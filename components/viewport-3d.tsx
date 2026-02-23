@@ -8,11 +8,14 @@ import * as THREE from "three"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import type { ExportSettings } from "@/components/drawing-canvas"
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js"
-import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js"
-
-const mergeGeometriesSafe =
-  (BufferGeometryUtils as any).mergeGeometries ??
-  (BufferGeometryUtils as any).mergeBufferGeometries
+import {
+  type GeometryMode,
+  type StrokeMeshData,
+  getEngine,
+  TUBE_RADIUS,
+  RADIAL_SEGMENTS,
+  SPHERE_SEGMENTS,
+} from "@/lib/geometry-engines"
 
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
@@ -22,136 +25,21 @@ const FRAME_K = 3.0
 const TOP_K = 2.5
 
 /* ------------------------------------------------------------------ */
-/*  Convert 2D canvas strokes to 3D tube meshes + cap/joint spheres   */
+/*  Convert 2D strokes to 3D mesh data via geometry engine             */
 /* ------------------------------------------------------------------ */
 
-const TUBE_RADIUS = 0.012
-const TUBE_SEGMENTS_MULTIPLIER = 3
-const MAX_TUBULAR_SEGMENTS = 512
-const RADIAL_SEGMENTS = 16
-const SPHERE_SEGMENTS = 14
-const JOINT_ANGLE_THRESHOLD_DEG = 40
-const JOINT_MIN_DISTANCE = 0.03
-const MIN_STROKE_LENGTH = 0.01 // world units — skip micro-strokes below this arc-length
 const MIN_REVEAL_RINGS = 1 // minimum tube rings visible before showing any caps/joints
-
-interface StrokeMeshData {
-  tubeGeometry: THREE.TubeGeometry
-  curve: THREE.CatmullRomCurve3
-  capPositions: THREE.Vector3[]
-  jointPositions: THREE.Vector3[]
-  /** Normalized time [0,1] at which each joint appears (based on nearest point along the curve) */
-  jointFractions: number[]
-  /** Number of 3D filtered points (used for drawRange fraction calculation) */
-  filteredCount: number
-  key: string
-}
 
 function useStrokeMeshes(
   strokes: ProcessedStroke[],
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  mode: GeometryMode
 ): StrokeMeshData[] {
   return useMemo(() => {
-    if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0)
-      return []
-
-    const scaleRef = Math.max(canvasWidth, canvasHeight)
-    const normScale = 3 / scaleRef
-
-    const result: StrokeMeshData[] = []
-
-    for (let si = 0; si < strokes.length; si++) {
-      const stroke = strokes[si]
-      if (stroke.points.length < 2) continue
-
-      const pts3d = stroke.points.map((p) => {
-        const x = (p.x - canvasWidth / 2) * normScale
-        const y = -(p.y - canvasHeight / 2) * normScale
-        return new THREE.Vector3(x, y, 0)
-      })
-
-      const filtered = [pts3d[0]]
-      for (let i = 1; i < pts3d.length; i++) {
-        if (pts3d[i].distanceTo(filtered[filtered.length - 1]) > 0.001) {
-          filtered.push(pts3d[i])
-        }
-      }
-      if (filtered.length < 2) continue
-
-      // Micro-stroke filter: skip strokes with negligible arc-length
-      let arcLength = 0
-      for (let i = 1; i < filtered.length; i++) {
-        arcLength += filtered[i].distanceTo(filtered[i - 1])
-      }
-      if (arcLength < MIN_STROKE_LENGTH) continue
-
-      const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
-      const tubularSegments = Math.min(
-        Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
-        MAX_TUBULAR_SEGMENTS
-      )
-      const tubeGeometry = new THREE.TubeGeometry(
-        curve,
-        tubularSegments,
-        TUBE_RADIUS,
-        RADIAL_SEGMENTS,
-        false
-      )
-
-      const capPositions = [
-        filtered[0].clone(),
-        filtered[filtered.length - 1].clone(),
-      ]
-
-      // Detect joints via angle scan on 3D polyline
-      const jointPositions: THREE.Vector3[] = []
-      const jointFractions: number[] = []
-      const angleThresholdRad = (JOINT_ANGLE_THRESHOLD_DEG * Math.PI) / 180
-
-      for (let i = 1; i < filtered.length - 1; i++) {
-        const prev = filtered[i - 1]
-        const curr = filtered[i]
-        const next = filtered[i + 1]
-
-        const ax = curr.x - prev.x
-        const ay = curr.y - prev.y
-        const az = curr.z - prev.z
-        const bx = next.x - curr.x
-        const by = next.y - curr.y
-        const bz = next.z - curr.z
-
-        const magA = Math.sqrt(ax * ax + ay * ay + az * az)
-        const magB = Math.sqrt(bx * bx + by * by + bz * bz)
-        if (magA < 1e-6 || magB < 1e-6) continue
-
-        const dot = ax * bx + ay * by + az * bz
-        const cosAngle = Math.max(-1, Math.min(1, dot / (magA * magB)))
-        const deviation = Math.PI - Math.acos(cosAngle)
-
-        if (deviation > angleThresholdRad) {
-          if (jointPositions.length > 0) {
-            const lastJoint = jointPositions[jointPositions.length - 1]
-            if (curr.distanceTo(lastJoint) < JOINT_MIN_DISTANCE) continue
-          }
-          jointPositions.push(curr.clone())
-          jointFractions.push(i / (filtered.length - 1))
-        }
-      }
-
-      result.push({
-        tubeGeometry,
-        curve,
-        capPositions,
-        jointPositions,
-        jointFractions,
-        filteredCount: filtered.length,
-        key: `stroke-${si}-${stroke.points.length}`,
-      })
-    }
-
-    return result
-  }, [strokes, canvasWidth, canvasHeight])
+    const engine = getEngine(mode)
+    return engine.buildPreview(strokes, { canvasWidth, canvasHeight })
+  }, [strokes, canvasWidth, canvasHeight, mode])
 }
 
 /* ---- Shared geometries ---- */
@@ -503,6 +391,7 @@ function Scene({
   rawStrokes,
   canvasWidth,
   canvasHeight,
+  geometryMode,
   boundsRef,
   exportGroupRef,
   playheadRef,
@@ -516,6 +405,7 @@ function Scene({
   rawStrokes: Stroke[]
   canvasWidth: number
   canvasHeight: number
+  geometryMode: GeometryMode
   boundsRef: React.MutableRefObject<StrokeBounds | null>
   exportGroupRef: React.RefObject<THREE.Group | null>
   playheadRef: React.MutableRefObject<number>
@@ -524,7 +414,7 @@ function Scene({
   totalDuration: number
   onProgressUpdate: (progress: number) => void
 }) {
-  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight)
+  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode)
   const bounds = useStrokeBounds(meshes)
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
@@ -614,10 +504,11 @@ class ViewportErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryS
 interface Viewport3DProps {
   processedStrokes: ProcessedStroke[]
   rawStrokes: Stroke[]
+  geometryMode: GeometryMode
   settingsRef?: React.MutableRefObject<ExportSettings>
 }
 
-export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }: Viewport3DProps) {
+export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode, settingsRef }: Viewport3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const boundsRef = useRef<StrokeBounds | null>(null)
@@ -743,187 +634,30 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
 
     setExporting(true)
     try {
-      const canMerge = typeof mergeGeometriesSafe === "function"
-      if (!canMerge) {
-        console.warn("[FreeStroke Export] mergeGeometries unavailable — falling back to per-part meshes")
-      }
-
-      const scaleRef = Math.max(canvasWidth, canvasHeight)
-      const normScale = 3 / scaleRef
-      const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
-      const capSphere = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-
-      // Collect top-level objects to add to the root group (one per stroke)
-      const exportObjects: THREE.Object3D[] = []
-      const disposables: THREE.BufferGeometry[] = []
-
-      for (let si = 0; si < processedStrokes.length; si++) {
-        const stroke = processedStrokes[si]
-        if (stroke.points.length < 2) continue
-
-        const pts3d = stroke.points.map((p) => {
-          const x = (p.x - canvasWidth / 2) * normScale
-          const y = -(p.y - canvasHeight / 2) * normScale
-          return new THREE.Vector3(x, y, 0)
-        })
-
-        const filtered = [pts3d[0]]
-        for (let i = 1; i < pts3d.length; i++) {
-          if (pts3d[i].distanceTo(filtered[filtered.length - 1]) > 0.001) {
-            filtered.push(pts3d[i])
-          }
-        }
-        if (filtered.length < 2) continue
-
-        let arcLength = 0
-        for (let i = 1; i < filtered.length; i++) {
-          arcLength += filtered[i].distanceTo(filtered[i - 1])
-        }
-        if (arcLength < MIN_STROKE_LENGTH) continue
-
-        const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
-        const tubularSegments = Math.min(
-          Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
-          MAX_TUBULAR_SEGMENTS
-        )
-        const tubeGeo = new THREE.TubeGeometry(
-          curve, tubularSegments, TUBE_RADIUS, RADIAL_SEGMENTS, false
-        )
-
-        const startCapGeo = capSphere.clone().translate(
-          filtered[0].x, filtered[0].y, filtered[0].z
-        )
-        const endCapGeo = capSphere.clone().translate(
-          filtered[filtered.length - 1].x,
-          filtered[filtered.length - 1].y,
-          filtered[filtered.length - 1].z
-        )
-
-        const jointGeos: THREE.BufferGeometry[] = []
-        const angleThresholdRad = (JOINT_ANGLE_THRESHOLD_DEG * Math.PI) / 180
-        let lastJointPos: THREE.Vector3 | null = null
-
-        for (let i = 1; i < filtered.length - 1; i++) {
-          const prev = filtered[i - 1]
-          const curr = filtered[i]
-          const next = filtered[i + 1]
-          const ax = curr.x - prev.x, ay = curr.y - prev.y, az = curr.z - prev.z
-          const bx = next.x - curr.x, by = next.y - curr.y, bz = next.z - curr.z
-          const magA = Math.sqrt(ax * ax + ay * ay + az * az)
-          const magB = Math.sqrt(bx * bx + by * by + bz * bz)
-          if (magA < 1e-6 || magB < 1e-6) continue
-          const dot = ax * bx + ay * by + az * bz
-          const cosAngle = Math.max(-1, Math.min(1, dot / (magA * magB)))
-          const deviation = Math.PI - Math.acos(cosAngle)
-          if (deviation > angleThresholdRad) {
-            if (lastJointPos && curr.distanceTo(lastJointPos) < JOINT_MIN_DISTANCE) continue
-            lastJointPos = curr
-            jointGeos.push(capSphere.clone().translate(curr.x, curr.y, curr.z))
-          }
-        }
-
-        const strokeName = `stroke_${String(si).padStart(3, "0")}`
-        const parts = [tubeGeo, startCapGeo, endCapGeo, ...jointGeos]
-
-        if (canMerge) {
-          // Merge all parts into a single geometry per stroke
-          const merged = mergeGeometriesSafe(parts, false)
-          if (merged) {
-            const mesh = new THREE.Mesh(merged, inkMaterial)
-            mesh.name = strokeName
-            exportObjects.push(mesh)
-            disposables.push(merged)
-          } else {
-            console.warn(`[FreeStroke Export] merge returned null for stroke ${si}, using group fallback`)
-            const group = new THREE.Group()
-            group.name = strokeName
-            for (let pi = 0; pi < parts.length; pi++) {
-              const m = new THREE.Mesh(parts[pi], inkMaterial)
-              m.name = `${strokeName}_part_${pi}`
-              group.add(m)
-            }
-            exportObjects.push(group)
-          }
-        } else {
-          // No merge available: export each part as a child mesh in a group
-          const group = new THREE.Group()
-          group.name = strokeName
-          for (let pi = 0; pi < parts.length; pi++) {
-            const m = new THREE.Mesh(parts[pi], inkMaterial)
-            m.name = `${strokeName}_part_${pi}`
-            group.add(m)
-          }
-          exportObjects.push(group)
-        }
-
-        // Dispose intermediate geometries (only when merged — parts are consumed)
-        if (canMerge) {
-          tubeGeo.dispose()
-          startCapGeo.dispose()
-          endCapGeo.dispose()
-          jointGeos.forEach((g) => g.dispose())
-        }
-      }
-
-      if (exportObjects.length === 0) {
-        setExporting(false)
-        return
-      }
-
-      // Compute bounding box and recenter at origin
-      const bbox = new THREE.Box3()
-      for (const obj of exportObjects) {
-        const b = new THREE.Box3().setFromObject(obj)
-        bbox.union(b)
-      }
-      const center = new THREE.Vector3()
-      bbox.getCenter(center)
-
-      // Translate all geometries so center = (0,0,0)
-      for (const obj of exportObjects) {
-        obj.traverse((child) => {
-          if (child instanceof THREE.Mesh && child.geometry) {
-            child.geometry.translate(-center.x, -center.y, -center.z)
-          }
-        })
-      }
-
-      // Centering verification
-      const verifyBox = new THREE.Box3()
-      for (const obj of exportObjects) {
-        verifyBox.union(new THREE.Box3().setFromObject(obj))
-      }
-      const verifyCenter = new THREE.Vector3()
-      verifyBox.getCenter(verifyCenter)
-      const centerDrift = verifyCenter.length()
-      if (centerDrift > 0.01) {
-        console.warn(`[FreeStroke Export] Post-centering drift: center=(${verifyCenter.x.toFixed(4)}, ${verifyCenter.y.toFixed(4)}, ${verifyCenter.z.toFixed(4)}), distance=${centerDrift.toFixed(4)}`)
-      }
-
-      // Build export scene
-      const exportScene = new THREE.Scene()
-      const rootGroup = new THREE.Group()
-      rootGroup.name = "FreeStroke"
-
+      const engine = getEngine(geometryMode)
       const settings = settingsRef?.current
-      rootGroup.userData = {
-        app: "Free Stroke",
-        exportedAt: new Date().toISOString(),
+
+      const exportResult = engine.buildExport(processedStrokes, {
+        canvasWidth,
+        canvasHeight,
+        exportName,
         strokeCount,
         totalPoints,
         settings: {
           spacing: settings?.spacing ?? null,
           smoothingEnabled: settings?.smoothing ?? null,
           cornersEnabled: settings?.preserveCorners ?? null,
-          tubeRadius: TUBE_RADIUS,
-          radialSegments: RADIAL_SEGMENTS,
         },
+      })
+
+      if (exportResult.objectCount === 0) {
+        setExporting(false)
+        return
       }
 
-      for (const obj of exportObjects) {
-        rootGroup.add(obj)
-      }
-      exportScene.add(rootGroup)
+      // Build export scene
+      const exportScene = new THREE.Scene()
+      exportScene.add(exportResult.group)
 
       // Dev-only scene verification
       if (process.env.NODE_ENV === "development") {
@@ -939,23 +673,14 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
           }
         })
 
-        // Verify root structure
         if (exportScene.children.length !== 1 || exportScene.children[0].name !== "FreeStroke") {
           console.warn("[FreeStroke Export] ASSERTION: root is not a single group named FreeStroke")
         }
 
-        const childNames = rootGroup.children.map((c) => c.name)
-        const expectedPattern = /^stroke_\d{3}$/
-        for (const name of childNames) {
-          if (!expectedPattern.test(name)) {
-            console.warn(`[FreeStroke Export] ASSERTION: unexpected child name "${name}" (expected stroke_NNN)`)
-          }
-        }
-
-        console.log(`[FreeStroke Export] meshes=${meshCount}, strokes=${exportObjects.length}, center=(${verifyCenter.x.toFixed(4)}, ${verifyCenter.y.toFixed(4)}, ${verifyCenter.z.toFixed(4)}), merged=${canMerge}`)
+        console.log(`[FreeStroke Export] mode=${geometryMode}, meshes=${meshCount}, strokes=${exportResult.objectCount}, merged=${exportResult.merged}`)
       }
 
-      // Export
+      // Export to GLB
       const exporter = new GLTFExporter()
       const result = await new Promise<ArrayBuffer>((resolve, reject) => {
         exporter.parse(
@@ -967,17 +692,13 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
       })
 
       // Dispose export-only resources
-      for (const g of disposables) g.dispose()
-      // If we didn't merge, dispose the parts that are still referenced by mesh children
-      if (!canMerge) {
-        exportScene.traverse((node) => {
-          if (node instanceof THREE.Mesh && node.geometry) {
-            node.geometry.dispose()
-          }
-        })
-      }
-      inkMaterial.dispose()
-      capSphere.dispose()
+      for (const g of exportResult.disposables) g.dispose()
+      exportScene.traverse((node) => {
+        if (node instanceof THREE.Mesh) {
+          node.geometry?.dispose()
+          if (node.material instanceof THREE.Material) node.material.dispose()
+        }
+      })
 
       // Build filename
       const now = new Date()
@@ -987,8 +708,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
       const prefix = safeName ? `${safeName}_` : "free-stroke_"
       const filename = `${prefix}${ts}.glb`
 
-      // One-line export report (always, not just dev)
-      console.log(`[FreeStroke] Exported "${filename}" — ${exportObjects.length} strokes, ${canMerge ? "merged" : "unmerged"}`)
+      console.log(`[FreeStroke] Exported "${filename}" — ${exportResult.objectCount} strokes (${geometryMode}), ${exportResult.merged ? "merged" : "unmerged"}`)
 
       // Download
       const blob = new Blob([result], { type: "application/octet-stream" })
@@ -1005,7 +725,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
     } finally {
       setExporting(false)
     }
-  }, [processedStrokes, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
+  }, [processedStrokes, geometryMode, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
 
   const formatDuration = (ms: number, frac: number) => {
     const sec = (ms * frac) / 1000
@@ -1032,6 +752,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
             rawStrokes={rawStrokes}
             canvasWidth={canvasWidth}
             canvasHeight={canvasHeight}
+            geometryMode={geometryMode}
             boundsRef={boundsRef}
             exportGroupRef={exportGroupRef}
             playheadRef={playheadRef}
