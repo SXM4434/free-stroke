@@ -7,6 +7,13 @@ import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import type { ExportSettings } from "@/components/drawing-canvas"
+import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js"
+import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js"
+
+const mergeGeometriesSafe =
+  (BufferGeometryUtils as any).mergeGeometries ??
+  (BufferGeometryUtils as any).mergeBufferGeometries
+
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
 const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
@@ -727,31 +734,181 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
     controls.update()
   }, [])
 
+  /**
+   * Build a fresh export-only scene with merged geometry per stroke,
+   * centered at origin, with deterministic naming. No viewer junk.
+   */
   const handleExportGLB = useCallback(async () => {
-    const group = exportGroupRef.current
-    if (!group || processedStrokes.length === 0) return
-
-    // Before export, ensure full reveal
-    playheadRef.current = 1
-    setProgress(1)
-    setPlaying(false)
-
-    // Wait one frame for drawRange to update
-    await new Promise((resolve) => requestAnimationFrame(resolve))
+    if (processedStrokes.length === 0) return
 
     setExporting(true)
     try {
-      const now = new Date()
-      const pad = (n: number) => String(n).padStart(2, "0")
-      const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
-      const safeName = exportName.trim().replace(/[^a-zA-Z0-9_-]/g, "-")
-      const prefix = safeName ? `${safeName}_` : "free-stroke_"
-      const filename = `${prefix}${ts}.glb`
+      const canMerge = typeof mergeGeometriesSafe === "function"
+      if (!canMerge) {
+        console.warn("[FreeStroke Export] mergeGeometries unavailable — falling back to per-part meshes")
+      }
+
+      const scaleRef = Math.max(canvasWidth, canvasHeight)
+      const normScale = 3 / scaleRef
+      const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
+      const capSphere = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+
+      // Collect top-level objects to add to the root group (one per stroke)
+      const exportObjects: THREE.Object3D[] = []
+      const disposables: THREE.BufferGeometry[] = []
+
+      for (let si = 0; si < processedStrokes.length; si++) {
+        const stroke = processedStrokes[si]
+        if (stroke.points.length < 2) continue
+
+        const pts3d = stroke.points.map((p) => {
+          const x = (p.x - canvasWidth / 2) * normScale
+          const y = -(p.y - canvasHeight / 2) * normScale
+          return new THREE.Vector3(x, y, 0)
+        })
+
+        const filtered = [pts3d[0]]
+        for (let i = 1; i < pts3d.length; i++) {
+          if (pts3d[i].distanceTo(filtered[filtered.length - 1]) > 0.001) {
+            filtered.push(pts3d[i])
+          }
+        }
+        if (filtered.length < 2) continue
+
+        let arcLength = 0
+        for (let i = 1; i < filtered.length; i++) {
+          arcLength += filtered[i].distanceTo(filtered[i - 1])
+        }
+        if (arcLength < MIN_STROKE_LENGTH) continue
+
+        const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
+        const tubularSegments = Math.min(
+          Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
+          MAX_TUBULAR_SEGMENTS
+        )
+        const tubeGeo = new THREE.TubeGeometry(
+          curve, tubularSegments, TUBE_RADIUS, RADIAL_SEGMENTS, false
+        )
+
+        const startCapGeo = capSphere.clone().translate(
+          filtered[0].x, filtered[0].y, filtered[0].z
+        )
+        const endCapGeo = capSphere.clone().translate(
+          filtered[filtered.length - 1].x,
+          filtered[filtered.length - 1].y,
+          filtered[filtered.length - 1].z
+        )
+
+        const jointGeos: THREE.BufferGeometry[] = []
+        const angleThresholdRad = (JOINT_ANGLE_THRESHOLD_DEG * Math.PI) / 180
+        let lastJointPos: THREE.Vector3 | null = null
+
+        for (let i = 1; i < filtered.length - 1; i++) {
+          const prev = filtered[i - 1]
+          const curr = filtered[i]
+          const next = filtered[i + 1]
+          const ax = curr.x - prev.x, ay = curr.y - prev.y, az = curr.z - prev.z
+          const bx = next.x - curr.x, by = next.y - curr.y, bz = next.z - curr.z
+          const magA = Math.sqrt(ax * ax + ay * ay + az * az)
+          const magB = Math.sqrt(bx * bx + by * by + bz * bz)
+          if (magA < 1e-6 || magB < 1e-6) continue
+          const dot = ax * bx + ay * by + az * bz
+          const cosAngle = Math.max(-1, Math.min(1, dot / (magA * magB)))
+          const deviation = Math.PI - Math.acos(cosAngle)
+          if (deviation > angleThresholdRad) {
+            if (lastJointPos && curr.distanceTo(lastJointPos) < JOINT_MIN_DISTANCE) continue
+            lastJointPos = curr
+            jointGeos.push(capSphere.clone().translate(curr.x, curr.y, curr.z))
+          }
+        }
+
+        const strokeName = `stroke_${String(si).padStart(3, "0")}`
+        const parts = [tubeGeo, startCapGeo, endCapGeo, ...jointGeos]
+
+        if (canMerge) {
+          // Merge all parts into a single geometry per stroke
+          const merged = mergeGeometriesSafe(parts, false)
+          if (merged) {
+            const mesh = new THREE.Mesh(merged, inkMaterial)
+            mesh.name = strokeName
+            exportObjects.push(mesh)
+            disposables.push(merged)
+          } else {
+            console.warn(`[FreeStroke Export] merge returned null for stroke ${si}, using group fallback`)
+            const group = new THREE.Group()
+            group.name = strokeName
+            for (let pi = 0; pi < parts.length; pi++) {
+              const m = new THREE.Mesh(parts[pi], inkMaterial)
+              m.name = `${strokeName}_part_${pi}`
+              group.add(m)
+            }
+            exportObjects.push(group)
+          }
+        } else {
+          // No merge available: export each part as a child mesh in a group
+          const group = new THREE.Group()
+          group.name = strokeName
+          for (let pi = 0; pi < parts.length; pi++) {
+            const m = new THREE.Mesh(parts[pi], inkMaterial)
+            m.name = `${strokeName}_part_${pi}`
+            group.add(m)
+          }
+          exportObjects.push(group)
+        }
+
+        // Dispose intermediate geometries (only when merged — parts are consumed)
+        if (canMerge) {
+          tubeGeo.dispose()
+          startCapGeo.dispose()
+          endCapGeo.dispose()
+          jointGeos.forEach((g) => g.dispose())
+        }
+      }
+
+      if (exportObjects.length === 0) {
+        setExporting(false)
+        return
+      }
+
+      // Compute bounding box and recenter at origin
+      const bbox = new THREE.Box3()
+      for (const obj of exportObjects) {
+        const b = new THREE.Box3().setFromObject(obj)
+        bbox.union(b)
+      }
+      const center = new THREE.Vector3()
+      bbox.getCenter(center)
+
+      // Translate all geometries so center = (0,0,0)
+      for (const obj of exportObjects) {
+        obj.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.geometry) {
+            child.geometry.translate(-center.x, -center.y, -center.z)
+          }
+        })
+      }
+
+      // Centering verification
+      const verifyBox = new THREE.Box3()
+      for (const obj of exportObjects) {
+        verifyBox.union(new THREE.Box3().setFromObject(obj))
+      }
+      const verifyCenter = new THREE.Vector3()
+      verifyBox.getCenter(verifyCenter)
+      const centerDrift = verifyCenter.length()
+      if (centerDrift > 0.01) {
+        console.warn(`[FreeStroke Export] Post-centering drift: center=(${verifyCenter.x.toFixed(4)}, ${verifyCenter.y.toFixed(4)}, ${verifyCenter.z.toFixed(4)}), distance=${centerDrift.toFixed(4)}`)
+      }
+
+      // Build export scene
+      const exportScene = new THREE.Scene()
+      const rootGroup = new THREE.Group()
+      rootGroup.name = "FreeStroke"
 
       const settings = settingsRef?.current
-      group.userData = {
+      rootGroup.userData = {
         app: "Free Stroke",
-        exportedAt: now.toISOString(),
+        exportedAt: new Date().toISOString(),
         strokeCount,
         totalPoints,
         settings: {
@@ -763,19 +920,77 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
         },
       }
 
-      const { GLTFExporter } = await import("three-stdlib")
+      for (const obj of exportObjects) {
+        rootGroup.add(obj)
+      }
+      exportScene.add(rootGroup)
+
+      // Dev-only scene verification
+      if (process.env.NODE_ENV === "development") {
+        const FORBIDDEN_NAMES = ["grid", "helper", "cube", "debug", "controls"]
+        let meshCount = 0
+        exportScene.traverse((node) => {
+          if (node instanceof THREE.Mesh) meshCount++
+          const nameLower = (node.name || "").toLowerCase()
+          for (const f of FORBIDDEN_NAMES) {
+            if (nameLower.includes(f)) {
+              console.warn(`[FreeStroke Export] ASSERTION: found forbidden name "${node.name}" in export scene`)
+            }
+          }
+        })
+
+        // Verify root structure
+        if (exportScene.children.length !== 1 || exportScene.children[0].name !== "FreeStroke") {
+          console.warn("[FreeStroke Export] ASSERTION: root is not a single group named FreeStroke")
+        }
+
+        const childNames = rootGroup.children.map((c) => c.name)
+        const expectedPattern = /^stroke_\d{3}$/
+        for (const name of childNames) {
+          if (!expectedPattern.test(name)) {
+            console.warn(`[FreeStroke Export] ASSERTION: unexpected child name "${name}" (expected stroke_NNN)`)
+          }
+        }
+
+        console.log(`[FreeStroke Export] meshes=${meshCount}, strokes=${exportObjects.length}, center=(${verifyCenter.x.toFixed(4)}, ${verifyCenter.y.toFixed(4)}, ${verifyCenter.z.toFixed(4)}), merged=${canMerge}`)
+      }
+
+      // Export
       const exporter = new GLTFExporter()
       const result = await new Promise<ArrayBuffer>((resolve, reject) => {
         exporter.parse(
-          group,
+          exportScene,
           (gltf) => resolve(gltf as ArrayBuffer),
           (error) => reject(error),
           { binary: true }
         )
       })
 
-      group.userData = {}
+      // Dispose export-only resources
+      for (const g of disposables) g.dispose()
+      // If we didn't merge, dispose the parts that are still referenced by mesh children
+      if (!canMerge) {
+        exportScene.traverse((node) => {
+          if (node instanceof THREE.Mesh && node.geometry) {
+            node.geometry.dispose()
+          }
+        })
+      }
+      inkMaterial.dispose()
+      capSphere.dispose()
 
+      // Build filename
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, "0")
+      const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
+      const safeName = exportName.trim().replace(/[^a-zA-Z0-9_-]/g, "-")
+      const prefix = safeName ? `${safeName}_` : "free-stroke_"
+      const filename = `${prefix}${ts}.glb`
+
+      // One-line export report (always, not just dev)
+      console.log(`[FreeStroke] Exported "${filename}" — ${exportObjects.length} strokes, ${canMerge ? "merged" : "unmerged"}`)
+
+      // Download
       const blob = new Blob([result], { type: "application/octet-stream" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -786,11 +1001,11 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (err) {
-      console.error("GLB export failed:", err)
+      console.error("[FreeStroke Export] GLB export failed:", err)
     } finally {
       setExporting(false)
     }
-  }, [processedStrokes.length, exportName, settingsRef, strokeCount, totalPoints])
+  }, [processedStrokes, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
 
   const formatDuration = (ms: number, frac: number) => {
     const sec = (ms * frac) / 1000
@@ -878,11 +1093,10 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
               <button
                 key={s}
                 onClick={() => setSpeed(s)}
-                className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                  speed === s
+                className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors ${speed === s
                     ? "bg-foreground text-background"
                     : "text-muted-foreground hover:text-foreground"
-                }`}
+                  }`}
               >
                 {s}x
               </button>
