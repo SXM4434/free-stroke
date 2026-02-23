@@ -38,20 +38,44 @@ export const MIN_STROKE_LENGTH = 0.01
 
 export type GeometryMode = "rod" | "extrude" | "inflate"
 
+/** Extrude-mode parameters */
+export interface ExtrudeParams {
+  width: number       // ribbon half-width in world units
+  depth: number       // extrusion depth
+  bevelEnabled: boolean
+  bevelSize: number
+  bevelSegments: number
+}
+
+export const DEFAULT_EXTRUDE_PARAMS: ExtrudeParams = {
+  width: 0.06,
+  depth: 0.2,
+  bevelEnabled: true,
+  bevelSize: 0.015,
+  bevelSegments: 2,
+}
+
 /** Per-stroke mesh data used by the viewport for rendering + animation */
 export interface StrokeMeshData {
-  tubeGeometry: THREE.TubeGeometry
-  curve: THREE.CatmullRomCurve3
-  capPositions: THREE.Vector3[]
-  jointPositions: THREE.Vector3[]
-  jointFractions: number[]
+  /** The geometry — TubeGeometry for rod, ExtrudeGeometry for extrude */
+  tubeGeometry: THREE.BufferGeometry
+  /** Curve for rod-mode animation (undefined for extrude) */
+  curve?: THREE.CatmullRomCurve3
+  /** Cap positions for rod-mode caps (undefined for extrude) */
+  capPositions?: THREE.Vector3[]
+  /** Joint positions for rod-mode joints (undefined for extrude) */
+  jointPositions?: THREE.Vector3[]
+  jointFractions?: number[]
   filteredCount: number
   key: string
+  /** Geometry mode that produced this mesh data */
+  mode: GeometryMode
 }
 
 export interface PreviewParams {
   canvasWidth: number
   canvasHeight: number
+  extrudeParams?: ExtrudeParams
 }
 
 export interface ExportResult {
@@ -67,6 +91,7 @@ export interface ExportParams {
   exportName: string
   strokeCount: number
   totalPoints: number
+  extrudeParams?: ExtrudeParams
   settings: {
     spacing: number | null
     smoothingEnabled: boolean | null
@@ -199,6 +224,7 @@ export const RodEngine: GeometryEngine = {
         jointFractions,
         filteredCount: filtered.length,
         key: `stroke-${si}-${stroke.points.length}`,
+        mode: "rod",
       })
     }
 
@@ -336,22 +362,224 @@ export const RodEngine: GeometryEngine = {
 }
 
 /* ------------------------------------------------------------------ */
-/*  ExtrudeEngine — TODO: Iteration 7                                 */
+/*  ExtrudeEngine                                                     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Build a 2D ribbon outline (offset left/right of polyline by `halfWidth`).
+ * Returns an array of 2D points forming a closed polygon.
+ */
+function buildRibbonShape(pts: THREE.Vector3[], halfWidth: number): THREE.Shape | null {
+  if (pts.length < 2) return null
+
+  const left: THREE.Vector2[] = []
+  const right: THREE.Vector2[] = []
+
+  for (let i = 0; i < pts.length; i++) {
+    let nx: number, ny: number
+
+    if (i === 0) {
+      // First point: normal from first segment
+      const dx = pts[1].x - pts[0].x
+      const dy = pts[1].y - pts[0].y
+      const len = Math.sqrt(dx * dx + dy * dy) || 1e-6
+      nx = -dy / len
+      ny = dx / len
+    } else if (i === pts.length - 1) {
+      // Last point: normal from last segment
+      const dx = pts[i].x - pts[i - 1].x
+      const dy = pts[i].y - pts[i - 1].y
+      const len = Math.sqrt(dx * dx + dy * dy) || 1e-6
+      nx = -dy / len
+      ny = dx / len
+    } else {
+      // Middle: average normals of adjacent segments
+      const dx1 = pts[i].x - pts[i - 1].x
+      const dy1 = pts[i].y - pts[i - 1].y
+      const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1e-6
+      const nx1 = -dy1 / len1
+      const ny1 = dx1 / len1
+
+      const dx2 = pts[i + 1].x - pts[i].x
+      const dy2 = pts[i + 1].y - pts[i].y
+      const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1e-6
+      const nx2 = -dy2 / len2
+      const ny2 = dx2 / len2
+
+      // Average
+      nx = (nx1 + nx2) * 0.5
+      ny = (ny1 + ny2) * 0.5
+      const nlen = Math.sqrt(nx * nx + ny * ny) || 1e-6
+      nx /= nlen
+      ny /= nlen
+    }
+
+    left.push(new THREE.Vector2(pts[i].x + nx * halfWidth, pts[i].y + ny * halfWidth))
+    right.push(new THREE.Vector2(pts[i].x - nx * halfWidth, pts[i].y - ny * halfWidth))
+  }
+
+  // Build closed polygon: left forward + right backward
+  const shape = new THREE.Shape()
+  shape.moveTo(left[0].x, left[0].y)
+  for (let i = 1; i < left.length; i++) {
+    shape.lineTo(left[i].x, left[i].y)
+  }
+  // Round end cap (semicircle at end)
+  const endCenter = new THREE.Vector2(
+    (left[left.length - 1].x + right[right.length - 1].x) / 2,
+    (left[left.length - 1].y + right[right.length - 1].y) / 2
+  )
+  shape.absarc(endCenter.x, endCenter.y, halfWidth, 
+    Math.atan2(left[left.length - 1].y - endCenter.y, left[left.length - 1].x - endCenter.x),
+    Math.atan2(right[right.length - 1].y - endCenter.y, right[right.length - 1].x - endCenter.x),
+    true
+  )
+  for (let i = right.length - 1; i >= 0; i--) {
+    shape.lineTo(right[i].x, right[i].y)
+  }
+  // Round start cap (semicircle at start)
+  const startCenter = new THREE.Vector2(
+    (left[0].x + right[0].x) / 2,
+    (left[0].y + right[0].y) / 2
+  )
+  shape.absarc(startCenter.x, startCenter.y, halfWidth,
+    Math.atan2(right[0].y - startCenter.y, right[0].x - startCenter.x),
+    Math.atan2(left[0].y - startCenter.y, left[0].x - startCenter.x),
+    true
+  )
+  shape.closePath()
+
+  return shape
+}
+
 export const ExtrudeEngine: GeometryEngine = {
-  buildPreview(_strokes: ProcessedStroke[], _params: PreviewParams): StrokeMeshData[] {
-    // TODO: Iteration 7 — Extrude mode
-    // Will generate ribbon/extruded profiles along stroke paths
-    return []
+  buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
+    const { canvasWidth, canvasHeight, extrudeParams: ep } = params
+    const extrudeParams = ep ?? DEFAULT_EXTRUDE_PARAMS
+    if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) return []
+
+    const result: StrokeMeshData[] = []
+
+    for (let si = 0; si < strokes.length; si++) {
+      const stroke = strokes[si]
+      if (stroke.points.length < 2) continue
+
+      const pts3d = strokeTo3D(stroke, canvasWidth, canvasHeight)
+      const filtered = filterDuplicates(pts3d)
+      if (filtered.length < 2) continue
+      if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
+
+      const shape = buildRibbonShape(filtered, extrudeParams.width)
+      if (!shape) continue
+
+      const halfDepth = extrudeParams.depth / 2
+      const geometry = new THREE.ExtrudeGeometry(shape, {
+        depth: extrudeParams.depth,
+        bevelEnabled: extrudeParams.bevelEnabled,
+        bevelSize: extrudeParams.bevelSize,
+        bevelThickness: extrudeParams.bevelSize,
+        bevelSegments: extrudeParams.bevelSegments,
+        curveSegments: 12,
+      })
+
+      // Center the extrusion on z=0 (ExtrudeGeometry extrudes along +z from 0)
+      geometry.translate(0, 0, -halfDepth)
+
+      result.push({
+        tubeGeometry: geometry,
+        filteredCount: filtered.length,
+        key: `stroke-${si}-${stroke.points.length}`,
+        mode: "extrude",
+      })
+    }
+
+    return result
   },
 
-  buildExport(_strokes: ProcessedStroke[], _params: ExportParams): ExportResult {
-    // TODO: Iteration 7 — Extrude mode export
-    const group = new THREE.Group()
-    group.name = "FreeStroke"
-    group.userData = { app: "Free Stroke", mode: "extrude" }
-    return { group, disposables: [], objectCount: 0, merged: false }
+  buildExport(strokes: ProcessedStroke[], params: ExportParams): ExportResult {
+    const { canvasWidth, canvasHeight, extrudeParams: ep } = params
+    const extrudeParams = ep ?? DEFAULT_EXTRUDE_PARAMS
+    const canMerge = typeof mergeGeometriesSafe === "function"
+
+    const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
+    const exportObjects: THREE.Object3D[] = []
+    const disposables: THREE.BufferGeometry[] = []
+
+    for (let si = 0; si < strokes.length; si++) {
+      const stroke = strokes[si]
+      if (stroke.points.length < 2) continue
+
+      const pts3d = strokeTo3D(stroke, canvasWidth, canvasHeight)
+      const filtered = filterDuplicates(pts3d)
+      if (filtered.length < 2) continue
+      if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
+
+      const shape = buildRibbonShape(filtered, extrudeParams.width)
+      if (!shape) continue
+
+      const halfDepth = extrudeParams.depth / 2
+      const geometry = new THREE.ExtrudeGeometry(shape, {
+        depth: extrudeParams.depth,
+        bevelEnabled: extrudeParams.bevelEnabled,
+        bevelSize: extrudeParams.bevelSize,
+        bevelThickness: extrudeParams.bevelSize,
+        bevelSegments: extrudeParams.bevelSegments,
+        curveSegments: 12,
+      })
+      geometry.translate(0, 0, -halfDepth)
+
+      const strokeName = `stroke_${String(si).padStart(3, "0")}`
+      const mesh = new THREE.Mesh(geometry, inkMaterial)
+      mesh.name = strokeName
+      exportObjects.push(mesh)
+      disposables.push(geometry)
+    }
+
+    // Recenter at origin
+    const bbox = new THREE.Box3()
+    for (const obj of exportObjects) {
+      bbox.union(new THREE.Box3().setFromObject(obj))
+    }
+    const center = new THREE.Vector3()
+    bbox.getCenter(center)
+
+    for (const obj of exportObjects) {
+      obj.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.geometry) {
+          child.geometry.translate(-center.x, -center.y, -center.z)
+        }
+      })
+    }
+
+    // Build root group
+    const rootGroup = new THREE.Group()
+    rootGroup.name = "FreeStroke"
+    rootGroup.userData = {
+      app: "Free Stroke",
+      mode: "extrude",
+      exportedAt: new Date().toISOString(),
+      strokeCount: params.strokeCount,
+      totalPoints: params.totalPoints,
+      settings: {
+        ...params.settings,
+        extrudeWidth: extrudeParams.width,
+        extrudeDepth: extrudeParams.depth,
+        bevelEnabled: extrudeParams.bevelEnabled,
+      },
+    }
+
+    for (const obj of exportObjects) {
+      rootGroup.add(obj)
+    }
+
+    inkMaterial.dispose()
+
+    return {
+      group: rootGroup,
+      disposables,
+      objectCount: exportObjects.length,
+      merged: canMerge,
+    }
   },
 }
 

@@ -11,6 +11,7 @@ import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js"
 import {
   type GeometryMode,
   type StrokeMeshData,
+  type ExtrudeParams,
   getEngine,
   TUBE_RADIUS,
   RADIAL_SEGMENTS,
@@ -34,12 +35,13 @@ function useStrokeMeshes(
   strokes: ProcessedStroke[],
   canvasWidth: number,
   canvasHeight: number,
-  mode: GeometryMode
+  mode: GeometryMode,
+  extrudeParams?: ExtrudeParams
 ): StrokeMeshData[] {
   return useMemo(() => {
     const engine = getEngine(mode)
-    return engine.buildPreview(strokes, { canvasWidth, canvasHeight })
-  }, [strokes, canvasWidth, canvasHeight, mode])
+    return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams })
+  }, [strokes, canvasWidth, canvasHeight, mode, extrudeParams])
 }
 
 /* ---- Shared geometries ---- */
@@ -195,24 +197,30 @@ function AnimatedStrokes({
 
     for (let si = 0; si < meshes.length; si++) {
       const mesh = tubeMeshRefs.current[si]
+      const strokeMeshData = meshes[si]
+
+      if (!mesh || !strokeMeshData) continue
+
+      // Extrude meshes are always fully visible (static, no animation)
+      if (strokeMeshData.mode === "extrude") {
+        mesh.visible = true
+        continue
+      }
+
+      // Rod mode: animate with drawRange + caps + joints + tip
       const startCap = startCapRefs.current[si]
       const endCap = endCapRefs.current[si]
       const jointGroup = jointGroupRefs.current[si]
       const tip = tipRefs.current[si]
       const timeline = timelines[si]
-      const strokeMeshData = meshes[si]
 
-      if (!mesh || !timeline || !strokeMeshData) continue
+      if (!timeline) continue
 
       const geo = mesh.geometry as THREE.TubeGeometry
-      // Total indices in the tube
       const totalIndices = geo.index ? geo.index.count : 0
-
-      // Minimum indices for one visible tube ring
       const minVisibleIndices = RADIAL_SEGMENTS * 6 * MIN_REVEAL_RINGS
 
       if (currentTimeMs < timeline.tStart) {
-        // Stroke hasn't started yet — hide everything
         geo.setDrawRange(0, 0)
         if (startCap) startCap.visible = false
         if (endCap) endCap.visible = false
@@ -222,7 +230,6 @@ function AnimatedStrokes({
       }
 
       if (currentTimeMs >= timeline.tEnd) {
-        // Stroke fully revealed — show final end cap, hide traveling tip
         geo.setDrawRange(0, totalIndices)
         if (startCap) startCap.visible = true
         if (endCap) endCap.visible = true
@@ -236,31 +243,24 @@ function AnimatedStrokes({
         continue
       }
 
-      // Partial reveal: compute fraction within this stroke's time range
       const strokeDuration = Math.max(timeline.tEnd - timeline.tStart, 1)
       const elapsed = currentTimeMs - timeline.tStart
       const fraction = Math.min(elapsed / strokeDuration, 1)
 
-      // Set drawRange proportionally
       const revealedIndices = Math.floor(fraction * totalIndices)
       geo.setDrawRange(0, revealedIndices)
 
-      // Guard: if fewer than one ring of indices revealed, hide everything for this stroke
       const hasVisibleSegment = revealedIndices >= minVisibleIndices
 
-      // Start cap: only show when we have a visible tube segment
       if (startCap) startCap.visible = hasVisibleSegment
 
-      // End cap: show ONLY when drawRange covers the entire tube geometry
       if (endCap) {
         endCap.visible = revealedIndices >= totalIndices
       }
 
-      // Traveling ink tip: position at the reveal front on the curve
       if (tip) {
-        if (hasVisibleSegment) {
+        if (hasVisibleSegment && strokeMeshData.curve) {
           tip.visible = true
-          // Use the same fraction to sample the exact curve position
           const clampedFraction = Math.max(0, Math.min(fraction, 1))
           const tipPos = strokeMeshData.curve.getPointAt(clampedFraction)
           tip.position.copy(tipPos)
@@ -269,7 +269,6 @@ function AnimatedStrokes({
         }
       }
 
-      // Joints: only show when stroke has a visible segment AND reveal has passed that joint
       if (jointGroup) {
         if (!hasVisibleSegment) {
           jointGroup.visible = false
@@ -277,7 +276,7 @@ function AnimatedStrokes({
           jointGroup.visible = true
           const fracs = strokeMeshData.jointFractions
           for (let ji = 0; ji < jointGroup.children.length; ji++) {
-            jointGroup.children[ji].visible = ji < fracs.length && fracs[ji] <= fraction
+            jointGroup.children[ji].visible = ji < fracs.length && (fracs?.[ji] ?? 0) <= fraction
           }
         }
       }
@@ -286,47 +285,51 @@ function AnimatedStrokes({
 
   return (
     <>
-      {/* Export group: tubes + caps + joints (exported to GLB) */}
+      {/* Export group: tubes/extrude meshes + caps + joints */}
       <group ref={exportGroupRef}>
         {meshes.map((data, si) => (
           <group key={data.key}>
-            {/* Tube */}
+            {/* Main geometry (tube or extrude) */}
             <mesh
               ref={(el) => { tubeMeshRefs.current[si] = el }}
               geometry={data.tubeGeometry}
               material={strokeMaterial}
             />
-            {/* Start cap */}
-            <mesh
-              ref={(el) => { startCapRefs.current[si] = el }}
-              geometry={sphereGeometry}
-              material={strokeMaterial}
-              position={data.capPositions[0]}
-            />
-            {/* End cap */}
-            <mesh
-              ref={(el) => { endCapRefs.current[si] = el }}
-              geometry={sphereGeometry}
-              material={strokeMaterial}
-              position={data.capPositions[1]}
-            />
-            {/* Joints */}
-            <group ref={(el) => { jointGroupRefs.current[si] = el }}>
-              {data.jointPositions.map((pos, ji) => (
+            {/* Rod-mode only: caps + joints */}
+            {data.mode === "rod" && data.capPositions && (
+              <>
                 <mesh
-                  key={`${data.key}-joint-${ji}`}
+                  ref={(el) => { startCapRefs.current[si] = el }}
                   geometry={sphereGeometry}
                   material={strokeMaterial}
-                  position={pos}
+                  position={data.capPositions[0]}
                 />
-              ))}
-            </group>
+                <mesh
+                  ref={(el) => { endCapRefs.current[si] = el }}
+                  geometry={sphereGeometry}
+                  material={strokeMaterial}
+                  position={data.capPositions[1]}
+                />
+              </>
+            )}
+            {data.mode === "rod" && data.jointPositions && (
+              <group ref={(el) => { jointGroupRefs.current[si] = el }}>
+                {data.jointPositions.map((pos, ji) => (
+                  <mesh
+                    key={`${data.key}-joint-${ji}`}
+                    geometry={sphereGeometry}
+                    material={strokeMaterial}
+                    position={pos}
+                  />
+                ))}
+              </group>
+            )}
           </group>
         ))}
       </group>
 
-      {/* Traveling ink tips: NOT exported (purely visual during animation) */}
-      {meshes.map((data, si) => (
+      {/* Traveling ink tips: Rod-mode only, NOT exported */}
+      {meshes.filter((d) => d.mode === "rod").map((data, si) => (
         <mesh
           key={`${data.key}-tip`}
           ref={(el) => { tipRefs.current[si] = el }}
@@ -392,6 +395,7 @@ function Scene({
   canvasWidth,
   canvasHeight,
   geometryMode,
+  extrudeParams,
   boundsRef,
   exportGroupRef,
   playheadRef,
@@ -406,6 +410,7 @@ function Scene({
   canvasWidth: number
   canvasHeight: number
   geometryMode: GeometryMode
+  extrudeParams?: ExtrudeParams
   boundsRef: React.MutableRefObject<StrokeBounds | null>
   exportGroupRef: React.RefObject<THREE.Group | null>
   playheadRef: React.MutableRefObject<number>
@@ -414,7 +419,7 @@ function Scene({
   totalDuration: number
   onProgressUpdate: (progress: number) => void
 }) {
-  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode)
+  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode, extrudeParams)
   const bounds = useStrokeBounds(meshes)
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
@@ -505,10 +510,11 @@ interface Viewport3DProps {
   processedStrokes: ProcessedStroke[]
   rawStrokes: Stroke[]
   geometryMode: GeometryMode
+  extrudeParams?: ExtrudeParams
   settingsRef?: React.MutableRefObject<ExportSettings>
 }
 
-export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode, settingsRef }: Viewport3DProps) {
+export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode, extrudeParams, settingsRef }: Viewport3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const boundsRef = useRef<StrokeBounds | null>(null)
@@ -643,6 +649,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         exportName,
         strokeCount,
         totalPoints,
+        extrudeParams,
         settings: {
           spacing: settings?.spacing ?? null,
           smoothingEnabled: settings?.smoothing ?? null,
@@ -725,7 +732,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
     } finally {
       setExporting(false)
     }
-  }, [processedStrokes, geometryMode, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
+  }, [processedStrokes, geometryMode, extrudeParams, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
 
   const formatDuration = (ms: number, frac: number) => {
     const sec = (ms * frac) / 1000
@@ -753,6 +760,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             canvasWidth={canvasWidth}
             canvasHeight={canvasHeight}
             geometryMode={geometryMode}
+            extrudeParams={extrudeParams}
             boundsRef={boundsRef}
             exportGroupRef={exportGroupRef}
             playheadRef={playheadRef}

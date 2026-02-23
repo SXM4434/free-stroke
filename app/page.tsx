@@ -4,11 +4,11 @@ import { useState, useRef } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 import DrawingCanvas, { type ExportSettings } from "@/components/drawing-canvas"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
-import type { GeometryMode } from "@/lib/geometry-engines"
+import { type GeometryMode, type ExtrudeParams, DEFAULT_EXTRUDE_PARAMS } from "@/lib/geometry-engines"
 
 const GEOMETRY_MODES: { value: GeometryMode; label: string; disabled: boolean; tooltip?: string }[] = [
   { value: "rod", label: "Rod", disabled: false },
-  { value: "extrude", label: "Extrude", disabled: true, tooltip: "Coming soon" },
+  { value: "extrude", label: "Extrude", disabled: false },
   { value: "inflate", label: "Inflate", disabled: true, tooltip: "Coming soon" },
 ]
 
@@ -18,6 +18,7 @@ export default function Home() {
     []
   )
   const [geometryMode, setGeometryMode] = useState<GeometryMode>("rod")
+  const [extrudeParams, setExtrudeParams] = useState<ExtrudeParams>(DEFAULT_EXTRUDE_PARAMS)
   const settingsRef = useRef<ExportSettings>({
     spacing: 4,
     smoothing: true,
@@ -61,6 +62,61 @@ export default function Home() {
         <div className="w-[70px]" />
       </header>
 
+      {/* Extrude mode controls */}
+      {geometryMode === "extrude" && (
+        <div className="flex h-10 shrink-0 items-center gap-4 border-b border-border bg-muted/30 px-4">
+          {/* Width */}
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="select-none font-medium">Width</span>
+            <input
+              type="range"
+              min={0.02}
+              max={0.2}
+              step={0.005}
+              value={extrudeParams.width}
+              onChange={(e) => setExtrudeParams((p) => ({ ...p, width: Number(e.target.value) }))}
+              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+            />
+            <span className="w-8 select-none font-mono text-[10px]">
+              {extrudeParams.width.toFixed(3)}
+            </span>
+          </label>
+
+          <div className="h-4 w-px bg-border" />
+
+          {/* Depth */}
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="select-none font-medium">Depth</span>
+            <input
+              type="range"
+              min={0.02}
+              max={0.6}
+              step={0.01}
+              value={extrudeParams.depth}
+              onChange={(e) => setExtrudeParams((p) => ({ ...p, depth: Number(e.target.value) }))}
+              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+            />
+            <span className="w-8 select-none font-mono text-[10px]">
+              {extrudeParams.depth.toFixed(2)}
+            </span>
+          </label>
+
+          <div className="h-4 w-px bg-border" />
+
+          {/* Bevel toggle */}
+          <button
+            onClick={() => setExtrudeParams((p) => ({ ...p, bevelEnabled: !p.bevelEnabled }))}
+            className={`rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+              extrudeParams.bevelEnabled
+                ? "border-foreground/20 bg-foreground text-background"
+                : "border-border bg-background text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Bevel
+          </button>
+        </div>
+      )}
+
       {/* Two-column layout */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left column: drawing canvas */}
@@ -76,7 +132,7 @@ export default function Home() {
 
         {/* Right column: 3D viewport */}
         <div className="flex-1">
-          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} geometryMode={geometryMode} settingsRef={settingsRef} />
+          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} settingsRef={settingsRef} />
         </div>
       </div>
     </div>
