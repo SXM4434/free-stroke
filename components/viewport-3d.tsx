@@ -5,24 +5,32 @@ import { Canvas, useThree } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
-import type { ProcessedStroke } from "@/lib/stroke-processing"
+import { detectCorners, type ProcessedStroke } from "@/lib/stroke-processing"
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
 const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
 
 /* ------------------------------------------------------------------ */
-/*  Convert 2D canvas strokes to 3D tube meshes                       */
+/*  Convert 2D canvas strokes to 3D tube meshes + cap/joint spheres   */
 /* ------------------------------------------------------------------ */
 
-const TUBE_RADIUS = 0.02
+const TUBE_RADIUS = 0.012
 const TUBE_SEGMENTS_MULTIPLIER = 2
-const RADIAL_SEGMENTS = 6
+const RADIAL_SEGMENTS = 14
+const SPHERE_SEGMENTS = 12
 
-function useStrokeTubes(
+interface StrokeMeshData {
+  tubeGeometry: THREE.TubeGeometry
+  capPositions: THREE.Vector3[]    // start + end caps
+  jointPositions: THREE.Vector3[]  // corner joint spheres
+  key: string
+}
+
+function useStrokeMeshes(
   strokes: ProcessedStroke[],
   canvasWidth: number,
   canvasHeight: number
-) {
+): StrokeMeshData[] {
   return useMemo(() => {
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0)
       return []
@@ -30,65 +38,109 @@ function useStrokeTubes(
     const scaleRef = Math.max(canvasWidth, canvasHeight)
     const normScale = 3 / scaleRef
 
-    const tubes: { curve: THREE.CatmullRomCurve3; geometry: THREE.TubeGeometry; key: string }[] = []
+    const result: StrokeMeshData[] = []
 
     for (let si = 0; si < strokes.length; si++) {
       const stroke = strokes[si]
       if (stroke.points.length < 2) continue
 
+      // Convert 2D -> 3D
       const pts3d = stroke.points.map((p) => {
         const x = (p.x - canvasWidth / 2) * normScale
         const y = -(p.y - canvasHeight / 2) * normScale
         return new THREE.Vector3(x, y, 0)
       })
 
+      // Filter near-duplicate points
       const filtered = [pts3d[0]]
+      const filteredIndices = [0] // track original indices for corner mapping
       for (let i = 1; i < pts3d.length; i++) {
         if (pts3d[i].distanceTo(filtered[filtered.length - 1]) > 0.001) {
           filtered.push(pts3d[i])
+          filteredIndices.push(i)
         }
       }
       if (filtered.length < 2) continue
 
+      // Build tube
       const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
       const tubularSegments = Math.max(
         curve.points.length * TUBE_SEGMENTS_MULTIPLIER,
         8
       )
-      const geometry = new THREE.TubeGeometry(
+      const tubeGeometry = new THREE.TubeGeometry(
         curve,
         tubularSegments,
         TUBE_RADIUS,
         RADIAL_SEGMENTS,
-        false
+        false // not closed — we add sphere caps instead
       )
-      tubes.push({ curve, geometry, key: `stroke-${si}-${stroke.points.length}` })
+
+      // Cap positions: first and last filtered point
+      const capPositions = [
+        filtered[0].clone(),
+        filtered[filtered.length - 1].clone(),
+      ]
+
+      // Corner joint positions: detect corners on 2D points, map to 3D
+      const jointPositions: THREE.Vector3[] = []
+      if (stroke.cornerCount > 0) {
+        const cornerIndices = detectCorners(stroke.points, 45, 4)
+        for (const ci of cornerIndices) {
+          // Map corner index to closest filtered 3D point
+          if (ci >= 0 && ci < pts3d.length) {
+            const pos = pts3d[ci]
+            // Find nearest filtered point (corner may land between filtered points)
+            let best = filtered[0]
+            let bestDist = pos.distanceTo(filtered[0])
+            for (let fi = 1; fi < filtered.length; fi++) {
+              const d = pos.distanceTo(filtered[fi])
+              if (d < bestDist) {
+                bestDist = d
+                best = filtered[fi]
+              }
+            }
+            jointPositions.push(best.clone())
+          }
+        }
+      }
+
+      result.push({
+        tubeGeometry,
+        capPositions,
+        jointPositions,
+        key: `stroke-${si}-${stroke.points.length}`,
+      })
     }
 
-    return tubes
+    return result
   }, [strokes, canvasWidth, canvasHeight])
 }
 
+/* ---- Shared geometries (created once, reused) ---- */
+const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+const strokeMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a" })
+
 /* ---- Auto-frame camera to fit strokes ---- */
 function CameraFramer({
-  tubes,
+  meshes,
   controlsRef,
 }: {
-  tubes: { geometry: THREE.TubeGeometry }[]
+  meshes: StrokeMeshData[]
   controlsRef: React.RefObject<OrbitControlsImpl | null>
 }) {
   const { camera } = useThree()
 
   useEffect(() => {
-    if (tubes.length === 0) return
+    if (meshes.length === 0) return
     const controls = controlsRef.current
     if (!controls) return
 
     const box = new THREE.Box3()
-    for (const { geometry } of tubes) {
-      geometry.computeBoundingBox()
-      if (geometry.boundingBox) {
-        box.union(geometry.boundingBox)
+    for (const { tubeGeometry } of meshes) {
+      tubeGeometry.computeBoundingBox()
+      if (tubeGeometry.boundingBox) {
+        box.union(tubeGeometry.boundingBox)
       }
     }
 
@@ -100,7 +152,6 @@ function CameraFramer({
     const sphere = new THREE.Sphere()
     box.getBoundingSphere(sphere)
 
-    // Position camera along Z, far enough to see the full sphere
     const fov = (camera as THREE.PerspectiveCamera).fov
     const fovRad = (fov * Math.PI) / 180
     const dist = Math.max(sphere.radius / Math.sin(fovRad / 2), 1)
@@ -108,7 +159,7 @@ function CameraFramer({
     camera.position.set(center.x, center.y, center.z + dist * 1.2)
     controls.target.copy(center)
     controls.update()
-  }, [tubes, camera, controlsRef])
+  }, [meshes, camera, controlsRef])
 
   return null
 }
@@ -125,7 +176,7 @@ function Scene({
   canvasWidth: number
   canvasHeight: number
 }) {
-  const tubes = useStrokeTubes(strokes, canvasWidth, canvasHeight)
+  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight)
 
   return (
     <>
@@ -141,13 +192,34 @@ function Scene({
         </mesh>
       )}
 
-      {tubes.map(({ geometry, key }) => (
-        <mesh key={key} geometry={geometry}>
-          <meshStandardMaterial color="#1a1a1a" />
-        </mesh>
+      {meshes.map(({ tubeGeometry, capPositions, jointPositions, key }) => (
+        <group key={key}>
+          {/* Tube body */}
+          <mesh geometry={tubeGeometry} material={strokeMaterial} />
+
+          {/* End caps */}
+          {capPositions.map((pos, i) => (
+            <mesh
+              key={`${key}-cap-${i}`}
+              geometry={sphereGeometry}
+              material={strokeMaterial}
+              position={pos}
+            />
+          ))}
+
+          {/* Corner joint spheres */}
+          {jointPositions.map((pos, i) => (
+            <mesh
+              key={`${key}-joint-${i}`}
+              geometry={sphereGeometry}
+              material={strokeMaterial}
+              position={pos}
+            />
+          ))}
+        </group>
       ))}
 
-      <CameraFramer tubes={tubes} controlsRef={controlsRef} />
+      <CameraFramer meshes={meshes} controlsRef={controlsRef} />
 
       <gridHelper
         args={[6, 12, "#cccccc", "#e5e5e5"]}
