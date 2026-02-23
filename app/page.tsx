@@ -1,4 +1,5 @@
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
+import DrawingCanvas from "@/components/drawing-canvas"
 
 export default function Home() {
   return (
@@ -12,11 +13,9 @@ export default function Home() {
 
       {/* Two-column layout */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left column: draw area placeholder */}
-        <div className="flex flex-1 items-center justify-center border-r border-border">
-          <p className="text-sm text-muted-foreground">
-            Draw here (next step)
-          </p>
+        {/* Left column: drawing canvas */}
+        <div className="relative flex-1 border-r border-border">
+          <DrawingCanvas />
         </div>
 
         {/* Right column: 3D viewport */}
