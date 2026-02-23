@@ -7,6 +7,13 @@ import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import type { ExportSettings } from "@/components/drawing-canvas"
+import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js"
+import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js"
+
+const mergeGeometriesSafe =
+  (BufferGeometryUtils as any).mergeGeometries ??
+  (BufferGeometryUtils as any).mergeBufferGeometries
+
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
 const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
@@ -736,7 +743,9 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
 
     setExporting(true)
     try {
-      const { GLTFExporter, mergeGeometries } = await import("three-stdlib")
+      if (typeof mergeGeometriesSafe !== "function") {
+        throw new Error("BufferGeometryUtils merge function not available")
+      }
 
       // Compute the same meshes used on screen
       const scaleRef = Math.max(canvasWidth, canvasHeight)
@@ -820,7 +829,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
 
         // Merge all parts into a single geometry
         const parts = [tubeGeo, startCapGeo, endCapGeo, ...jointGeos]
-        const merged = mergeGeometries(parts, false)
+        const merged = mergeGeometriesSafe(parts, false)
 
         if (merged) {
           const mesh = new THREE.Mesh(merged, inkMaterial)
@@ -1009,11 +1018,10 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
               <button
                 key={s}
                 onClick={() => setSpeed(s)}
-                className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                  speed === s
+                className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors ${speed === s
                     ? "bg-foreground text-background"
                     : "text-muted-foreground hover:text-foreground"
-                }`}
+                  }`}
               >
                 {s}x
               </button>
