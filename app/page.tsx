@@ -1,8 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
-import DrawingCanvas from "@/components/drawing-canvas"
+import DrawingCanvas, { type ExportSettings } from "@/components/drawing-canvas"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 
 export default function Home() {
@@ -10,6 +10,11 @@ export default function Home() {
   const [processedStrokes, setProcessedStrokes] = useState<ProcessedStroke[]>(
     []
   )
+  const settingsRef = useRef<ExportSettings>({
+    spacing: 4,
+    smoothing: true,
+    preserveCorners: true,
+  })
 
   return (
     <div className="flex h-screen flex-col">
@@ -29,12 +34,13 @@ export default function Home() {
             setRawStrokes={setRawStrokes}
             processedStrokes={processedStrokes}
             setProcessedStrokes={setProcessedStrokes}
+            settingsRef={settingsRef}
           />
         </div>
 
         {/* Right column: 3D viewport */}
         <div className="flex-1">
-          <Viewport3DWrapper processedStrokes={processedStrokes} />
+          <Viewport3DWrapper processedStrokes={processedStrokes} settingsRef={settingsRef} />
         </div>
       </div>
     </div>

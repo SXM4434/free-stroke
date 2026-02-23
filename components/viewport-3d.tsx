@@ -6,6 +6,8 @@ import { OrbitControls } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
 import type { ProcessedStroke } from "@/lib/stroke-processing"
+import type { ExportSettings } from "@/components/drawing-canvas"
+import type { ExportSettings } from "@/components/drawing-canvas"
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
 const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
@@ -323,14 +325,27 @@ class ViewportErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryS
 /* ---- Main viewport component ---- */
 interface Viewport3DProps {
   processedStrokes: ProcessedStroke[]
+  settingsRef?: React.MutableRefObject<ExportSettings>
 }
 
-export default function Viewport3D({ processedStrokes }: Viewport3DProps) {
+export default function Viewport3D({ processedStrokes, settingsRef }: Viewport3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const boundsRef = useRef<StrokeBounds | null>(null)
   const exportGroupRef = useRef<THREE.Group | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [exportName, setExportName] = useState("")
+
+  const canvasWidth =
+    typeof window !== "undefined" ? window.innerWidth / 2 : 800
+  const canvasHeight =
+    typeof window !== "undefined" ? window.innerHeight - 48 : 600
+
+  const strokeCount = processedStrokes.length
+  const totalPoints = processedStrokes.reduce(
+    (sum, s) => sum + s.points.length,
+    0
+  )
 
   const handleResetCamera = useCallback(() => {
     const controls = controlsRef.current
@@ -373,6 +388,33 @@ export default function Viewport3D({ processedStrokes }: Viewport3DProps) {
 
     setExporting(true)
     try {
+      // Build formatted timestamp: YYYY-MM-DD_HH-mm-ss (local time)
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, "0")
+      const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
+
+      // Build filename
+      const safeName = exportName.trim().replace(/[^a-zA-Z0-9_-]/g, "-")
+      const prefix = safeName ? `${safeName}_` : "free-stroke_"
+      const filename = `${prefix}${ts}.glb`
+
+      // Embed metadata in the export group's userData (glTF "extras")
+      const settings = settingsRef?.current
+      const metadata = {
+        app: "Free Stroke",
+        exportedAt: now.toISOString(),
+        strokeCount,
+        totalPoints,
+        settings: {
+          spacing: settings?.spacing ?? null,
+          smoothingEnabled: settings?.smoothing ?? null,
+          cornersEnabled: settings?.preserveCorners ?? null,
+          tubeRadius: TUBE_RADIUS,
+          radialSegments: RADIAL_SEGMENTS,
+        },
+      }
+      group.userData = metadata
+
       const { GLTFExporter } = await import("three-stdlib")
       const exporter = new GLTFExporter()
 
@@ -385,12 +427,14 @@ export default function Viewport3D({ processedStrokes }: Viewport3DProps) {
         )
       })
 
+      // Clean up userData after export to not pollute the live scene
+      group.userData = {}
+
       const blob = new Blob([result], { type: "application/octet-stream" })
       const url = URL.createObjectURL(blob)
-      const timestamp = Date.now()
       const a = document.createElement("a")
       a.href = url
-      a.download = `free-stroke-${timestamp}.glb`
+      a.download = filename
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -400,18 +444,7 @@ export default function Viewport3D({ processedStrokes }: Viewport3DProps) {
     } finally {
       setExporting(false)
     }
-  }, [processedStrokes.length])
-
-  const canvasWidth =
-    typeof window !== "undefined" ? window.innerWidth / 2 : 800
-  const canvasHeight =
-    typeof window !== "undefined" ? window.innerHeight - 48 : 600
-
-  const strokeCount = processedStrokes.length
-  const totalPoints = processedStrokes.reduce(
-    (sum, s) => sum + s.points.length,
-    0
-  )
+  }, [processedStrokes.length, exportName, settingsRef, strokeCount, totalPoints])
 
   return (
     <div ref={containerRef} className="relative h-full w-full">
@@ -446,6 +479,14 @@ export default function Viewport3D({ processedStrokes }: Viewport3DProps) {
 
       {/* Controls */}
       <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
+        <input
+          type="text"
+          value={exportName}
+          onChange={(e) => setExportName(e.target.value)}
+          placeholder="filename prefix"
+          maxLength={32}
+          className="h-[30px] w-28 rounded-lg border border-border bg-background/80 px-2 text-xs text-foreground placeholder:text-muted-foreground/50 backdrop-blur-sm focus:outline-none focus:ring-1 focus:ring-foreground/20"
+        />
         <button
           onClick={handleExportGLB}
           disabled={strokeCount === 0 || exporting}

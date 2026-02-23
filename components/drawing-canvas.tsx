@@ -16,11 +16,18 @@ import {
   type ProcessedStroke,
 } from "@/lib/stroke-processing"
 
+export interface ExportSettings {
+  spacing: number
+  smoothing: boolean
+  preserveCorners: boolean
+}
+
 interface DrawingCanvasProps {
   rawStrokes: Stroke[]
   setRawStrokes: Dispatch<SetStateAction<Stroke[]>>
   processedStrokes: ProcessedStroke[]
   setProcessedStrokes: Dispatch<SetStateAction<ProcessedStroke[]>>
+  settingsRef: React.MutableRefObject<ExportSettings>
 }
 
 export default function DrawingCanvas({
@@ -28,6 +35,7 @@ export default function DrawingCanvas({
   setRawStrokes,
   processedStrokes,
   setProcessedStrokes,
+  settingsRef,
 }: DrawingCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -47,13 +55,16 @@ export default function DrawingCanvas({
 
   useEffect(() => {
     smoothingRef.current = smoothing
-  }, [smoothing])
+    settingsRef.current = { ...settingsRef.current, smoothing }
+  }, [smoothing, settingsRef])
   useEffect(() => {
     spacingRef.current = spacing
-  }, [spacing])
+    settingsRef.current = { ...settingsRef.current, spacing }
+  }, [spacing, settingsRef])
   useEffect(() => {
     preserveCornersRef.current = preserveCorners
-  }, [preserveCorners])
+    settingsRef.current = { ...settingsRef.current, preserveCorners }
+  }, [preserveCorners, settingsRef])
   useEffect(() => {
     rawStrokesRef.current = rawStrokes
   }, [rawStrokes])
