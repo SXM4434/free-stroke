@@ -70,6 +70,12 @@ export interface StrokeMeshData {
   key: string
   /** Geometry mode that produced this mesh data */
   mode: GeometryMode
+  /**
+   * Per-filtered-point timestamps (ms, relative to stroke start = 0).
+   * Used for continuous reveal interpolation so the animation follows
+   * the actual pen speed rather than advancing at a uniform rate.
+   */
+  pointTimestamps?: number[]
 }
 
 export interface PreviewParams {
@@ -212,9 +218,22 @@ export const RodEngine: GeometryEngine = {
       if (stroke.points.length < 2) continue
 
       const pts3d = strokeTo3D(stroke, canvasWidth, canvasHeight)
-      const filtered = filterDuplicates(pts3d)
+
+      // Filter duplicates while tracking which source indices survived
+      const filtered: THREE.Vector3[] = [pts3d[0]]
+      const survivedIndices: number[] = [0]
+      for (let i = 1; i < pts3d.length; i++) {
+        if (pts3d[i].distanceTo(filtered[filtered.length - 1]) > 0.001) {
+          filtered.push(pts3d[i])
+          survivedIndices.push(i)
+        }
+      }
       if (filtered.length < 2) continue
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
+
+      // Build per-filtered-point timestamps (relative to stroke start)
+      const strokeTStart = stroke.points[0].t
+      const pointTimestamps = survivedIndices.map((idx) => stroke.points[idx].t - strokeTStart)
 
       const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
       const tubularSegments = Math.min(
@@ -246,6 +265,7 @@ export const RodEngine: GeometryEngine = {
         filteredCount: filtered.length,
         key: `stroke-${si}-${stroke.points.length}`,
         mode: "rod",
+        pointTimestamps,
       })
     }
 

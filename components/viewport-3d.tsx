@@ -172,12 +172,14 @@ function AnimatedStrokes({
   timelines,
   totalDuration,
   playheadRef,
+  smoothReveal,
   exportGroupRef,
 }: {
   meshes: StrokeMeshData[]
   timelines: StrokeTimeline[]
   totalDuration: number
   playheadRef: React.MutableRefObject<number> // 0..1 progress
+  smoothReveal: boolean
   exportGroupRef: React.RefObject<THREE.Group | null>
 }) {
   // Refs to all tube meshes for drawRange updates
@@ -245,7 +247,32 @@ function AnimatedStrokes({
 
       const strokeDuration = Math.max(timeline.tEnd - timeline.tStart, 1)
       const elapsed = currentTimeMs - timeline.tStart
-      const fraction = Math.min(elapsed / strokeDuration, 1)
+
+      // Compute reveal fraction — either per-point timestamp interpolation (smooth)
+      // or uniform linear (stepped)
+      let fraction: number
+      const ts = smoothReveal ? strokeMeshData.pointTimestamps : undefined
+      if (ts && ts.length >= 2) {
+        // Binary search for the segment [i, i+1] containing elapsed
+        let lo = 0
+        let hi = ts.length - 1
+        while (lo < hi - 1) {
+          const mid = (lo + hi) >> 1
+          if (ts[mid] <= elapsed) lo = mid
+          else hi = mid
+        }
+        if (elapsed <= ts[0]) {
+          fraction = 0
+        } else if (elapsed >= ts[ts.length - 1]) {
+          fraction = 1
+        } else {
+          const segDur = ts[hi] - ts[lo]
+          const alpha = segDur > 0 ? (elapsed - ts[lo]) / segDur : 0
+          fraction = (lo + alpha) / (ts.length - 1)
+        }
+      } else {
+        fraction = Math.min(elapsed / strokeDuration, 1)
+      }
 
       const revealedIndices = Math.floor(fraction * totalIndices)
       geo.setDrawRange(0, revealedIndices)
@@ -396,6 +423,7 @@ function Scene({
   canvasHeight,
   geometryMode,
   extrudeParams,
+  smoothReveal,
   boundsRef,
   exportGroupRef,
   playheadRef,
@@ -411,6 +439,7 @@ function Scene({
   canvasHeight: number
   geometryMode: GeometryMode
   extrudeParams?: ExtrudeParams
+  smoothReveal: boolean
   boundsRef: React.MutableRefObject<StrokeBounds | null>
   exportGroupRef: React.RefObject<THREE.Group | null>
   playheadRef: React.MutableRefObject<number>
@@ -445,6 +474,7 @@ function Scene({
         timelines={timelines}
         totalDuration={computedDuration}
         playheadRef={playheadRef}
+        smoothReveal={smoothReveal}
         exportGroupRef={exportGroupRef}
       />
 
@@ -527,6 +557,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const [playing, setPlaying] = useState(false)
   const [progress, setProgress] = useState(0) // for UI slider display
   const [speed, setSpeed] = useState(1)
+  const [smoothReveal, setSmoothReveal] = useState(true)
 
   const { totalDuration } = useTimeline(rawStrokes)
 
@@ -761,6 +792,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             canvasHeight={canvasHeight}
             geometryMode={geometryMode}
             extrudeParams={extrudeParams}
+            smoothReveal={smoothReveal}
             boundsRef={boundsRef}
             exportGroupRef={exportGroupRef}
             playheadRef={playheadRef}
@@ -815,6 +847,21 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             onChange={(e) => handleScrub(Number(e.target.value))}
             className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
           />
+
+          {/* Smooth reveal toggle */}
+          <button
+            onClick={() => setSmoothReveal((v) => !v)}
+            title="Smooth reveal: follow actual pen speed"
+            className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              smoothReveal
+                ? "border-foreground/20 bg-foreground text-background"
+                : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Smooth
+          </button>
+
+          <div className="h-4 w-px bg-border" />
 
           {/* Speed */}
           <div className="flex shrink-0 items-center gap-0.5">
