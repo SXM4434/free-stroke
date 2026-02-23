@@ -1,7 +1,16 @@
+"use client"
+
+import { useState } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 import DrawingCanvas from "@/components/drawing-canvas"
+import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 
 export default function Home() {
+  const [rawStrokes, setRawStrokes] = useState<Stroke[]>([])
+  const [processedStrokes, setProcessedStrokes] = useState<ProcessedStroke[]>(
+    []
+  )
+
   return (
     <div className="flex h-screen flex-col">
       {/* Top bar */}
@@ -15,12 +24,17 @@ export default function Home() {
       <div className="flex flex-1 overflow-hidden">
         {/* Left column: drawing canvas */}
         <div className="relative flex-1 border-r border-border">
-          <DrawingCanvas />
+          <DrawingCanvas
+            rawStrokes={rawStrokes}
+            setRawStrokes={setRawStrokes}
+            processedStrokes={processedStrokes}
+            setProcessedStrokes={setProcessedStrokes}
+          />
         </div>
 
         {/* Right column: 3D viewport */}
         <div className="flex-1">
-          <Viewport3DWrapper />
+          <Viewport3DWrapper processedStrokes={processedStrokes} />
         </div>
       </div>
     </div>

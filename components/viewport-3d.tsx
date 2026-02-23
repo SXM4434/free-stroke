@@ -1,35 +1,299 @@
 "use client"
 
-import { useRef, useCallback } from "react"
-import { Canvas } from "@react-three/fiber"
+import { useRef, useCallback, useMemo, useEffect, Component, type ReactNode } from "react"
+import { Canvas, useThree } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
+import type { ProcessedStroke } from "@/lib/stroke-processing"
 
-const INITIAL_CAMERA_POSITION = new THREE.Vector3(3, 3, 3)
+const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
 const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
 
-function Scene({
+/* ------------------------------------------------------------------ */
+/*  Convert 2D canvas strokes to 3D tube meshes + cap/joint spheres   */
+/* ------------------------------------------------------------------ */
+
+const TUBE_RADIUS = 0.012
+const TUBE_SEGMENTS_MULTIPLIER = 3
+const MAX_TUBULAR_SEGMENTS = 512
+const RADIAL_SEGMENTS = 16
+const SPHERE_SEGMENTS = 14
+const JOINT_ANGLE_THRESHOLD_DEG = 40
+const JOINT_MIN_DISTANCE = 0.03 // world units between joint spheres
+
+interface StrokeMeshData {
+  tubeGeometry: THREE.TubeGeometry
+  capPositions: THREE.Vector3[]    // start + end caps
+  jointPositions: THREE.Vector3[]  // corner joint spheres
+  key: string
+}
+
+function useStrokeMeshes(
+  strokes: ProcessedStroke[],
+  canvasWidth: number,
+  canvasHeight: number
+): StrokeMeshData[] {
+  return useMemo(() => {
+    if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0)
+      return []
+
+    const scaleRef = Math.max(canvasWidth, canvasHeight)
+    const normScale = 3 / scaleRef
+
+    const result: StrokeMeshData[] = []
+
+    for (let si = 0; si < strokes.length; si++) {
+      const stroke = strokes[si]
+      if (stroke.points.length < 2) continue
+
+      // Convert 2D -> 3D
+      const pts3d = stroke.points.map((p) => {
+        const x = (p.x - canvasWidth / 2) * normScale
+        const y = -(p.y - canvasHeight / 2) * normScale
+        return new THREE.Vector3(x, y, 0)
+      })
+
+      // Filter near-duplicate points
+      const filtered = [pts3d[0]]
+      const filteredIndices = [0] // track original indices for corner mapping
+      for (let i = 1; i < pts3d.length; i++) {
+        if (pts3d[i].distanceTo(filtered[filtered.length - 1]) > 0.001) {
+          filtered.push(pts3d[i])
+          filteredIndices.push(i)
+        }
+      }
+      if (filtered.length < 2) continue
+
+      // Build tube
+      const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
+      const tubularSegments = Math.min(
+        Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
+        MAX_TUBULAR_SEGMENTS
+      )
+      const tubeGeometry = new THREE.TubeGeometry(
+        curve,
+        tubularSegments,
+        TUBE_RADIUS,
+        RADIAL_SEGMENTS,
+        false // not closed — we add sphere caps instead
+      )
+
+      // Cap positions: first and last filtered point
+      const capPositions = [
+        filtered[0].clone(),
+        filtered[filtered.length - 1].clone(),
+      ]
+
+      // Joint positions: scan 3D polyline for sharp angles directly
+      const jointPositions: THREE.Vector3[] = []
+      const angleThresholdRad =
+        (JOINT_ANGLE_THRESHOLD_DEG * Math.PI) / 180
+
+      for (let i = 1; i < filtered.length - 1; i++) {
+        const prev = filtered[i - 1]
+        const curr = filtered[i]
+        const next = filtered[i + 1]
+
+        const ax = curr.x - prev.x
+        const ay = curr.y - prev.y
+        const az = curr.z - prev.z
+        const bx = next.x - curr.x
+        const by = next.y - curr.y
+        const bz = next.z - curr.z
+
+        const magA = Math.sqrt(ax * ax + ay * ay + az * az)
+        const magB = Math.sqrt(bx * bx + by * by + bz * bz)
+        if (magA < 1e-6 || magB < 1e-6) continue
+
+        const dot = ax * bx + ay * by + az * bz
+        const cosAngle = Math.max(-1, Math.min(1, dot / (magA * magB)))
+        const deviation = Math.PI - Math.acos(cosAngle)
+
+        if (deviation > angleThresholdRad) {
+          // Min distance gate: skip if too close to the last joint
+          if (jointPositions.length > 0) {
+            const lastJoint = jointPositions[jointPositions.length - 1]
+            if (curr.distanceTo(lastJoint) < JOINT_MIN_DISTANCE) continue
+          }
+          jointPositions.push(curr.clone())
+        }
+      }
+
+      result.push({
+        tubeGeometry,
+        capPositions,
+        jointPositions,
+        key: `stroke-${si}-${stroke.points.length}`,
+      })
+    }
+
+    return result
+  }, [strokes, canvasWidth, canvasHeight])
+}
+
+/* ---- Shared geometries (created once, reused) ---- */
+const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+const strokeMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a" })
+
+/* ---- Auto-frame camera to fit strokes ---- */
+function CameraFramer({
+  meshes,
   controlsRef,
 }: {
+  meshes: StrokeMeshData[]
   controlsRef: React.RefObject<OrbitControlsImpl | null>
 }) {
+  const { camera } = useThree()
+
+  useEffect(() => {
+    if (meshes.length === 0) return
+    const controls = controlsRef.current
+    if (!controls) return
+
+    const box = new THREE.Box3()
+    for (const { tubeGeometry } of meshes) {
+      tubeGeometry.computeBoundingBox()
+      if (tubeGeometry.boundingBox) {
+        box.union(tubeGeometry.boundingBox)
+      }
+    }
+
+    if (box.isEmpty()) return
+
+    const center = new THREE.Vector3()
+    box.getCenter(center)
+
+    const sphere = new THREE.Sphere()
+    box.getBoundingSphere(sphere)
+
+    const fov = (camera as THREE.PerspectiveCamera).fov
+    const fovRad = (fov * Math.PI) / 180
+    const dist = Math.max(sphere.radius / Math.sin(fovRad / 2), 1)
+
+    camera.position.set(center.x, center.y, center.z + dist * 1.2)
+    controls.target.copy(center)
+    controls.update()
+  }, [meshes, camera, controlsRef])
+
+  return null
+}
+
+/* ---- Scene with strokes ---- */
+function Scene({
+  controlsRef,
+  strokes,
+  canvasWidth,
+  canvasHeight,
+}: {
+  controlsRef: React.RefObject<OrbitControlsImpl | null>
+  strokes: ProcessedStroke[]
+  canvasWidth: number
+  canvasHeight: number
+}) {
+  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight)
+
   return (
     <>
-      <ambientLight intensity={0.5} />
+      <ambientLight intensity={0.6} />
       <directionalLight position={[5, 5, 5]} intensity={1} />
-      <mesh>
-        <boxGeometry args={[1, 1, 1]} />
-        <meshStandardMaterial color="#888888" />
-      </mesh>
-      <gridHelper args={[10, 10, "#cccccc", "#e5e5e5"]} />
+      <directionalLight position={[-3, 2, -3]} intensity={0.3} />
+
+      {/* Show cube only when no strokes exist */}
+      {strokes.length === 0 && (
+        <mesh>
+          <boxGeometry args={[0.6, 0.6, 0.6]} />
+          <meshStandardMaterial color="#888888" />
+        </mesh>
+      )}
+
+      {meshes.map(({ tubeGeometry, capPositions, jointPositions, key }) => (
+        <group key={key}>
+          {/* Tube body */}
+          <mesh geometry={tubeGeometry} material={strokeMaterial} />
+
+          {/* End caps */}
+          {capPositions.map((pos, i) => (
+            <mesh
+              key={`${key}-cap-${i}`}
+              geometry={sphereGeometry}
+              material={strokeMaterial}
+              position={pos}
+            />
+          ))}
+
+          {/* Corner joint spheres */}
+          {jointPositions.map((pos, i) => (
+            <mesh
+              key={`${key}-joint-${i}`}
+              geometry={sphereGeometry}
+              material={strokeMaterial}
+              position={pos}
+            />
+          ))}
+        </group>
+      ))}
+
+      <CameraFramer meshes={meshes} controlsRef={controlsRef} />
+
+      <gridHelper
+        args={[6, 12, "#cccccc", "#e5e5e5"]}
+        rotation={[Math.PI / 2, 0, 0]}
+        position={[0, 0, -0.05]}
+      />
       <OrbitControls ref={controlsRef} makeDefault />
     </>
   )
 }
 
-export default function Viewport3D() {
+/* ---- Error boundary ---- */
+interface ErrorBoundaryProps {
+  children: ReactNode
+}
+interface ErrorBoundaryState {
+  hasError: boolean
+  error: string | null
+}
+
+class ViewportErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error: error.message }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex h-full w-full items-center justify-center bg-destructive/5 p-6">
+          <div className="rounded-xl border border-destructive/20 bg-background p-6 text-center">
+            <p className="text-sm font-medium text-destructive">3D Viewport Error</p>
+            <p className="mt-1 text-xs text-muted-foreground">{this.state.error}</p>
+            <button
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="mt-3 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+/* ---- Main viewport component ---- */
+interface Viewport3DProps {
+  processedStrokes: ProcessedStroke[]
+}
+
+export default function Viewport3D({ processedStrokes }: Viewport3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
+  const containerRef = useRef<HTMLDivElement | null>(null)
 
   const handleResetCamera = useCallback(() => {
     const controls = controlsRef.current
@@ -40,21 +304,46 @@ export default function Viewport3D() {
     controls.update()
   }, [])
 
+  const canvasWidth =
+    typeof window !== "undefined" ? window.innerWidth / 2 : 800
+  const canvasHeight =
+    typeof window !== "undefined" ? window.innerHeight - 48 : 600
+
+  // Debug counts
+  const strokeCount = processedStrokes.length
+  const totalPoints = processedStrokes.reduce(
+    (sum, s) => sum + s.points.length,
+    0
+  )
+
   return (
-    <div className="relative h-full w-full">
-      <Canvas
-        camera={{
-          position: [
-            INITIAL_CAMERA_POSITION.x,
-            INITIAL_CAMERA_POSITION.y,
-            INITIAL_CAMERA_POSITION.z,
-          ],
-          fov: 50,
-        }}
-        style={{ background: "#fafafa" }}
-      >
-        <Scene controlsRef={controlsRef} />
-      </Canvas>
+    <div ref={containerRef} className="relative h-full w-full">
+      <ViewportErrorBoundary>
+        <Canvas
+          camera={{
+            position: [
+              INITIAL_CAMERA_POSITION.x,
+              INITIAL_CAMERA_POSITION.y,
+              INITIAL_CAMERA_POSITION.z,
+            ],
+            fov: 50,
+          }}
+          style={{ background: "#fafafa" }}
+        >
+          <Scene
+            controlsRef={controlsRef}
+            strokes={processedStrokes}
+            canvasWidth={canvasWidth}
+            canvasHeight={canvasHeight}
+          />
+        </Canvas>
+      </ViewportErrorBoundary>
+
+      {/* Debug overlay */}
+      <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-muted-foreground backdrop-blur-sm">
+        <div>strokes: {strokeCount}</div>
+        <div>points: {totalPoints}</div>
+      </div>
 
       <button
         onClick={handleResetCamera}

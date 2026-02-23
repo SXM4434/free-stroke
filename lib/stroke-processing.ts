@@ -110,7 +110,7 @@ interface CornerCandidate {
   strength: number // deviation angle in radians (higher = sharper)
 }
 
-function detectCorners(
+export function detectCorners(
   points: Point[],
   angleThresholdDeg: number = 45,
   spacing: number = 4
