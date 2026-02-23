@@ -213,7 +213,7 @@ export default function DrawingCanvas() {
       {/* Debug info */}
       <div className="pointer-events-none absolute left-3 top-3 select-none font-mono text-[11px] text-muted-foreground">
         raw {rawTotalPoints} pts | processed {processedTotalPoints} pts |
-        spacing {spacing}px | smoothing {smoothing ? "on" : "off"} | corners{" "}
+        spacing {spacing}px | smoothing: {smoothing ? "on" : "off"} | corners:{" "}
         {preserveCorners ? "on" : "off"}
       </div>
 
@@ -250,12 +250,12 @@ export default function DrawingCanvas() {
           Smoothing
         </button>
 
-        {/* Preserve corners toggle */}
+        {/* Preserve corners toggle — independent of smoothing state */}
         <button
           onClick={() => setPreserveCorners((v) => !v)}
           disabled={!smoothing}
           className={`rounded-lg border px-3 py-1.5 text-xs font-medium backdrop-blur-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-            preserveCorners && smoothing
+            preserveCorners
               ? "border-foreground/20 bg-foreground text-background"
               : "border-border bg-background/80 text-foreground hover:bg-accent"
           }`}
