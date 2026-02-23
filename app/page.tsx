@@ -1,8 +1,4 @@
-import dynamic from "next/dynamic"
-
-const Viewport3D = dynamic(() => import("@/components/viewport-3d"), {
-  ssr: false,
-})
+import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 
 export default function Home() {
   return (
@@ -25,7 +21,7 @@ export default function Home() {
 
         {/* Right column: 3D viewport */}
         <div className="flex-1">
-          <Viewport3D />
+          <Viewport3DWrapper />
         </div>
       </div>
     </div>
