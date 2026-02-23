@@ -6,6 +6,7 @@ import {
   processAllStrokes,
   type Point,
   type Stroke,
+  type ProcessedStroke,
 } from "@/lib/stroke-processing"
 
 export default function DrawingCanvas() {
@@ -16,7 +17,7 @@ export default function DrawingCanvas() {
 
   /* ---- stroke state ---- */
   const [rawStrokes, setRawStrokes] = useState<Stroke[]>([])
-  const [processedStrokes, setProcessedStrokes] = useState<Stroke[]>([])
+  const [processedStrokes, setProcessedStrokes] = useState<ProcessedStroke[]>([])
 
   /* ---- processing controls ---- */
   const [smoothing, setSmoothing] = useState(true)
@@ -198,6 +199,10 @@ export default function DrawingCanvas() {
     (sum, s) => sum + s.points.length,
     0
   )
+  const lastCornerCount =
+    processedStrokes.length > 0
+      ? processedStrokes[processedStrokes.length - 1].cornerCount
+      : 0
 
   return (
     <div ref={containerRef} className="relative h-full w-full">
@@ -214,7 +219,7 @@ export default function DrawingCanvas() {
       <div className="pointer-events-none absolute left-3 top-3 select-none font-mono text-[11px] text-muted-foreground">
         raw {rawTotalPoints} pts | processed {processedTotalPoints} pts |
         spacing {spacing}px | smoothing: {smoothing ? "on" : "off"} | corners:{" "}
-        {preserveCorners ? "on" : "off"}
+        {preserveCorners ? "on" : "off"} | last splits: {lastCornerCount}
       </div>
 
       {/* Controls bar */}
