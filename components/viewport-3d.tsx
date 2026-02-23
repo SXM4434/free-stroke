@@ -5,7 +5,7 @@ import { Canvas, useThree } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
-import { detectCorners, type ProcessedStroke } from "@/lib/stroke-processing"
+import type { ProcessedStroke } from "@/lib/stroke-processing"
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
 const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
@@ -15,9 +15,12 @@ const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
 /* ------------------------------------------------------------------ */
 
 const TUBE_RADIUS = 0.012
-const TUBE_SEGMENTS_MULTIPLIER = 2
-const RADIAL_SEGMENTS = 14
-const SPHERE_SEGMENTS = 12
+const TUBE_SEGMENTS_MULTIPLIER = 3
+const MAX_TUBULAR_SEGMENTS = 512
+const RADIAL_SEGMENTS = 16
+const SPHERE_SEGMENTS = 14
+const JOINT_ANGLE_THRESHOLD_DEG = 40
+const JOINT_MIN_DISTANCE = 0.03 // world units between joint spheres
 
 interface StrokeMeshData {
   tubeGeometry: THREE.TubeGeometry
@@ -64,9 +67,9 @@ function useStrokeMeshes(
 
       // Build tube
       const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
-      const tubularSegments = Math.max(
-        curve.points.length * TUBE_SEGMENTS_MULTIPLIER,
-        8
+      const tubularSegments = Math.min(
+        Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
+        MAX_TUBULAR_SEGMENTS
       )
       const tubeGeometry = new THREE.TubeGeometry(
         curve,
@@ -82,26 +85,38 @@ function useStrokeMeshes(
         filtered[filtered.length - 1].clone(),
       ]
 
-      // Corner joint positions: detect corners on 2D points, map to 3D
+      // Joint positions: scan 3D polyline for sharp angles directly
       const jointPositions: THREE.Vector3[] = []
-      if (stroke.cornerCount > 0) {
-        const cornerIndices = detectCorners(stroke.points, 45, 4)
-        for (const ci of cornerIndices) {
-          // Map corner index to closest filtered 3D point
-          if (ci >= 0 && ci < pts3d.length) {
-            const pos = pts3d[ci]
-            // Find nearest filtered point (corner may land between filtered points)
-            let best = filtered[0]
-            let bestDist = pos.distanceTo(filtered[0])
-            for (let fi = 1; fi < filtered.length; fi++) {
-              const d = pos.distanceTo(filtered[fi])
-              if (d < bestDist) {
-                bestDist = d
-                best = filtered[fi]
-              }
-            }
-            jointPositions.push(best.clone())
+      const angleThresholdRad =
+        (JOINT_ANGLE_THRESHOLD_DEG * Math.PI) / 180
+
+      for (let i = 1; i < filtered.length - 1; i++) {
+        const prev = filtered[i - 1]
+        const curr = filtered[i]
+        const next = filtered[i + 1]
+
+        const ax = curr.x - prev.x
+        const ay = curr.y - prev.y
+        const az = curr.z - prev.z
+        const bx = next.x - curr.x
+        const by = next.y - curr.y
+        const bz = next.z - curr.z
+
+        const magA = Math.sqrt(ax * ax + ay * ay + az * az)
+        const magB = Math.sqrt(bx * bx + by * by + bz * bz)
+        if (magA < 1e-6 || magB < 1e-6) continue
+
+        const dot = ax * bx + ay * by + az * bz
+        const cosAngle = Math.max(-1, Math.min(1, dot / (magA * magB)))
+        const deviation = Math.PI - Math.acos(cosAngle)
+
+        if (deviation > angleThresholdRad) {
+          // Min distance gate: skip if too close to the last joint
+          if (jointPositions.length > 0) {
+            const lastJoint = jointPositions[jointPositions.length - 1]
+            if (curr.distanceTo(lastJoint) < JOINT_MIN_DISTANCE) continue
           }
+          jointPositions.push(curr.clone())
         }
       }
 
