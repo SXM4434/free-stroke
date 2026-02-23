@@ -47,6 +47,7 @@ export default function DrawingCanvas() {
 
   /* ---- timing instrumentation ---- */
   const timingRef = useRef({
+    drawMs: 0,
     procOneMs: 0,
     procAllMs: 0,
     callsOne: 0,
@@ -54,47 +55,66 @@ export default function DrawingCanvas() {
     lastTrigger: "none" as string,
   })
   const [timingDisplay, setTimingDisplay] = useState(
-    "procOne: 0ms | procAll: 0ms | callsOne: 0 | callsAll: 0 | lastTrigger: none"
+    "draw: 0ms | procOne: 0ms | procAll: 0ms | callsAll: 0 | lastTrigger: none"
   )
   const processingRef = useRef(false)
 
   const updateTimingDisplay = useCallback(() => {
     const t = timingRef.current
     setTimingDisplay(
-      `procOne: ${t.procOneMs.toFixed(1)}ms | procAll: ${t.procAllMs.toFixed(1)}ms | callsOne: ${t.callsOne} | callsAll: ${t.callsAll} | lastTrigger: ${t.lastTrigger}`
+      `draw: ${t.drawMs.toFixed(1)}ms | procOne: ${t.procOneMs.toFixed(1)}ms | procAll: ${t.procAllMs.toFixed(1)}ms | callsAll: ${t.callsAll} | lastTrigger: ${t.lastTrigger}`
     )
   }, [])
+
+  /* ---- rAF batching ---- */
+  const rafIdRef = useRef(0)
 
   /* ---- stable debounced reprocess (ref-based, never recreated) ---- */
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  /** Run processAllStrokes synchronously, update timing + state */
+  const runFullReprocess = useCallback(
+    (trigger: string) => {
+      if (processingRef.current) return
+      processingRef.current = true
+
+      const t0 = performance.now()
+      const result = processAllStrokes(
+        rawStrokesRef.current,
+        spacingRef.current,
+        smoothingRef.current,
+        preserveCornersRef.current
+      )
+      const t1 = performance.now()
+
+      timingRef.current.procAllMs = t1 - t0
+      timingRef.current.callsAll += 1
+      timingRef.current.lastTrigger = trigger
+
+      setProcessedStrokes(result)
+      processingRef.current = false
+      updateTimingDisplay()
+    },
+    [updateTimingDisplay]
+  )
+
   const debouncedReprocess = useCallback(
     (trigger: string) => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
-
       debounceTimerRef.current = setTimeout(() => {
-        if (processingRef.current) return
-        processingRef.current = true
-
-        const t0 = performance.now()
-        const result = processAllStrokes(
-          rawStrokesRef.current,
-          spacingRef.current,
-          smoothingRef.current,
-          preserveCornersRef.current
-        )
-        const t1 = performance.now()
-
-        timingRef.current.procAllMs = t1 - t0
-        timingRef.current.callsAll += 1
-        timingRef.current.lastTrigger = trigger
-
-        setProcessedStrokes(result)
-        processingRef.current = false
-        updateTimingDisplay()
+        runFullReprocess(trigger)
       }, 200)
     },
-    [updateTimingDisplay]
+    [runFullReprocess]
+  )
+
+  /** Immediately run reprocess, cancelling any pending debounce */
+  const commitReprocess = useCallback(
+    (trigger: string) => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
+      runFullReprocess(trigger)
+    },
+    [runFullReprocess]
   )
 
   /* Trigger debounced reprocess when settings change */
@@ -142,13 +162,15 @@ export default function DrawingCanvas() {
     return () => ro.disconnect()
   }, [])
 
-  /* ---- full redraw from strokes ---- */
+  /* ---- full redraw from strokes (instrumented) ---- */
   const redraw = useCallback(
     (extraPoints?: Point[]) => {
       const canvas = canvasRef.current
       if (!canvas) return
       const ctx = canvas.getContext("2d")
       if (!ctx) return
+
+      const t0 = performance.now()
 
       const dpr = window.devicePixelRatio || 1
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -171,14 +193,33 @@ export default function DrawingCanvas() {
         ctx.lineJoin = "round"
         ctx.stroke()
       }
+
+      const t1 = performance.now()
+      timingRef.current.drawMs = t1 - t0
     },
     [renderStrokes]
   )
 
+  /* ---- rAF-batched redraw scheduler ---- */
+  const scheduleRedraw = useCallback(
+    (extraPoints?: Point[]) => {
+      cancelAnimationFrame(rafIdRef.current)
+      rafIdRef.current = requestAnimationFrame(() => {
+        redraw(extraPoints)
+      })
+    },
+    [redraw]
+  )
+
   /* redraw whenever committed strokes or processing result change */
   useEffect(() => {
-    redraw()
-  }, [redraw])
+    scheduleRedraw()
+  }, [scheduleRedraw])
+
+  /* cleanup rAF on unmount */
+  useEffect(() => {
+    return () => cancelAnimationFrame(rafIdRef.current)
+  }, [])
 
   /* ---- pointer handlers ---- */
   const handlePointerDown = useCallback(
@@ -216,9 +257,9 @@ export default function DrawingCanvas() {
         pressure: e.pressure !== undefined ? e.pressure : undefined,
       }
       currentPointsRef.current.push(point)
-      redraw(currentPointsRef.current)
+      scheduleRedraw(currentPointsRef.current)
     },
-    [redraw]
+    [scheduleRedraw]
   )
 
   const handlePointerUp = useCallback(() => {
@@ -329,7 +370,7 @@ export default function DrawingCanvas() {
           Smoothing
         </button>
 
-        {/* Preserve corners toggle */}
+        {/* Preserve corners toggle — independent of smoothing state */}
         <button
           onClick={() => setPreserveCorners((v) => !v)}
           disabled={!smoothing}
@@ -352,6 +393,7 @@ export default function DrawingCanvas() {
             step={1}
             value={spacing}
             onChange={(e) => setSpacing(Number(e.target.value))}
+            onPointerUp={() => commitReprocess("spacing-commit")}
             className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
           />
           <span className="w-5 select-none font-mono text-[11px]">
