@@ -350,17 +350,9 @@ function AnimatedStrokes({
       // Start cap: only show when we have a visible tube segment
       if (startCap) startCap.visible = hasVisibleSegment
 
-      // End cap: only show when stroke is nearly or fully revealed
+      // End cap: show ONLY when drawRange covers the entire tube geometry
       if (endCap) {
-        if (fraction >= 0.98) {
-          // Snap to final position
-          endCap.visible = true
-          endCap.position.copy(strokeMeshData.capPositions[1])
-        } else {
-          // Hide end cap during partial reveal — the tube cross-section itself
-          // provides a visual terminus, and showing the cap causes stray dots
-          endCap.visible = false
-        }
+        endCap.visible = revealedIndices >= totalIndices
       }
 
       // Joints: only show when stroke has a visible segment AND reveal has passed that joint
