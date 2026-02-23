@@ -1,16 +1,29 @@
+import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
+
 export default function Home() {
   return (
-    <div className="flex min-h-screen items-center justify-center font-sans">
-      <main className="flex w-full max-w-3xl flex-col items-center gap-8 px-6 py-16 text-center sm:items-start sm:text-left">
-        <div className="flex flex-col gap-4">
-          <h1 className="text-4xl font-bold tracking-tight">
-            Free Stroke
-          </h1>
-          <p className="max-w-md text-lg text-muted-foreground">
-            To get started, send a prompt or modify this page directly.
+    <div className="flex h-screen flex-col">
+      {/* Top bar */}
+      <header className="flex h-12 shrink-0 items-center justify-center border-b border-border">
+        <h1 className="text-sm font-semibold tracking-tight text-foreground">
+          Free Stroke
+        </h1>
+      </header>
+
+      {/* Two-column layout */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left column: draw area placeholder */}
+        <div className="flex flex-1 items-center justify-center border-r border-border">
+          <p className="text-sm text-muted-foreground">
+            Draw here (next step)
           </p>
         </div>
-      </main>
+
+        {/* Right column: 3D viewport */}
+        <div className="flex-1">
+          <Viewport3DWrapper />
+        </div>
+      </div>
     </div>
-  );
+  )
 }
