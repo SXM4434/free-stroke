@@ -274,22 +274,29 @@ function AnimatedStrokes({
         fraction = Math.min(elapsed / strokeDuration, 1)
       }
 
-      const revealedIndices = Math.floor(fraction * totalIndices)
-      geo.setDrawRange(0, revealedIndices)
+      // Segment-aligned reveal: snap drawRange to whole tube rings
+      // to avoid partial-triangle popping artifacts
+      const tubularSegments = (geo.parameters as any).tubularSegments as number || 64
+      const indicesPerSegment = RADIAL_SEGMENTS * 6
+      const visibleSegments = Math.floor(fraction * tubularSegments)
+      const drawRangeCount = Math.min(visibleSegments * indicesPerSegment, totalIndices)
+      geo.setDrawRange(0, drawRangeCount)
 
-      const hasVisibleSegment = revealedIndices >= minVisibleIndices
+      const hasVisibleSegment = visibleSegments >= MIN_REVEAL_RINGS
 
       if (startCap) startCap.visible = hasVisibleSegment
 
       if (endCap) {
-        endCap.visible = revealedIndices >= totalIndices
+        endCap.visible = drawRangeCount >= totalIndices
       }
 
+      // Sync tip to the same segment-aligned fraction so it stays
+      // attached to the visible tube front (no "tip ahead of mesh")
       if (tip) {
         if (hasVisibleSegment && strokeMeshData.curve) {
           tip.visible = true
-          const clampedFraction = Math.max(0, Math.min(fraction, 1))
-          const tipPos = strokeMeshData.curve.getPointAt(clampedFraction)
+          const tipFraction = Math.min(visibleSegments / tubularSegments, 1)
+          const tipPos = strokeMeshData.curve.getPointAt(tipFraction)
           tip.position.copy(tipPos)
         } else {
           tip.visible = false
@@ -301,9 +308,10 @@ function AnimatedStrokes({
           jointGroup.visible = false
         } else {
           jointGroup.visible = true
+          const segFraction = visibleSegments / tubularSegments
           const fracs = strokeMeshData.jointFractions
           for (let ji = 0; ji < jointGroup.children.length; ji++) {
-            jointGroup.children[ji].visible = ji < fracs.length && (fracs?.[ji] ?? 0) <= fraction
+            jointGroup.children[ji].visible = ji < fracs.length && (fracs?.[ji] ?? 0) <= segFraction
           }
         }
       }
