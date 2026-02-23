@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useCallback, useMemo, useEffect, Component, type ReactNode } from "react"
+import { useRef, useCallback, useMemo, useEffect, useState, Component, type ReactNode } from "react"
 import { Canvas, useThree } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
@@ -209,12 +209,14 @@ function Scene({
   canvasWidth,
   canvasHeight,
   boundsRef,
+  exportGroupRef,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
   canvasWidth: number
   canvasHeight: number
   boundsRef: React.MutableRefObject<StrokeBounds | null>
+  exportGroupRef: React.RefObject<THREE.Group | null>
 }) {
   const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight)
   const bounds = useStrokeBounds(meshes)
@@ -237,27 +239,30 @@ function Scene({
         </mesh>
       )}
 
-      {meshes.map(({ tubeGeometry, capPositions, jointPositions, key }) => (
-        <group key={key}>
-          <mesh geometry={tubeGeometry} material={strokeMaterial} />
-          {capPositions.map((pos, i) => (
-            <mesh
-              key={`${key}-cap-${i}`}
-              geometry={sphereGeometry}
-              material={strokeMaterial}
-              position={pos}
-            />
-          ))}
-          {jointPositions.map((pos, i) => (
-            <mesh
-              key={`${key}-joint-${i}`}
-              geometry={sphereGeometry}
-              material={strokeMaterial}
-              position={pos}
-            />
-          ))}
-        </group>
-      ))}
+      {/* Export group: contains ONLY stroke geometry (tubes + caps + joints) */}
+      <group ref={exportGroupRef}>
+        {meshes.map(({ tubeGeometry, capPositions, jointPositions, key }) => (
+          <group key={key}>
+            <mesh geometry={tubeGeometry} material={strokeMaterial} />
+            {capPositions.map((pos, i) => (
+              <mesh
+                key={`${key}-cap-${i}`}
+                geometry={sphereGeometry}
+                material={strokeMaterial}
+                position={pos}
+              />
+            ))}
+            {jointPositions.map((pos, i) => (
+              <mesh
+                key={`${key}-joint-${i}`}
+                geometry={sphereGeometry}
+                material={strokeMaterial}
+                position={pos}
+              />
+            ))}
+          </group>
+        ))}
+      </group>
 
       <AutoFrameOnFirstDraw
         meshes={meshes}
@@ -324,6 +329,8 @@ export default function Viewport3D({ processedStrokes }: Viewport3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const boundsRef = useRef<StrokeBounds | null>(null)
+  const exportGroupRef = useRef<THREE.Group | null>(null)
+  const [exporting, setExporting] = useState(false)
 
   const handleResetCamera = useCallback(() => {
     const controls = controlsRef.current
@@ -360,6 +367,41 @@ export default function Viewport3D({ processedStrokes }: Viewport3DProps) {
     controls.update()
   }, [])
 
+  const handleExportGLB = useCallback(async () => {
+    const group = exportGroupRef.current
+    if (!group || processedStrokes.length === 0) return
+
+    setExporting(true)
+    try {
+      const { GLTFExporter } = await import("three-stdlib")
+      const exporter = new GLTFExporter()
+
+      const result = await new Promise<ArrayBuffer>((resolve, reject) => {
+        exporter.parse(
+          group,
+          (gltf) => resolve(gltf as ArrayBuffer),
+          (error) => reject(error),
+          { binary: true }
+        )
+      })
+
+      const blob = new Blob([result], { type: "application/octet-stream" })
+      const url = URL.createObjectURL(blob)
+      const timestamp = Date.now()
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `free-stroke-${timestamp}.glb`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error("GLB export failed:", err)
+    } finally {
+      setExporting(false)
+    }
+  }, [processedStrokes.length])
+
   const canvasWidth =
     typeof window !== "undefined" ? window.innerWidth / 2 : 800
   const canvasHeight =
@@ -391,6 +433,7 @@ export default function Viewport3D({ processedStrokes }: Viewport3DProps) {
             canvasWidth={canvasWidth}
             canvasHeight={canvasHeight}
             boundsRef={boundsRef}
+            exportGroupRef={exportGroupRef}
           />
         </Canvas>
       </ViewportErrorBoundary>
@@ -401,8 +444,15 @@ export default function Viewport3D({ processedStrokes }: Viewport3DProps) {
         <div>points: {totalPoints}</div>
       </div>
 
-      {/* Camera controls */}
+      {/* Controls */}
       <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
+        <button
+          onClick={handleExportGLB}
+          disabled={strokeCount === 0 || exporting}
+          className="rounded-lg border border-border bg-background/80 px-3 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {exporting ? "Exporting..." : "Export GLB"}
+        </button>
         <button
           onClick={handleTopView}
           className="rounded-lg border border-border bg-background/80 px-2.5 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-accent"
