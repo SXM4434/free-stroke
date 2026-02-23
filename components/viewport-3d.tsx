@@ -46,7 +46,7 @@ function useStrokeMeshes(
 
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-const tipGeometry = new THREE.SphereGeometry(TUBE_RADIUS * 1.1, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+const tipGeometry = new THREE.SphereGeometry(TUBE_RADIUS * 0.95, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
 const strokeMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a" })
 
 /* ---- Bounding box ---- */
@@ -355,8 +355,8 @@ function AnimatedStrokes({
         ))}
       </group>
 
-      {/* Traveling ink tips: Rod-mode only, NOT exported */}
-      {meshes.filter((d) => d.mode === "rod").map((data, si) => (
+      {/* Traveling ink tips: one per stroke, NOT exported (visibility managed in useFrame) */}
+      {meshes.map((data, si) => (
         <mesh
           key={`${data.key}-tip`}
           ref={(el) => { tipRefs.current[si] = el }}
