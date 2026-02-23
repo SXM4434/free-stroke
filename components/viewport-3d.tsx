@@ -149,6 +149,7 @@ function useStrokeMeshes(
 
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+const tipGeometry = new THREE.SphereGeometry(TUBE_RADIUS * 1.1, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
 const strokeMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a" })
 
 /* ---- Bounding box ---- */
@@ -290,6 +291,8 @@ function AnimatedStrokes({
   const startCapRefs = useRef<(THREE.Mesh | null)[]>([])
   // Refs to joint groups (one group per stroke)
   const jointGroupRefs = useRef<(THREE.Group | null)[]>([])
+  // Refs to traveling ink-tip spheres (one per stroke)
+  const tipRefs = useRef<(THREE.Mesh | null)[]>([])
 
   useFrame(() => {
     const progress = playheadRef.current
@@ -300,6 +303,7 @@ function AnimatedStrokes({
       const startCap = startCapRefs.current[si]
       const endCap = endCapRefs.current[si]
       const jointGroup = jointGroupRefs.current[si]
+      const tip = tipRefs.current[si]
       const timeline = timelines[si]
       const strokeMeshData = meshes[si]
 
@@ -317,15 +321,17 @@ function AnimatedStrokes({
         geo.setDrawRange(0, 0)
         if (startCap) startCap.visible = false
         if (endCap) endCap.visible = false
+        if (tip) tip.visible = false
         if (jointGroup) jointGroup.visible = false
         continue
       }
 
       if (currentTimeMs >= timeline.tEnd) {
-        // Stroke fully revealed
+        // Stroke fully revealed — show final end cap, hide traveling tip
         geo.setDrawRange(0, totalIndices)
         if (startCap) startCap.visible = true
         if (endCap) endCap.visible = true
+        if (tip) tip.visible = false
         if (jointGroup) {
           jointGroup.visible = true
           for (const child of jointGroup.children) {
@@ -355,6 +361,19 @@ function AnimatedStrokes({
         endCap.visible = revealedIndices >= totalIndices
       }
 
+      // Traveling ink tip: position at the reveal front on the curve
+      if (tip) {
+        if (hasVisibleSegment) {
+          tip.visible = true
+          // Use the same fraction to sample the exact curve position
+          const clampedFraction = Math.max(0, Math.min(fraction, 1))
+          const tipPos = strokeMeshData.curve.getPointAt(clampedFraction)
+          tip.position.copy(tipPos)
+        } else {
+          tip.visible = false
+        }
+      }
+
       // Joints: only show when stroke has a visible segment AND reveal has passed that joint
       if (jointGroup) {
         if (!hasVisibleSegment) {
@@ -371,43 +390,57 @@ function AnimatedStrokes({
   })
 
   return (
-    <group ref={exportGroupRef}>
-      {meshes.map((data, si) => (
-        <group key={data.key}>
-          {/* Tube */}
-          <mesh
-            ref={(el) => { tubeMeshRefs.current[si] = el }}
-            geometry={data.tubeGeometry}
-            material={strokeMaterial}
-          />
-          {/* Start cap */}
-          <mesh
-            ref={(el) => { startCapRefs.current[si] = el }}
-            geometry={sphereGeometry}
-            material={strokeMaterial}
-            position={data.capPositions[0]}
-          />
-          {/* End cap */}
-          <mesh
-            ref={(el) => { endCapRefs.current[si] = el }}
-            geometry={sphereGeometry}
-            material={strokeMaterial}
-            position={data.capPositions[1]}
-          />
-          {/* Joints */}
-          <group ref={(el) => { jointGroupRefs.current[si] = el }}>
-            {data.jointPositions.map((pos, ji) => (
-              <mesh
-                key={`${data.key}-joint-${ji}`}
-                geometry={sphereGeometry}
-                material={strokeMaterial}
-                position={pos}
-              />
-            ))}
+    <>
+      {/* Export group: tubes + caps + joints (exported to GLB) */}
+      <group ref={exportGroupRef}>
+        {meshes.map((data, si) => (
+          <group key={data.key}>
+            {/* Tube */}
+            <mesh
+              ref={(el) => { tubeMeshRefs.current[si] = el }}
+              geometry={data.tubeGeometry}
+              material={strokeMaterial}
+            />
+            {/* Start cap */}
+            <mesh
+              ref={(el) => { startCapRefs.current[si] = el }}
+              geometry={sphereGeometry}
+              material={strokeMaterial}
+              position={data.capPositions[0]}
+            />
+            {/* End cap */}
+            <mesh
+              ref={(el) => { endCapRefs.current[si] = el }}
+              geometry={sphereGeometry}
+              material={strokeMaterial}
+              position={data.capPositions[1]}
+            />
+            {/* Joints */}
+            <group ref={(el) => { jointGroupRefs.current[si] = el }}>
+              {data.jointPositions.map((pos, ji) => (
+                <mesh
+                  key={`${data.key}-joint-${ji}`}
+                  geometry={sphereGeometry}
+                  material={strokeMaterial}
+                  position={pos}
+                />
+              ))}
+            </group>
           </group>
-        </group>
+        ))}
+      </group>
+
+      {/* Traveling ink tips: NOT exported (purely visual during animation) */}
+      {meshes.map((data, si) => (
+        <mesh
+          key={`${data.key}-tip`}
+          ref={(el) => { tipRefs.current[si] = el }}
+          geometry={tipGeometry}
+          material={strokeMaterial}
+          visible={false}
+        />
       ))}
-    </group>
+    </>
   )
 }
 
