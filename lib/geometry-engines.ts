@@ -147,13 +147,20 @@ function computeArcLength(pts: THREE.Vector3[]): number {
   return len
 }
 
-/** Detect joints (sharp angle turns) in a 3D polyline */
+/** Detect joints (sharp angle turns) in a 3D polyline, excluding endpoint zones */
 function detectJoints3D(
-  filtered: THREE.Vector3[]
+  filtered: THREE.Vector3[],
+  startPt: THREE.Vector3,
+  endPt: THREE.Vector3
 ): { positions: THREE.Vector3[]; fractions: number[] } {
   const positions: THREE.Vector3[] = []
   const fractions: number[] = []
   const angleThresholdRad = (JOINT_ANGLE_THRESHOLD_DEG * Math.PI) / 180
+
+  // Exclusion zone around endpoints: joints here cause "dot" artifacts
+  const endpointEps = TUBE_RADIUS * 1.25
+  // Minimum distance between consecutive joints (tighter than JOINT_MIN_DISTANCE)
+  const jointDedup = TUBE_RADIUS * 0.75
 
   for (let i = 1; i < filtered.length - 1; i++) {
     const prev = filtered[i - 1]
@@ -172,9 +179,14 @@ function detectJoints3D(
     const deviation = Math.PI - Math.acos(cosAngle)
 
     if (deviation > angleThresholdRad) {
+      // Skip joints too close to start or end cap positions
+      if (curr.distanceTo(startPt) < endpointEps) continue
+      if (curr.distanceTo(endPt) < endpointEps) continue
+
+      // Deduplicate joints that are too close together
       if (positions.length > 0) {
         const lastJoint = positions[positions.length - 1]
-        if (curr.distanceTo(lastJoint) < JOINT_MIN_DISTANCE) continue
+        if (curr.distanceTo(lastJoint) < jointDedup) continue
       }
       positions.push(curr.clone())
       fractions.push(i / (filtered.length - 1))
@@ -213,8 +225,17 @@ export const RodEngine: GeometryEngine = {
         curve, tubularSegments, TUBE_RADIUS, RADIAL_SEGMENTS, false
       )
 
-      const capPositions = [filtered[0].clone(), filtered[filtered.length - 1].clone()]
-      const { positions: jointPositions, fractions: jointFractions } = detectJoints3D(filtered)
+      // Inset cap spheres slightly along tangent so they sit inside the tube ends
+      const inset = TUBE_RADIUS * 0.35
+      const startTangent = curve.getTangentAt(0)
+      const endTangent = curve.getTangentAt(1)
+      const startCapPos = filtered[0].clone().addScaledVector(startTangent, inset)
+      const endCapPos = filtered[filtered.length - 1].clone().addScaledVector(endTangent, -inset)
+      const capPositions = [startCapPos, endCapPos]
+
+      const { positions: jointPositions, fractions: jointFractions } = detectJoints3D(
+        filtered, filtered[0], filtered[filtered.length - 1]
+      )
 
       result.push({
         tubeGeometry,
@@ -259,16 +280,21 @@ export const RodEngine: GeometryEngine = {
         curve, tubularSegments, TUBE_RADIUS, RADIAL_SEGMENTS, false
       )
 
-      const startCapGeo = capSphere.clone().translate(filtered[0].x, filtered[0].y, filtered[0].z)
-      const endCapGeo = capSphere.clone().translate(
-        filtered[filtered.length - 1].x,
-        filtered[filtered.length - 1].y,
-        filtered[filtered.length - 1].z
-      )
+      // Inset cap spheres along tangent (same as preview)
+      const inset = TUBE_RADIUS * 0.35
+      const startTangent = curve.getTangentAt(0)
+      const endTangent = curve.getTangentAt(1)
+      const startCapPos = filtered[0].clone().addScaledVector(startTangent, inset)
+      const endCapPos = filtered[filtered.length - 1].clone().addScaledVector(endTangent, -inset)
 
-      // Build joint spheres
+      const startCapGeo = capSphere.clone().translate(startCapPos.x, startCapPos.y, startCapPos.z)
+      const endCapGeo = capSphere.clone().translate(endCapPos.x, endCapPos.y, endCapPos.z)
+
+      // Build joint spheres (excluding endpoint zones)
       const jointGeos: THREE.BufferGeometry[] = []
-      const { positions: jointPositions } = detectJoints3D(filtered)
+      const { positions: jointPositions } = detectJoints3D(
+        filtered, filtered[0], filtered[filtered.length - 1]
+      )
       for (const pos of jointPositions) {
         jointGeos.push(capSphere.clone().translate(pos.x, pos.y, pos.z))
       }
