@@ -727,31 +727,145 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
     controls.update()
   }, [])
 
+  /**
+   * Build a fresh export-only scene with merged geometry per stroke,
+   * centered at origin, with deterministic naming. No viewer junk.
+   */
   const handleExportGLB = useCallback(async () => {
-    const group = exportGroupRef.current
-    if (!group || processedStrokes.length === 0) return
-
-    // Before export, ensure full reveal
-    playheadRef.current = 1
-    setProgress(1)
-    setPlaying(false)
-
-    // Wait one frame for drawRange to update
-    await new Promise((resolve) => requestAnimationFrame(resolve))
+    if (processedStrokes.length === 0) return
 
     setExporting(true)
     try {
-      const now = new Date()
-      const pad = (n: number) => String(n).padStart(2, "0")
-      const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
-      const safeName = exportName.trim().replace(/[^a-zA-Z0-9_-]/g, "-")
-      const prefix = safeName ? `${safeName}_` : "free-stroke_"
-      const filename = `${prefix}${ts}.glb`
+      const { GLTFExporter, mergeGeometries } = await import("three-stdlib")
+
+      // Compute the same meshes used on screen
+      const scaleRef = Math.max(canvasWidth, canvasHeight)
+      const normScale = 3 / scaleRef
+      const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
+
+      // Shared cap/joint sphere template
+      const capSphere = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+
+      const exportMeshes: THREE.Mesh[] = []
+      const allGeometries: THREE.BufferGeometry[] = [] // track for disposal
+
+      for (let si = 0; si < processedStrokes.length; si++) {
+        const stroke = processedStrokes[si]
+        if (stroke.points.length < 2) continue
+
+        // Convert 2D -> 3D (same logic as useStrokeMeshes)
+        const pts3d = stroke.points.map((p) => {
+          const x = (p.x - canvasWidth / 2) * normScale
+          const y = -(p.y - canvasHeight / 2) * normScale
+          return new THREE.Vector3(x, y, 0)
+        })
+
+        const filtered = [pts3d[0]]
+        for (let i = 1; i < pts3d.length; i++) {
+          if (pts3d[i].distanceTo(filtered[filtered.length - 1]) > 0.001) {
+            filtered.push(pts3d[i])
+          }
+        }
+        if (filtered.length < 2) continue
+
+        let arcLength = 0
+        for (let i = 1; i < filtered.length; i++) {
+          arcLength += filtered[i].distanceTo(filtered[i - 1])
+        }
+        if (arcLength < MIN_STROKE_LENGTH) continue
+
+        // Build tube
+        const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
+        const tubularSegments = Math.min(
+          Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
+          MAX_TUBULAR_SEGMENTS
+        )
+        const tubeGeo = new THREE.TubeGeometry(
+          curve, tubularSegments, TUBE_RADIUS, RADIAL_SEGMENTS, false
+        )
+
+        // Build cap spheres positioned at start/end
+        const startCapGeo = capSphere.clone().translate(
+          filtered[0].x, filtered[0].y, filtered[0].z
+        )
+        const endCapGeo = capSphere.clone().translate(
+          filtered[filtered.length - 1].x,
+          filtered[filtered.length - 1].y,
+          filtered[filtered.length - 1].z
+        )
+
+        // Build joint spheres
+        const jointGeos: THREE.BufferGeometry[] = []
+        const angleThresholdRad = (JOINT_ANGLE_THRESHOLD_DEG * Math.PI) / 180
+        let lastJointPos: THREE.Vector3 | null = null
+
+        for (let i = 1; i < filtered.length - 1; i++) {
+          const prev = filtered[i - 1]
+          const curr = filtered[i]
+          const next = filtered[i + 1]
+          const ax = curr.x - prev.x, ay = curr.y - prev.y, az = curr.z - prev.z
+          const bx = next.x - curr.x, by = next.y - curr.y, bz = next.z - curr.z
+          const magA = Math.sqrt(ax * ax + ay * ay + az * az)
+          const magB = Math.sqrt(bx * bx + by * by + bz * bz)
+          if (magA < 1e-6 || magB < 1e-6) continue
+          const dot = ax * bx + ay * by + az * bz
+          const cosAngle = Math.max(-1, Math.min(1, dot / (magA * magB)))
+          const deviation = Math.PI - Math.acos(cosAngle)
+          if (deviation > angleThresholdRad) {
+            if (lastJointPos && curr.distanceTo(lastJointPos) < JOINT_MIN_DISTANCE) continue
+            lastJointPos = curr
+            jointGeos.push(capSphere.clone().translate(curr.x, curr.y, curr.z))
+          }
+        }
+
+        // Merge all parts into a single geometry
+        const parts = [tubeGeo, startCapGeo, endCapGeo, ...jointGeos]
+        const merged = mergeGeometries(parts, false)
+
+        if (merged) {
+          const mesh = new THREE.Mesh(merged, inkMaterial)
+          mesh.name = `stroke_${String(si).padStart(3, "0")}`
+          exportMeshes.push(mesh)
+          allGeometries.push(merged)
+        }
+
+        // Dispose intermediate geometries
+        tubeGeo.dispose()
+        startCapGeo.dispose()
+        endCapGeo.dispose()
+        jointGeos.forEach((g) => g.dispose())
+      }
+
+      if (exportMeshes.length === 0) {
+        setExporting(false)
+        return
+      }
+
+      // Compute bounding box and recenter at origin
+      const bbox = new THREE.Box3()
+      for (const m of exportMeshes) {
+        m.geometry.computeBoundingBox()
+        if (m.geometry.boundingBox) {
+          bbox.union(m.geometry.boundingBox)
+        }
+      }
+      const center = new THREE.Vector3()
+      bbox.getCenter(center)
+
+      // Translate all geometries so center = (0,0,0)
+      for (const m of exportMeshes) {
+        m.geometry.translate(-center.x, -center.y, -center.z)
+      }
+
+      // Build export scene
+      const exportScene = new THREE.Scene()
+      const rootGroup = new THREE.Group()
+      rootGroup.name = "FreeStroke"
 
       const settings = settingsRef?.current
-      group.userData = {
+      rootGroup.userData = {
         app: "Free Stroke",
-        exportedAt: now.toISOString(),
+        exportedAt: new Date().toISOString(),
         strokeCount,
         totalPoints,
         settings: {
@@ -763,19 +877,36 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
         },
       }
 
-      const { GLTFExporter } = await import("three-stdlib")
+      for (const m of exportMeshes) {
+        rootGroup.add(m)
+      }
+      exportScene.add(rootGroup)
+
+      // Export
       const exporter = new GLTFExporter()
       const result = await new Promise<ArrayBuffer>((resolve, reject) => {
         exporter.parse(
-          group,
+          exportScene,
           (gltf) => resolve(gltf as ArrayBuffer),
           (error) => reject(error),
           { binary: true }
         )
       })
 
-      group.userData = {}
+      // Dispose export-only resources
+      for (const g of allGeometries) g.dispose()
+      inkMaterial.dispose()
+      capSphere.dispose()
 
+      // Build filename
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, "0")
+      const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
+      const safeName = exportName.trim().replace(/[^a-zA-Z0-9_-]/g, "-")
+      const prefix = safeName ? `${safeName}_` : "free-stroke_"
+      const filename = `${prefix}${ts}.glb`
+
+      // Download
       const blob = new Blob([result], { type: "application/octet-stream" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -790,7 +921,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
     } finally {
       setExporting(false)
     }
-  }, [processedStrokes.length, exportName, settingsRef, strokeCount, totalPoints])
+  }, [processedStrokes, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
 
   const formatDuration = (ms: number, frac: number) => {
     const sec = (ms * frac) / 1000
