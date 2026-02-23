@@ -40,7 +40,7 @@ export default function Home() {
 
         {/* Right column: 3D viewport */}
         <div className="flex-1">
-          <Viewport3DWrapper processedStrokes={processedStrokes} settingsRef={settingsRef} />
+          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} settingsRef={settingsRef} />
         </div>
       </div>
     </div>

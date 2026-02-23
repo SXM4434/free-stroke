@@ -1,19 +1,18 @@
 "use client"
 
 import { useRef, useCallback, useMemo, useEffect, useState, Component, type ReactNode } from "react"
-import { Canvas, useThree } from "@react-three/fiber"
+import { Canvas, useThree, useFrame } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
-import type { ProcessedStroke } from "@/lib/stroke-processing"
-import type { ExportSettings } from "@/components/drawing-canvas"
+import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import type { ExportSettings } from "@/components/drawing-canvas"
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
 const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
 
-const FRAME_K = 3.0  // distance multiplier for diagonal reset view
-const TOP_K = 2.5    // distance multiplier for top-down view
+const FRAME_K = 3.0
+const TOP_K = 2.5
 
 /* ------------------------------------------------------------------ */
 /*  Convert 2D canvas strokes to 3D tube meshes + cap/joint spheres   */
@@ -31,6 +30,10 @@ interface StrokeMeshData {
   tubeGeometry: THREE.TubeGeometry
   capPositions: THREE.Vector3[]
   jointPositions: THREE.Vector3[]
+  /** Normalized time [0,1] at which each joint appears (based on nearest point along the curve) */
+  jointFractions: number[]
+  /** Number of 3D filtered points (used for drawRange fraction calculation) */
+  filteredCount: number
   key: string
 }
 
@@ -84,7 +87,9 @@ function useStrokeMeshes(
         filtered[filtered.length - 1].clone(),
       ]
 
+      // Detect joints via angle scan on 3D polyline
       const jointPositions: THREE.Vector3[] = []
+      const jointFractions: number[] = []
       const angleThresholdRad = (JOINT_ANGLE_THRESHOLD_DEG * Math.PI) / 180
 
       for (let i = 1; i < filtered.length - 1; i++) {
@@ -113,6 +118,7 @@ function useStrokeMeshes(
             if (curr.distanceTo(lastJoint) < JOINT_MIN_DISTANCE) continue
           }
           jointPositions.push(curr.clone())
+          jointFractions.push(i / (filtered.length - 1))
         }
       }
 
@@ -120,6 +126,8 @@ function useStrokeMeshes(
         tubeGeometry,
         capPositions,
         jointPositions,
+        jointFractions,
+        filteredCount: filtered.length,
         key: `stroke-${si}-${stroke.points.length}`,
       })
     }
@@ -132,7 +140,7 @@ function useStrokeMeshes(
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
 const strokeMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a" })
 
-/* ---- Compute bounding center + radius from mesh data ---- */
+/* ---- Bounding box ---- */
 interface StrokeBounds {
   center: THREE.Vector3
   radius: number
@@ -153,7 +161,6 @@ function useStrokeBounds(meshes: StrokeMeshData[]): StrokeBounds | null {
 
     const center = new THREE.Vector3()
     box.getCenter(center)
-
     const sphere = new THREE.Sphere()
     box.getBoundingSphere(sphere)
 
@@ -161,7 +168,7 @@ function useStrokeBounds(meshes: StrokeMeshData[]): StrokeBounds | null {
   }, [meshes])
 }
 
-/* ---- Auto-frame on first draw (once per empty->drawn transition) ---- */
+/* ---- Auto-frame on first draw ---- */
 function AutoFrameOnFirstDraw({
   meshes,
   bounds,
@@ -176,30 +183,265 @@ function AutoFrameOnFirstDraw({
   const prevCountRef = useRef(0)
 
   useEffect(() => {
-    // Reset flag when going from strokes -> empty
     if (meshes.length === 0) {
       hasFramedRef.current = false
       prevCountRef.current = 0
       return
     }
-
-    // Auto-frame once on first draw (0 -> >0 transition)
     if (prevCountRef.current === 0 && meshes.length > 0 && !hasFramedRef.current && bounds) {
       hasFramedRef.current = true
-
       const controls = controlsRef.current
       if (!controls) return
-
       const dir = new THREE.Vector3(1, 1, 1).normalize()
       const pos = bounds.center.clone().add(dir.multiplyScalar(bounds.radius * FRAME_K))
-
       camera.position.copy(pos)
       controls.target.copy(bounds.center)
       controls.update()
     }
-
     prevCountRef.current = meshes.length
   }, [meshes, bounds, camera, controlsRef])
+
+  return null
+}
+
+/* ------------------------------------------------------------------ */
+/*  Animation timeline: computes timing from raw stroke timestamps    */
+/* ------------------------------------------------------------------ */
+
+interface StrokeTimeline {
+  /** Global time start (ms since epoch) relative to the very first point */
+  tStart: number
+  /** Global time end */
+  tEnd: number
+}
+
+function useTimeline(rawStrokes: Stroke[]): {
+  timelines: StrokeTimeline[]
+  totalDuration: number
+  globalTStart: number
+} {
+  return useMemo(() => {
+    if (rawStrokes.length === 0) return { timelines: [], totalDuration: 0, globalTStart: 0 }
+
+    let globalMin = Infinity
+    let globalMax = -Infinity
+
+    for (const stroke of rawStrokes) {
+      for (const p of stroke.points) {
+        if (p.t < globalMin) globalMin = p.t
+        if (p.t > globalMax) globalMax = p.t
+      }
+    }
+
+    const totalDuration = Math.max(globalMax - globalMin, 1) // at least 1ms to avoid div/0
+
+    const timelines: StrokeTimeline[] = rawStrokes.map((stroke) => {
+      const pts = stroke.points
+      if (pts.length === 0) return { tStart: 0, tEnd: 0 }
+      let sMin = Infinity
+      let sMax = -Infinity
+      for (const p of pts) {
+        if (p.t < sMin) sMin = p.t
+        if (p.t > sMax) sMax = p.t
+      }
+      return {
+        tStart: sMin - globalMin,
+        tEnd: sMax - globalMin,
+      }
+    })
+
+    return { timelines, totalDuration, globalTStart: globalMin }
+  }, [rawStrokes])
+}
+
+/* ------------------------------------------------------------------ */
+/*  AnimatedStrokes: manages drawRange + visibility per frame         */
+/* ------------------------------------------------------------------ */
+
+function AnimatedStrokes({
+  meshes,
+  timelines,
+  totalDuration,
+  playheadRef,
+  exportGroupRef,
+}: {
+  meshes: StrokeMeshData[]
+  timelines: StrokeTimeline[]
+  totalDuration: number
+  playheadRef: React.MutableRefObject<number> // 0..1 progress
+  exportGroupRef: React.RefObject<THREE.Group | null>
+}) {
+  // Refs to all tube meshes for drawRange updates
+  const tubeMeshRefs = useRef<(THREE.Mesh | null)[]>([])
+  // Refs to end cap meshes
+  const endCapRefs = useRef<(THREE.Mesh | null)[]>([])
+  // Refs to start cap meshes
+  const startCapRefs = useRef<(THREE.Mesh | null)[]>([])
+  // Refs to joint groups (one group per stroke)
+  const jointGroupRefs = useRef<(THREE.Group | null)[]>([])
+
+  useFrame(() => {
+    const progress = playheadRef.current
+    const currentTimeMs = progress * totalDuration
+
+    for (let si = 0; si < meshes.length; si++) {
+      const mesh = tubeMeshRefs.current[si]
+      const startCap = startCapRefs.current[si]
+      const endCap = endCapRefs.current[si]
+      const jointGroup = jointGroupRefs.current[si]
+      const timeline = timelines[si]
+      const strokeMeshData = meshes[si]
+
+      if (!mesh || !timeline || !strokeMeshData) continue
+
+      const geo = mesh.geometry as THREE.TubeGeometry
+      // Total indices in the tube
+      const totalIndices = geo.index ? geo.index.count : 0
+
+      if (currentTimeMs < timeline.tStart) {
+        // Stroke hasn't started yet — hide everything
+        geo.setDrawRange(0, 0)
+        if (startCap) startCap.visible = false
+        if (endCap) endCap.visible = false
+        if (jointGroup) jointGroup.visible = false
+        continue
+      }
+
+      if (currentTimeMs >= timeline.tEnd) {
+        // Stroke fully revealed
+        geo.setDrawRange(0, totalIndices)
+        if (startCap) startCap.visible = true
+        if (endCap) endCap.visible = true
+        if (jointGroup) {
+          jointGroup.visible = true
+          // Show all joint children
+          for (const child of jointGroup.children) {
+            child.visible = true
+          }
+        }
+        continue
+      }
+
+      // Partial reveal: compute fraction within this stroke's time range
+      const strokeDuration = Math.max(timeline.tEnd - timeline.tStart, 1)
+      const elapsed = currentTimeMs - timeline.tStart
+      const fraction = Math.min(elapsed / strokeDuration, 1)
+
+      // Set drawRange proportionally
+      const revealedIndices = Math.floor(fraction * totalIndices)
+      geo.setDrawRange(0, revealedIndices)
+
+      // Start cap always visible once stroke has started
+      if (startCap) startCap.visible = true
+
+      // End cap: compute position along curve at the reveal front
+      if (endCap) {
+        if (fraction >= 0.99) {
+          endCap.visible = true
+          endCap.position.copy(strokeMeshData.capPositions[1])
+        } else {
+          // Interpolate position along the tube curve
+          // We approximate the reveal-front position from the cap positions
+          const startPos = strokeMeshData.capPositions[0]
+          const endPos = strokeMeshData.capPositions[1]
+          endCap.visible = true
+          endCap.position.lerpVectors(startPos, endPos, fraction)
+        }
+      }
+
+      // Joints: show those whose fraction is below the current reveal fraction
+      if (jointGroup) {
+        jointGroup.visible = true
+        const fracs = strokeMeshData.jointFractions
+        for (let ji = 0; ji < jointGroup.children.length; ji++) {
+          jointGroup.children[ji].visible = ji < fracs.length && fracs[ji] <= fraction
+        }
+      }
+    }
+  })
+
+  return (
+    <group ref={exportGroupRef}>
+      {meshes.map((data, si) => (
+        <group key={data.key}>
+          {/* Tube */}
+          <mesh
+            ref={(el) => { tubeMeshRefs.current[si] = el }}
+            geometry={data.tubeGeometry}
+            material={strokeMaterial}
+          />
+          {/* Start cap */}
+          <mesh
+            ref={(el) => { startCapRefs.current[si] = el }}
+            geometry={sphereGeometry}
+            material={strokeMaterial}
+            position={data.capPositions[0]}
+          />
+          {/* End cap */}
+          <mesh
+            ref={(el) => { endCapRefs.current[si] = el }}
+            geometry={sphereGeometry}
+            material={strokeMaterial}
+            position={data.capPositions[1]}
+          />
+          {/* Joints */}
+          <group ref={(el) => { jointGroupRefs.current[si] = el }}>
+            {data.jointPositions.map((pos, ji) => (
+              <mesh
+                key={`${data.key}-joint-${ji}`}
+                geometry={sphereGeometry}
+                material={strokeMaterial}
+                position={pos}
+              />
+            ))}
+          </group>
+        </group>
+      ))}
+    </group>
+  )
+}
+
+/* ---- PlaybackController: advances playheadRef when playing ---- */
+function PlaybackController({
+  playheadRef,
+  playing,
+  speed,
+  totalDuration,
+  onProgressUpdate,
+}: {
+  playheadRef: React.MutableRefObject<number>
+  playing: boolean
+  speed: number
+  totalDuration: number
+  onProgressUpdate: (progress: number) => void
+}) {
+  const lastTimeRef = useRef<number | null>(null)
+
+  useFrame(() => {
+    if (!playing || totalDuration <= 0) {
+      lastTimeRef.current = null
+      return
+    }
+
+    const now = performance.now()
+    if (lastTimeRef.current === null) {
+      lastTimeRef.current = now
+      return
+    }
+
+    const deltaMs = (now - lastTimeRef.current) * speed
+    lastTimeRef.current = now
+
+    const deltaFraction = deltaMs / totalDuration
+    const newProgress = Math.min(playheadRef.current + deltaFraction, 1)
+    playheadRef.current = newProgress
+    onProgressUpdate(newProgress)
+
+    // Auto-pause at end
+    if (newProgress >= 1) {
+      lastTimeRef.current = null
+    }
+  })
 
   return null
 }
@@ -208,22 +450,34 @@ function AutoFrameOnFirstDraw({
 function Scene({
   controlsRef,
   strokes,
+  rawStrokes,
   canvasWidth,
   canvasHeight,
   boundsRef,
   exportGroupRef,
+  playheadRef,
+  playing,
+  speed,
+  totalDuration,
+  onProgressUpdate,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
+  rawStrokes: Stroke[]
   canvasWidth: number
   canvasHeight: number
   boundsRef: React.MutableRefObject<StrokeBounds | null>
   exportGroupRef: React.RefObject<THREE.Group | null>
+  playheadRef: React.MutableRefObject<number>
+  playing: boolean
+  speed: number
+  totalDuration: number
+  onProgressUpdate: (progress: number) => void
 }) {
   const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight)
   const bounds = useStrokeBounds(meshes)
+  const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
-  // Keep boundsRef synced for external use (Reset / Top buttons)
   useEffect(() => {
     boundsRef.current = bounds
   }, [bounds, boundsRef])
@@ -241,30 +495,21 @@ function Scene({
         </mesh>
       )}
 
-      {/* Export group: contains ONLY stroke geometry (tubes + caps + joints) */}
-      <group ref={exportGroupRef}>
-        {meshes.map(({ tubeGeometry, capPositions, jointPositions, key }) => (
-          <group key={key}>
-            <mesh geometry={tubeGeometry} material={strokeMaterial} />
-            {capPositions.map((pos, i) => (
-              <mesh
-                key={`${key}-cap-${i}`}
-                geometry={sphereGeometry}
-                material={strokeMaterial}
-                position={pos}
-              />
-            ))}
-            {jointPositions.map((pos, i) => (
-              <mesh
-                key={`${key}-joint-${i}`}
-                geometry={sphereGeometry}
-                material={strokeMaterial}
-                position={pos}
-              />
-            ))}
-          </group>
-        ))}
-      </group>
+      <AnimatedStrokes
+        meshes={meshes}
+        timelines={timelines}
+        totalDuration={computedDuration}
+        playheadRef={playheadRef}
+        exportGroupRef={exportGroupRef}
+      />
+
+      <PlaybackController
+        playheadRef={playheadRef}
+        playing={playing}
+        speed={speed}
+        totalDuration={totalDuration}
+        onProgressUpdate={onProgressUpdate}
+      />
 
       <AutoFrameOnFirstDraw
         meshes={meshes}
@@ -283,24 +528,17 @@ function Scene({
 }
 
 /* ---- Error boundary ---- */
-interface ErrorBoundaryProps {
-  children: ReactNode
-}
-interface ErrorBoundaryState {
-  hasError: boolean
-  error: string | null
-}
+interface ErrorBoundaryProps { children: ReactNode }
+interface ErrorBoundaryState { hasError: boolean; error: string | null }
 
 class ViewportErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props)
     this.state = { hasError: false, error: null }
   }
-
   static getDerivedStateFromError(error: Error) {
     return { hasError: true, error: error.message }
   }
-
   render() {
     if (this.state.hasError) {
       return (
@@ -325,16 +563,84 @@ class ViewportErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryS
 /* ---- Main viewport component ---- */
 interface Viewport3DProps {
   processedStrokes: ProcessedStroke[]
+  rawStrokes: Stroke[]
   settingsRef?: React.MutableRefObject<ExportSettings>
 }
 
-export default function Viewport3D({ processedStrokes, settingsRef }: Viewport3DProps) {
+export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }: Viewport3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const boundsRef = useRef<StrokeBounds | null>(null)
   const exportGroupRef = useRef<THREE.Group | null>(null)
   const [exporting, setExporting] = useState(false)
   const [exportName, setExportName] = useState("")
+
+  /* ---- Animation state ---- */
+  const playheadRef = useRef(0) // 0..1
+  const [playing, setPlaying] = useState(false)
+  const [progress, setProgress] = useState(0) // for UI slider display
+  const [speed, setSpeed] = useState(1)
+
+  const { totalDuration } = useTimeline(rawStrokes)
+
+  // Sync progress from the frame loop at ~15fps to avoid React re-render storms
+  const progressUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const onProgressUpdate = useCallback((p: number) => {
+    // Throttled UI update
+    if (progressUpdateTimerRef.current) return
+    progressUpdateTimerRef.current = setTimeout(() => {
+      setProgress(p)
+      progressUpdateTimerRef.current = null
+      // Auto-pause at end
+      if (p >= 1) setPlaying(false)
+    }, 66) // ~15fps UI updates
+  }, [])
+
+  // Cleanup throttle timer
+  useEffect(() => {
+    return () => {
+      if (progressUpdateTimerRef.current) clearTimeout(progressUpdateTimerRef.current)
+    }
+  }, [])
+
+  // Reset animation when strokes are cleared or undone
+  const prevStrokeCountRef = useRef(processedStrokes.length)
+  useEffect(() => {
+    const prevCount = prevStrokeCountRef.current
+    const newCount = processedStrokes.length
+
+    if (newCount < prevCount || newCount === 0) {
+      // Undo or Clear happened
+      setPlaying(false)
+      playheadRef.current = newCount === 0 ? 0 : 1
+      setProgress(newCount === 0 ? 0 : 1)
+    } else if (newCount > prevCount) {
+      // New stroke added — show fully
+      playheadRef.current = 1
+      setProgress(1)
+    }
+
+    prevStrokeCountRef.current = newCount
+  }, [processedStrokes.length])
+
+  const handlePlayPause = useCallback(() => {
+    setPlaying((prev) => {
+      if (!prev) {
+        // If at end, restart from beginning
+        if (playheadRef.current >= 1) {
+          playheadRef.current = 0
+          setProgress(0)
+        }
+        return true
+      }
+      return false
+    })
+  }, [])
+
+  const handleScrub = useCallback((value: number) => {
+    playheadRef.current = value
+    setProgress(value)
+  }, [])
 
   const canvasWidth =
     typeof window !== "undefined" ? window.innerWidth / 2 : 800
@@ -350,16 +656,13 @@ export default function Viewport3D({ processedStrokes, settingsRef }: Viewport3D
   const handleResetCamera = useCallback(() => {
     const controls = controlsRef.current
     if (!controls) return
-
     const bounds = boundsRef.current
     if (bounds && bounds.radius > 0) {
-      // Frame the current drawing
       const dir = new THREE.Vector3(1, 1, 1).normalize()
       const pos = bounds.center.clone().add(dir.multiplyScalar(bounds.radius * FRAME_K))
       controls.object.position.copy(pos)
       controls.target.copy(bounds.center)
     } else {
-      // No strokes: fall back to default
       controls.object.position.copy(INITIAL_CAMERA_POSITION)
       controls.target.copy(INITIAL_CAMERA_TARGET)
     }
@@ -369,7 +672,6 @@ export default function Viewport3D({ processedStrokes, settingsRef }: Viewport3D
   const handleTopView = useCallback(() => {
     const controls = controlsRef.current
     if (!controls) return
-
     const bounds = boundsRef.current
     if (bounds && bounds.radius > 0) {
       const pos = bounds.center.clone().add(new THREE.Vector3(0, 0, bounds.radius * TOP_K))
@@ -386,21 +688,25 @@ export default function Viewport3D({ processedStrokes, settingsRef }: Viewport3D
     const group = exportGroupRef.current
     if (!group || processedStrokes.length === 0) return
 
+    // Before export, ensure full reveal
+    playheadRef.current = 1
+    setProgress(1)
+    setPlaying(false)
+
+    // Wait one frame for drawRange to update
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+
     setExporting(true)
     try {
-      // Build formatted timestamp: YYYY-MM-DD_HH-mm-ss (local time)
       const now = new Date()
       const pad = (n: number) => String(n).padStart(2, "0")
       const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
-
-      // Build filename
       const safeName = exportName.trim().replace(/[^a-zA-Z0-9_-]/g, "-")
       const prefix = safeName ? `${safeName}_` : "free-stroke_"
       const filename = `${prefix}${ts}.glb`
 
-      // Embed metadata in the export group's userData (glTF "extras")
       const settings = settingsRef?.current
-      const metadata = {
+      group.userData = {
         app: "Free Stroke",
         exportedAt: now.toISOString(),
         strokeCount,
@@ -413,11 +719,9 @@ export default function Viewport3D({ processedStrokes, settingsRef }: Viewport3D
           radialSegments: RADIAL_SEGMENTS,
         },
       }
-      group.userData = metadata
 
       const { GLTFExporter } = await import("three-stdlib")
       const exporter = new GLTFExporter()
-
       const result = await new Promise<ArrayBuffer>((resolve, reject) => {
         exporter.parse(
           group,
@@ -427,7 +731,6 @@ export default function Viewport3D({ processedStrokes, settingsRef }: Viewport3D
         )
       })
 
-      // Clean up userData after export to not pollute the live scene
       group.userData = {}
 
       const blob = new Blob([result], { type: "application/octet-stream" })
@@ -446,6 +749,11 @@ export default function Viewport3D({ processedStrokes, settingsRef }: Viewport3D
     }
   }, [processedStrokes.length, exportName, settingsRef, strokeCount, totalPoints])
 
+  const formatDuration = (ms: number, frac: number) => {
+    const sec = (ms * frac) / 1000
+    return sec.toFixed(1) + "s"
+  }
+
   return (
     <div ref={containerRef} className="relative h-full w-full">
       <ViewportErrorBoundary>
@@ -463,10 +771,16 @@ export default function Viewport3D({ processedStrokes, settingsRef }: Viewport3D
           <Scene
             controlsRef={controlsRef}
             strokes={processedStrokes}
+            rawStrokes={rawStrokes}
             canvasWidth={canvasWidth}
             canvasHeight={canvasHeight}
             boundsRef={boundsRef}
             exportGroupRef={exportGroupRef}
+            playheadRef={playheadRef}
+            playing={playing}
+            speed={speed}
+            totalDuration={totalDuration}
+            onProgressUpdate={onProgressUpdate}
           />
         </Canvas>
       </ViewportErrorBoundary>
@@ -475,9 +789,66 @@ export default function Viewport3D({ processedStrokes, settingsRef }: Viewport3D
       <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-muted-foreground backdrop-blur-sm">
         <div>strokes: {strokeCount}</div>
         <div>points: {totalPoints}</div>
+        <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
       </div>
 
-      {/* Controls */}
+      {/* Animation controls */}
+      {strokeCount > 0 && (
+        <div className="absolute bottom-12 left-3 right-3 flex items-center gap-2 rounded-lg border border-border bg-background/80 px-3 py-2 backdrop-blur-sm">
+          {/* Play/Pause */}
+          <button
+            onClick={handlePlayPause}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-foreground transition-colors hover:bg-accent"
+            aria-label={playing ? "Pause" : "Play"}
+          >
+            {playing ? (
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                <rect x="2" y="1" width="3" height="10" rx="0.5" />
+                <rect x="7" y="1" width="3" height="10" rx="0.5" />
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                <path d="M3 1.5v9l7.5-4.5L3 1.5z" />
+              </svg>
+            )}
+          </button>
+
+          {/* Time display */}
+          <span className="w-10 shrink-0 text-center font-mono text-[10px] text-muted-foreground">
+            {formatDuration(totalDuration, progress)}
+          </span>
+
+          {/* Scrubber */}
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={progress}
+            onChange={(e) => handleScrub(Number(e.target.value))}
+            className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+          />
+
+          {/* Speed */}
+          <div className="flex shrink-0 items-center gap-0.5">
+            {[0.5, 1, 2].map((s) => (
+              <button
+                key={s}
+                onClick={() => setSpeed(s)}
+                className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                  speed === s
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {s}x
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Camera + Export controls */}
       <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
         <input
           type="text"
