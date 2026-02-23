@@ -17,47 +17,108 @@ export default function DrawingCanvas() {
 
   /* ---- stroke state ---- */
   const [rawStrokes, setRawStrokes] = useState<Stroke[]>([])
-  const [processedStrokes, setProcessedStrokes] = useState<ProcessedStroke[]>([])
+  const [processedStrokes, setProcessedStrokes] = useState<ProcessedStroke[]>(
+    []
+  )
 
   /* ---- processing controls ---- */
   const [smoothing, setSmoothing] = useState(true)
   const [spacing, setSpacing] = useState(4)
   const [preserveCorners, setPreserveCorners] = useState(true)
 
-  /* We keep refs to current settings so the debounced reprocess reads fresh values */
+  /* ---- refs for current settings (so callbacks read fresh values) ---- */
   const smoothingRef = useRef(smoothing)
   const spacingRef = useRef(spacing)
   const preserveCornersRef = useRef(preserveCorners)
   const rawStrokesRef = useRef(rawStrokes)
 
-  useEffect(() => { smoothingRef.current = smoothing }, [smoothing])
-  useEffect(() => { spacingRef.current = spacing }, [spacing])
-  useEffect(() => { preserveCornersRef.current = preserveCorners }, [preserveCorners])
-  useEffect(() => { rawStrokesRef.current = rawStrokes }, [rawStrokes])
+  useEffect(() => {
+    smoothingRef.current = smoothing
+  }, [smoothing])
+  useEffect(() => {
+    spacingRef.current = spacing
+  }, [spacing])
+  useEffect(() => {
+    preserveCornersRef.current = preserveCorners
+  }, [preserveCorners])
+  useEffect(() => {
+    rawStrokesRef.current = rawStrokes
+  }, [rawStrokes])
 
-  /* ---- debounced reprocess when settings change ---- */
+  /* ---- timing instrumentation ---- */
+  const timingRef = useRef({
+    procOneMs: 0,
+    procAllMs: 0,
+    callsOne: 0,
+    callsAll: 0,
+    lastTrigger: "none" as string,
+  })
+  const [timingDisplay, setTimingDisplay] = useState(
+    "procOne: 0ms | procAll: 0ms | callsOne: 0 | callsAll: 0 | lastTrigger: none"
+  )
+  const processingRef = useRef(false)
+
+  const updateTimingDisplay = useCallback(() => {
+    const t = timingRef.current
+    setTimingDisplay(
+      `procOne: ${t.procOneMs.toFixed(1)}ms | procAll: ${t.procAllMs.toFixed(1)}ms | callsOne: ${t.callsOne} | callsAll: ${t.callsAll} | lastTrigger: ${t.lastTrigger}`
+    )
+  }, [])
+
+  /* ---- stable debounced reprocess (ref-based, never recreated) ---- */
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => {
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
+  const debouncedReprocess = useCallback(
+    (trigger: string) => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
 
-    debounceTimerRef.current = setTimeout(() => {
-      setProcessedStrokes(
-        processAllStrokes(
+      debounceTimerRef.current = setTimeout(() => {
+        if (processingRef.current) return
+        processingRef.current = true
+
+        const t0 = performance.now()
+        const result = processAllStrokes(
           rawStrokesRef.current,
           spacingRef.current,
           smoothingRef.current,
           preserveCornersRef.current
         )
-      )
-    }, 200)
+        const t1 = performance.now()
 
+        timingRef.current.procAllMs = t1 - t0
+        timingRef.current.callsAll += 1
+        timingRef.current.lastTrigger = trigger
+
+        setProcessedStrokes(result)
+        processingRef.current = false
+        updateTimingDisplay()
+      }, 200)
+    },
+    [updateTimingDisplay]
+  )
+
+  /* Trigger debounced reprocess when settings change */
+  useEffect(() => {
+    debouncedReprocess("smoothing")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [smoothing])
+
+  useEffect(() => {
+    debouncedReprocess("spacing")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spacing])
+
+  useEffect(() => {
+    debouncedReprocess("corners")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preserveCorners])
+
+  /* Cleanup debounce on unmount */
+  useEffect(() => {
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
     }
-    // Only re-run when settings change, NOT when rawStrokes change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [smoothing, spacing, preserveCorners])
+  }, [])
 
   /* which strokes to render */
   const renderStrokes = smoothing ? processedStrokes : rawStrokes
@@ -93,7 +154,6 @@ export default function DrawingCanvas() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-      // Committed strokes: use renderStrokes (processed or raw)
       const allStrokes = extraPoints
         ? [...renderStrokes, { points: extraPoints }]
         : renderStrokes
@@ -156,7 +216,6 @@ export default function DrawingCanvas() {
         pressure: e.pressure !== undefined ? e.pressure : undefined,
       }
       currentPointsRef.current.push(point)
-      // Live draw: render raw points only (no processing during draw)
       redraw(currentPointsRef.current)
     },
     [redraw]
@@ -169,18 +228,26 @@ export default function DrawingCanvas() {
     const points = currentPointsRef.current
     if (points.length >= 2) {
       const newRaw: Stroke = { points: [...points] }
-      // Process only the new stroke (not all strokes)
+
+      const t0 = performance.now()
       const newProcessed = processStroke(
         newRaw,
         spacingRef.current,
         smoothingRef.current,
         preserveCornersRef.current
       )
+      const t1 = performance.now()
+
+      timingRef.current.procOneMs = t1 - t0
+      timingRef.current.callsOne += 1
+      timingRef.current.lastTrigger = "pointerUp"
+
       setRawStrokes((prev) => [...prev, newRaw])
       setProcessedStrokes((prev) => [...prev, newProcessed])
+      updateTimingDisplay()
     }
     currentPointsRef.current = []
-  }, [])
+  }, [updateTimingDisplay])
 
   /* ---- undo / clear ---- */
   const handleUndo = useCallback(() => {
@@ -194,7 +261,10 @@ export default function DrawingCanvas() {
   }, [])
 
   /* ---- debug counts ---- */
-  const rawTotalPoints = rawStrokes.reduce((sum, s) => sum + s.points.length, 0)
+  const rawTotalPoints = rawStrokes.reduce(
+    (sum, s) => sum + s.points.length,
+    0
+  )
   const processedTotalPoints = processedStrokes.reduce(
     (sum, s) => sum + s.points.length,
     0
@@ -217,9 +287,13 @@ export default function DrawingCanvas() {
 
       {/* Debug info */}
       <div className="pointer-events-none absolute left-3 top-3 select-none font-mono text-[11px] text-muted-foreground">
-        raw {rawTotalPoints} pts | processed {processedTotalPoints} pts |
-        spacing {spacing}px | smoothing: {smoothing ? "on" : "off"} | corners:{" "}
-        {preserveCorners ? "on" : "off"} | last splits: {lastCornerCount}
+        <div>
+          raw {rawTotalPoints} pts | processed {processedTotalPoints} pts |
+          spacing {spacing}px | smoothing: {smoothing ? "on" : "off"} |
+          corners: {preserveCorners ? "on" : "off"} | last splits:{" "}
+          {lastCornerCount}
+        </div>
+        <div className="mt-0.5">{timingDisplay}</div>
       </div>
 
       {/* Controls bar */}
@@ -255,7 +329,7 @@ export default function DrawingCanvas() {
           Smoothing
         </button>
 
-        {/* Preserve corners toggle — independent of smoothing state */}
+        {/* Preserve corners toggle */}
         <button
           onClick={() => setPreserveCorners((v) => !v)}
           disabled={!smoothing}
