@@ -1,6 +1,7 @@
 "use client"
 
-import { useRef, useState, useCallback, useEffect } from "react"
+import { useRef, useState, useCallback, useEffect, useMemo } from "react"
+import { processAllStrokes } from "@/lib/stroke-processing"
 
 interface Point {
   x: number
@@ -16,9 +17,22 @@ interface Stroke {
 export default function DrawingCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const [strokes, setStrokes] = useState<Stroke[]>([])
+  const [rawStrokes, setRawStrokes] = useState<Stroke[]>([])
   const isDrawingRef = useRef(false)
   const currentPointsRef = useRef<Point[]>([])
+
+  /* ---- processing controls ---- */
+  const [smoothing, setSmoothing] = useState(true)
+  const [spacing, setSpacing] = useState(4)
+
+  /* ---- derive processed strokes ---- */
+  const processedStrokes = useMemo(
+    () => processAllStrokes(rawStrokes, spacing, smoothing),
+    [rawStrokes, spacing, smoothing]
+  )
+
+  /* which strokes to render (processed when smoothing on, raw when off) */
+  const renderStrokes = smoothing ? processedStrokes : rawStrokes
 
   /* ---- resize canvas to fill container ---- */
   useEffect(() => {
@@ -52,8 +66,8 @@ export default function DrawingCanvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
       const allStrokes = extraPoints
-        ? [...strokes, { points: extraPoints }]
-        : strokes
+        ? [...renderStrokes, { points: extraPoints }]
+        : renderStrokes
 
       for (const stroke of allStrokes) {
         if (stroke.points.length < 2) continue
@@ -69,10 +83,10 @@ export default function DrawingCanvas() {
         ctx.stroke()
       }
     },
-    [strokes]
+    [renderStrokes]
   )
 
-  /* redraw whenever strokes change */
+  /* redraw whenever strokes or processing settings change */
   useEffect(() => {
     redraw()
   }, [redraw])
@@ -124,22 +138,26 @@ export default function DrawingCanvas() {
 
     const points = currentPointsRef.current
     if (points.length >= 2) {
-      setStrokes((prev) => [...prev, { points: [...points] }])
+      setRawStrokes((prev) => [...prev, { points: [...points] }])
     }
     currentPointsRef.current = []
   }, [])
 
   /* ---- undo / clear ---- */
   const handleUndo = useCallback(() => {
-    setStrokes((prev) => prev.slice(0, -1))
+    setRawStrokes((prev) => prev.slice(0, -1))
   }, [])
 
   const handleClear = useCallback(() => {
-    setStrokes([])
+    setRawStrokes([])
   }, [])
 
   /* ---- debug counts ---- */
-  const totalPoints = strokes.reduce((sum, s) => sum + s.points.length, 0)
+  const rawTotalPoints = rawStrokes.reduce((sum, s) => sum + s.points.length, 0)
+  const processedTotalPoints = processedStrokes.reduce(
+    (sum, s) => sum + s.points.length,
+    0
+  )
 
   return (
     <div ref={containerRef} className="relative h-full w-full">
@@ -153,26 +171,60 @@ export default function DrawingCanvas() {
       />
 
       {/* Debug info */}
-      <div className="pointer-events-none absolute left-3 top-3 select-none text-[11px] font-mono text-muted-foreground">
-        {strokes.length} strokes / {totalPoints} pts
+      <div className="pointer-events-none absolute left-3 top-3 select-none font-mono text-[11px] text-muted-foreground">
+        raw {rawTotalPoints} pts | processed {processedTotalPoints} pts |
+        spacing {spacing}px | smoothing {smoothing ? "on" : "off"}
       </div>
 
-      {/* Undo + Clear buttons */}
-      <div className="absolute bottom-3 left-3 flex gap-2">
+      {/* Controls bar */}
+      <div className="absolute bottom-3 left-3 right-3 flex items-center gap-3">
+        {/* Undo + Clear */}
         <button
           onClick={handleUndo}
-          disabled={strokes.length === 0}
-          className="rounded-lg border border-border bg-background/80 px-3 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={rawStrokes.length === 0}
+          className="rounded-lg border border-border bg-background/80 px-3 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
         >
           Undo
         </button>
         <button
           onClick={handleClear}
-          disabled={strokes.length === 0}
-          className="rounded-lg border border-border bg-background/80 px-3 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={rawStrokes.length === 0}
+          className="rounded-lg border border-border bg-background/80 px-3 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
         >
           Clear
         </button>
+
+        {/* Divider */}
+        <div className="h-5 w-px bg-border" />
+
+        {/* Smoothing toggle */}
+        <button
+          onClick={() => setSmoothing((v) => !v)}
+          className={`rounded-lg border px-3 py-1.5 text-xs font-medium backdrop-blur-sm transition-colors ${
+            smoothing
+              ? "border-foreground/20 bg-foreground text-background"
+              : "border-border bg-background/80 text-foreground hover:bg-accent"
+          }`}
+        >
+          Smoothing
+        </button>
+
+        {/* Spacing slider */}
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="select-none">Spacing</span>
+          <input
+            type="range"
+            min={2}
+            max={8}
+            step={1}
+            value={spacing}
+            onChange={(e) => setSpacing(Number(e.target.value))}
+            className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+          />
+          <span className="w-5 select-none font-mono text-[11px]">
+            {spacing}
+          </span>
+        </label>
       </div>
     </div>
   )
