@@ -1,6 +1,13 @@
 "use client"
 
-import { useRef, useState, useCallback, useEffect } from "react"
+import {
+  useRef,
+  useState,
+  useCallback,
+  useEffect,
+  type Dispatch,
+  type SetStateAction,
+} from "react"
 import {
   processStroke,
   processAllStrokes,
@@ -9,17 +16,23 @@ import {
   type ProcessedStroke,
 } from "@/lib/stroke-processing"
 
-export default function DrawingCanvas() {
+interface DrawingCanvasProps {
+  rawStrokes: Stroke[]
+  setRawStrokes: Dispatch<SetStateAction<Stroke[]>>
+  processedStrokes: ProcessedStroke[]
+  setProcessedStrokes: Dispatch<SetStateAction<ProcessedStroke[]>>
+}
+
+export default function DrawingCanvas({
+  rawStrokes,
+  setRawStrokes,
+  processedStrokes,
+  setProcessedStrokes,
+}: DrawingCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const isDrawingRef = useRef(false)
   const currentPointsRef = useRef<Point[]>([])
-
-  /* ---- stroke state ---- */
-  const [rawStrokes, setRawStrokes] = useState<Stroke[]>([])
-  const [processedStrokes, setProcessedStrokes] = useState<ProcessedStroke[]>(
-    []
-  )
 
   /* ---- processing controls ---- */
   const [smoothing, setSmoothing] = useState(true)
@@ -95,7 +108,7 @@ export default function DrawingCanvas() {
       processingRef.current = false
       updateTimingDisplay()
     },
-    [updateTimingDisplay]
+    [setProcessedStrokes, updateTimingDisplay]
   )
 
   const debouncedReprocess = useCallback(
@@ -140,7 +153,7 @@ export default function DrawingCanvas() {
     }
   }, [])
 
-  /* which strokes to render */
+  /* which strokes to render on 2D canvas */
   const renderStrokes = smoothing ? processedStrokes : rawStrokes
 
   /* ---- resize canvas to fill container ---- */
@@ -288,18 +301,18 @@ export default function DrawingCanvas() {
       updateTimingDisplay()
     }
     currentPointsRef.current = []
-  }, [updateTimingDisplay])
+  }, [setRawStrokes, setProcessedStrokes, updateTimingDisplay])
 
   /* ---- undo / clear ---- */
   const handleUndo = useCallback(() => {
     setRawStrokes((prev) => prev.slice(0, -1))
     setProcessedStrokes((prev) => prev.slice(0, -1))
-  }, [])
+  }, [setRawStrokes, setProcessedStrokes])
 
   const handleClear = useCallback(() => {
     setRawStrokes([])
     setProcessedStrokes([])
-  }, [])
+  }, [setRawStrokes, setProcessedStrokes])
 
   /* ---- debug counts ---- */
   const rawTotalPoints = rawStrokes.reduce(
@@ -370,7 +383,7 @@ export default function DrawingCanvas() {
           Smoothing
         </button>
 
-        {/* Preserve corners toggle — independent of smoothing state */}
+        {/* Preserve corners toggle */}
         <button
           onClick={() => setPreserveCorners((v) => !v)}
           disabled={!smoothing}
