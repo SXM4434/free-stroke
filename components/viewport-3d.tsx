@@ -25,9 +25,12 @@ const RADIAL_SEGMENTS = 16
 const SPHERE_SEGMENTS = 14
 const JOINT_ANGLE_THRESHOLD_DEG = 40
 const JOINT_MIN_DISTANCE = 0.03
+const MIN_STROKE_LENGTH = 0.01 // world units — skip micro-strokes below this arc-length
+const MIN_REVEAL_RINGS = 1 // minimum tube rings visible before showing any caps/joints
 
 interface StrokeMeshData {
   tubeGeometry: THREE.TubeGeometry
+  curve: THREE.CatmullRomCurve3
   capPositions: THREE.Vector3[]
   jointPositions: THREE.Vector3[]
   /** Normalized time [0,1] at which each joint appears (based on nearest point along the curve) */
@@ -68,6 +71,13 @@ function useStrokeMeshes(
         }
       }
       if (filtered.length < 2) continue
+
+      // Micro-stroke filter: skip strokes with negligible arc-length
+      let arcLength = 0
+      for (let i = 1; i < filtered.length; i++) {
+        arcLength += filtered[i].distanceTo(filtered[i - 1])
+      }
+      if (arcLength < MIN_STROKE_LENGTH) continue
 
       const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
       const tubularSegments = Math.min(
@@ -124,6 +134,7 @@ function useStrokeMeshes(
 
       result.push({
         tubeGeometry,
+        curve,
         capPositions,
         jointPositions,
         jointFractions,
@@ -298,6 +309,9 @@ function AnimatedStrokes({
       // Total indices in the tube
       const totalIndices = geo.index ? geo.index.count : 0
 
+      // Minimum indices for one visible tube ring
+      const minVisibleIndices = RADIAL_SEGMENTS * 6 * MIN_REVEAL_RINGS
+
       if (currentTimeMs < timeline.tStart) {
         // Stroke hasn't started yet — hide everything
         geo.setDrawRange(0, 0)
@@ -314,7 +328,6 @@ function AnimatedStrokes({
         if (endCap) endCap.visible = true
         if (jointGroup) {
           jointGroup.visible = true
-          // Show all joint children
           for (const child of jointGroup.children) {
             child.visible = true
           }
@@ -331,30 +344,35 @@ function AnimatedStrokes({
       const revealedIndices = Math.floor(fraction * totalIndices)
       geo.setDrawRange(0, revealedIndices)
 
-      // Start cap always visible once stroke has started
-      if (startCap) startCap.visible = true
+      // Guard: if fewer than one ring of indices revealed, hide everything for this stroke
+      const hasVisibleSegment = revealedIndices >= minVisibleIndices
 
-      // End cap: compute position along curve at the reveal front
+      // Start cap: only show when we have a visible tube segment
+      if (startCap) startCap.visible = hasVisibleSegment
+
+      // End cap: only show when stroke is nearly or fully revealed
       if (endCap) {
-        if (fraction >= 0.99) {
+        if (fraction >= 0.98) {
+          // Snap to final position
           endCap.visible = true
           endCap.position.copy(strokeMeshData.capPositions[1])
         } else {
-          // Interpolate position along the tube curve
-          // We approximate the reveal-front position from the cap positions
-          const startPos = strokeMeshData.capPositions[0]
-          const endPos = strokeMeshData.capPositions[1]
-          endCap.visible = true
-          endCap.position.lerpVectors(startPos, endPos, fraction)
+          // Hide end cap during partial reveal — the tube cross-section itself
+          // provides a visual terminus, and showing the cap causes stray dots
+          endCap.visible = false
         }
       }
 
-      // Joints: show those whose fraction is below the current reveal fraction
+      // Joints: only show when stroke has a visible segment AND reveal has passed that joint
       if (jointGroup) {
-        jointGroup.visible = true
-        const fracs = strokeMeshData.jointFractions
-        for (let ji = 0; ji < jointGroup.children.length; ji++) {
-          jointGroup.children[ji].visible = ji < fracs.length && fracs[ji] <= fraction
+        if (!hasVisibleSegment) {
+          jointGroup.visible = false
+        } else {
+          jointGroup.visible = true
+          const fracs = strokeMeshData.jointFractions
+          for (let ji = 0; ji < jointGroup.children.length; ji++) {
+            jointGroup.children[ji].visible = ji < fracs.length && fracs[ji] <= fraction
+          }
         }
       }
     }
