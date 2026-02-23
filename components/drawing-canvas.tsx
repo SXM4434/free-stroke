@@ -1,37 +1,64 @@
 "use client"
 
-import { useRef, useState, useCallback, useEffect, useMemo } from "react"
-import { processAllStrokes } from "@/lib/stroke-processing"
-
-interface Point {
-  x: number
-  y: number
-  t: number
-  pressure?: number
-}
-
-interface Stroke {
-  points: Point[]
-}
+import { useRef, useState, useCallback, useEffect } from "react"
+import {
+  processStroke,
+  processAllStrokes,
+  type Point,
+  type Stroke,
+} from "@/lib/stroke-processing"
 
 export default function DrawingCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const [rawStrokes, setRawStrokes] = useState<Stroke[]>([])
   const isDrawingRef = useRef(false)
   const currentPointsRef = useRef<Point[]>([])
+
+  /* ---- stroke state ---- */
+  const [rawStrokes, setRawStrokes] = useState<Stroke[]>([])
+  const [processedStrokes, setProcessedStrokes] = useState<Stroke[]>([])
 
   /* ---- processing controls ---- */
   const [smoothing, setSmoothing] = useState(true)
   const [spacing, setSpacing] = useState(4)
+  const [preserveCorners, setPreserveCorners] = useState(true)
 
-  /* ---- derive processed strokes ---- */
-  const processedStrokes = useMemo(
-    () => processAllStrokes(rawStrokes, spacing, smoothing),
-    [rawStrokes, spacing, smoothing]
-  )
+  /* We keep refs to current settings so the debounced reprocess reads fresh values */
+  const smoothingRef = useRef(smoothing)
+  const spacingRef = useRef(spacing)
+  const preserveCornersRef = useRef(preserveCorners)
+  const rawStrokesRef = useRef(rawStrokes)
 
-  /* which strokes to render (processed when smoothing on, raw when off) */
+  useEffect(() => { smoothingRef.current = smoothing }, [smoothing])
+  useEffect(() => { spacingRef.current = spacing }, [spacing])
+  useEffect(() => { preserveCornersRef.current = preserveCorners }, [preserveCorners])
+  useEffect(() => { rawStrokesRef.current = rawStrokes }, [rawStrokes])
+
+  /* ---- debounced reprocess when settings change ---- */
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
+
+    debounceTimerRef.current = setTimeout(() => {
+      setProcessedStrokes(
+        processAllStrokes(
+          rawStrokesRef.current,
+          spacingRef.current,
+          smoothingRef.current,
+          preserveCornersRef.current
+        )
+      )
+    }, 200)
+
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
+    }
+    // Only re-run when settings change, NOT when rawStrokes change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [smoothing, spacing, preserveCorners])
+
+  /* which strokes to render */
   const renderStrokes = smoothing ? processedStrokes : rawStrokes
 
   /* ---- resize canvas to fill container ---- */
@@ -65,6 +92,7 @@ export default function DrawingCanvas() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
+      // Committed strokes: use renderStrokes (processed or raw)
       const allStrokes = extraPoints
         ? [...renderStrokes, { points: extraPoints }]
         : renderStrokes
@@ -86,7 +114,7 @@ export default function DrawingCanvas() {
     [renderStrokes]
   )
 
-  /* redraw whenever strokes or processing settings change */
+  /* redraw whenever committed strokes or processing result change */
   useEffect(() => {
     redraw()
   }, [redraw])
@@ -127,6 +155,7 @@ export default function DrawingCanvas() {
         pressure: e.pressure !== undefined ? e.pressure : undefined,
       }
       currentPointsRef.current.push(point)
+      // Live draw: render raw points only (no processing during draw)
       redraw(currentPointsRef.current)
     },
     [redraw]
@@ -138,7 +167,16 @@ export default function DrawingCanvas() {
 
     const points = currentPointsRef.current
     if (points.length >= 2) {
-      setRawStrokes((prev) => [...prev, { points: [...points] }])
+      const newRaw: Stroke = { points: [...points] }
+      // Process only the new stroke (not all strokes)
+      const newProcessed = processStroke(
+        newRaw,
+        spacingRef.current,
+        smoothingRef.current,
+        preserveCornersRef.current
+      )
+      setRawStrokes((prev) => [...prev, newRaw])
+      setProcessedStrokes((prev) => [...prev, newProcessed])
     }
     currentPointsRef.current = []
   }, [])
@@ -146,10 +184,12 @@ export default function DrawingCanvas() {
   /* ---- undo / clear ---- */
   const handleUndo = useCallback(() => {
     setRawStrokes((prev) => prev.slice(0, -1))
+    setProcessedStrokes((prev) => prev.slice(0, -1))
   }, [])
 
   const handleClear = useCallback(() => {
     setRawStrokes([])
+    setProcessedStrokes([])
   }, [])
 
   /* ---- debug counts ---- */
@@ -173,7 +213,8 @@ export default function DrawingCanvas() {
       {/* Debug info */}
       <div className="pointer-events-none absolute left-3 top-3 select-none font-mono text-[11px] text-muted-foreground">
         raw {rawTotalPoints} pts | processed {processedTotalPoints} pts |
-        spacing {spacing}px | smoothing {smoothing ? "on" : "off"}
+        spacing {spacing}px | smoothing {smoothing ? "on" : "off"} | corners{" "}
+        {preserveCorners ? "on" : "off"}
       </div>
 
       {/* Controls bar */}
@@ -207,6 +248,19 @@ export default function DrawingCanvas() {
           }`}
         >
           Smoothing
+        </button>
+
+        {/* Preserve corners toggle */}
+        <button
+          onClick={() => setPreserveCorners((v) => !v)}
+          disabled={!smoothing}
+          className={`rounded-lg border px-3 py-1.5 text-xs font-medium backdrop-blur-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+            preserveCorners && smoothing
+              ? "border-foreground/20 bg-foreground text-background"
+              : "border-border bg-background/80 text-foreground hover:bg-accent"
+          }`}
+        >
+          Corners
         </button>
 
         {/* Spacing slider */}
