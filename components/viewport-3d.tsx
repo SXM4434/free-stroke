@@ -46,16 +46,7 @@ function useStrokeMeshes(
 
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-const tipGeometry = new THREE.IcosahedronGeometry(TUBE_RADIUS * 2.2, 2)
 const strokeMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a" })
-const tipMaterial = new THREE.MeshPhysicalMaterial({
-  color: "#111111",
-  name: "InkTip",
-  clearcoat: 1.0,
-  clearcoatRoughness: 0.1,
-  roughness: 0.25,
-  metalness: 0.0,
-})
 
 /* ---- Bounding box ---- */
 interface StrokeBounds {
@@ -198,8 +189,6 @@ function AnimatedStrokes({
   const startCapRefs = useRef<(THREE.Mesh | null)[]>([])
   // Refs to joint groups (one group per stroke)
   const jointGroupRefs = useRef<(THREE.Group | null)[]>([])
-  // Refs to traveling ink-tip spheres (one per stroke)
-  const tipRefs = useRef<(THREE.Mesh | null)[]>([])
 
   useFrame(() => {
     const progress = playheadRef.current
@@ -217,11 +206,10 @@ function AnimatedStrokes({
         continue
       }
 
-      // Rod mode: animate with drawRange + caps + joints + tip
+      // Rod mode: animate with drawRange + caps + joints
       const startCap = startCapRefs.current[si]
       const endCap = endCapRefs.current[si]
       const jointGroup = jointGroupRefs.current[si]
-      const tip = tipRefs.current[si]
       const timeline = timelines[si]
 
       if (!timeline) continue
@@ -234,7 +222,6 @@ function AnimatedStrokes({
         geo.setDrawRange(0, 0)
         if (startCap) startCap.visible = false
         if (endCap) endCap.visible = false
-        if (tip) tip.visible = false
         if (jointGroup) jointGroup.visible = false
         continue
       }
@@ -242,8 +229,10 @@ function AnimatedStrokes({
       if (currentTimeMs >= timeline.tEnd) {
         geo.setDrawRange(0, totalIndices)
         if (startCap) startCap.visible = true
-        if (endCap) endCap.visible = true
-        if (tip) tip.visible = false
+        if (endCap && strokeMeshData.capPositions) {
+          endCap.visible = true
+          endCap.position.copy(strokeMeshData.capPositions[1])
+        }
         if (jointGroup) {
           jointGroup.visible = true
           for (const child of jointGroup.children) {
@@ -285,10 +274,8 @@ function AnimatedStrokes({
         }
 
         if (smoothReveal) {
-          // Smooth: constant-speed = easeInOut(timeFrac), blended with raw
-          const t2 = timeFrac * timeFrac
-          const smoothDistFrac = t2 / (2 * (t2 - timeFrac) + 1) // easeInOutQuad
-          distFrac = rawDistFrac + (smoothDistFrac - rawDistFrac) * 0.65
+          // Smooth: 60% raw pen timing, 40% constant linear — stabilized but authentic
+          distFrac = rawDistFrac + (timeFrac - rawDistFrac) * 0.4
         } else {
           // Raw: follow actual pen timing
           distFrac = rawDistFrac
@@ -319,33 +306,18 @@ function AnimatedStrokes({
 
       if (startCap) startCap.visible = hasVisibleSegment
 
-      if (endCap) {
-        endCap.visible = drawRangeCount >= totalIndices
-      }
-
-      // --- Gel-pen ink head: clearly visible, oriented along tangent ---
-      if (tip && curve) {
-        if (distFrac <= 0.0 || distFrac >= 0.995) {
-          tip.visible = false
-        } else {
-          tip.visible = true
-          const tipPos = curve.getPointAt(tParam)
+      // End cap doubles as the moving "rounded head" during partial reveal
+      if (endCap && curve) {
+        if (hasVisibleSegment) {
+          endCap.visible = true
+          const headPos = curve.getPointAt(tParam)
           const tangent = curve.getTangentAt(tParam).normalize()
-
-          // Offset slightly forward so it reads as a leading head
-          tipPos.addScaledVector(tangent, TUBE_RADIUS * 0.35)
-          tip.position.copy(tipPos)
-
-          // Orient: align the compressed axis (local Z) with tangent
-          const forward = new THREE.Vector3(0, 0, 1)
-          const quat = new THREE.Quaternion().setFromUnitVectors(forward, tangent)
-          tip.quaternion.copy(quat)
-
-          // Scale: wide perpendicular (x,y = 1.35), compressed along tangent (z = 0.70)
-          tip.scale.set(1.35, 1.35, 0.70)
+          // Inset along negative tangent so cap sits inside tube, not protruding
+          headPos.addScaledVector(tangent, -TUBE_RADIUS * 0.35)
+          endCap.position.copy(headPos)
+        } else {
+          endCap.visible = false
         }
-      } else if (tip) {
-        tip.visible = false
       }
 
       // --- Joints ---
@@ -407,17 +379,6 @@ function AnimatedStrokes({
           </group>
         ))}
       </group>
-
-      {/* Traveling ink tips: one per stroke, NOT exported (visibility managed in useFrame) */}
-      {meshes.map((data, si) => (
-        <mesh
-          key={`${data.key}-tip`}
-          ref={(el) => { tipRefs.current[si] = el }}
-          geometry={tipGeometry}
-          material={tipMaterial}
-          visible={false}
-        />
-      ))}
     </>
   )
 }
