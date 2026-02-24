@@ -46,7 +46,15 @@ function useStrokeMeshes(
 
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-const strokeMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a" })
+// Gel-ink material: preview-only (export uses its own lightweight MeshStandardMaterial)
+const strokeMaterial = new THREE.MeshPhysicalMaterial({
+  color: "#1a1a1a",
+  clearcoat: 0.8,
+  clearcoatRoughness: 0.15,
+  roughness: 0.35,
+  metalness: 0.0,
+  reflectivity: 0.6,
+})
 
 /* ---- Bounding box ---- */
 interface StrokeBounds {
@@ -472,9 +480,11 @@ function Scene({
 
   return (
     <>
-      <ambientLight intensity={0.6} />
-      <directionalLight position={[5, 5, 5]} intensity={1} />
-      <directionalLight position={[-3, 2, -3]} intensity={0.3} />
+      {/* Lighting: key + fill + rim for gel-ink specular highlights */}
+      <ambientLight intensity={0.4} />
+      <directionalLight position={[5, 8, 5]} intensity={1.2} />
+      <directionalLight position={[-4, 2, -2]} intensity={0.4} />
+      <directionalLight position={[0, -3, -5]} intensity={0.3} />
 
       {strokes.length === 0 && (
         <mesh>
