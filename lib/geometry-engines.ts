@@ -76,6 +76,12 @@ export interface StrokeMeshData {
    * the actual pen speed rather than advancing at a uniform rate.
    */
   pointTimestamps?: number[]
+  /**
+   * Cumulative arc-length at each filtered point (world units, starting at 0).
+   * Used with pointTimestamps for arc-length-based progress mapping
+   * so curves reveal at constant spatial speed instead of per-index stepping.
+   */
+  pointArcLengths?: number[]
 }
 
 export interface PreviewParams {
@@ -235,6 +241,12 @@ export const RodEngine: GeometryEngine = {
       const strokeTStart = stroke.points[0].t
       const pointTimestamps = survivedIndices.map((idx) => stroke.points[idx].t - strokeTStart)
 
+      // Build cumulative arc-length at each filtered point
+      const pointArcLengths: number[] = [0]
+      for (let i = 1; i < filtered.length; i++) {
+        pointArcLengths.push(pointArcLengths[i - 1] + filtered[i].distanceTo(filtered[i - 1]))
+      }
+
       const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
       const tubularSegments = Math.min(
         Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
@@ -266,6 +278,7 @@ export const RodEngine: GeometryEngine = {
         key: `stroke-${si}-${stroke.points.length}`,
         mode: "rod",
         pointTimestamps,
+        pointArcLengths,
       })
     }
 

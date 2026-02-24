@@ -248,12 +248,12 @@ function AnimatedStrokes({
       const strokeDuration = Math.max(timeline.tEnd - timeline.tStart, 1)
       const elapsed = currentTimeMs - timeline.tStart
 
-      // Compute reveal fraction — either per-point timestamp interpolation (smooth)
-      // or uniform linear (stepped)
+      // Compute reveal fraction — arc-length-based (smooth) or uniform linear (raw)
       let fraction: number
       const ts = smoothReveal ? strokeMeshData.pointTimestamps : undefined
-      if (ts && ts.length >= 2) {
-        // Binary search for the segment [i, i+1] containing elapsed
+      const arcs = smoothReveal ? strokeMeshData.pointArcLengths : undefined
+      if (ts && arcs && ts.length >= 2 && arcs.length === ts.length) {
+        // Binary search pointTimestamps for the segment containing elapsed
         let lo = 0
         let hi = ts.length - 1
         while (lo < hi - 1) {
@@ -266,10 +266,17 @@ function AnimatedStrokes({
         } else if (elapsed >= ts[ts.length - 1]) {
           fraction = 1
         } else {
+          // Interpolate arc-length between the two bounding points
           const segDur = ts[hi] - ts[lo]
           const alpha = segDur > 0 ? (elapsed - ts[lo]) / segDur : 0
-          fraction = (lo + alpha) / (ts.length - 1)
+          const arcAtElapsed = arcs[lo] + alpha * (arcs[hi] - arcs[lo])
+          const totalArc = arcs[arcs.length - 1]
+          fraction = totalArc > 0 ? arcAtElapsed / totalArc : 0
         }
+        // "Middle" easing: mostly linear with subtle smoothing at start/end
+        // smoothstep(t) = t*t*(3-2*t), blend = lerp(t, smoothstep(t), 0.6)
+        const ss = fraction * fraction * (3 - 2 * fraction)
+        fraction = fraction + (ss - fraction) * 0.6
       } else {
         fraction = Math.min(elapsed / strokeDuration, 1)
       }
@@ -290,16 +297,41 @@ function AnimatedStrokes({
         endCap.visible = drawRangeCount >= totalIndices
       }
 
-      // Sync tip to the same segment-aligned fraction so it stays
-      // attached to the visible tube front (no "tip ahead of mesh")
+      // Gel-pen tip: oriented ellipsoid along tangent with inset + dynamic stretch
       if (tip) {
-        if (hasVisibleSegment && strokeMeshData.curve) {
-          tip.visible = true
-          const tipFraction = Math.min(visibleSegments / tubularSegments, 1)
-          const tipPos = strokeMeshData.curve.getPointAt(tipFraction)
-          tip.position.copy(tipPos)
-        } else {
+        const tipFraction = Math.min(visibleSegments / tubularSegments, 1)
+        // Hide tip when not enough tube is visible or when nearly complete (let end cap finish)
+        if (!hasVisibleSegment || !strokeMeshData.curve || tipFraction > 0.97) {
           tip.visible = false
+        } else {
+          tip.visible = true
+          const tipPos = strokeMeshData.curve.getPointAt(tipFraction)
+          const tangent = strokeMeshData.curve.getTangentAt(tipFraction)
+
+          // Inset backward along tangent so tip sits inside tube front
+          tipPos.addScaledVector(tangent, -TUBE_RADIUS * 0.4)
+          tip.position.copy(tipPos)
+
+          // Orient ellipsoid: stretch along tangent (z-forward), squash perpendicular
+          // Compute quaternion that rotates default forward (0,0,1) to tangent
+          const forward = new THREE.Vector3(0, 0, 1)
+          const quat = new THREE.Quaternion().setFromUnitVectors(forward, tangent.normalize())
+          tip.quaternion.copy(quat)
+
+          // Dynamic stretch based on speed (compare to previous position)
+          const prevPos = tip.userData.prevPos as THREE.Vector3 | undefined
+          let speedStretch = 1.0
+          if (prevPos) {
+            const dist = tipPos.distanceTo(prevPos)
+            // Clamp stretch factor: 1.0 at rest, up to 1.6 at high speed
+            speedStretch = Math.min(1.0 + dist * 30, 1.6)
+          }
+          tip.userData.prevPos = tipPos.clone()
+
+          // Squash perpendicular (x,y) = 0.7, stretch along tangent (z) = 1.4 * speed
+          const perp = 0.7
+          const along = 1.4 * speedStretch
+          tip.scale.set(perp, perp, along)
         }
       }
 
@@ -856,17 +888,17 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
           />
 
-          {/* Smooth reveal toggle */}
+          {/* Smooth / Raw timing toggle */}
           <button
             onClick={() => setSmoothReveal((v) => !v)}
-            title="Smooth reveal: follow actual pen speed"
+            title={smoothReveal ? "Smooth: arc-length eased reveal" : "Raw: uniform linear reveal"}
             className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
               smoothReveal
                 ? "border-foreground/20 bg-foreground text-background"
                 : "border-border text-muted-foreground hover:text-foreground"
             }`}
           >
-            Smooth
+            {smoothReveal ? "Smooth" : "Raw"}
           </button>
 
           <div className="h-4 w-px bg-border" />
