@@ -46,8 +46,16 @@ function useStrokeMeshes(
 
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-const tipGeometry = new THREE.SphereGeometry(TUBE_RADIUS * 0.95, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+const tipGeometry = new THREE.IcosahedronGeometry(TUBE_RADIUS * 2.2, 2)
 const strokeMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a" })
+const tipMaterial = new THREE.MeshPhysicalMaterial({
+  color: "#111111",
+  name: "InkTip",
+  clearcoat: 1.0,
+  clearcoatRoughness: 0.1,
+  roughness: 0.25,
+  metalness: 0.0,
+})
 
 /* ---- Bounding box ---- */
 interface StrokeBounds {
@@ -247,49 +255,67 @@ function AnimatedStrokes({
 
       const strokeDuration = Math.max(timeline.tEnd - timeline.tStart, 1)
       const elapsed = currentTimeMs - timeline.tStart
+      const timeFrac = Math.min(elapsed / strokeDuration, 1)
 
-      // Compute reveal fraction — arc-length-based (smooth) or uniform linear (raw)
-      let fraction: number
-      const ts = smoothReveal ? strokeMeshData.pointTimestamps : undefined
-      const arcs = smoothReveal ? strokeMeshData.pointArcLengths : undefined
-      if (ts && arcs && ts.length >= 2 && arcs.length === ts.length) {
-        // Binary search pointTimestamps for the segment containing elapsed
+      // --- Convert timeFrac -> distFrac using per-point mapping ---
+      const tf = strokeMeshData.timeFracs
+      const df = strokeMeshData.distFracs
+      const curve = strokeMeshData.curve
+
+      let distFrac: number
+      if (tf && df && tf.length >= 2 && df.length === tf.length) {
+        // Binary search timeFracs for the segment containing timeFrac
         let lo = 0
-        let hi = ts.length - 1
+        let hi = tf.length - 1
         while (lo < hi - 1) {
           const mid = (lo + hi) >> 1
-          if (ts[mid] <= elapsed) lo = mid
+          if (tf[mid] <= timeFrac) lo = mid
           else hi = mid
         }
-        if (elapsed <= ts[0]) {
-          fraction = 0
-        } else if (elapsed >= ts[ts.length - 1]) {
-          fraction = 1
+        // Interpolate distFrac from the bounding pair
+        let rawDistFrac: number
+        if (timeFrac <= tf[0]) {
+          rawDistFrac = df[0]
+        } else if (timeFrac >= tf[tf.length - 1]) {
+          rawDistFrac = df[df.length - 1]
         } else {
-          // Interpolate arc-length between the two bounding points
-          const segDur = ts[hi] - ts[lo]
-          const alpha = segDur > 0 ? (elapsed - ts[lo]) / segDur : 0
-          const arcAtElapsed = arcs[lo] + alpha * (arcs[hi] - arcs[lo])
-          const totalArc = arcs[arcs.length - 1]
-          fraction = totalArc > 0 ? arcAtElapsed / totalArc : 0
+          const segLen = tf[hi] - tf[lo]
+          const alpha = segLen > 0 ? (timeFrac - tf[lo]) / segLen : 0
+          rawDistFrac = df[lo] + alpha * (df[hi] - df[lo])
         }
-        // "Middle" easing: mostly linear with subtle smoothing at start/end
-        // smoothstep(t) = t*t*(3-2*t), blend = lerp(t, smoothstep(t), 0.6)
-        const ss = fraction * fraction * (3 - 2 * fraction)
-        fraction = fraction + (ss - fraction) * 0.6
+
+        if (smoothReveal) {
+          // Smooth: constant-speed = easeInOut(timeFrac), blended with raw
+          const t2 = timeFrac * timeFrac
+          const smoothDistFrac = t2 / (2 * (t2 - timeFrac) + 1) // easeInOutQuad
+          distFrac = rawDistFrac + (smoothDistFrac - rawDistFrac) * 0.65
+        } else {
+          // Raw: follow actual pen timing
+          distFrac = rawDistFrac
+        }
       } else {
-        fraction = Math.min(elapsed / strokeDuration, 1)
+        // Fallback: no mapping data, use linear timeFrac as distFrac
+        distFrac = timeFrac
       }
 
-      // Segment-aligned reveal: snap drawRange to whole tube rings
-      // to avoid partial-triangle popping artifacts
+      // --- Convert distFrac -> curve tParam using arc-length mapping ---
+      let tParam: number
+      if (curve) {
+        const distance = distFrac * curve.getLength()
+        tParam = curve.getUtoTmapping(0, distance)
+      } else {
+        tParam = distFrac
+      }
+
+      // --- DrawRange: snap to full tube rings ---
       const tubularSegments = (geo.parameters as any).tubularSegments as number || 64
-      const indicesPerSegment = RADIAL_SEGMENTS * 6
-      const visibleSegments = Math.floor(fraction * tubularSegments)
-      const drawRangeCount = Math.min(visibleSegments * indicesPerSegment, totalIndices)
+      const indicesPerRing = RADIAL_SEGMENTS * 6
+      const ringIndex = Math.floor(tParam * tubularSegments)
+      const visibleRings = Math.min(ringIndex + 1, tubularSegments + 1)
+      const drawRangeCount = Math.min(visibleRings * indicesPerRing, totalIndices)
       geo.setDrawRange(0, drawRangeCount)
 
-      const hasVisibleSegment = visibleSegments >= MIN_REVEAL_RINGS
+      const hasVisibleSegment = visibleRings >= MIN_REVEAL_RINGS + 1
 
       if (startCap) startCap.visible = hasVisibleSegment
 
@@ -297,53 +323,40 @@ function AnimatedStrokes({
         endCap.visible = drawRangeCount >= totalIndices
       }
 
-      // Gel-pen tip: oriented ellipsoid along tangent with inset + dynamic stretch
-      if (tip) {
-        const tipFraction = Math.min(visibleSegments / tubularSegments, 1)
-        // Hide tip when not enough tube is visible or when nearly complete (let end cap finish)
-        if (!hasVisibleSegment || !strokeMeshData.curve || tipFraction > 0.97) {
+      // --- Gel-pen ink head: clearly visible, oriented along tangent ---
+      if (tip && curve) {
+        if (distFrac <= 0.0 || distFrac >= 0.995) {
           tip.visible = false
         } else {
           tip.visible = true
-          const tipPos = strokeMeshData.curve.getPointAt(tipFraction)
-          const tangent = strokeMeshData.curve.getTangentAt(tipFraction)
+          const tipPos = curve.getPointAt(tParam)
+          const tangent = curve.getTangentAt(tParam).normalize()
 
-          // Inset backward along tangent so tip sits inside tube front
-          tipPos.addScaledVector(tangent, -TUBE_RADIUS * 0.4)
+          // Offset slightly forward so it reads as a leading head
+          tipPos.addScaledVector(tangent, TUBE_RADIUS * 0.35)
           tip.position.copy(tipPos)
 
-          // Orient ellipsoid: stretch along tangent (z-forward), squash perpendicular
-          // Compute quaternion that rotates default forward (0,0,1) to tangent
+          // Orient: align the compressed axis (local Z) with tangent
           const forward = new THREE.Vector3(0, 0, 1)
-          const quat = new THREE.Quaternion().setFromUnitVectors(forward, tangent.normalize())
+          const quat = new THREE.Quaternion().setFromUnitVectors(forward, tangent)
           tip.quaternion.copy(quat)
 
-          // Dynamic stretch based on speed (compare to previous position)
-          const prevPos = tip.userData.prevPos as THREE.Vector3 | undefined
-          let speedStretch = 1.0
-          if (prevPos) {
-            const dist = tipPos.distanceTo(prevPos)
-            // Clamp stretch factor: 1.0 at rest, up to 1.6 at high speed
-            speedStretch = Math.min(1.0 + dist * 30, 1.6)
-          }
-          tip.userData.prevPos = tipPos.clone()
-
-          // Squash perpendicular (x,y) = 0.7, stretch along tangent (z) = 1.4 * speed
-          const perp = 0.7
-          const along = 1.4 * speedStretch
-          tip.scale.set(perp, perp, along)
+          // Scale: wide perpendicular (x,y = 1.35), compressed along tangent (z = 0.70)
+          tip.scale.set(1.35, 1.35, 0.70)
         }
+      } else if (tip) {
+        tip.visible = false
       }
 
+      // --- Joints ---
       if (jointGroup) {
         if (!hasVisibleSegment) {
           jointGroup.visible = false
         } else {
           jointGroup.visible = true
-          const segFraction = visibleSegments / tubularSegments
           const fracs = strokeMeshData.jointFractions
           for (let ji = 0; ji < jointGroup.children.length; ji++) {
-            jointGroup.children[ji].visible = ji < fracs.length && (fracs?.[ji] ?? 0) <= segFraction
+            jointGroup.children[ji].visible = ji < fracs.length && (fracs?.[ji] ?? 0) <= distFrac
           }
         }
       }
@@ -401,7 +414,7 @@ function AnimatedStrokes({
           key={`${data.key}-tip`}
           ref={(el) => { tipRefs.current[si] = el }}
           geometry={tipGeometry}
-          material={strokeMaterial}
+          material={tipMaterial}
           visible={false}
         />
       ))}
@@ -849,6 +862,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         <div>strokes: {strokeCount}</div>
         <div>points: {totalPoints}</div>
         <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
+        <div>reveal: {smoothReveal ? "Smooth" : "Raw"}</div>
       </div>
 
       {/* Animation controls */}

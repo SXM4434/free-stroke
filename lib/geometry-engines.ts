@@ -82,6 +82,16 @@ export interface StrokeMeshData {
    * so curves reveal at constant spatial speed instead of per-index stepping.
    */
   pointArcLengths?: number[]
+  /**
+   * Normalized time fractions [0..1] at each filtered point.
+   * timeFracs[i] = pointTimestamps[i] / pointTimestamps[last]
+   */
+  timeFracs?: number[]
+  /**
+   * Normalized distance fractions [0..1] at each filtered point.
+   * distFracs[i] = pointArcLengths[i] / pointArcLengths[last]
+   */
+  distFracs?: number[]
 }
 
 export interface PreviewParams {
@@ -247,6 +257,16 @@ export const RodEngine: GeometryEngine = {
         pointArcLengths.push(pointArcLengths[i - 1] + filtered[i].distanceTo(filtered[i - 1]))
       }
 
+      // Pre-compute normalized time/distance fraction arrays for playback lookup
+      const totalTime = pointTimestamps[pointTimestamps.length - 1]
+      const totalArc = pointArcLengths[pointArcLengths.length - 1]
+      const timeFracs = totalTime > 0
+        ? pointTimestamps.map((t) => t / totalTime)
+        : pointTimestamps.map((_, i) => i / (pointTimestamps.length - 1))
+      const distFracs = totalArc > 0
+        ? pointArcLengths.map((a) => a / totalArc)
+        : pointArcLengths.map((_, i) => i / (pointArcLengths.length - 1))
+
       const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
       const tubularSegments = Math.min(
         Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
@@ -279,6 +299,8 @@ export const RodEngine: GeometryEngine = {
         mode: "rod",
         pointTimestamps,
         pointArcLengths,
+        timeFracs,
+        distFracs,
       })
     }
 
