@@ -174,19 +174,23 @@ function useTimeline(rawStrokes: Stroke[]): {
 /*  AnimatedStrokes: manages drawRange + visibility per frame         */
 /* ------------------------------------------------------------------ */
 
+type RevealMode = "raw" | "smooth" | "hybrid"
+
 function AnimatedStrokes({
   meshes,
   timelines,
   totalDuration,
   playheadRef,
-  smoothReveal,
+  revealMode,
+  hybridBlend,
   exportGroupRef,
 }: {
   meshes: StrokeMeshData[]
   timelines: StrokeTimeline[]
   totalDuration: number
   playheadRef: React.MutableRefObject<number> // 0..1 progress
-  smoothReveal: boolean
+  revealMode: RevealMode
+  hybridBlend: number
   exportGroupRef: React.RefObject<THREE.Group | null>
 }) {
   // Refs to all tube meshes for drawRange updates
@@ -259,9 +263,9 @@ function AnimatedStrokes({
       const df = strokeMeshData.distFracs
       const curve = strokeMeshData.curve
 
-      let distFrac: number
+      // Compute rawDistFrac: pen-speed-based arc-length fraction
+      let rawDistFrac = timeFrac // fallback
       if (tf && df && tf.length >= 2 && df.length === tf.length) {
-        // Binary search timeFracs for the segment containing timeFrac
         let lo = 0
         let hi = tf.length - 1
         while (lo < hi - 1) {
@@ -269,8 +273,6 @@ function AnimatedStrokes({
           if (tf[mid] <= timeFrac) lo = mid
           else hi = mid
         }
-        // Interpolate distFrac from the bounding pair
-        let rawDistFrac: number
         if (timeFrac <= tf[0]) {
           rawDistFrac = df[0]
         } else if (timeFrac >= tf[tf.length - 1]) {
@@ -280,17 +282,16 @@ function AnimatedStrokes({
           const alpha = segLen > 0 ? (timeFrac - tf[lo]) / segLen : 0
           rawDistFrac = df[lo] + alpha * (df[hi] - df[lo])
         }
+      }
 
-        if (smoothReveal) {
-          // Smooth: 60% raw pen timing, 40% constant linear — stabilized but authentic
-          distFrac = rawDistFrac + (timeFrac - rawDistFrac) * 0.4
-        } else {
-          // Raw: follow actual pen timing
-          distFrac = rawDistFrac
-        }
+      // Apply reveal mode — NO easing, all linear at the end
+      let distFrac: number
+      if (revealMode === "smooth") {
+        distFrac = timeFrac // constant speed
+      } else if (revealMode === "hybrid") {
+        distFrac = rawDistFrac + (timeFrac - rawDistFrac) * hybridBlend
       } else {
-        // Fallback: no mapping data, use linear timeFrac as distFrac
-        distFrac = timeFrac
+        distFrac = rawDistFrac // raw pen timing
       }
 
       // --- Convert distFrac -> curve tParam using arc-length mapping ---
@@ -314,15 +315,11 @@ function AnimatedStrokes({
 
       if (startCap) startCap.visible = hasVisibleSegment
 
-      // End cap doubles as the moving "rounded head" during partial reveal
-      if (endCap && curve) {
-        if (hasVisibleSegment) {
+      // End cap: hidden during reveal, snaps to final position near completion
+      if (endCap) {
+        if (distFrac >= 0.98 && strokeMeshData.capPositions) {
           endCap.visible = true
-          const headPos = curve.getPointAt(tParam)
-          const tangent = curve.getTangentAt(tParam).normalize()
-          // Inset along negative tangent so cap sits inside tube, not protruding
-          headPos.addScaledVector(tangent, -TUBE_RADIUS * 0.35)
-          endCap.position.copy(headPos)
+          endCap.position.copy(strokeMeshData.capPositions[1])
         } else {
           endCap.visible = false
         }
@@ -445,7 +442,8 @@ function Scene({
   canvasHeight,
   geometryMode,
   extrudeParams,
-  smoothReveal,
+  revealMode,
+  hybridBlend,
   boundsRef,
   exportGroupRef,
   playheadRef,
@@ -461,7 +459,8 @@ function Scene({
   canvasHeight: number
   geometryMode: GeometryMode
   extrudeParams?: ExtrudeParams
-  smoothReveal: boolean
+  revealMode: RevealMode
+  hybridBlend: number
   boundsRef: React.MutableRefObject<StrokeBounds | null>
   exportGroupRef: React.RefObject<THREE.Group | null>
   playheadRef: React.MutableRefObject<number>
@@ -498,7 +497,8 @@ function Scene({
         timelines={timelines}
         totalDuration={computedDuration}
         playheadRef={playheadRef}
-        smoothReveal={smoothReveal}
+        revealMode={revealMode}
+        hybridBlend={hybridBlend}
         exportGroupRef={exportGroupRef}
       />
 
@@ -581,7 +581,8 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const [playing, setPlaying] = useState(false)
   const [progress, setProgress] = useState(0) // for UI slider display
   const [speed, setSpeed] = useState(1)
-  const [smoothReveal, setSmoothReveal] = useState(true)
+  const [revealMode, setRevealMode] = useState<RevealMode>("hybrid")
+  const [hybridBlend, setHybridBlend] = useState(0.4)
 
   const { totalDuration } = useTimeline(rawStrokes)
 
@@ -816,7 +817,8 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             canvasHeight={canvasHeight}
             geometryMode={geometryMode}
             extrudeParams={extrudeParams}
-            smoothReveal={smoothReveal}
+            revealMode={revealMode}
+            hybridBlend={hybridBlend}
             boundsRef={boundsRef}
             exportGroupRef={exportGroupRef}
             playheadRef={playheadRef}
@@ -833,7 +835,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         <div>strokes: {strokeCount}</div>
         <div>points: {totalPoints}</div>
         <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
-        <div>reveal: {smoothReveal ? "Smooth" : "Raw"}</div>
+        <div>reveal: {revealMode === "hybrid" ? `Hybrid(${hybridBlend.toFixed(2)})` : revealMode}</div>
       </div>
 
       {/* Animation controls */}
@@ -873,18 +875,36 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
           />
 
-          {/* Smooth / Raw timing toggle */}
-          <button
-            onClick={() => setSmoothReveal((v) => !v)}
-            title={smoothReveal ? "Smooth: arc-length eased reveal" : "Raw: uniform linear reveal"}
-            className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
-              smoothReveal
-                ? "border-foreground/20 bg-foreground text-background"
-                : "border-border text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {smoothReveal ? "Smooth" : "Raw"}
-          </button>
+          {/* Reveal mode selector */}
+          <div className="flex shrink-0 items-center gap-0.5">
+            {(["raw", "hybrid", "smooth"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setRevealMode(m)}
+                className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium capitalize transition-colors ${
+                  revealMode === m
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+
+          {/* Blend slider (hybrid only) */}
+          {revealMode === "hybrid" && (
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={hybridBlend}
+              onChange={(e) => setHybridBlend(Number(e.target.value))}
+              title={`Blend: ${hybridBlend.toFixed(2)}`}
+              className="h-1 w-14 shrink-0 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+            />
+          )}
 
           <div className="h-4 w-px bg-border" />
 
