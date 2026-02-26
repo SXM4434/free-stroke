@@ -583,6 +583,9 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const [speed, setSpeed] = useState(1)
   const [revealMode, setRevealMode] = useState<RevealMode>("hybrid")
   const [hybridBlend, setHybridBlend] = useState(0.4)
+  const [comparing, setComparing] = useState(false)
+  const comparePhaseRef = useRef(0) // 0=raw, 1=hybrid, 2=smooth
+  const [compareLabel, setCompareLabel] = useState("")
 
   const { totalDuration } = useTimeline(rawStrokes)
 
@@ -625,6 +628,47 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
 
     prevStrokeCountRef.current = newCount
   }, [processedStrokes.length])
+
+  // Compare mode: auto-cycle through Raw -> Hybrid -> Smooth
+  const COMPARE_MODES: RevealMode[] = ["raw", "hybrid", "smooth"]
+  const COMPARE_LABELS = ["RAW", `HYBRID (blend=${hybridBlend.toFixed(2)})`, "SMOOTH"]
+
+  useEffect(() => {
+    if (!comparing) return
+    // When playback finishes (progress >= 1 and not playing), advance phase
+    if (progress >= 1 && !playing) {
+      const nextPhase = (comparePhaseRef.current + 1) % 3
+      comparePhaseRef.current = nextPhase
+      setRevealMode(COMPARE_MODES[nextPhase])
+      setCompareLabel(COMPARE_LABELS[nextPhase])
+      // Small delay so the mode switch is visible before replay starts
+      const timer = setTimeout(() => {
+        playheadRef.current = 0
+        setProgress(0)
+        setPlaying(true)
+      }, 400)
+      return () => clearTimeout(timer)
+    }
+  }, [comparing, progress, playing, hybridBlend])
+
+  const handleCompareToggle = useCallback(() => {
+    setComparing((prev) => {
+      if (!prev) {
+        // Enter compare: start at phase 0 (raw)
+        comparePhaseRef.current = 0
+        setRevealMode("raw")
+        setCompareLabel("RAW")
+        playheadRef.current = 0
+        setProgress(0)
+        setPlaying(true)
+        return true
+      }
+      // Exit compare: stop playback, restore manual control
+      setPlaying(false)
+      setCompareLabel("")
+      return false
+    })
+  }, [])
 
   const handlePlayPause = useCallback(() => {
     setPlaying((prev) => {
@@ -836,6 +880,9 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         <div>points: {totalPoints}</div>
         <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
         <div>reveal: {revealMode === "hybrid" ? `Hybrid(${hybridBlend.toFixed(2)})` : revealMode}</div>
+        {comparing && compareLabel && (
+          <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
+        )}
       </div>
 
       {/* Animation controls */}
@@ -875,8 +922,8 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
           />
 
-          {/* Reveal mode selector */}
-          <div className="flex shrink-0 items-center gap-0.5">
+          {/* Reveal mode selector (locked during compare) */}
+          <div className={`flex shrink-0 items-center gap-0.5 ${comparing ? "pointer-events-none opacity-40" : ""}`}>
             {(["raw", "hybrid", "smooth"] as const).map((m) => (
               <button
                 key={m}
@@ -892,7 +939,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             ))}
           </div>
 
-          {/* Blend slider (hybrid only) */}
+          {/* Blend slider (hybrid only, locked during compare) */}
           {revealMode === "hybrid" && (
             <input
               type="range"
@@ -902,7 +949,8 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               value={hybridBlend}
               onChange={(e) => setHybridBlend(Number(e.target.value))}
               title={`Blend: ${hybridBlend.toFixed(2)}`}
-              className="h-1 w-14 shrink-0 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+              disabled={comparing}
+              className={`h-1 w-14 shrink-0 cursor-pointer appearance-none rounded-full bg-border accent-foreground ${comparing ? "opacity-40" : ""}`}
             />
           )}
 
@@ -923,6 +971,20 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               </button>
             ))}
           </div>
+
+          <div className="h-4 w-px bg-border" />
+
+          {/* Compare toggle */}
+          <button
+            onClick={handleCompareToggle}
+            className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              comparing
+                ? "border-foreground/20 bg-foreground text-background"
+                : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {comparing ? "Stop" : "Compare"}
+          </button>
         </div>
       )}
 
