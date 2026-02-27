@@ -120,6 +120,26 @@ function AutoFrameOnFirstDraw({
   return null
 }
 
+/* ---- CameraSlave: copies camera from a master OrbitControls ref ---- */
+function CameraSlave({
+  masterControlsRef,
+}: {
+  masterControlsRef: React.RefObject<OrbitControlsImpl | null>
+}) {
+  const { camera } = useThree()
+
+  useFrame(() => {
+    const master = masterControlsRef.current
+    if (!master) return
+    camera.position.copy(master.object.position)
+    camera.quaternion.copy(master.object.quaternion)
+    ;(camera as THREE.PerspectiveCamera).fov = (master.object as THREE.PerspectiveCamera).fov
+    ;(camera as THREE.PerspectiveCamera).updateProjectionMatrix()
+  })
+
+  return null
+}
+
 /* ------------------------------------------------------------------ */
 /*  Animation timeline: computes timing from raw stroke timestamps    */
 /* ------------------------------------------------------------------ */
@@ -451,6 +471,8 @@ function Scene({
   speed,
   totalDuration,
   onProgressUpdate,
+  orbitEnabled = true,
+  masterControlsRef,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
@@ -468,6 +490,8 @@ function Scene({
   speed: number
   totalDuration: number
   onProgressUpdate: (progress: number) => void
+  orbitEnabled?: boolean
+  masterControlsRef?: React.RefObject<OrbitControlsImpl | null>
 }) {
   const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode, extrudeParams)
   const bounds = useStrokeBounds(meshes)
@@ -521,7 +545,11 @@ function Scene({
         rotation={[Math.PI / 2, 0, 0]}
         position={[0, 0, -0.05]}
       />
-      <OrbitControls ref={controlsRef} makeDefault />
+      {orbitEnabled ? (
+        <OrbitControls ref={controlsRef} makeDefault />
+      ) : masterControlsRef ? (
+        <CameraSlave masterControlsRef={masterControlsRef} />
+      ) : null}
     </>
   )
 }
@@ -586,6 +614,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const [comparing, setComparing] = useState(false)
   const comparePhaseRef = useRef(0) // 0=raw, 1=hybrid, 2=smooth
   const [compareLabel, setCompareLabel] = useState("")
+  const [compare3Up, setCompare3Up] = useState(false)
 
   const { totalDuration } = useTimeline(rawStrokes)
 
@@ -839,47 +868,123 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
     return sec.toFixed(1) + "s"
   }
 
+  const THREE_UP_MODES: { mode: RevealMode; label: string }[] = [
+    { mode: "raw", label: "RAW" },
+    { mode: "hybrid", label: "HYBRID" },
+    { mode: "smooth", label: "SMOOTH" },
+  ]
+
+  // Dummy boundsRef/exportGroupRef for slave canvases (not used for export)
+  const slaveBoundsRef1 = useRef<StrokeBounds | null>(null)
+  const slaveBoundsRef2 = useRef<StrokeBounds | null>(null)
+  const slaveExportRef1 = useRef<THREE.Group | null>(null)
+  const slaveExportRef2 = useRef<THREE.Group | null>(null)
+
   return (
     <div ref={containerRef} className="relative h-full w-full">
-      <ViewportErrorBoundary>
-        <Canvas
-          camera={{
-            position: [
-              INITIAL_CAMERA_POSITION.x,
-              INITIAL_CAMERA_POSITION.y,
-              INITIAL_CAMERA_POSITION.z,
-            ],
-            fov: 50,
-          }}
-          style={{ background: "#fafafa" }}
-        >
-          <Scene
-            controlsRef={controlsRef}
-            strokes={processedStrokes}
-            rawStrokes={rawStrokes}
-            canvasWidth={canvasWidth}
-            canvasHeight={canvasHeight}
-            geometryMode={geometryMode}
-            extrudeParams={extrudeParams}
-            revealMode={revealMode}
-            hybridBlend={hybridBlend}
-            boundsRef={boundsRef}
-            exportGroupRef={exportGroupRef}
-            playheadRef={playheadRef}
-            playing={playing}
-            speed={speed}
-            totalDuration={totalDuration}
-            onProgressUpdate={onProgressUpdate}
-          />
-        </Canvas>
-      </ViewportErrorBoundary>
+      {compare3Up ? (
+        /* ---- 3-Up side-by-side view ---- */
+        <div className="grid h-full w-full grid-cols-3">
+          {THREE_UP_MODES.map((item, idx) => {
+            const isMaster = idx === 0
+            const bRef = idx === 0 ? boundsRef : idx === 1 ? slaveBoundsRef1 : slaveBoundsRef2
+            const eRef = idx === 0 ? exportGroupRef : idx === 1 ? slaveExportRef1 : slaveExportRef2
+            return (
+              <div key={item.mode} className="relative border-r border-border last:border-r-0">
+                <ViewportErrorBoundary>
+                  <Canvas
+                    camera={{
+                      position: [
+                        INITIAL_CAMERA_POSITION.x,
+                        INITIAL_CAMERA_POSITION.y,
+                        INITIAL_CAMERA_POSITION.z,
+                      ],
+                      fov: 50,
+                    }}
+                    style={{ background: "#fafafa" }}
+                  >
+                    <Scene
+                      controlsRef={isMaster ? controlsRef : { current: null }}
+                      strokes={processedStrokes}
+                      rawStrokes={rawStrokes}
+                      canvasWidth={canvasWidth}
+                      canvasHeight={canvasHeight}
+                      geometryMode={geometryMode}
+                      extrudeParams={extrudeParams}
+                      revealMode={item.mode}
+                      hybridBlend={hybridBlend}
+                      boundsRef={bRef}
+                      exportGroupRef={eRef}
+                      playheadRef={playheadRef}
+                      playing={playing}
+                      speed={speed}
+                      totalDuration={totalDuration}
+                      onProgressUpdate={isMaster ? onProgressUpdate : () => {}}
+                      orbitEnabled={isMaster}
+                      masterControlsRef={isMaster ? undefined : controlsRef}
+                    />
+                  </Canvas>
+                </ViewportErrorBoundary>
+                {/* Panel label */}
+                <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-background/80 px-2 py-0.5 font-mono text-[11px] font-semibold text-foreground backdrop-blur-sm">
+                  {item.label}
+                  {item.mode === "hybrid" && (
+                    <span className="ml-1 font-normal text-muted-foreground">
+                      ({hybridBlend.toFixed(2)})
+                    </span>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        /* ---- Single viewport ---- */
+        <>
+          <ViewportErrorBoundary>
+            <Canvas
+              camera={{
+                position: [
+                  INITIAL_CAMERA_POSITION.x,
+                  INITIAL_CAMERA_POSITION.y,
+                  INITIAL_CAMERA_POSITION.z,
+                ],
+                fov: 50,
+              }}
+              style={{ background: "#fafafa" }}
+            >
+              <Scene
+                controlsRef={controlsRef}
+                strokes={processedStrokes}
+                rawStrokes={rawStrokes}
+                canvasWidth={canvasWidth}
+                canvasHeight={canvasHeight}
+                geometryMode={geometryMode}
+                extrudeParams={extrudeParams}
+                revealMode={revealMode}
+                hybridBlend={hybridBlend}
+                boundsRef={boundsRef}
+                exportGroupRef={exportGroupRef}
+                playheadRef={playheadRef}
+                playing={playing}
+                speed={speed}
+                totalDuration={totalDuration}
+                onProgressUpdate={onProgressUpdate}
+              />
+            </Canvas>
+          </ViewportErrorBoundary>
+        </>
+      )}
 
       {/* Debug overlay */}
       <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-muted-foreground backdrop-blur-sm">
         <div>strokes: {strokeCount}</div>
         <div>points: {totalPoints}</div>
         <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
-        <div>reveal: {revealMode === "hybrid" ? `Hybrid(${hybridBlend.toFixed(2)})` : revealMode}</div>
+        {!compare3Up && (
+          <div>reveal: {revealMode === "hybrid" ? `Hybrid(${hybridBlend.toFixed(2)})` : revealMode}</div>
+        )}
+        {compare3Up && <div className="font-semibold text-foreground">3-Up Compare</div>}
         {comparing && compareLabel && (
           <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
         )}
@@ -974,16 +1079,39 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
 
           <div className="h-4 w-px bg-border" />
 
-          {/* Compare toggle */}
+          {/* Compare toggle (sequential) */}
           <button
             onClick={handleCompareToggle}
+            disabled={compare3Up}
             className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
               comparing
                 ? "border-foreground/20 bg-foreground text-background"
                 : "border-border text-muted-foreground hover:text-foreground"
-            }`}
+            } ${compare3Up ? "pointer-events-none opacity-40" : ""}`}
           >
             {comparing ? "Stop" : "Compare"}
+          </button>
+
+          <div className="h-4 w-px bg-border" />
+
+          {/* 3-Up toggle */}
+          <button
+            onClick={() => {
+              setCompare3Up((v) => !v)
+              // Exit sequential compare when entering 3-up
+              if (!compare3Up && comparing) {
+                setComparing(false)
+                setPlaying(false)
+                setCompareLabel("")
+              }
+            }}
+            className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              compare3Up
+                ? "border-foreground/20 bg-foreground text-background"
+                : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {compare3Up ? "Single" : "3-Up"}
           </button>
         </div>
       )}
