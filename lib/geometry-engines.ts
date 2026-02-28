@@ -36,7 +36,7 @@ export const MIN_STROKE_LENGTH = 0.01
 /*  Types                                                             */
 /* ------------------------------------------------------------------ */
 
-export type GeometryMode = "rod" | "extrude" | "inflate"
+export type GeometryMode = "rod" | "extrude" | "inflate" | "solid"
 
 /** Extrude-mode parameters */
 export interface ExtrudeParams {
@@ -53,6 +53,17 @@ export const DEFAULT_EXTRUDE_PARAMS: ExtrudeParams = {
   bevelEnabled: true,
   bevelSize: 0.015,
   bevelSegments: 2,
+}
+
+/** Solid-mode parameters */
+export interface SolidParams {
+  thickness: number   // stroke width in pixels when rasterizing (2D canvas lineWidth)
+  depth: number       // extrusion depth in world units
+}
+
+export const DEFAULT_SOLID_PARAMS: SolidParams = {
+  thickness: 24,
+  depth: 0.15,
 }
 
 /** Per-stroke mesh data used by the viewport for rendering + animation */
@@ -98,6 +109,7 @@ export interface PreviewParams {
   canvasWidth: number
   canvasHeight: number
   extrudeParams?: ExtrudeParams
+  solidParams?: SolidParams
 }
 
 export interface ExportResult {
@@ -114,6 +126,7 @@ export interface ExportParams {
   strokeCount: number
   totalPoints: number
   extrudeParams?: ExtrudeParams
+  solidParams?: SolidParams
   settings: {
     spacing: number | null
     smoothingEnabled: boolean | null
@@ -665,6 +678,165 @@ export const ExtrudeEngine: GeometryEngine = {
 }
 
 /* ------------------------------------------------------------------ */
+/*  SolidEngine — raster mask -> voxel extrude (watertight spike)     */
+/* ------------------------------------------------------------------ */
+
+const SOLID_RASTER_SIZE = 512 // offscreen canvas resolution
+
+/**
+ * Rasterize processedStrokes into a binary mask on an offscreen 2D canvas.
+ * Returns a boolean[] of size SOLID_RASTER_SIZE^2 (row-major, true = filled).
+ */
+function rasterizeMask(
+  strokes: ProcessedStroke[],
+  canvasWidth: number,
+  canvasHeight: number,
+  lineWidth: number
+): boolean[] {
+  const S = SOLID_RASTER_SIZE
+  // Use OffscreenCanvas if available, otherwise fallback to document.createElement
+  let canvas: OffscreenCanvas | HTMLCanvasElement
+  let ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null
+  if (typeof OffscreenCanvas !== "undefined") {
+    canvas = new OffscreenCanvas(S, S)
+    ctx = canvas.getContext("2d")
+  } else {
+    canvas = document.createElement("canvas")
+    canvas.width = S
+    canvas.height = S
+    ctx = canvas.getContext("2d")
+  }
+  if (!ctx) return new Array(S * S).fill(false)
+
+  ctx.fillStyle = "#000"
+  ctx.fillRect(0, 0, S, S)
+
+  // Map from stroke coordinate space -> raster space
+  // Stroke points are in pixel space (0..canvasWidth, 0..canvasHeight)
+  const scaleX = S / canvasWidth
+  const scaleY = S / canvasHeight
+
+  ctx.strokeStyle = "#fff"
+  ctx.lineWidth = lineWidth * Math.max(scaleX, scaleY)
+  ctx.lineCap = "round"
+  ctx.lineJoin = "round"
+
+  for (const stroke of strokes) {
+    if (stroke.points.length < 2) continue
+    ctx.beginPath()
+    ctx.moveTo(stroke.points[0].x * scaleX, stroke.points[0].y * scaleY)
+    for (let i = 1; i < stroke.points.length; i++) {
+      ctx.lineTo(stroke.points[i].x * scaleX, stroke.points[i].y * scaleY)
+    }
+    ctx.stroke()
+  }
+
+  const imageData = ctx.getImageData(0, 0, S, S)
+  const mask: boolean[] = new Array(S * S)
+  for (let i = 0; i < S * S; i++) {
+    // Check red channel (white = 255, black = 0), threshold at 128
+    mask[i] = imageData.data[i * 4] > 128
+  }
+  return mask
+}
+
+/**
+ * Build a coarse grid mesh from the binary mask.
+ * For efficiency, uses greedy row-run merging: for each row, merge
+ * consecutive filled pixels into a single box spanning the run.
+ * Then extrude each run box to the specified depth.
+ */
+function buildSolidMesh(
+  mask: boolean[],
+  canvasWidth: number,
+  canvasHeight: number,
+  depth: number
+): THREE.BufferGeometry | null {
+  const S = SOLID_RASTER_SIZE
+  const scaleRef = Math.max(canvasWidth, canvasHeight)
+  const normScale = 3 / scaleRef
+  const pixelSize = 1 / S // in raster coords
+
+  // Convert raster (row, col) -> world (x, y) matching strokeTo3D transform
+  const toWorldX = (col: number) => ((col / S) * canvasWidth - canvasWidth / 2) * normScale
+  const toWorldY = (row: number) => -((row / S) * canvasHeight - canvasHeight / 2) * normScale
+
+  const halfDepth = depth / 2
+  const boxes: THREE.BufferGeometry[] = []
+
+  // Greedy row-run merge
+  for (let row = 0; row < S; row++) {
+    let col = 0
+    while (col < S) {
+      if (!mask[row * S + col]) {
+        col++
+        continue
+      }
+      // Find run end
+      let runEnd = col
+      while (runEnd < S && mask[row * S + runEnd]) runEnd++
+
+      const runLen = runEnd - col
+
+      // World coordinates for this run
+      const x0 = toWorldX(col)
+      const x1 = toWorldX(runEnd)
+      const y0 = toWorldY(row)
+      const y1 = toWorldY(row + 1)
+
+      const w = Math.abs(x1 - x0)
+      const h = Math.abs(y1 - y0)
+      const cx = (x0 + x1) / 2
+      const cy = (y0 + y1) / 2
+
+      const box = new THREE.BoxGeometry(w, h, depth)
+      box.translate(cx, cy, 0)
+      boxes.push(box)
+
+      col = runEnd
+    }
+  }
+
+  if (boxes.length === 0) return null
+
+  // Merge all boxes into one geometry
+  const merged = mergeGeometriesSafe(boxes, false)
+
+  // Dispose individual boxes
+  for (const b of boxes) b.dispose()
+
+  return merged || null
+}
+
+export const SolidEngine: GeometryEngine = {
+  buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
+    const { canvasWidth, canvasHeight, solidParams: sp } = params
+    const solidParams = sp ?? DEFAULT_SOLID_PARAMS
+    if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) return []
+
+    const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
+    const geometry = buildSolidMesh(mask, canvasWidth, canvasHeight, solidParams.depth)
+
+    if (!geometry) return []
+
+    return [{
+      tubeGeometry: geometry,
+      filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
+      key: `solid-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
+      mode: "solid",
+    }]
+  },
+
+  buildExport(_strokes: ProcessedStroke[], _params: ExportParams): ExportResult {
+    // TODO: Solid export in a future iteration
+    const group = new THREE.Group()
+    group.name = "FreeStroke"
+    group.userData = { app: "Free Stroke", mode: "solid" }
+    return { group, disposables: [], objectCount: 0, merged: false }
+  },
+}
+
+/* ------------------------------------------------------------------ */
 /*  InflateEngine — TODO: Iteration 8+                                */
 /* ------------------------------------------------------------------ */
 
@@ -691,6 +863,7 @@ export const InflateEngine: GeometryEngine = {
 export const engines: Record<GeometryMode, GeometryEngine> = {
   rod: RodEngine,
   extrude: ExtrudeEngine,
+  solid: SolidEngine,
   inflate: InflateEngine,
 }
 
