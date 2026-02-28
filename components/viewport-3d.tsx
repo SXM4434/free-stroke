@@ -615,6 +615,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const comparePhaseRef = useRef(0) // 0=raw, 1=hybrid, 2=smooth
   const [compareLabel, setCompareLabel] = useState("")
   const [compare3Up, setCompare3Up] = useState(false)
+  const [showDebug, setShowDebug] = useState(false)
 
   const { totalDuration } = useTimeline(rawStrokes)
 
@@ -976,19 +977,19 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         </>
       )}
 
-      {/* Debug overlay */}
-      <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-muted-foreground backdrop-blur-sm">
-        <div>strokes: {strokeCount}</div>
-        <div>points: {totalPoints}</div>
-        <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
-        {!compare3Up && (
+      {/* Debug overlay (only when debug mode is on) */}
+      {showDebug && (
+        <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-muted-foreground backdrop-blur-sm">
+          <div>strokes: {strokeCount}</div>
+          <div>points: {totalPoints}</div>
+          <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
           <div>reveal: {revealMode === "hybrid" ? `Hybrid(${hybridBlend.toFixed(2)})` : revealMode}</div>
-        )}
-        {compare3Up && <div className="font-semibold text-foreground">3-Up Compare</div>}
-        {comparing && compareLabel && (
-          <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
-        )}
-      </div>
+          {compare3Up && <div className="font-semibold text-foreground">3-Up Compare</div>}
+          {comparing && compareLabel && (
+            <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
+          )}
+        </div>
+      )}
 
       {/* Animation controls */}
       {strokeCount > 0 && (
@@ -1027,37 +1028,29 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
           />
 
-          {/* Reveal mode selector (locked during compare) */}
+          {/* Main timing toggle: Natural (hybrid) / Authentic (raw) */}
           <div className={`flex shrink-0 items-center gap-0.5 ${comparing ? "pointer-events-none opacity-40" : ""}`}>
-            {(["raw", "hybrid", "smooth"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setRevealMode(m)}
-                className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium capitalize transition-colors ${
-                  revealMode === m
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {m}
-              </button>
-            ))}
+            <button
+              onClick={() => setRevealMode("hybrid")}
+              className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                revealMode === "hybrid"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Natural
+            </button>
+            <button
+              onClick={() => setRevealMode("raw")}
+              className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                revealMode === "raw"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Authentic
+            </button>
           </div>
-
-          {/* Blend slider (hybrid only, locked during compare) */}
-          {revealMode === "hybrid" && (
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={hybridBlend}
-              onChange={(e) => setHybridBlend(Number(e.target.value))}
-              title={`Blend: ${hybridBlend.toFixed(2)}`}
-              disabled={comparing}
-              className={`h-1 w-14 shrink-0 cursor-pointer appearance-none rounded-full bg-border accent-foreground ${comparing ? "opacity-40" : ""}`}
-            />
-          )}
 
           <div className="h-4 w-px bg-border" />
 
@@ -1079,40 +1072,85 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
 
           <div className="h-4 w-px bg-border" />
 
-          {/* Compare toggle (sequential) */}
+          {/* Debug toggle */}
           <button
-            onClick={handleCompareToggle}
-            disabled={compare3Up}
+            onClick={() => setShowDebug((v) => !v)}
             className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
-              comparing
-                ? "border-foreground/20 bg-foreground text-background"
-                : "border-border text-muted-foreground hover:text-foreground"
-            } ${compare3Up ? "pointer-events-none opacity-40" : ""}`}
-          >
-            {comparing ? "Stop" : "Compare"}
-          </button>
-
-          <div className="h-4 w-px bg-border" />
-
-          {/* 3-Up toggle */}
-          <button
-            onClick={() => {
-              setCompare3Up((v) => !v)
-              // Exit sequential compare when entering 3-up
-              if (!compare3Up && comparing) {
-                setComparing(false)
-                setPlaying(false)
-                setCompareLabel("")
-              }
-            }}
-            className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
-              compare3Up
+              showDebug
                 ? "border-foreground/20 bg-foreground text-background"
                 : "border-border text-muted-foreground hover:text-foreground"
             }`}
           >
-            {compare3Up ? "Single" : "3-Up"}
+            Debug
           </button>
+
+          {/* Debug-only tools */}
+          {showDebug && (
+            <>
+              <div className="h-4 w-px bg-border" />
+
+              {/* Smooth option (debug only) */}
+              <button
+                onClick={() => setRevealMode("smooth")}
+                className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                  revealMode === "smooth"
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Smooth
+              </button>
+
+              {/* Blend slider (debug only) */}
+              {revealMode === "hybrid" && (
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={hybridBlend}
+                  onChange={(e) => setHybridBlend(Number(e.target.value))}
+                  title={`Blend: ${hybridBlend.toFixed(2)}`}
+                  disabled={comparing}
+                  className={`h-1 w-14 shrink-0 cursor-pointer appearance-none rounded-full bg-border accent-foreground ${comparing ? "opacity-40" : ""}`}
+                />
+              )}
+
+              <div className="h-4 w-px bg-border" />
+
+              {/* Compare toggle (debug only) */}
+              <button
+                onClick={handleCompareToggle}
+                disabled={compare3Up}
+                className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                  comparing
+                    ? "border-foreground/20 bg-foreground text-background"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                } ${compare3Up ? "pointer-events-none opacity-40" : ""}`}
+              >
+                {comparing ? "Stop" : "Compare"}
+              </button>
+
+              {/* 3-Up toggle (debug only) */}
+              <button
+                onClick={() => {
+                  setCompare3Up((v) => !v)
+                  if (!compare3Up && comparing) {
+                    setComparing(false)
+                    setPlaying(false)
+                    setCompareLabel("")
+                  }
+                }}
+                className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                  compare3Up
+                    ? "border-foreground/20 bg-foreground text-background"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {compare3Up ? "Single" : "3-Up"}
+              </button>
+            </>
+          )}
         </div>
       )}
 
