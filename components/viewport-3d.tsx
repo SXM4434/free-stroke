@@ -12,6 +12,7 @@ import {
   type GeometryMode,
   type StrokeMeshData,
   type ExtrudeParams,
+  type SolidParams,
   getEngine,
   TUBE_RADIUS,
   RADIAL_SEGMENTS,
@@ -36,12 +37,13 @@ function useStrokeMeshes(
   canvasWidth: number,
   canvasHeight: number,
   mode: GeometryMode,
-  extrudeParams?: ExtrudeParams
+  extrudeParams?: ExtrudeParams,
+  solidParams?: SolidParams
 ): StrokeMeshData[] {
   return useMemo(() => {
     const engine = getEngine(mode)
-    return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams })
-  }, [strokes, canvasWidth, canvasHeight, mode, extrudeParams])
+    return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
+  }, [strokes, canvasWidth, canvasHeight, mode, extrudeParams, solidParams])
 }
 
 /* ---- Shared geometries ---- */
@@ -232,8 +234,8 @@ function AnimatedStrokes({
 
       if (!mesh || !strokeMeshData) continue
 
-      // Extrude meshes are always fully visible (static, no animation)
-      if (strokeMeshData.mode === "extrude") {
+      // Extrude/Solid meshes are always fully visible (static, no animation)
+      if (strokeMeshData.mode === "extrude" || strokeMeshData.mode === "solid") {
         mesh.visible = true
         continue
       }
@@ -462,6 +464,7 @@ function Scene({
   canvasHeight,
   geometryMode,
   extrudeParams,
+  solidParams,
   revealMode,
   hybridBlend,
   boundsRef,
@@ -481,6 +484,7 @@ function Scene({
   canvasHeight: number
   geometryMode: GeometryMode
   extrudeParams?: ExtrudeParams
+  solidParams?: SolidParams
   revealMode: RevealMode
   hybridBlend: number
   boundsRef: React.MutableRefObject<StrokeBounds | null>
@@ -493,7 +497,7 @@ function Scene({
   orbitEnabled?: boolean
   masterControlsRef?: React.RefObject<OrbitControlsImpl | null>
 }) {
-  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode, extrudeParams)
+  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode, extrudeParams, solidParams)
   const bounds = useStrokeBounds(meshes)
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
@@ -593,10 +597,11 @@ interface Viewport3DProps {
   rawStrokes: Stroke[]
   geometryMode: GeometryMode
   extrudeParams?: ExtrudeParams
+  solidParams?: SolidParams
   settingsRef?: React.MutableRefObject<ExportSettings>
 }
 
-export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode, extrudeParams, settingsRef }: Viewport3DProps) {
+export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode, extrudeParams, solidParams, settingsRef }: Viewport3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const boundsRef = useRef<StrokeBounds | null>(null)
@@ -779,8 +784,9 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         exportName,
         strokeCount,
         totalPoints,
-        extrudeParams,
-        settings: {
+      extrudeParams,
+      solidParams,
+      settings: {
           spacing: settings?.spacing ?? null,
           smoothingEnabled: settings?.smoothing ?? null,
           cornersEnabled: settings?.preserveCorners ?? null,
@@ -862,7 +868,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
     } finally {
       setExporting(false)
     }
-  }, [processedStrokes, geometryMode, extrudeParams, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
+  }, [processedStrokes, geometryMode, extrudeParams, solidParams, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
 
   const formatDuration = (ms: number, frac: number) => {
     const sec = (ms * frac) / 1000
@@ -912,6 +918,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                       canvasHeight={canvasHeight}
                       geometryMode={geometryMode}
                       extrudeParams={extrudeParams}
+                      solidParams={solidParams}
                       revealMode={item.mode}
                       hybridBlend={hybridBlend}
                       boundsRef={bRef}
@@ -962,6 +969,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 canvasHeight={canvasHeight}
                 geometryMode={geometryMode}
                 extrudeParams={extrudeParams}
+                solidParams={solidParams}
                 revealMode={revealMode}
                 hybridBlend={hybridBlend}
                 boundsRef={boundsRef}

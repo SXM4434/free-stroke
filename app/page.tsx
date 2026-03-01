@@ -4,11 +4,12 @@ import { useState, useRef } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 import DrawingCanvas, { type ExportSettings } from "@/components/drawing-canvas"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
-import { type GeometryMode, type ExtrudeParams, DEFAULT_EXTRUDE_PARAMS } from "@/lib/geometry-engines"
+import { type GeometryMode, type ExtrudeParams, type SolidParams, DEFAULT_EXTRUDE_PARAMS, DEFAULT_SOLID_PARAMS } from "@/lib/geometry-engines"
 
 const GEOMETRY_MODES: { value: GeometryMode; label: string; disabled: boolean; tooltip?: string }[] = [
   { value: "rod", label: "Rod", disabled: false },
   { value: "extrude", label: "Extrude", disabled: false },
+  { value: "solid", label: "Solid", disabled: false },
   { value: "inflate", label: "Inflate", disabled: true, tooltip: "Coming soon" },
 ]
 
@@ -19,6 +20,7 @@ export default function Home() {
   )
   const [geometryMode, setGeometryMode] = useState<GeometryMode>("rod")
   const [extrudeParams, setExtrudeParams] = useState<ExtrudeParams>(DEFAULT_EXTRUDE_PARAMS)
+  const [solidParams, setSolidParams] = useState<SolidParams>(DEFAULT_SOLID_PARAMS)
   const settingsRef = useRef<ExportSettings>({
     spacing: 4,
     smoothing: true,
@@ -117,6 +119,47 @@ export default function Home() {
         </div>
       )}
 
+      {/* Solid mode controls */}
+      {geometryMode === "solid" && (
+        <div className="flex h-10 shrink-0 items-center gap-4 border-b border-border bg-muted/30 px-4">
+          {/* Thickness */}
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="select-none font-medium">Thickness</span>
+            <input
+              type="range"
+              min={4}
+              max={64}
+              step={2}
+              value={solidParams.thickness}
+              onChange={(e) => setSolidParams((p) => ({ ...p, thickness: Number(e.target.value) }))}
+              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+            />
+            <span className="w-8 select-none font-mono text-[10px]">
+              {solidParams.thickness}px
+            </span>
+          </label>
+
+          <div className="h-4 w-px bg-border" />
+
+          {/* Depth */}
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="select-none font-medium">Depth</span>
+            <input
+              type="range"
+              min={0.02}
+              max={0.5}
+              step={0.01}
+              value={solidParams.depth}
+              onChange={(e) => setSolidParams((p) => ({ ...p, depth: Number(e.target.value) }))}
+              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+            />
+            <span className="w-8 select-none font-mono text-[10px]">
+              {solidParams.depth.toFixed(2)}
+            </span>
+          </label>
+        </div>
+      )}
+
       {/* Two-column layout */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left column: drawing canvas */}
@@ -132,7 +175,7 @@ export default function Home() {
 
         {/* Right column: 3D viewport */}
         <div className="flex-1">
-          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} settingsRef={settingsRef} />
+          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" ? solidParams : undefined} settingsRef={settingsRef} />
         </div>
       </div>
     </div>
