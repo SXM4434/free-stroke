@@ -8,11 +8,16 @@ import * as THREE from "three"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import type { ExportSettings } from "@/components/drawing-canvas"
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js"
-import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js"
-
-const mergeGeometriesSafe =
-  (BufferGeometryUtils as any).mergeGeometries ??
-  (BufferGeometryUtils as any).mergeBufferGeometries
+import {
+  type GeometryMode,
+  type StrokeMeshData,
+  type ExtrudeParams,
+  type SolidParams,
+  getEngine,
+  TUBE_RADIUS,
+  RADIAL_SEGMENTS,
+  SPHERE_SEGMENTS,
+} from "@/lib/geometry-engines"
 
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
@@ -22,142 +27,36 @@ const FRAME_K = 3.0
 const TOP_K = 2.5
 
 /* ------------------------------------------------------------------ */
-/*  Convert 2D canvas strokes to 3D tube meshes + cap/joint spheres   */
+/*  Convert 2D strokes to 3D mesh data via geometry engine             */
 /* ------------------------------------------------------------------ */
 
-const TUBE_RADIUS = 0.012
-const TUBE_SEGMENTS_MULTIPLIER = 3
-const MAX_TUBULAR_SEGMENTS = 512
-const RADIAL_SEGMENTS = 16
-const SPHERE_SEGMENTS = 14
-const JOINT_ANGLE_THRESHOLD_DEG = 40
-const JOINT_MIN_DISTANCE = 0.03
-const MIN_STROKE_LENGTH = 0.01 // world units — skip micro-strokes below this arc-length
 const MIN_REVEAL_RINGS = 1 // minimum tube rings visible before showing any caps/joints
-
-interface StrokeMeshData {
-  tubeGeometry: THREE.TubeGeometry
-  curve: THREE.CatmullRomCurve3
-  capPositions: THREE.Vector3[]
-  jointPositions: THREE.Vector3[]
-  /** Normalized time [0,1] at which each joint appears (based on nearest point along the curve) */
-  jointFractions: number[]
-  /** Number of 3D filtered points (used for drawRange fraction calculation) */
-  filteredCount: number
-  key: string
-}
 
 function useStrokeMeshes(
   strokes: ProcessedStroke[],
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  mode: GeometryMode,
+  extrudeParams?: ExtrudeParams,
+  solidParams?: SolidParams
 ): StrokeMeshData[] {
   return useMemo(() => {
-    if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0)
-      return []
-
-    const scaleRef = Math.max(canvasWidth, canvasHeight)
-    const normScale = 3 / scaleRef
-
-    const result: StrokeMeshData[] = []
-
-    for (let si = 0; si < strokes.length; si++) {
-      const stroke = strokes[si]
-      if (stroke.points.length < 2) continue
-
-      const pts3d = stroke.points.map((p) => {
-        const x = (p.x - canvasWidth / 2) * normScale
-        const y = -(p.y - canvasHeight / 2) * normScale
-        return new THREE.Vector3(x, y, 0)
-      })
-
-      const filtered = [pts3d[0]]
-      for (let i = 1; i < pts3d.length; i++) {
-        if (pts3d[i].distanceTo(filtered[filtered.length - 1]) > 0.001) {
-          filtered.push(pts3d[i])
-        }
-      }
-      if (filtered.length < 2) continue
-
-      // Micro-stroke filter: skip strokes with negligible arc-length
-      let arcLength = 0
-      for (let i = 1; i < filtered.length; i++) {
-        arcLength += filtered[i].distanceTo(filtered[i - 1])
-      }
-      if (arcLength < MIN_STROKE_LENGTH) continue
-
-      const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
-      const tubularSegments = Math.min(
-        Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
-        MAX_TUBULAR_SEGMENTS
-      )
-      const tubeGeometry = new THREE.TubeGeometry(
-        curve,
-        tubularSegments,
-        TUBE_RADIUS,
-        RADIAL_SEGMENTS,
-        false
-      )
-
-      const capPositions = [
-        filtered[0].clone(),
-        filtered[filtered.length - 1].clone(),
-      ]
-
-      // Detect joints via angle scan on 3D polyline
-      const jointPositions: THREE.Vector3[] = []
-      const jointFractions: number[] = []
-      const angleThresholdRad = (JOINT_ANGLE_THRESHOLD_DEG * Math.PI) / 180
-
-      for (let i = 1; i < filtered.length - 1; i++) {
-        const prev = filtered[i - 1]
-        const curr = filtered[i]
-        const next = filtered[i + 1]
-
-        const ax = curr.x - prev.x
-        const ay = curr.y - prev.y
-        const az = curr.z - prev.z
-        const bx = next.x - curr.x
-        const by = next.y - curr.y
-        const bz = next.z - curr.z
-
-        const magA = Math.sqrt(ax * ax + ay * ay + az * az)
-        const magB = Math.sqrt(bx * bx + by * by + bz * bz)
-        if (magA < 1e-6 || magB < 1e-6) continue
-
-        const dot = ax * bx + ay * by + az * bz
-        const cosAngle = Math.max(-1, Math.min(1, dot / (magA * magB)))
-        const deviation = Math.PI - Math.acos(cosAngle)
-
-        if (deviation > angleThresholdRad) {
-          if (jointPositions.length > 0) {
-            const lastJoint = jointPositions[jointPositions.length - 1]
-            if (curr.distanceTo(lastJoint) < JOINT_MIN_DISTANCE) continue
-          }
-          jointPositions.push(curr.clone())
-          jointFractions.push(i / (filtered.length - 1))
-        }
-      }
-
-      result.push({
-        tubeGeometry,
-        curve,
-        capPositions,
-        jointPositions,
-        jointFractions,
-        filteredCount: filtered.length,
-        key: `stroke-${si}-${stroke.points.length}`,
-      })
-    }
-
-    return result
-  }, [strokes, canvasWidth, canvasHeight])
+    const engine = getEngine(mode)
+    return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
+  }, [strokes, canvasWidth, canvasHeight, mode, extrudeParams, solidParams])
 }
 
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-const tipGeometry = new THREE.SphereGeometry(TUBE_RADIUS * 1.1, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-const strokeMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a" })
+// Gel-ink material: preview-only (export uses its own lightweight MeshStandardMaterial)
+const strokeMaterial = new THREE.MeshPhysicalMaterial({
+  color: "#1a1a1a",
+  clearcoat: 0.8,
+  clearcoatRoughness: 0.15,
+  roughness: 0.35,
+  metalness: 0.0,
+  reflectivity: 0.6,
+})
 
 /* ---- Bounding box ---- */
 interface StrokeBounds {
@@ -223,6 +122,26 @@ function AutoFrameOnFirstDraw({
   return null
 }
 
+/* ---- CameraSlave: copies camera from a master OrbitControls ref ---- */
+function CameraSlave({
+  masterControlsRef,
+}: {
+  masterControlsRef: React.RefObject<OrbitControlsImpl | null>
+}) {
+  const { camera } = useThree()
+
+  useFrame(() => {
+    const master = masterControlsRef.current
+    if (!master) return
+    camera.position.copy(master.object.position)
+    camera.quaternion.copy(master.object.quaternion)
+    ;(camera as THREE.PerspectiveCamera).fov = (master.object as THREE.PerspectiveCamera).fov
+    ;(camera as THREE.PerspectiveCamera).updateProjectionMatrix()
+  })
+
+  return null
+}
+
 /* ------------------------------------------------------------------ */
 /*  Animation timeline: computes timing from raw stroke timestamps    */
 /* ------------------------------------------------------------------ */
@@ -277,17 +196,23 @@ function useTimeline(rawStrokes: Stroke[]): {
 /*  AnimatedStrokes: manages drawRange + visibility per frame         */
 /* ------------------------------------------------------------------ */
 
+type RevealMode = "raw" | "smooth" | "hybrid"
+
 function AnimatedStrokes({
   meshes,
   timelines,
   totalDuration,
   playheadRef,
+  revealMode,
+  hybridBlend,
   exportGroupRef,
 }: {
   meshes: StrokeMeshData[]
   timelines: StrokeTimeline[]
   totalDuration: number
   playheadRef: React.MutableRefObject<number> // 0..1 progress
+  revealMode: RevealMode
+  hybridBlend: number
   exportGroupRef: React.RefObject<THREE.Group | null>
 }) {
   // Refs to all tube meshes for drawRange updates
@@ -298,8 +223,6 @@ function AnimatedStrokes({
   const startCapRefs = useRef<(THREE.Mesh | null)[]>([])
   // Refs to joint groups (one group per stroke)
   const jointGroupRefs = useRef<(THREE.Group | null)[]>([])
-  // Refs to traveling ink-tip spheres (one per stroke)
-  const tipRefs = useRef<(THREE.Mesh | null)[]>([])
 
   useFrame(() => {
     const progress = playheadRef.current
@@ -307,38 +230,43 @@ function AnimatedStrokes({
 
     for (let si = 0; si < meshes.length; si++) {
       const mesh = tubeMeshRefs.current[si]
+      const strokeMeshData = meshes[si]
+
+      if (!mesh || !strokeMeshData) continue
+
+      // Extrude/Solid meshes are always fully visible (static, no animation)
+      if (strokeMeshData.mode === "extrude" || strokeMeshData.mode === "solid") {
+        mesh.visible = true
+        continue
+      }
+
+      // Rod mode: animate with drawRange + caps + joints
       const startCap = startCapRefs.current[si]
       const endCap = endCapRefs.current[si]
       const jointGroup = jointGroupRefs.current[si]
-      const tip = tipRefs.current[si]
       const timeline = timelines[si]
-      const strokeMeshData = meshes[si]
 
-      if (!mesh || !timeline || !strokeMeshData) continue
+      if (!timeline) continue
 
       const geo = mesh.geometry as THREE.TubeGeometry
-      // Total indices in the tube
       const totalIndices = geo.index ? geo.index.count : 0
-
-      // Minimum indices for one visible tube ring
       const minVisibleIndices = RADIAL_SEGMENTS * 6 * MIN_REVEAL_RINGS
 
       if (currentTimeMs < timeline.tStart) {
-        // Stroke hasn't started yet — hide everything
         geo.setDrawRange(0, 0)
         if (startCap) startCap.visible = false
         if (endCap) endCap.visible = false
-        if (tip) tip.visible = false
         if (jointGroup) jointGroup.visible = false
         continue
       }
 
       if (currentTimeMs >= timeline.tEnd) {
-        // Stroke fully revealed — show final end cap, hide traveling tip
         geo.setDrawRange(0, totalIndices)
         if (startCap) startCap.visible = true
-        if (endCap) endCap.visible = true
-        if (tip) tip.visible = false
+        if (endCap && strokeMeshData.capPositions) {
+          endCap.visible = true
+          endCap.position.copy(strokeMeshData.capPositions[1])
+        }
         if (jointGroup) {
           jointGroup.visible = true
           for (const child of jointGroup.children) {
@@ -348,40 +276,78 @@ function AnimatedStrokes({
         continue
       }
 
-      // Partial reveal: compute fraction within this stroke's time range
       const strokeDuration = Math.max(timeline.tEnd - timeline.tStart, 1)
       const elapsed = currentTimeMs - timeline.tStart
-      const fraction = Math.min(elapsed / strokeDuration, 1)
+      const timeFrac = Math.min(elapsed / strokeDuration, 1)
 
-      // Set drawRange proportionally
-      const revealedIndices = Math.floor(fraction * totalIndices)
-      geo.setDrawRange(0, revealedIndices)
+      // --- Convert timeFrac -> distFrac using per-point mapping ---
+      const tf = strokeMeshData.timeFracs
+      const df = strokeMeshData.distFracs
+      const curve = strokeMeshData.curve
 
-      // Guard: if fewer than one ring of indices revealed, hide everything for this stroke
-      const hasVisibleSegment = revealedIndices >= minVisibleIndices
-
-      // Start cap: only show when we have a visible tube segment
-      if (startCap) startCap.visible = hasVisibleSegment
-
-      // End cap: show ONLY when drawRange covers the entire tube geometry
-      if (endCap) {
-        endCap.visible = revealedIndices >= totalIndices
-      }
-
-      // Traveling ink tip: position at the reveal front on the curve
-      if (tip) {
-        if (hasVisibleSegment) {
-          tip.visible = true
-          // Use the same fraction to sample the exact curve position
-          const clampedFraction = Math.max(0, Math.min(fraction, 1))
-          const tipPos = strokeMeshData.curve.getPointAt(clampedFraction)
-          tip.position.copy(tipPos)
+      // Compute rawDistFrac: pen-speed-based arc-length fraction
+      let rawDistFrac = timeFrac // fallback
+      if (tf && df && tf.length >= 2 && df.length === tf.length) {
+        let lo = 0
+        let hi = tf.length - 1
+        while (lo < hi - 1) {
+          const mid = (lo + hi) >> 1
+          if (tf[mid] <= timeFrac) lo = mid
+          else hi = mid
+        }
+        if (timeFrac <= tf[0]) {
+          rawDistFrac = df[0]
+        } else if (timeFrac >= tf[tf.length - 1]) {
+          rawDistFrac = df[df.length - 1]
         } else {
-          tip.visible = false
+          const segLen = tf[hi] - tf[lo]
+          const alpha = segLen > 0 ? (timeFrac - tf[lo]) / segLen : 0
+          rawDistFrac = df[lo] + alpha * (df[hi] - df[lo])
         }
       }
 
-      // Joints: only show when stroke has a visible segment AND reveal has passed that joint
+      // Apply reveal mode — NO easing, all linear at the end
+      let distFrac: number
+      if (revealMode === "smooth") {
+        distFrac = timeFrac // constant speed
+      } else if (revealMode === "hybrid") {
+        distFrac = rawDistFrac + (timeFrac - rawDistFrac) * hybridBlend
+      } else {
+        distFrac = rawDistFrac // raw pen timing
+      }
+
+      // --- Convert distFrac -> curve tParam using arc-length mapping ---
+      let tParam: number
+      if (curve) {
+        const distance = distFrac * curve.getLength()
+        tParam = curve.getUtoTmapping(0, distance)
+      } else {
+        tParam = distFrac
+      }
+
+      // --- DrawRange: snap to full tube rings ---
+      const tubularSegments = (geo.parameters as any).tubularSegments as number || 64
+      const indicesPerRing = RADIAL_SEGMENTS * 6
+      const ringIndex = Math.floor(tParam * tubularSegments)
+      const visibleRings = Math.min(ringIndex + 1, tubularSegments + 1)
+      const drawRangeCount = Math.min(visibleRings * indicesPerRing, totalIndices)
+      geo.setDrawRange(0, drawRangeCount)
+
+      const hasVisibleSegment = visibleRings >= MIN_REVEAL_RINGS + 1
+
+      if (startCap) startCap.visible = hasVisibleSegment
+
+      // End cap: hidden during reveal, snaps to final position near completion
+      if (endCap) {
+        if (distFrac >= 0.98 && strokeMeshData.capPositions) {
+          endCap.visible = true
+          endCap.position.copy(strokeMeshData.capPositions[1])
+        } else {
+          endCap.visible = false
+        }
+      }
+
+      // --- Joints ---
       if (jointGroup) {
         if (!hasVisibleSegment) {
           jointGroup.visible = false
@@ -389,7 +355,7 @@ function AnimatedStrokes({
           jointGroup.visible = true
           const fracs = strokeMeshData.jointFractions
           for (let ji = 0; ji < jointGroup.children.length; ji++) {
-            jointGroup.children[ji].visible = ji < fracs.length && fracs[ji] <= fraction
+            jointGroup.children[ji].visible = ji < fracs.length && (fracs?.[ji] ?? 0) <= distFrac
           }
         }
       }
@@ -398,55 +364,48 @@ function AnimatedStrokes({
 
   return (
     <>
-      {/* Export group: tubes + caps + joints (exported to GLB) */}
+      {/* Export group: tubes/extrude meshes + caps + joints */}
       <group ref={exportGroupRef}>
         {meshes.map((data, si) => (
           <group key={data.key}>
-            {/* Tube */}
+            {/* Main geometry (tube or extrude) */}
             <mesh
               ref={(el) => { tubeMeshRefs.current[si] = el }}
               geometry={data.tubeGeometry}
               material={strokeMaterial}
             />
-            {/* Start cap */}
-            <mesh
-              ref={(el) => { startCapRefs.current[si] = el }}
-              geometry={sphereGeometry}
-              material={strokeMaterial}
-              position={data.capPositions[0]}
-            />
-            {/* End cap */}
-            <mesh
-              ref={(el) => { endCapRefs.current[si] = el }}
-              geometry={sphereGeometry}
-              material={strokeMaterial}
-              position={data.capPositions[1]}
-            />
-            {/* Joints */}
-            <group ref={(el) => { jointGroupRefs.current[si] = el }}>
-              {data.jointPositions.map((pos, ji) => (
+            {/* Rod-mode only: caps + joints */}
+            {data.mode === "rod" && data.capPositions && (
+              <>
                 <mesh
-                  key={`${data.key}-joint-${ji}`}
+                  ref={(el) => { startCapRefs.current[si] = el }}
                   geometry={sphereGeometry}
                   material={strokeMaterial}
-                  position={pos}
+                  position={data.capPositions[0]}
                 />
-              ))}
-            </group>
+                <mesh
+                  ref={(el) => { endCapRefs.current[si] = el }}
+                  geometry={sphereGeometry}
+                  material={strokeMaterial}
+                  position={data.capPositions[1]}
+                />
+              </>
+            )}
+            {data.mode === "rod" && data.jointPositions && (
+              <group ref={(el) => { jointGroupRefs.current[si] = el }}>
+                {data.jointPositions.map((pos, ji) => (
+                  <mesh
+                    key={`${data.key}-joint-${ji}`}
+                    geometry={sphereGeometry}
+                    material={strokeMaterial}
+                    position={pos}
+                  />
+                ))}
+              </group>
+            )}
           </group>
         ))}
       </group>
-
-      {/* Traveling ink tips: NOT exported (purely visual during animation) */}
-      {meshes.map((data, si) => (
-        <mesh
-          key={`${data.key}-tip`}
-          ref={(el) => { tipRefs.current[si] = el }}
-          geometry={tipGeometry}
-          material={strokeMaterial}
-          visible={false}
-        />
-      ))}
     </>
   )
 }
@@ -503,6 +462,11 @@ function Scene({
   rawStrokes,
   canvasWidth,
   canvasHeight,
+  geometryMode,
+  extrudeParams,
+  solidParams,
+  revealMode,
+  hybridBlend,
   boundsRef,
   exportGroupRef,
   playheadRef,
@@ -510,12 +474,19 @@ function Scene({
   speed,
   totalDuration,
   onProgressUpdate,
+  orbitEnabled = true,
+  masterControlsRef,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
   rawStrokes: Stroke[]
   canvasWidth: number
   canvasHeight: number
+  geometryMode: GeometryMode
+  extrudeParams?: ExtrudeParams
+  solidParams?: SolidParams
+  revealMode: RevealMode
+  hybridBlend: number
   boundsRef: React.MutableRefObject<StrokeBounds | null>
   exportGroupRef: React.RefObject<THREE.Group | null>
   playheadRef: React.MutableRefObject<number>
@@ -523,8 +494,10 @@ function Scene({
   speed: number
   totalDuration: number
   onProgressUpdate: (progress: number) => void
+  orbitEnabled?: boolean
+  masterControlsRef?: React.RefObject<OrbitControlsImpl | null>
 }) {
-  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight)
+  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode, extrudeParams, solidParams)
   const bounds = useStrokeBounds(meshes)
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
@@ -534,9 +507,11 @@ function Scene({
 
   return (
     <>
-      <ambientLight intensity={0.6} />
-      <directionalLight position={[5, 5, 5]} intensity={1} />
-      <directionalLight position={[-3, 2, -3]} intensity={0.3} />
+      {/* Lighting: key + fill + rim for gel-ink specular highlights */}
+      <ambientLight intensity={0.4} />
+      <directionalLight position={[5, 8, 5]} intensity={1.2} />
+      <directionalLight position={[-4, 2, -2]} intensity={0.4} />
+      <directionalLight position={[0, -3, -5]} intensity={0.3} />
 
       {strokes.length === 0 && (
         <mesh>
@@ -550,6 +525,8 @@ function Scene({
         timelines={timelines}
         totalDuration={computedDuration}
         playheadRef={playheadRef}
+        revealMode={revealMode}
+        hybridBlend={hybridBlend}
         exportGroupRef={exportGroupRef}
       />
 
@@ -572,7 +549,11 @@ function Scene({
         rotation={[Math.PI / 2, 0, 0]}
         position={[0, 0, -0.05]}
       />
-      <OrbitControls ref={controlsRef} makeDefault />
+      {orbitEnabled ? (
+        <OrbitControls ref={controlsRef} makeDefault />
+      ) : masterControlsRef ? (
+        <CameraSlave masterControlsRef={masterControlsRef} />
+      ) : null}
     </>
   )
 }
@@ -614,10 +595,13 @@ class ViewportErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryS
 interface Viewport3DProps {
   processedStrokes: ProcessedStroke[]
   rawStrokes: Stroke[]
+  geometryMode: GeometryMode
+  extrudeParams?: ExtrudeParams
+  solidParams?: SolidParams
   settingsRef?: React.MutableRefObject<ExportSettings>
 }
 
-export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }: Viewport3DProps) {
+export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode, extrudeParams, solidParams, settingsRef }: Viewport3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const boundsRef = useRef<StrokeBounds | null>(null)
@@ -630,6 +614,13 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
   const [playing, setPlaying] = useState(false)
   const [progress, setProgress] = useState(0) // for UI slider display
   const [speed, setSpeed] = useState(1)
+  const [revealMode, setRevealMode] = useState<RevealMode>("hybrid")
+  const [hybridBlend, setHybridBlend] = useState(0.4)
+  const [comparing, setComparing] = useState(false)
+  const comparePhaseRef = useRef(0) // 0=raw, 1=hybrid, 2=smooth
+  const [compareLabel, setCompareLabel] = useState("")
+  const [compare3Up, setCompare3Up] = useState(false)
+  const [showDebug, setShowDebug] = useState(false)
 
   const { totalDuration } = useTimeline(rawStrokes)
 
@@ -672,6 +663,47 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
 
     prevStrokeCountRef.current = newCount
   }, [processedStrokes.length])
+
+  // Compare mode: auto-cycle through Raw -> Hybrid -> Smooth
+  const COMPARE_MODES: RevealMode[] = ["raw", "hybrid", "smooth"]
+  const COMPARE_LABELS = ["RAW", `HYBRID (blend=${hybridBlend.toFixed(2)})`, "SMOOTH"]
+
+  useEffect(() => {
+    if (!comparing) return
+    // When playback finishes (progress >= 1 and not playing), advance phase
+    if (progress >= 1 && !playing) {
+      const nextPhase = (comparePhaseRef.current + 1) % 3
+      comparePhaseRef.current = nextPhase
+      setRevealMode(COMPARE_MODES[nextPhase])
+      setCompareLabel(COMPARE_LABELS[nextPhase])
+      // Small delay so the mode switch is visible before replay starts
+      const timer = setTimeout(() => {
+        playheadRef.current = 0
+        setProgress(0)
+        setPlaying(true)
+      }, 400)
+      return () => clearTimeout(timer)
+    }
+  }, [comparing, progress, playing, hybridBlend])
+
+  const handleCompareToggle = useCallback(() => {
+    setComparing((prev) => {
+      if (!prev) {
+        // Enter compare: start at phase 0 (raw)
+        comparePhaseRef.current = 0
+        setRevealMode("raw")
+        setCompareLabel("RAW")
+        playheadRef.current = 0
+        setProgress(0)
+        setPlaying(true)
+        return true
+      }
+      // Exit compare: stop playback, restore manual control
+      setPlaying(false)
+      setCompareLabel("")
+      return false
+    })
+  }, [])
 
   const handlePlayPause = useCallback(() => {
     setPlaying((prev) => {
@@ -743,187 +775,32 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
 
     setExporting(true)
     try {
-      const canMerge = typeof mergeGeometriesSafe === "function"
-      if (!canMerge) {
-        console.warn("[FreeStroke Export] mergeGeometries unavailable — falling back to per-part meshes")
-      }
+      const engine = getEngine(geometryMode)
+      const settings = settingsRef?.current
 
-      const scaleRef = Math.max(canvasWidth, canvasHeight)
-      const normScale = 3 / scaleRef
-      const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
-      const capSphere = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+      const exportResult = engine.buildExport(processedStrokes, {
+        canvasWidth,
+        canvasHeight,
+        exportName,
+        strokeCount,
+        totalPoints,
+      extrudeParams,
+      solidParams,
+      settings: {
+          spacing: settings?.spacing ?? null,
+          smoothingEnabled: settings?.smoothing ?? null,
+          cornersEnabled: settings?.preserveCorners ?? null,
+        },
+      })
 
-      // Collect top-level objects to add to the root group (one per stroke)
-      const exportObjects: THREE.Object3D[] = []
-      const disposables: THREE.BufferGeometry[] = []
-
-      for (let si = 0; si < processedStrokes.length; si++) {
-        const stroke = processedStrokes[si]
-        if (stroke.points.length < 2) continue
-
-        const pts3d = stroke.points.map((p) => {
-          const x = (p.x - canvasWidth / 2) * normScale
-          const y = -(p.y - canvasHeight / 2) * normScale
-          return new THREE.Vector3(x, y, 0)
-        })
-
-        const filtered = [pts3d[0]]
-        for (let i = 1; i < pts3d.length; i++) {
-          if (pts3d[i].distanceTo(filtered[filtered.length - 1]) > 0.001) {
-            filtered.push(pts3d[i])
-          }
-        }
-        if (filtered.length < 2) continue
-
-        let arcLength = 0
-        for (let i = 1; i < filtered.length; i++) {
-          arcLength += filtered[i].distanceTo(filtered[i - 1])
-        }
-        if (arcLength < MIN_STROKE_LENGTH) continue
-
-        const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
-        const tubularSegments = Math.min(
-          Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
-          MAX_TUBULAR_SEGMENTS
-        )
-        const tubeGeo = new THREE.TubeGeometry(
-          curve, tubularSegments, TUBE_RADIUS, RADIAL_SEGMENTS, false
-        )
-
-        const startCapGeo = capSphere.clone().translate(
-          filtered[0].x, filtered[0].y, filtered[0].z
-        )
-        const endCapGeo = capSphere.clone().translate(
-          filtered[filtered.length - 1].x,
-          filtered[filtered.length - 1].y,
-          filtered[filtered.length - 1].z
-        )
-
-        const jointGeos: THREE.BufferGeometry[] = []
-        const angleThresholdRad = (JOINT_ANGLE_THRESHOLD_DEG * Math.PI) / 180
-        let lastJointPos: THREE.Vector3 | null = null
-
-        for (let i = 1; i < filtered.length - 1; i++) {
-          const prev = filtered[i - 1]
-          const curr = filtered[i]
-          const next = filtered[i + 1]
-          const ax = curr.x - prev.x, ay = curr.y - prev.y, az = curr.z - prev.z
-          const bx = next.x - curr.x, by = next.y - curr.y, bz = next.z - curr.z
-          const magA = Math.sqrt(ax * ax + ay * ay + az * az)
-          const magB = Math.sqrt(bx * bx + by * by + bz * bz)
-          if (magA < 1e-6 || magB < 1e-6) continue
-          const dot = ax * bx + ay * by + az * bz
-          const cosAngle = Math.max(-1, Math.min(1, dot / (magA * magB)))
-          const deviation = Math.PI - Math.acos(cosAngle)
-          if (deviation > angleThresholdRad) {
-            if (lastJointPos && curr.distanceTo(lastJointPos) < JOINT_MIN_DISTANCE) continue
-            lastJointPos = curr
-            jointGeos.push(capSphere.clone().translate(curr.x, curr.y, curr.z))
-          }
-        }
-
-        const strokeName = `stroke_${String(si).padStart(3, "0")}`
-        const parts = [tubeGeo, startCapGeo, endCapGeo, ...jointGeos]
-
-        if (canMerge) {
-          // Merge all parts into a single geometry per stroke
-          const merged = mergeGeometriesSafe(parts, false)
-          if (merged) {
-            const mesh = new THREE.Mesh(merged, inkMaterial)
-            mesh.name = strokeName
-            exportObjects.push(mesh)
-            disposables.push(merged)
-          } else {
-            console.warn(`[FreeStroke Export] merge returned null for stroke ${si}, using group fallback`)
-            const group = new THREE.Group()
-            group.name = strokeName
-            for (let pi = 0; pi < parts.length; pi++) {
-              const m = new THREE.Mesh(parts[pi], inkMaterial)
-              m.name = `${strokeName}_part_${pi}`
-              group.add(m)
-            }
-            exportObjects.push(group)
-          }
-        } else {
-          // No merge available: export each part as a child mesh in a group
-          const group = new THREE.Group()
-          group.name = strokeName
-          for (let pi = 0; pi < parts.length; pi++) {
-            const m = new THREE.Mesh(parts[pi], inkMaterial)
-            m.name = `${strokeName}_part_${pi}`
-            group.add(m)
-          }
-          exportObjects.push(group)
-        }
-
-        // Dispose intermediate geometries (only when merged — parts are consumed)
-        if (canMerge) {
-          tubeGeo.dispose()
-          startCapGeo.dispose()
-          endCapGeo.dispose()
-          jointGeos.forEach((g) => g.dispose())
-        }
-      }
-
-      if (exportObjects.length === 0) {
+      if (exportResult.objectCount === 0) {
         setExporting(false)
         return
       }
 
-      // Compute bounding box and recenter at origin
-      const bbox = new THREE.Box3()
-      for (const obj of exportObjects) {
-        const b = new THREE.Box3().setFromObject(obj)
-        bbox.union(b)
-      }
-      const center = new THREE.Vector3()
-      bbox.getCenter(center)
-
-      // Translate all geometries so center = (0,0,0)
-      for (const obj of exportObjects) {
-        obj.traverse((child) => {
-          if (child instanceof THREE.Mesh && child.geometry) {
-            child.geometry.translate(-center.x, -center.y, -center.z)
-          }
-        })
-      }
-
-      // Centering verification
-      const verifyBox = new THREE.Box3()
-      for (const obj of exportObjects) {
-        verifyBox.union(new THREE.Box3().setFromObject(obj))
-      }
-      const verifyCenter = new THREE.Vector3()
-      verifyBox.getCenter(verifyCenter)
-      const centerDrift = verifyCenter.length()
-      if (centerDrift > 0.01) {
-        console.warn(`[FreeStroke Export] Post-centering drift: center=(${verifyCenter.x.toFixed(4)}, ${verifyCenter.y.toFixed(4)}, ${verifyCenter.z.toFixed(4)}), distance=${centerDrift.toFixed(4)}`)
-      }
-
       // Build export scene
       const exportScene = new THREE.Scene()
-      const rootGroup = new THREE.Group()
-      rootGroup.name = "FreeStroke"
-
-      const settings = settingsRef?.current
-      rootGroup.userData = {
-        app: "Free Stroke",
-        exportedAt: new Date().toISOString(),
-        strokeCount,
-        totalPoints,
-        settings: {
-          spacing: settings?.spacing ?? null,
-          smoothingEnabled: settings?.smoothing ?? null,
-          cornersEnabled: settings?.preserveCorners ?? null,
-          tubeRadius: TUBE_RADIUS,
-          radialSegments: RADIAL_SEGMENTS,
-        },
-      }
-
-      for (const obj of exportObjects) {
-        rootGroup.add(obj)
-      }
-      exportScene.add(rootGroup)
+      exportScene.add(exportResult.group)
 
       // Dev-only scene verification
       if (process.env.NODE_ENV === "development") {
@@ -939,23 +816,14 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
           }
         })
 
-        // Verify root structure
         if (exportScene.children.length !== 1 || exportScene.children[0].name !== "FreeStroke") {
           console.warn("[FreeStroke Export] ASSERTION: root is not a single group named FreeStroke")
         }
 
-        const childNames = rootGroup.children.map((c) => c.name)
-        const expectedPattern = /^stroke_\d{3}$/
-        for (const name of childNames) {
-          if (!expectedPattern.test(name)) {
-            console.warn(`[FreeStroke Export] ASSERTION: unexpected child name "${name}" (expected stroke_NNN)`)
-          }
-        }
-
-        console.log(`[FreeStroke Export] meshes=${meshCount}, strokes=${exportObjects.length}, center=(${verifyCenter.x.toFixed(4)}, ${verifyCenter.y.toFixed(4)}, ${verifyCenter.z.toFixed(4)}), merged=${canMerge}`)
+        console.log(`[FreeStroke Export] mode=${geometryMode}, meshes=${meshCount}, strokes=${exportResult.objectCount}, merged=${exportResult.merged}`)
       }
 
-      // Export
+      // Export to GLB
       const exporter = new GLTFExporter()
       const result = await new Promise<ArrayBuffer>((resolve, reject) => {
         exporter.parse(
@@ -967,17 +835,13 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
       })
 
       // Dispose export-only resources
-      for (const g of disposables) g.dispose()
-      // If we didn't merge, dispose the parts that are still referenced by mesh children
-      if (!canMerge) {
-        exportScene.traverse((node) => {
-          if (node instanceof THREE.Mesh && node.geometry) {
-            node.geometry.dispose()
-          }
-        })
-      }
-      inkMaterial.dispose()
-      capSphere.dispose()
+      for (const g of exportResult.disposables) g.dispose()
+      exportScene.traverse((node) => {
+        if (node instanceof THREE.Mesh) {
+          node.geometry?.dispose()
+          if (node.material instanceof THREE.Material) node.material.dispose()
+        }
+      })
 
       // Build filename
       const now = new Date()
@@ -987,8 +851,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
       const prefix = safeName ? `${safeName}_` : "free-stroke_"
       const filename = `${prefix}${ts}.glb`
 
-      // One-line export report (always, not just dev)
-      console.log(`[FreeStroke] Exported "${filename}" — ${exportObjects.length} strokes, ${canMerge ? "merged" : "unmerged"}`)
+      console.log(`[FreeStroke] Exported "${filename}" — ${exportResult.objectCount} strokes (${geometryMode}), ${exportResult.merged ? "merged" : "unmerged"}`)
 
       // Download
       const blob = new Blob([result], { type: "application/octet-stream" })
@@ -1005,50 +868,136 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
     } finally {
       setExporting(false)
     }
-  }, [processedStrokes, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
+  }, [processedStrokes, geometryMode, extrudeParams, solidParams, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
 
   const formatDuration = (ms: number, frac: number) => {
     const sec = (ms * frac) / 1000
     return sec.toFixed(1) + "s"
   }
 
+  const THREE_UP_MODES: { mode: RevealMode; label: string }[] = [
+    { mode: "raw", label: "RAW" },
+    { mode: "hybrid", label: "HYBRID" },
+    { mode: "smooth", label: "SMOOTH" },
+  ]
+
+  // Dummy boundsRef/exportGroupRef for slave canvases (not used for export)
+  const slaveBoundsRef1 = useRef<StrokeBounds | null>(null)
+  const slaveBoundsRef2 = useRef<StrokeBounds | null>(null)
+  const slaveExportRef1 = useRef<THREE.Group | null>(null)
+  const slaveExportRef2 = useRef<THREE.Group | null>(null)
+
   return (
     <div ref={containerRef} className="relative h-full w-full">
-      <ViewportErrorBoundary>
-        <Canvas
-          camera={{
-            position: [
-              INITIAL_CAMERA_POSITION.x,
-              INITIAL_CAMERA_POSITION.y,
-              INITIAL_CAMERA_POSITION.z,
-            ],
-            fov: 50,
-          }}
-          style={{ background: "#fafafa" }}
-        >
-          <Scene
-            controlsRef={controlsRef}
-            strokes={processedStrokes}
-            rawStrokes={rawStrokes}
-            canvasWidth={canvasWidth}
-            canvasHeight={canvasHeight}
-            boundsRef={boundsRef}
-            exportGroupRef={exportGroupRef}
-            playheadRef={playheadRef}
-            playing={playing}
-            speed={speed}
-            totalDuration={totalDuration}
-            onProgressUpdate={onProgressUpdate}
-          />
-        </Canvas>
-      </ViewportErrorBoundary>
+      {compare3Up ? (
+        /* ---- 3-Up side-by-side view ---- */
+        <div className="grid h-full w-full grid-cols-3">
+          {THREE_UP_MODES.map((item, idx) => {
+            const isMaster = idx === 0
+            const bRef = idx === 0 ? boundsRef : idx === 1 ? slaveBoundsRef1 : slaveBoundsRef2
+            const eRef = idx === 0 ? exportGroupRef : idx === 1 ? slaveExportRef1 : slaveExportRef2
+            return (
+              <div key={item.mode} className="relative border-r border-border last:border-r-0">
+                <ViewportErrorBoundary>
+                  <Canvas
+                    camera={{
+                      position: [
+                        INITIAL_CAMERA_POSITION.x,
+                        INITIAL_CAMERA_POSITION.y,
+                        INITIAL_CAMERA_POSITION.z,
+                      ],
+                      fov: 50,
+                    }}
+                    style={{ background: "#fafafa" }}
+                  >
+                    <Scene
+                      controlsRef={isMaster ? controlsRef : { current: null }}
+                      strokes={processedStrokes}
+                      rawStrokes={rawStrokes}
+                      canvasWidth={canvasWidth}
+                      canvasHeight={canvasHeight}
+                      geometryMode={geometryMode}
+                      extrudeParams={extrudeParams}
+                      solidParams={solidParams}
+                      revealMode={item.mode}
+                      hybridBlend={hybridBlend}
+                      boundsRef={bRef}
+                      exportGroupRef={eRef}
+                      playheadRef={playheadRef}
+                      playing={playing}
+                      speed={speed}
+                      totalDuration={totalDuration}
+                      onProgressUpdate={isMaster ? onProgressUpdate : () => {}}
+                      orbitEnabled={isMaster}
+                      masterControlsRef={isMaster ? undefined : controlsRef}
+                    />
+                  </Canvas>
+                </ViewportErrorBoundary>
+                {/* Panel label */}
+                <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-background/80 px-2 py-0.5 font-mono text-[11px] font-semibold text-foreground backdrop-blur-sm">
+                  {item.label}
+                  {item.mode === "hybrid" && (
+                    <span className="ml-1 font-normal text-muted-foreground">
+                      ({hybridBlend.toFixed(2)})
+                    </span>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        /* ---- Single viewport ---- */
+        <>
+          <ViewportErrorBoundary>
+            <Canvas
+              camera={{
+                position: [
+                  INITIAL_CAMERA_POSITION.x,
+                  INITIAL_CAMERA_POSITION.y,
+                  INITIAL_CAMERA_POSITION.z,
+                ],
+                fov: 50,
+              }}
+              style={{ background: "#fafafa" }}
+            >
+              <Scene
+                controlsRef={controlsRef}
+                strokes={processedStrokes}
+                rawStrokes={rawStrokes}
+                canvasWidth={canvasWidth}
+                canvasHeight={canvasHeight}
+                geometryMode={geometryMode}
+                extrudeParams={extrudeParams}
+                solidParams={solidParams}
+                revealMode={revealMode}
+                hybridBlend={hybridBlend}
+                boundsRef={boundsRef}
+                exportGroupRef={exportGroupRef}
+                playheadRef={playheadRef}
+                playing={playing}
+                speed={speed}
+                totalDuration={totalDuration}
+                onProgressUpdate={onProgressUpdate}
+              />
+            </Canvas>
+          </ViewportErrorBoundary>
+        </>
+      )}
 
-      {/* Debug overlay */}
-      <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-muted-foreground backdrop-blur-sm">
-        <div>strokes: {strokeCount}</div>
-        <div>points: {totalPoints}</div>
-        <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
-      </div>
+      {/* Debug overlay (only when debug mode is on) */}
+      {showDebug && (
+        <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-muted-foreground backdrop-blur-sm">
+          <div>strokes: {strokeCount}</div>
+          <div>points: {totalPoints}</div>
+          <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
+          <div>reveal: {revealMode === "hybrid" ? `Hybrid(${hybridBlend.toFixed(2)})` : revealMode}</div>
+          {compare3Up && <div className="font-semibold text-foreground">3-Up Compare</div>}
+          {comparing && compareLabel && (
+            <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
+          )}
+        </div>
+      )}
 
       {/* Animation controls */}
       {strokeCount > 0 && (
@@ -1087,6 +1036,32 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
             className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
           />
 
+          {/* Main timing toggle: Natural (hybrid) / Authentic (raw) */}
+          <div className={`flex shrink-0 items-center gap-0.5 ${comparing ? "pointer-events-none opacity-40" : ""}`}>
+            <button
+              onClick={() => setRevealMode("hybrid")}
+              className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                revealMode === "hybrid"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Natural
+            </button>
+            <button
+              onClick={() => setRevealMode("raw")}
+              className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                revealMode === "raw"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Authentic
+            </button>
+          </div>
+
+          <div className="h-4 w-px bg-border" />
+
           {/* Speed */}
           <div className="flex shrink-0 items-center gap-0.5">
             {[0.5, 1, 2].map((s) => (
@@ -1102,6 +1077,88 @@ export default function Viewport3D({ processedStrokes, rawStrokes, settingsRef }
               </button>
             ))}
           </div>
+
+          <div className="h-4 w-px bg-border" />
+
+          {/* Debug toggle */}
+          <button
+            onClick={() => setShowDebug((v) => !v)}
+            className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              showDebug
+                ? "border-foreground/20 bg-foreground text-background"
+                : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Debug
+          </button>
+
+          {/* Debug-only tools */}
+          {showDebug && (
+            <>
+              <div className="h-4 w-px bg-border" />
+
+              {/* Smooth option (debug only) */}
+              <button
+                onClick={() => setRevealMode("smooth")}
+                className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                  revealMode === "smooth"
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Smooth
+              </button>
+
+              {/* Blend slider (debug only) */}
+              {revealMode === "hybrid" && (
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={hybridBlend}
+                  onChange={(e) => setHybridBlend(Number(e.target.value))}
+                  title={`Blend: ${hybridBlend.toFixed(2)}`}
+                  disabled={comparing}
+                  className={`h-1 w-14 shrink-0 cursor-pointer appearance-none rounded-full bg-border accent-foreground ${comparing ? "opacity-40" : ""}`}
+                />
+              )}
+
+              <div className="h-4 w-px bg-border" />
+
+              {/* Compare toggle (debug only) */}
+              <button
+                onClick={handleCompareToggle}
+                disabled={compare3Up}
+                className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                  comparing
+                    ? "border-foreground/20 bg-foreground text-background"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                } ${compare3Up ? "pointer-events-none opacity-40" : ""}`}
+              >
+                {comparing ? "Stop" : "Compare"}
+              </button>
+
+              {/* 3-Up toggle (debug only) */}
+              <button
+                onClick={() => {
+                  setCompare3Up((v) => !v)
+                  if (!compare3Up && comparing) {
+                    setComparing(false)
+                    setPlaying(false)
+                    setCompareLabel("")
+                  }
+                }}
+                className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                  compare3Up
+                    ? "border-foreground/20 bg-foreground text-background"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {compare3Up ? "Single" : "3-Up"}
+              </button>
+            </>
+          )}
         </div>
       )}
 
