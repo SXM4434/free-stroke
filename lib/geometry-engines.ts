@@ -546,6 +546,20 @@ function buildRibbonShape(pts: THREE.Vector3[], halfWidth: number): THREE.Shape 
   return shape
 }
 
+/** Auto-clamp bevel to avoid self-intersection on tight curves / large widths */
+function clampBevel(ep: ExtrudeParams): { bevelSize: number; bevelThickness: number; bevelSegments: number } {
+  const maxBevel = Math.min(ep.width * 0.25, ep.depth * 0.25)
+  let bevelSize = Math.min(ep.bevelSize, maxBevel)
+  let bevelThickness = Math.min(ep.bevelSize, bevelSize)
+  let bevelSegments = Math.min(ep.bevelSegments, 6)
+  if (bevelSize < 0) bevelSize = 0
+  if (bevelThickness < 0) bevelThickness = 0
+  if (bevelSize < ep.bevelSize || bevelThickness < ep.bevelSize || bevelSegments < ep.bevelSegments) {
+    console.warn(`[FreeStroke] Bevel clamped: size ${ep.bevelSize.toFixed(4)}->${bevelSize.toFixed(4)}, segments ${ep.bevelSegments}->${bevelSegments} (width=${ep.width}, depth=${ep.depth})`)
+  }
+  return { bevelSize, bevelThickness, bevelSegments }
+}
+
 export const ExtrudeEngine: GeometryEngine = {
   buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
     const { canvasWidth, canvasHeight, extrudeParams: ep } = params
@@ -567,12 +581,13 @@ export const ExtrudeEngine: GeometryEngine = {
       if (!shape) continue
 
       const halfDepth = extrudeParams.depth / 2
+      const bevel = clampBevel(extrudeParams)
       const geometry = new THREE.ExtrudeGeometry(shape, {
         depth: extrudeParams.depth,
         bevelEnabled: extrudeParams.bevelEnabled,
-        bevelSize: extrudeParams.bevelSize,
-        bevelThickness: extrudeParams.bevelSize,
-        bevelSegments: extrudeParams.bevelSegments,
+        bevelSize: bevel.bevelSize,
+        bevelThickness: bevel.bevelThickness,
+        bevelSegments: bevel.bevelSegments,
         curveSegments: 12,
       })
 
@@ -612,12 +627,13 @@ export const ExtrudeEngine: GeometryEngine = {
       if (!shape) continue
 
       const halfDepth = extrudeParams.depth / 2
+      const bevel = clampBevel(extrudeParams)
       const geometry = new THREE.ExtrudeGeometry(shape, {
         depth: extrudeParams.depth,
         bevelEnabled: extrudeParams.bevelEnabled,
-        bevelSize: extrudeParams.bevelSize,
-        bevelThickness: extrudeParams.bevelSize,
-        bevelSegments: extrudeParams.bevelSegments,
+        bevelSize: bevel.bevelSize,
+        bevelThickness: bevel.bevelThickness,
+        bevelSegments: bevel.bevelSegments,
         curveSegments: 12,
       })
       geometry.translate(0, 0, -halfDepth)
