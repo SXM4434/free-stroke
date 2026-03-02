@@ -678,14 +678,14 @@ export const ExtrudeEngine: GeometryEngine = {
 }
 
 /* ------------------------------------------------------------------ */
-/*  SolidEngine — raster mask -> voxel extrude (watertight spike)     */
+/*  SolidEngine — raster mask -> marching squares -> extrude          */
 /* ------------------------------------------------------------------ */
 
-const SOLID_RASTER_SIZE = 512 // offscreen canvas resolution
+const SOLID_RASTER_SIZE = 512
 
 /**
  * Rasterize processedStrokes into a binary mask on an offscreen 2D canvas.
- * Returns a boolean[] of size SOLID_RASTER_SIZE^2 (row-major, true = filled).
+ * Returns a boolean[] of size S*S (row-major, true = filled).
  */
 function rasterizeMask(
   strokes: ProcessedStroke[],
@@ -694,7 +694,6 @@ function rasterizeMask(
   lineWidth: number
 ): boolean[] {
   const S = SOLID_RASTER_SIZE
-  // Use OffscreenCanvas if available, otherwise fallback to document.createElement
   let canvas: OffscreenCanvas | HTMLCanvasElement
   let ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null
   if (typeof OffscreenCanvas !== "undefined") {
@@ -711,8 +710,6 @@ function rasterizeMask(
   ctx.fillStyle = "#000"
   ctx.fillRect(0, 0, S, S)
 
-  // Map from stroke coordinate space -> raster space
-  // Stroke points are in pixel space (0..canvasWidth, 0..canvasHeight)
   const scaleX = S / canvasWidth
   const scaleY = S / canvasHeight
 
@@ -734,19 +731,279 @@ function rasterizeMask(
   const imageData = ctx.getImageData(0, 0, S, S)
   const mask: boolean[] = new Array(S * S)
   for (let i = 0; i < S * S; i++) {
-    // Check red channel (white = 255, black = 0), threshold at 128
     mask[i] = imageData.data[i * 4] > 128
   }
   return mask
 }
 
+/* ---- Marching Squares ---- */
+
 /**
- * Build a coarse grid mesh from the binary mask.
- * For efficiency, uses greedy row-run merging: for each row, merge
- * consecutive filled pixels into a single box spanning the run.
- * Then extrude each run box to the specified depth.
+ * Edge segment key: encode two grid-edge endpoints into a string for hashing.
+ * Each endpoint is (x*2, y*2) to avoid fractional keys — marching squares
+ * vertices lie on half-integer grid positions.
  */
-function buildSolidMesh(
+function edgeKey(ax: number, ay: number): string {
+  // Multiply by 2 to get integer keys for half-positions
+  return `${Math.round(ax * 2)},${Math.round(ay * 2)}`
+}
+
+interface Seg { ax: number; ay: number; bx: number; by: number }
+
+/**
+ * Run marching squares on a binary mask of size S*S.
+ * Returns an array of closed contour polylines (each is an array of {x,y}).
+ * Coordinates are in raster space [0..S].
+ */
+function marchingSquaresContours(mask: boolean[], S: number): { x: number; y: number }[][] {
+  // Sample the mask: val(row, col) — treat out-of-bounds as false
+  const val = (r: number, c: number): boolean => {
+    if (r < 0 || r >= S || c < 0 || c >= S) return false
+    return mask[r * S + c]
+  }
+
+  // Collect edge segments from each 2x2 cell
+  const segments: Seg[] = []
+
+  for (let row = 0; row <= S; row++) {
+    for (let col = 0; col <= S; col++) {
+      // Four corners of the cell: TL, TR, BR, BL
+      // Each corner samples mask[row-1][col-1], etc.
+      const tl = val(row - 1, col - 1) ? 1 : 0
+      const tr = val(row - 1, col) ? 1 : 0
+      const br = val(row, col) ? 1 : 0
+      const bl = val(row, col - 1) ? 1 : 0
+
+      const cellCase = (tl << 3) | (tr << 2) | (br << 1) | bl
+
+      if (cellCase === 0 || cellCase === 15) continue
+
+      // Edge midpoints (in grid coordinates where cell top-left = (col, row)):
+      // top    = (col + 0.5, row)
+      // right  = (col + 1,   row + 0.5)
+      // bottom = (col + 0.5, row + 1)
+      // left   = (col,       row + 0.5)
+      const tx = col + 0.5, ty = row
+      const rx = col + 1,   ry = row + 0.5
+      const bx = col + 0.5, by = row + 1
+      const lx = col,       ly = row + 0.5
+
+      // 16-case lookup — emit 1 or 2 segments per cell
+      switch (cellCase) {
+        case 1:  segments.push({ ax: lx, ay: ly, bx: bx, by: by }); break
+        case 2:  segments.push({ ax: bx, ay: by, bx: rx, by: ry }); break
+        case 3:  segments.push({ ax: lx, ay: ly, bx: rx, by: ry }); break
+        case 4:  segments.push({ ax: tx, ay: ty, bx: rx, by: ry }); break
+        case 5:  // Saddle: TL + BR on
+          segments.push({ ax: lx, ay: ly, bx: tx, by: ty })
+          segments.push({ ax: bx, ay: by, bx: rx, by: ry })
+          break
+        case 6:  segments.push({ ax: tx, ay: ty, bx: bx, by: by }); break
+        case 7:  segments.push({ ax: lx, ay: ly, bx: tx, by: ty }); break
+        case 8:  segments.push({ ax: tx, ay: ty, bx: lx, by: ly }); break
+        case 9:  segments.push({ ax: tx, ay: ty, bx: bx, by: by }); break
+        case 10: // Saddle: TR + BL on
+          segments.push({ ax: tx, ay: ty, bx: rx, by: ry })
+          segments.push({ ax: lx, ay: ly, bx: bx, by: by })
+          break
+        case 11: segments.push({ ax: tx, ay: ty, bx: rx, by: ry }); break
+        case 12: segments.push({ ax: lx, ay: ly, bx: rx, by: ry }); break
+        case 13: segments.push({ ax: bx, ay: by, bx: rx, by: ry }); break
+        case 14: segments.push({ ax: lx, ay: ly, bx: bx, by: by }); break
+      }
+    }
+  }
+
+  if (segments.length === 0) return []
+
+  // Chain segments into closed contours using an adjacency map
+  const adj = new Map<string, { x: number; y: number; key: string }[]>()
+  for (const seg of segments) {
+    const ka = edgeKey(seg.ax, seg.ay)
+    const kb = edgeKey(seg.bx, seg.by)
+    if (!adj.has(ka)) adj.set(ka, [])
+    if (!adj.has(kb)) adj.set(kb, [])
+    adj.get(ka)!.push({ x: seg.bx, y: seg.by, key: kb })
+    adj.get(kb)!.push({ x: seg.ax, y: seg.ay, key: ka })
+  }
+
+  const visited = new Set<string>()
+  const contours: { x: number; y: number }[][] = []
+
+  for (const [startKey, neighbors] of adj) {
+    if (visited.has(startKey) || neighbors.length === 0) continue
+
+    const contour: { x: number; y: number }[] = []
+    let currentKey = startKey
+    // Decode startKey back to coords
+    const parts = startKey.split(",")
+    let cx = parseInt(parts[0]) / 2
+    let cy = parseInt(parts[1]) / 2
+
+    // Walk the chain
+    for (let step = 0; step < segments.length * 2 + 1; step++) {
+      contour.push({ x: cx, y: cy })
+      visited.add(currentKey)
+
+      const nexts = adj.get(currentKey)
+      if (!nexts) break
+
+      // Find first unvisited neighbor
+      let found = false
+      for (let ni = 0; ni < nexts.length; ni++) {
+        const n = nexts[ni]
+        if (!visited.has(n.key)) {
+          cx = n.x
+          cy = n.y
+          currentKey = n.key
+          // Remove this edge (mark as used) by splicing
+          nexts.splice(ni, 1)
+          // Also remove reverse
+          const rev = adj.get(n.key)
+          if (rev) {
+            const ri = rev.findIndex((r) => r.key === contour[contour.length - 1] ? false : edgeKey(contour[contour.length - 1].x, contour[contour.length - 1].y) === currentKey)
+            // Simple: remove first entry pointing back
+            for (let rj = 0; rj < rev.length; rj++) {
+              if (rev[rj].key === edgeKey(contour[contour.length - 1].x, contour[contour.length - 1].y)) {
+                rev.splice(rj, 1)
+                break
+              }
+            }
+          }
+          found = true
+          break
+        }
+      }
+
+      if (!found) break // closed or dead-end
+    }
+
+    if (contour.length >= 3) {
+      contours.push(contour)
+    }
+  }
+
+  return contours
+}
+
+/* ---- Douglas-Peucker simplification ---- */
+
+function dpSimplify(pts: { x: number; y: number }[], tolerance: number): { x: number; y: number }[] {
+  if (pts.length <= 2) return pts
+
+  // Find the point with the maximum distance from the line (first, last)
+  let maxDist = 0
+  let maxIdx = 0
+  const first = pts[0]
+  const last = pts[pts.length - 1]
+  const dx = last.x - first.x
+  const dy = last.y - first.y
+  const lineLenSq = dx * dx + dy * dy
+
+  for (let i = 1; i < pts.length - 1; i++) {
+    let dist: number
+    if (lineLenSq < 1e-10) {
+      const ex = pts[i].x - first.x
+      const ey = pts[i].y - first.y
+      dist = Math.sqrt(ex * ex + ey * ey)
+    } else {
+      const t = Math.max(0, Math.min(1, ((pts[i].x - first.x) * dx + (pts[i].y - first.y) * dy) / lineLenSq))
+      const px = first.x + t * dx
+      const py = first.y + t * dy
+      const ex = pts[i].x - px
+      const ey = pts[i].y - py
+      dist = Math.sqrt(ex * ex + ey * ey)
+    }
+    if (dist > maxDist) {
+      maxDist = dist
+      maxIdx = i
+    }
+  }
+
+  if (maxDist > tolerance) {
+    const left = dpSimplify(pts.slice(0, maxIdx + 1), tolerance)
+    const right = dpSimplify(pts.slice(maxIdx), tolerance)
+    return left.slice(0, -1).concat(right)
+  }
+
+  return [first, last]
+}
+
+/* ---- Contour classification (outer vs hole) ---- */
+
+/** Signed area of a 2D polygon. Positive = CCW, negative = CW. */
+function signedArea(pts: { x: number; y: number }[]): number {
+  let area = 0
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
+  }
+  return area / 2
+}
+
+/** Point-in-polygon (ray casting). */
+function pointInPolygon(px: number, py: number, poly: { x: number; y: number }[]): boolean {
+  let inside = false
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y
+    const xj = poly[j].x, yj = poly[j].y
+    if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+interface ClassifiedContours {
+  outer: { x: number; y: number }[]
+  holes: { x: number; y: number }[][]
+}
+
+/**
+ * Classify contours into outer boundary + holes.
+ * - Sort by absolute area descending.
+ * - Largest = outer shape.
+ * - Remaining contours that have a sample point inside the outer = holes.
+ * - Remaining contours that are outside the outer = separate outer shapes
+ *   (we merge them all into one Shape with multiple sub-paths).
+ */
+function classifyContours(contours: { x: number; y: number }[][]): ClassifiedContours[] {
+  if (contours.length === 0) return []
+
+  // Compute areas and sort by absolute area descending
+  const withArea = contours.map((c) => ({ contour: c, area: signedArea(c) }))
+  withArea.sort((a, b) => Math.abs(b.area) - Math.abs(a.area))
+
+  const used = new Set<number>()
+  const results: ClassifiedContours[] = []
+
+  for (let i = 0; i < withArea.length; i++) {
+    if (used.has(i)) continue
+    used.add(i)
+
+    const outer = withArea[i].contour
+    const holes: { x: number; y: number }[][] = []
+
+    // Find holes: smaller contours whose first point is inside this outer
+    for (let j = i + 1; j < withArea.length; j++) {
+      if (used.has(j)) continue
+      const candidate = withArea[j].contour
+      if (candidate.length > 0 && pointInPolygon(candidate[0].x, candidate[0].y, outer)) {
+        holes.push(candidate)
+        used.add(j)
+      }
+    }
+
+    results.push({ outer, holes })
+  }
+
+  return results
+}
+
+/**
+ * Build a watertight extruded mesh from raster mask contours.
+ * Pipeline: rasterize -> marching squares -> simplify -> classify -> Shape -> ExtrudeGeometry
+ */
+function buildSolidMeshFromMask(
   mask: boolean[],
   canvasWidth: number,
   canvasHeight: number,
@@ -755,56 +1012,65 @@ function buildSolidMesh(
   const S = SOLID_RASTER_SIZE
   const scaleRef = Math.max(canvasWidth, canvasHeight)
   const normScale = 3 / scaleRef
-  const pixelSize = 1 / S // in raster coords
 
-  // Convert raster (row, col) -> world (x, y) matching strokeTo3D transform
-  const toWorldX = (col: number) => ((col / S) * canvasWidth - canvasWidth / 2) * normScale
-  const toWorldY = (row: number) => -((row / S) * canvasHeight - canvasHeight / 2) * normScale
+  // Convert raster coords -> world coords (matching strokeTo3D transform)
+  const toWorldX = (rx: number) => ((rx / S) * canvasWidth - canvasWidth / 2) * normScale
+  const toWorldY = (ry: number) => -((ry / S) * canvasHeight - canvasHeight / 2) * normScale
 
+  // 1) Extract contours via marching squares
+  const rawContours = marchingSquaresContours(mask, S)
+  if (rawContours.length === 0) return null
+
+  // 2) Simplify contours (tolerance in raster pixels)
+  const tolerance = 0.8
+  const simplified = rawContours
+    .map((c) => dpSimplify(c, tolerance))
+    .filter((c) => c.length >= 3)
+  if (simplified.length === 0) return null
+
+  // 3) Classify into outer + holes
+  const classified = classifyContours(simplified)
+  if (classified.length === 0) return null
+
+  // 4) Build THREE.Shape(s) and extrude
+  const geometries: THREE.BufferGeometry[] = []
   const halfDepth = depth / 2
-  const boxes: THREE.BufferGeometry[] = []
 
-  // Greedy row-run merge
-  for (let row = 0; row < S; row++) {
-    let col = 0
-    while (col < S) {
-      if (!mask[row * S + col]) {
-        col++
-        continue
-      }
-      // Find run end
-      let runEnd = col
-      while (runEnd < S && mask[row * S + runEnd]) runEnd++
+  for (const group of classified) {
+    // Convert outer contour to world-space THREE.Shape
+    const shapePts = group.outer.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+    if (shapePts.length < 3) continue
 
-      const runLen = runEnd - col
+    const shape = new THREE.Shape(shapePts)
 
-      // World coordinates for this run
-      const x0 = toWorldX(col)
-      const x1 = toWorldX(runEnd)
-      const y0 = toWorldY(row)
-      const y1 = toWorldY(row + 1)
+    // Add holes
+    for (const hole of group.holes) {
+      const holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+      if (holePts.length < 3) continue
+      shape.holes.push(new THREE.Path(holePts))
+    }
 
-      const w = Math.abs(x1 - x0)
-      const h = Math.abs(y1 - y0)
-      const cx = (x0 + x1) / 2
-      const cy = (y0 + y1) / 2
-
-      const box = new THREE.BoxGeometry(w, h, depth)
-      box.translate(cx, cy, 0)
-      boxes.push(box)
-
-      col = runEnd
+    try {
+      const geo = new THREE.ExtrudeGeometry(shape, {
+        depth,
+        bevelEnabled: false,
+        curveSegments: 1,
+      })
+      geo.translate(0, 0, -halfDepth)
+      geometries.push(geo)
+    } catch {
+      // Triangulation can fail on degenerate shapes — skip silently
+      continue
     }
   }
 
-  if (boxes.length === 0) return null
+  if (geometries.length === 0) return null
 
-  // Merge all boxes into one geometry
-  const merged = mergeGeometriesSafe(boxes, false)
+  if (geometries.length === 1) return geometries[0]
 
-  // Dispose individual boxes
-  for (const b of boxes) b.dispose()
-
+  // Merge multiple shapes into one geometry
+  const merged = mergeGeometriesSafe(geometries, false)
+  for (const g of geometries) g.dispose()
   return merged || null
 }
 
@@ -815,7 +1081,7 @@ export const SolidEngine: GeometryEngine = {
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) return []
 
     const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
-    const geometry = buildSolidMesh(mask, canvasWidth, canvasHeight, solidParams.depth)
+    const geometry = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth)
 
     if (!geometry) return []
 
@@ -827,12 +1093,52 @@ export const SolidEngine: GeometryEngine = {
     }]
   },
 
-  buildExport(_strokes: ProcessedStroke[], _params: ExportParams): ExportResult {
-    // TODO: Solid export in a future iteration
-    const group = new THREE.Group()
-    group.name = "FreeStroke"
-    group.userData = { app: "Free Stroke", mode: "solid" }
-    return { group, disposables: [], objectCount: 0, merged: false }
+  buildExport(strokes: ProcessedStroke[], params: ExportParams): ExportResult {
+    const { canvasWidth, canvasHeight, solidParams: sp } = params
+    const solidParams = sp ?? DEFAULT_SOLID_PARAMS
+
+    const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
+    const disposables: THREE.BufferGeometry[] = []
+
+    const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
+    const geometry = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth)
+
+    const rootGroup = new THREE.Group()
+    rootGroup.name = "FreeStroke"
+    rootGroup.userData = {
+      app: "Free Stroke",
+      mode: "solid",
+      exportedAt: new Date().toISOString(),
+      strokeCount: params.strokeCount,
+      totalPoints: params.totalPoints,
+      settings: {
+        ...params.settings,
+        solidThickness: solidParams.thickness,
+        solidDepth: solidParams.depth,
+      },
+    }
+
+    if (geometry) {
+      // Recenter at origin
+      geometry.computeBoundingBox()
+      const center = new THREE.Vector3()
+      geometry.boundingBox?.getCenter(center)
+      geometry.translate(-center.x, -center.y, -center.z)
+
+      const mesh = new THREE.Mesh(geometry, inkMaterial)
+      mesh.name = "solid_000"
+      rootGroup.add(mesh)
+      disposables.push(geometry)
+    }
+
+    inkMaterial.dispose()
+
+    return {
+      group: rootGroup,
+      disposables,
+      objectCount: geometry ? 1 : 0,
+      merged: true,
+    }
   },
 }
 
