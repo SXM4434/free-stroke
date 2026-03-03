@@ -548,14 +548,13 @@ function buildRibbonShape(pts: THREE.Vector3[], halfWidth: number): THREE.Shape 
 
 /** Auto-clamp bevel to avoid self-intersection on tight curves / large widths */
 function clampBevel(ep: ExtrudeParams): { bevelSize: number; bevelThickness: number; bevelSegments: number } {
-  const maxBevel = Math.min(ep.width * 0.25, ep.depth * 0.25)
-  let bevelSize = Math.min(ep.bevelSize, maxBevel)
-  let bevelThickness = Math.min(ep.bevelSize, bevelSize)
-  let bevelSegments = Math.min(ep.bevelSegments, 6)
-  if (bevelSize < 0) bevelSize = 0
-  if (bevelThickness < 0) bevelThickness = 0
-  if (bevelSize < ep.bevelSize || bevelThickness < ep.bevelSize || bevelSegments < ep.bevelSegments) {
-    console.warn(`[FreeStroke] Bevel clamped: size ${ep.bevelSize.toFixed(4)}->${bevelSize.toFixed(4)}, segments ${ep.bevelSegments}->${bevelSegments} (width=${ep.width}, depth=${ep.depth})`)
+  // Bevel must not exceed half the smallest dimension
+  const maxBevel = Math.min(ep.width * 0.5, ep.depth * 0.5)
+  const bevelSize = Math.max(0, Math.min(ep.bevelSize, maxBevel))
+  const bevelThickness = Math.max(0, Math.min(ep.bevelSize, bevelSize))
+  const bevelSegments = Math.min(ep.bevelSegments, 6)
+  if (bevelSize < ep.bevelSize - 1e-6) {
+    console.warn(`[FreeStroke] Bevel clamped: ${ep.bevelSize.toFixed(4)}->${bevelSize.toFixed(4)} (width=${ep.width}, depth=${ep.depth})`)
   }
   return { bevelSize, bevelThickness, bevelSegments }
 }
