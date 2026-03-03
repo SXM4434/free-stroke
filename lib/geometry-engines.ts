@@ -546,15 +546,16 @@ function buildRibbonShape(pts: THREE.Vector3[], halfWidth: number): THREE.Shape 
   return shape
 }
 
-/** Auto-clamp bevel to avoid self-intersection on tight curves / large widths */
+/** Auto-clamp bevel to avoid self-intersection — only depth constrains bevel */
 function clampBevel(ep: ExtrudeParams): { bevelSize: number; bevelThickness: number; bevelSegments: number } {
-  // Bevel must not exceed half the smallest dimension
-  const maxBevel = Math.min(ep.width * 0.5, ep.depth * 0.5)
+  // Bevel extends along the extrusion (depth) axis, so cap at half-depth.
+  // Width is the 2D ribbon half-width and does not constrain bevel geometry.
+  const maxBevel = ep.depth * 0.5
   const bevelSize = Math.max(0, Math.min(ep.bevelSize, maxBevel))
   const bevelThickness = Math.max(0, Math.min(ep.bevelSize, bevelSize))
   const bevelSegments = Math.min(ep.bevelSegments, 6)
   if (bevelSize < ep.bevelSize - 1e-6) {
-    console.warn(`[FreeStroke] Bevel clamped: ${ep.bevelSize.toFixed(4)}->${bevelSize.toFixed(4)} (width=${ep.width}, depth=${ep.depth})`)
+    console.warn(`[FreeStroke] Bevel clamped: ${ep.bevelSize.toFixed(4)}->${bevelSize.toFixed(4)} (depth=${ep.depth})`)
   }
   return { bevelSize, bevelThickness, bevelSegments }
 }
