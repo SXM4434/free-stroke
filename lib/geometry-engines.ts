@@ -558,6 +558,24 @@ function clampBevel(ep: ExtrudeParams): { bevelSize: number; bevelThickness: num
   return { bevelSize, bevelThickness, bevelSegments }
 }
 
+/**
+ * Clamp ribbon half-width to stroke sampling density to prevent
+ * the "blobby/melted" look on tight curves where offset > segment length.
+ */
+function computeEffectiveWidth(filtered: THREE.Vector3[], userWidth: number): number {
+  if (filtered.length < 3) return userWidth
+  const segLengths: number[] = []
+  for (let i = 1; i < filtered.length; i++) {
+    segLengths.push(filtered[i].distanceTo(filtered[i - 1]))
+  }
+  segLengths.sort((a, b) => a - b)
+  const mid = segLengths.length >> 1
+  const median = segLengths.length % 2 === 0
+    ? (segLengths[mid - 1] + segLengths[mid]) / 2
+    : segLengths[mid]
+  return Math.min(userWidth, median * 0.9)
+}
+
 export const ExtrudeEngine: GeometryEngine = {
   buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
     const { canvasWidth, canvasHeight, extrudeParams: ep } = params
@@ -575,7 +593,8 @@ export const ExtrudeEngine: GeometryEngine = {
       if (filtered.length < 2) continue
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
-      const shape = buildRibbonShape(filtered, extrudeParams.width)
+      const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
+      const shape = buildRibbonShape(filtered, effectiveWidth)
       if (!shape) continue
 
       const halfDepth = extrudeParams.depth / 2
@@ -621,7 +640,8 @@ export const ExtrudeEngine: GeometryEngine = {
       if (filtered.length < 2) continue
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
-      const shape = buildRibbonShape(filtered, extrudeParams.width)
+      const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
+      const shape = buildRibbonShape(filtered, effectiveWidth)
       if (!shape) continue
 
       const halfDepth = extrudeParams.depth / 2
