@@ -477,6 +477,7 @@ function Scene({
   onProgressUpdate,
   orbitEnabled = true,
   masterControlsRef,
+  meshStatusRef,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
@@ -940,6 +941,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                       onProgressUpdate={isMaster ? onProgressUpdate : () => {}}
                       orbitEnabled={isMaster}
                       masterControlsRef={isMaster ? undefined : controlsRef}
+                      meshStatusRef={meshStatusRef}
                     />
                   </Canvas>
                 </ViewportErrorBoundary>
