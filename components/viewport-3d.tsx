@@ -11,6 +11,7 @@ import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js"
 import {
   type GeometryMode,
   type StrokeMeshData,
+  type StrokeBuildStatus,
   type ExtrudeParams,
   type SolidParams,
   getEngine,
@@ -496,9 +497,17 @@ function Scene({
   onProgressUpdate: (progress: number) => void
   orbitEnabled?: boolean
   masterControlsRef?: React.RefObject<OrbitControlsImpl | null>
+  meshStatusRef?: React.MutableRefObject<StrokeBuildStatus[]>
 }) {
   const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode, extrudeParams, solidParams)
   const bounds = useStrokeBounds(meshes)
+
+  // Populate meshStatusRef for debug overlay
+  useEffect(() => {
+    if (meshStatusRef) {
+      meshStatusRef.current = meshes.map((m) => m.buildStatus ?? { type: "ok" })
+    }
+  }, [meshes, meshStatusRef])
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
   useEffect(() => {
@@ -621,6 +630,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const [compareLabel, setCompareLabel] = useState("")
   const [compare3Up, setCompare3Up] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
+  const meshStatusRef = useRef<StrokeBuildStatus[]>([])
 
   const { totalDuration } = useTimeline(rawStrokes)
 
@@ -979,6 +989,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 speed={speed}
                 totalDuration={totalDuration}
                 onProgressUpdate={onProgressUpdate}
+                meshStatusRef={meshStatusRef}
               />
             </Canvas>
           </ViewportErrorBoundary>
@@ -995,6 +1006,26 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
           {compare3Up && <div className="font-semibold text-foreground">3-Up Compare</div>}
           {comparing && compareLabel && (
             <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
+          )}
+          {/* Per-stroke extrude build status (extrude mode only) */}
+          {geometryMode === "extrude" && meshStatusRef.current.length > 0 && (
+            <div className="mt-1 border-t border-border/50 pt-1">
+              <div className="font-semibold text-foreground">Build status:</div>
+              {meshStatusRef.current.map((s, i) => (
+                <div key={i} className={
+                  s.type === "ok" ? "text-muted-foreground"
+                    : s.type === "bevelOff" ? "text-yellow-600"
+                    : s.type === "widthClamped" ? "text-orange-600"
+                    : "text-red-500"
+                }>
+                  {i}: {s.type === "ok" ? "OK"
+                    : s.type === "bevelOff" ? "bevelOff"
+                    : s.type === "widthClamped"
+                      ? `w:${s.userWidth.toFixed(3)}->${s.effectiveWidth.toFixed(3)}`
+                      : `rod (${s.reason})`}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

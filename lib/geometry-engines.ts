@@ -66,6 +66,13 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
   depth: 0.15,
 }
 
+/** Per-stroke build status for debug overlay */
+export type StrokeBuildStatus =
+  | { type: "ok" }
+  | { type: "bevelOff" }
+  | { type: "widthClamped"; userWidth: number; effectiveWidth: number }
+  | { type: "rodFallback"; reason: string }
+
 /** Per-stroke mesh data used by the viewport for rendering + animation */
 export interface StrokeMeshData {
   /** The geometry — TubeGeometry for rod, ExtrudeGeometry for extrude */
@@ -81,6 +88,8 @@ export interface StrokeMeshData {
   key: string
   /** Geometry mode that produced this mesh data */
   mode: GeometryMode
+  /** Build status for debug overlay (extrude mode only) */
+  buildStatus?: StrokeBuildStatus
   /**
    * Per-filtered-point timestamps (ms, relative to stroke start = 0).
    * Used for continuous reveal interpolation so the animation follows
@@ -724,20 +733,24 @@ function safeExtrude(
 
 /**
  * Try to build a valid ExtrudeGeometry for a stroke.
+ * Returns { geometry, status } where geometry is null if fallback to rod is needed.
+ *
  * Strategy:
- *   A) Try with current params (bevel + width) — validate contour first.
- *   B) If contour invalid: retry with bevel disabled.
- *   C) If still invalid: binary-search width down (6 iters, floor = width*0.35).
- *   D) If all fail: return null (caller falls back to rod).
+ *   A) Try with full params (bevel + effectiveWidth).
+ *   B) If contour/geo invalid and bevel was on: retry bevel OFF at same width.
+ *   C) If effectiveWidth < userWidth * 0.7: skip width shrink, go straight to rod.
+ *      (avoids hairline spikes from over-shrinking)
+ *   D) If all fail: return null + rodFallback status.
  */
 function tryBuildExtrudeGeometry(
   filtered: THREE.Vector3[],
   extrudeParams: ExtrudeParams,
   effectiveWidth: number,
   si: number
-): THREE.BufferGeometry | null {
+): { geometry: THREE.BufferGeometry | null; status: StrokeBuildStatus } {
   const halfDepth = extrudeParams.depth / 2
   const bevel = clampBevel(extrudeParams)
+  const userWidth = extrudeParams.width
 
   // Attempt A: full params
   const shape1 = buildRibbonShape(filtered, effectiveWidth)
@@ -754,11 +767,14 @@ function tryBuildExtrudeGeometry(
       }, filtered, extrudeParams.depth)
       if (geo) {
         geo.translate(0, 0, -halfDepth)
-        return geo
+        const status: StrokeBuildStatus = effectiveWidth < userWidth - 1e-6
+          ? { type: "widthClamped", userWidth, effectiveWidth }
+          : { type: "ok" }
+        return { geometry: geo, status }
       }
     }
 
-    // Attempt B: valid shape but contour or geometry failed — try bevel off
+    // Attempt B: disable bevel at same width
     if (extrudeParams.bevelEnabled) {
       const geo = safeExtrude(shape1, {
         depth: extrudeParams.depth,
@@ -767,41 +783,17 @@ function tryBuildExtrudeGeometry(
       }, filtered, extrudeParams.depth)
       if (geo) {
         geo.translate(0, 0, -halfDepth)
-        console.warn(`[FreeStroke] Stroke ${si}: bevel disabled (contour issue)`)
-        return geo
+        return { geometry: geo, status: { type: "bevelOff" } }
       }
     }
   }
 
-  // Attempt C: binary-search width down
-  let lo = effectiveWidth * 0.35
-  let hi = effectiveWidth * 0.95
-  for (let iter = 0; iter < 6; iter++) {
-    const mid = (lo + hi) / 2
-    const shape = buildRibbonShape(filtered, mid)
-    if (shape) {
-      const contour = validateShapeContour(shape)
-      if (contour) {
-        const geo = safeExtrude(shape, {
-          depth: extrudeParams.depth,
-          bevelEnabled: false,
-          curveSegments: EXTRUDE_CURVE_SEGMENTS,
-        }, filtered, extrudeParams.depth)
-        if (geo) {
-          geo.translate(0, 0, -halfDepth)
-          console.warn(`[FreeStroke] Stroke ${si}: width reduced ${effectiveWidth.toFixed(4)}->${mid.toFixed(4)}`)
-          return geo
-        }
-      }
-      hi = mid
-    } else {
-      hi = mid
-    }
+  // No width binary-search: if we're already below 70% of userWidth,
+  // further shrinking will produce hairline spikes. Go straight to rod.
+  return {
+    geometry: null,
+    status: { type: "rodFallback", reason: "contour invalid" },
   }
-
-  // All attempts failed
-  console.warn(`[FreeStroke] Stroke ${si}: extrude failed, falling back to rod`)
-  return null
 }
 
 /** Build a rod tube fallback geometry for a single stroke's filtered points. */
@@ -832,7 +824,7 @@ export const ExtrudeEngine: GeometryEngine = {
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
-      const geometry = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
+      const { geometry, status } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
       if (geometry) {
         result.push({
@@ -840,6 +832,7 @@ export const ExtrudeEngine: GeometryEngine = {
           filteredCount: filtered.length,
           key: `stroke-${si}-${stroke.points.length}`,
           mode: "extrude",
+          buildStatus: status,
         })
       } else {
         // Fallback to rod tube for this stroke
@@ -848,6 +841,7 @@ export const ExtrudeEngine: GeometryEngine = {
           filteredCount: filtered.length,
           key: `stroke-${si}-${stroke.points.length}-rod-fallback`,
           mode: "rod",
+          buildStatus: status,
         })
       }
     }
@@ -874,7 +868,7 @@ export const ExtrudeEngine: GeometryEngine = {
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
-      const geometry = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
+      const { geometry } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
       const strokeName = `stroke_${String(si).padStart(3, "0")}`
       const finalGeo = geometry ?? buildRodFallback(filtered)
