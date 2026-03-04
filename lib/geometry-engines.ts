@@ -576,6 +576,140 @@ function computeEffectiveWidth(filtered: THREE.Vector3[], userWidth: number): nu
   return Math.min(userWidth, median * 0.9)
 }
 
+/**
+ * Test whether a 2D polygon (as THREE.Shape points) is simple (non-self-intersecting).
+ * Uses O(n^2) segment-segment intersection; fast enough since stroke outlines are small.
+ */
+function isSimplePolygon(shape: THREE.Shape): boolean {
+  const pts = shape.getPoints(12) // flatten arcs into line segments
+  const n = pts.length
+
+  if (n < 4) return true // triangle is always simple
+
+  // Check if two non-adjacent segments intersect
+  for (let i = 0; i < n; i++) {
+    const a1 = pts[i]
+    const a2 = pts[(i + 1) % n]
+    // Start j at i+2 to skip adjacent segment; also skip the wrap-around pair
+    for (let j = i + 2; j < n; j++) {
+      // Skip the pair that shares the closing vertex (last segment vs first)
+      if (i === 0 && j === n - 1) continue
+
+      const b1 = pts[j]
+      const b2 = pts[(j + 1) % n]
+
+      if (segmentsIntersect(a1.x, a1.y, a2.x, a2.y, b1.x, b1.y, b2.x, b2.y)) {
+        return false
+      }
+    }
+  }
+  return true
+}
+
+/** Proper segment-segment intersection test (excluding shared endpoints). */
+function segmentsIntersect(
+  ax1: number, ay1: number, ax2: number, ay2: number,
+  bx1: number, by1: number, bx2: number, by2: number
+): boolean {
+  const d1x = ax2 - ax1, d1y = ay2 - ay1
+  const d2x = bx2 - bx1, d2y = by2 - by1
+
+  const denom = d1x * d2y - d1y * d2x
+  if (Math.abs(denom) < 1e-12) return false // parallel
+
+  const t = ((bx1 - ax1) * d2y - (by1 - ay1) * d2x) / denom
+  const u = ((bx1 - ax1) * d1y - (by1 - ay1) * d1x) / denom
+
+  // Strict interior intersection (exclude endpoints with small epsilon)
+  const eps = 1e-6
+  return t > eps && t < 1 - eps && u > eps && u < 1 - eps
+}
+
+/**
+ * Try to build a valid ExtrudeGeometry for a stroke.
+ * Strategy:
+ *   1. Try with current params (bevel + width).
+ *   2. If outline self-intersects, retry with bevel disabled.
+ *   3. If still invalid, binary-search width down (6 iters, floor = width*0.35).
+ *   4. If all fail, return null (caller should fall back to rod).
+ */
+function tryBuildExtrudeGeometry(
+  filtered: THREE.Vector3[],
+  extrudeParams: ExtrudeParams,
+  effectiveWidth: number,
+  si: number
+): THREE.BufferGeometry | null {
+  const halfDepth = extrudeParams.depth / 2
+  const bevel = clampBevel(extrudeParams)
+
+  // Attempt 1: full params
+  const shape1 = buildRibbonShape(filtered, effectiveWidth)
+  if (shape1 && isSimplePolygon(shape1)) {
+    const geo = new THREE.ExtrudeGeometry(shape1, {
+      depth: extrudeParams.depth,
+      bevelEnabled: extrudeParams.bevelEnabled,
+      bevelSize: bevel.bevelSize,
+      bevelThickness: bevel.bevelThickness,
+      bevelSegments: bevel.bevelSegments,
+      curveSegments: 12,
+    })
+    geo.translate(0, 0, -halfDepth)
+    return geo
+  }
+
+  // Attempt 2: disable bevel
+  if (shape1 && extrudeParams.bevelEnabled) {
+    // The outline itself may be valid but bevel causes issues at triangulation
+    // Try extrude with bevel off
+    const geo = new THREE.ExtrudeGeometry(shape1, {
+      depth: extrudeParams.depth,
+      bevelEnabled: false,
+      curveSegments: 12,
+    })
+    geo.translate(0, 0, -halfDepth)
+    // Quick sanity: check face count is reasonable (not degenerate)
+    const triCount = geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3
+    if (triCount > 0 && triCount < filtered.length * 200) {
+      console.warn(`[FreeStroke] Stroke ${si}: bevel disabled (self-intersecting outline)`)
+      return geo
+    }
+    geo.dispose()
+  }
+
+  // Attempt 3: binary-search width down
+  let lo = effectiveWidth * 0.35
+  let hi = effectiveWidth
+  for (let iter = 0; iter < 6; iter++) {
+    const mid = (lo + hi) / 2
+    const shape = buildRibbonShape(filtered, mid)
+    if (shape && isSimplePolygon(shape)) {
+      const geo = new THREE.ExtrudeGeometry(shape, {
+        depth: extrudeParams.depth,
+        bevelEnabled: false,
+        curveSegments: 12,
+      })
+      geo.translate(0, 0, -halfDepth)
+      console.warn(`[FreeStroke] Stroke ${si}: width reduced ${effectiveWidth.toFixed(4)}->${mid.toFixed(4)} (self-intersecting outline)`)
+      return geo
+    }
+    hi = mid
+  }
+
+  // All attempts failed
+  console.warn(`[FreeStroke] Stroke ${si}: extrude failed, falling back to rod`)
+  return null
+}
+
+/** Build a rod tube fallback geometry for a single stroke's filtered points. */
+function buildRodFallback(filtered: THREE.Vector3[]): THREE.BufferGeometry {
+  const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
+  const tubularSegments = Math.min(
+    Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
+    MAX_TUBULAR_SEGMENTS
+  )
+  return new THREE.TubeGeometry(curve, tubularSegments, TUBE_RADIUS, RADIAL_SEGMENTS, false)
+}
+
 export const ExtrudeEngine: GeometryEngine = {
   buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
     const { canvasWidth, canvasHeight, extrudeParams: ep } = params
@@ -594,29 +728,24 @@ export const ExtrudeEngine: GeometryEngine = {
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
-      const shape = buildRibbonShape(filtered, effectiveWidth)
-      if (!shape) continue
+      const geometry = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
-      const halfDepth = extrudeParams.depth / 2
-      const bevel = clampBevel(extrudeParams)
-      const geometry = new THREE.ExtrudeGeometry(shape, {
-        depth: extrudeParams.depth,
-        bevelEnabled: extrudeParams.bevelEnabled,
-        bevelSize: bevel.bevelSize,
-        bevelThickness: bevel.bevelThickness,
-        bevelSegments: bevel.bevelSegments,
-        curveSegments: 12,
-      })
-
-      // Center the extrusion on z=0 (ExtrudeGeometry extrudes along +z from 0)
-      geometry.translate(0, 0, -halfDepth)
-
-      result.push({
-        tubeGeometry: geometry,
-        filteredCount: filtered.length,
-        key: `stroke-${si}-${stroke.points.length}`,
-        mode: "extrude",
-      })
+      if (geometry) {
+        result.push({
+          tubeGeometry: geometry,
+          filteredCount: filtered.length,
+          key: `stroke-${si}-${stroke.points.length}`,
+          mode: "extrude",
+        })
+      } else {
+        // Fallback to rod tube for this stroke
+        result.push({
+          tubeGeometry: buildRodFallback(filtered),
+          filteredCount: filtered.length,
+          key: `stroke-${si}-${stroke.points.length}-rod-fallback`,
+          mode: "rod",
+        })
+      }
     }
 
     return result
@@ -641,26 +770,14 @@ export const ExtrudeEngine: GeometryEngine = {
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
-      const shape = buildRibbonShape(filtered, effectiveWidth)
-      if (!shape) continue
-
-      const halfDepth = extrudeParams.depth / 2
-      const bevel = clampBevel(extrudeParams)
-      const geometry = new THREE.ExtrudeGeometry(shape, {
-        depth: extrudeParams.depth,
-        bevelEnabled: extrudeParams.bevelEnabled,
-        bevelSize: bevel.bevelSize,
-        bevelThickness: bevel.bevelThickness,
-        bevelSegments: bevel.bevelSegments,
-        curveSegments: 12,
-      })
-      geometry.translate(0, 0, -halfDepth)
+      const geometry = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
       const strokeName = `stroke_${String(si).padStart(3, "0")}`
-      const mesh = new THREE.Mesh(geometry, inkMaterial)
+      const finalGeo = geometry ?? buildRodFallback(filtered)
+      const mesh = new THREE.Mesh(finalGeo, inkMaterial)
       mesh.name = strokeName
       exportObjects.push(mesh)
-      disposables.push(geometry)
+      disposables.push(finalGeo)
     }
 
     // Recenter at origin
