@@ -1008,10 +1008,10 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
           )}
           {/* Per-stroke extrude build status (extrude mode only) */}
-          {geometryMode === "extrude" && meshStatusRef.current.length > 0 && (
+          {geometryMode === "extrude" && (meshStatusRef.current?.length ?? 0) > 0 && (
             <div className="mt-1 border-t border-border/50 pt-1">
               <div className="font-semibold text-foreground">Build status:</div>
-              {meshStatusRef.current.map((s, i) => (
+              {(meshStatusRef.current ?? []).map((s, i) => (
                 <div key={i} className={
                   s.type === "ok" ? "text-muted-foreground"
                     : s.type === "bevelOff" ? "text-yellow-600"
