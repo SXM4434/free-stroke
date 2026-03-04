@@ -576,35 +576,9 @@ function computeEffectiveWidth(filtered: THREE.Vector3[], userWidth: number): nu
   return Math.min(userWidth, median * 0.9)
 }
 
-/**
- * Test whether a 2D polygon (as THREE.Shape points) is simple (non-self-intersecting).
- * Uses O(n^2) segment-segment intersection; fast enough since stroke outlines are small.
- */
-function isSimplePolygon(shape: THREE.Shape): boolean {
-  const pts = shape.getPoints(12) // flatten arcs into line segments
-  const n = pts.length
+/* ---- Contour validation ---- */
 
-  if (n < 4) return true // triangle is always simple
-
-  // Check if two non-adjacent segments intersect
-  for (let i = 0; i < n; i++) {
-    const a1 = pts[i]
-    const a2 = pts[(i + 1) % n]
-    // Start j at i+2 to skip adjacent segment; also skip the wrap-around pair
-    for (let j = i + 2; j < n; j++) {
-      // Skip the pair that shares the closing vertex (last segment vs first)
-      if (i === 0 && j === n - 1) continue
-
-      const b1 = pts[j]
-      const b2 = pts[(j + 1) % n]
-
-      if (segmentsIntersect(a1.x, a1.y, a2.x, a2.y, b1.x, b1.y, b2.x, b2.y)) {
-        return false
-      }
-    }
-  }
-  return true
-}
+const EXTRUDE_CURVE_SEGMENTS = 12
 
 /** Proper segment-segment intersection test (excluding shared endpoints). */
 function segmentsIntersect(
@@ -620,18 +594,141 @@ function segmentsIntersect(
   const t = ((bx1 - ax1) * d2y - (by1 - ay1) * d2x) / denom
   const u = ((bx1 - ax1) * d1y - (by1 - ay1) * d1x) / denom
 
-  // Strict interior intersection (exclude endpoints with small epsilon)
   const eps = 1e-6
   return t > eps && t < 1 - eps && u > eps && u < 1 - eps
+}
+
+/** Check if a 2D contour has self-intersections (O(n^2) segment test). */
+function contourSelfIntersects(pts: THREE.Vector2[]): boolean {
+  const n = pts.length
+  if (n < 4) return false
+
+  for (let i = 0; i < n; i++) {
+    const a1 = pts[i]
+    const a2 = pts[(i + 1) % n]
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue // skip wrap-around adjacent
+      const b1 = pts[j]
+      const b2 = pts[(j + 1) % n]
+      if (segmentsIntersect(a1.x, a1.y, a2.x, a2.y, b1.x, b1.y, b2.x, b2.y)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/** Signed area of a 2D contour. */
+function contourSignedArea(pts: THREE.Vector2[]): number {
+  let area = 0
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
+  }
+  return area / 2
+}
+
+/** Remove near-duplicate consecutive points from a contour. */
+function deduplicateContour(pts: THREE.Vector2[], minDist = 1e-6): THREE.Vector2[] {
+  if (pts.length < 2) return pts
+  const out = [pts[0]]
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].distanceTo(out[out.length - 1]) > minDist) {
+      out.push(pts[i])
+    }
+  }
+  return out
+}
+
+/**
+ * Validate a shape's flattened contour: no self-intersections, non-degenerate area,
+ * enough unique vertices. Returns the deduplicated contour or null if invalid.
+ */
+function validateShapeContour(shape: THREE.Shape): THREE.Vector2[] | null {
+  const raw = shape.getPoints(EXTRUDE_CURVE_SEGMENTS)
+  const pts = deduplicateContour(raw)
+  if (pts.length < 3) return null
+  if (Math.abs(contourSignedArea(pts)) < 1e-8) return null
+  if (contourSelfIntersects(pts)) return null
+  return pts
+}
+
+/**
+ * Post-extrude sanity check: detect degenerate "sheet" triangles by comparing
+ * bounding box dimensions. A valid extrude should have reasonable XY extent
+ * relative to its Z extent. If the geometry has huge flat triangles, the
+ * XY bbox will be disproportionately large relative to what the stroke covers.
+ */
+function isExtrudeGeometryDegenerate(
+  geo: THREE.BufferGeometry,
+  filtered: THREE.Vector3[],
+  depth: number
+): boolean {
+  geo.computeBoundingBox()
+  const bb = geo.boundingBox
+  if (!bb) return true
+
+  const sizeX = bb.max.x - bb.min.x
+  const sizeY = bb.max.y - bb.min.y
+  const sizeZ = bb.max.z - bb.min.z
+
+  // Compute expected stroke extent (from the filtered polyline)
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (const p of filtered) {
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  const strokeExtentX = maxX - minX
+  const strokeExtentY = maxY - minY
+
+  // If the extruded geo is >3x the stroke extent in XY, it's probably a sheet
+  const margin = 3.0
+  if (sizeX > (strokeExtentX + 0.5) * margin) return true
+  if (sizeY > (strokeExtentY + 0.5) * margin) return true
+
+  // Z should be roughly depth (with bevel) — if it's wildly off, something broke
+  if (sizeZ > depth * 5) return true
+
+  return false
+}
+
+/**
+ * Safely build an ExtrudeGeometry, catching any THREE.js triangulation errors.
+ * Returns the geometry or null if construction fails or result is degenerate.
+ */
+function safeExtrude(
+  shape: THREE.Shape,
+  options: THREE.ExtrudeGeometryOptions,
+  filtered: THREE.Vector3[],
+  depth: number
+): THREE.BufferGeometry | null {
+  try {
+    const geo = new THREE.ExtrudeGeometry(shape, options)
+    // Check for empty geometry
+    const posAttr = geo.attributes.position
+    if (!posAttr || posAttr.count < 3) {
+      geo.dispose()
+      return null
+    }
+    // Check for degenerate sheet artifacts
+    if (isExtrudeGeometryDegenerate(geo, filtered, depth)) {
+      geo.dispose()
+      return null
+    }
+    return geo
+  } catch {
+    return null
+  }
 }
 
 /**
  * Try to build a valid ExtrudeGeometry for a stroke.
  * Strategy:
- *   1. Try with current params (bevel + width).
- *   2. If outline self-intersects, retry with bevel disabled.
- *   3. If still invalid, binary-search width down (6 iters, floor = width*0.35).
- *   4. If all fail, return null (caller should fall back to rod).
+ *   A) Try with current params (bevel + width) — validate contour first.
+ *   B) If contour invalid: retry with bevel disabled.
+ *   C) If still invalid: binary-search width down (6 iters, floor = width*0.35).
+ *   D) If all fail: return null (caller falls back to rod).
  */
 function tryBuildExtrudeGeometry(
   filtered: THREE.Vector3[],
@@ -642,57 +739,64 @@ function tryBuildExtrudeGeometry(
   const halfDepth = extrudeParams.depth / 2
   const bevel = clampBevel(extrudeParams)
 
-  // Attempt 1: full params
+  // Attempt A: full params
   const shape1 = buildRibbonShape(filtered, effectiveWidth)
-  if (shape1 && isSimplePolygon(shape1)) {
-    const geo = new THREE.ExtrudeGeometry(shape1, {
-      depth: extrudeParams.depth,
-      bevelEnabled: extrudeParams.bevelEnabled,
-      bevelSize: bevel.bevelSize,
-      bevelThickness: bevel.bevelThickness,
-      bevelSegments: bevel.bevelSegments,
-      curveSegments: 12,
-    })
-    geo.translate(0, 0, -halfDepth)
-    return geo
-  }
-
-  // Attempt 2: disable bevel
-  if (shape1 && extrudeParams.bevelEnabled) {
-    // The outline itself may be valid but bevel causes issues at triangulation
-    // Try extrude with bevel off
-    const geo = new THREE.ExtrudeGeometry(shape1, {
-      depth: extrudeParams.depth,
-      bevelEnabled: false,
-      curveSegments: 12,
-    })
-    geo.translate(0, 0, -halfDepth)
-    // Quick sanity: check face count is reasonable (not degenerate)
-    const triCount = geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3
-    if (triCount > 0 && triCount < filtered.length * 200) {
-      console.warn(`[FreeStroke] Stroke ${si}: bevel disabled (self-intersecting outline)`)
-      return geo
+  if (shape1) {
+    const contour = validateShapeContour(shape1)
+    if (contour) {
+      const geo = safeExtrude(shape1, {
+        depth: extrudeParams.depth,
+        bevelEnabled: extrudeParams.bevelEnabled,
+        bevelSize: bevel.bevelSize,
+        bevelThickness: bevel.bevelThickness,
+        bevelSegments: bevel.bevelSegments,
+        curveSegments: EXTRUDE_CURVE_SEGMENTS,
+      }, filtered, extrudeParams.depth)
+      if (geo) {
+        geo.translate(0, 0, -halfDepth)
+        return geo
+      }
     }
-    geo.dispose()
+
+    // Attempt B: valid shape but contour or geometry failed — try bevel off
+    if (extrudeParams.bevelEnabled) {
+      const geo = safeExtrude(shape1, {
+        depth: extrudeParams.depth,
+        bevelEnabled: false,
+        curveSegments: EXTRUDE_CURVE_SEGMENTS,
+      }, filtered, extrudeParams.depth)
+      if (geo) {
+        geo.translate(0, 0, -halfDepth)
+        console.warn(`[FreeStroke] Stroke ${si}: bevel disabled (contour issue)`)
+        return geo
+      }
+    }
   }
 
-  // Attempt 3: binary-search width down
+  // Attempt C: binary-search width down
   let lo = effectiveWidth * 0.35
-  let hi = effectiveWidth
+  let hi = effectiveWidth * 0.95
   for (let iter = 0; iter < 6; iter++) {
     const mid = (lo + hi) / 2
     const shape = buildRibbonShape(filtered, mid)
-    if (shape && isSimplePolygon(shape)) {
-      const geo = new THREE.ExtrudeGeometry(shape, {
-        depth: extrudeParams.depth,
-        bevelEnabled: false,
-        curveSegments: 12,
-      })
-      geo.translate(0, 0, -halfDepth)
-      console.warn(`[FreeStroke] Stroke ${si}: width reduced ${effectiveWidth.toFixed(4)}->${mid.toFixed(4)} (self-intersecting outline)`)
-      return geo
+    if (shape) {
+      const contour = validateShapeContour(shape)
+      if (contour) {
+        const geo = safeExtrude(shape, {
+          depth: extrudeParams.depth,
+          bevelEnabled: false,
+          curveSegments: EXTRUDE_CURVE_SEGMENTS,
+        }, filtered, extrudeParams.depth)
+        if (geo) {
+          geo.translate(0, 0, -halfDepth)
+          console.warn(`[FreeStroke] Stroke ${si}: width reduced ${effectiveWidth.toFixed(4)}->${mid.toFixed(4)}`)
+          return geo
+        }
+      }
+      hi = mid
+    } else {
+      hi = mid
     }
-    hi = mid
   }
 
   // All attempts failed
