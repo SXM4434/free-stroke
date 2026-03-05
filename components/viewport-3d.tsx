@@ -1014,17 +1014,8 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             <div className="mt-1 border-t border-border/50 pt-1">
               <div className="font-semibold text-foreground">Build status:</div>
               {(meshStatusRef.current ?? []).map((s, i) => (
-                <div key={i} className={
-                  s.type === "ok" ? "text-muted-foreground"
-                    : s.type === "bevelOff" ? "text-yellow-600"
-                    : s.type === "widthClamped" ? "text-orange-600"
-                    : "text-red-500"
-                }>
-                  {i}: {s.type === "ok" ? "OK"
-                    : s.type === "bevelOff" ? "bevelOff"
-                    : s.type === "widthClamped"
-                      ? `w:${s.userWidth.toFixed(3)}->${s.effectiveWidth.toFixed(3)}`
-                      : `rod (${s.reason})`}
+                <div key={i} className={s.type === "ok" ? "text-muted-foreground" : "text-red-500"}>
+                  {i}: {s.type === "ok" ? "OK" : `rod (${s.reason})`}
                 </div>
               ))}
             </div>
