@@ -740,16 +740,19 @@ function tryBuildExtrudeGeometry(
   effectiveWidth: number,
   _si: number
 ): { geometry: THREE.BufferGeometry | null; status: StrokeBuildStatus } {
+  console.log("[v0] tryBuildExtrudeGeometry", { si: _si, userWidth: extrudeParams.width, effectiveWidth })
   const halfDepth = extrudeParams.depth / 2
   const bevel = clampBevel(extrudeParams)
 
   const shape = buildRibbonShape(filtered, effectiveWidth)
   if (!shape) {
+    console.log("[v0] tryBuildExtrudeGeometry FAIL: no shape", { si: _si })
     return { geometry: null, status: { type: "rodFallback", reason: "no shape", effectiveWidth } }
   }
 
   const contour = validateShapeContour(shape)
   if (!contour) {
+    console.log("[v0] tryBuildExtrudeGeometry FAIL: bad contour", { si: _si })
     return { geometry: null, status: { type: "rodFallback", reason: "bad contour", effectiveWidth } }
   }
 
@@ -763,10 +766,12 @@ function tryBuildExtrudeGeometry(
   }, filtered, extrudeParams.depth)
 
   if (!geo) {
+    console.log("[v0] tryBuildExtrudeGeometry FAIL: extrude failed", { si: _si })
     return { geometry: null, status: { type: "rodFallback", reason: "extrude failed", effectiveWidth } }
   }
 
   geo.translate(0, 0, -halfDepth)
+  console.log("[v0] tryBuildExtrudeGeometry OK", { si: _si, effectiveWidth })
   return { geometry: geo, status: { type: "ok", effectiveWidth } }
 }
 
@@ -798,6 +803,7 @@ export const ExtrudeEngine: GeometryEngine = {
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
+      console.log("[v0] computeEffectiveWidth", { si, userWidth: extrudeParams.width, effectiveWidth, clamped: effectiveWidth < extrudeParams.width - 1e-6 })
       const { geometry, status } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
       if (geometry) {

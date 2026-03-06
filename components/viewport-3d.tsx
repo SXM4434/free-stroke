@@ -42,6 +42,7 @@ function useStrokeMeshes(
   solidParams?: SolidParams
 ): StrokeMeshData[] {
   return useMemo(() => {
+    console.log("[v0] useStrokeMeshes rebuild", { mode, width: extrudeParams?.width, strokeCount: strokes.length })
     const engine = getEngine(mode)
     return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
   }, [strokes, canvasWidth, canvasHeight, mode, extrudeParams, solidParams])
