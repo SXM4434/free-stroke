@@ -68,8 +68,8 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
 
 /** Per-stroke build status for debug overlay */
 export type StrokeBuildStatus =
-  | { type: "ok" }
-  | { type: "rodFallback"; reason: string }
+  | { type: "ok"; effectiveWidth: number }
+  | { type: "rodFallback"; reason: string; effectiveWidth: number }
 
 /** Per-stroke mesh data used by the viewport for rendering + animation */
 export interface StrokeMeshData {
@@ -745,12 +745,12 @@ function tryBuildExtrudeGeometry(
 
   const shape = buildRibbonShape(filtered, effectiveWidth)
   if (!shape) {
-    return { geometry: null, status: { type: "rodFallback", reason: "no shape" } }
+    return { geometry: null, status: { type: "rodFallback", reason: "no shape", effectiveWidth } }
   }
 
   const contour = validateShapeContour(shape)
   if (!contour) {
-    return { geometry: null, status: { type: "rodFallback", reason: "bad contour" } }
+    return { geometry: null, status: { type: "rodFallback", reason: "bad contour", effectiveWidth } }
   }
 
   const geo = safeExtrude(shape, {
@@ -763,11 +763,11 @@ function tryBuildExtrudeGeometry(
   }, filtered, extrudeParams.depth)
 
   if (!geo) {
-    return { geometry: null, status: { type: "rodFallback", reason: "extrude failed" } }
+    return { geometry: null, status: { type: "rodFallback", reason: "extrude failed", effectiveWidth } }
   }
 
   geo.translate(0, 0, -halfDepth)
-  return { geometry: geo, status: { type: "ok" } }
+  return { geometry: geo, status: { type: "ok", effectiveWidth } }
 }
 
 /** Build a rod tube fallback geometry for a single stroke's filtered points. */
