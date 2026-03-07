@@ -68,8 +68,10 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
 
 /** Per-stroke build status for debug overlay */
 export type StrokeBuildStatus =
-  | { type: "ok"; effectiveWidth: number }
-  | { type: "rodFallback"; reason: string; effectiveWidth: number }
+  | { type: "ok"; usedWidth: number }
+  | { type: "widthReduced"; usedWidth: number }
+  | { type: "bevelOff"; usedWidth: number }
+  | { type: "rodFallback"; reason: string; usedWidth: number }
 
 /** Per-stroke mesh data used by the viewport for rendering + animation */
 export interface StrokeMeshData {
@@ -718,50 +720,78 @@ function safeExtrude(
   }
 }
 
+/** Width multipliers for recovery attempts */
+const WIDTH_RETRY_MULTIPLIERS = [1.0, 0.85, 0.70, 0.55, 0.40]
+const WIDTH_FLOOR = 0.005
+
 /**
- * Try to build a valid ExtrudeGeometry for a stroke.
- * Single attempt: validate contour -> extrude -> sanity check.
- * If anything fails, return null (caller falls back to rod).
+ * Try to build a valid ExtrudeGeometry for a stroke with recovery:
+ *   A) Try userWidth with current bevel setting.
+ *   B) If "bad contour", retry with reduced width multipliers.
+ *   C) If still fails and bevel is ON, retry width sequence with bevel OFF.
+ *   D) If all fail, return rodFallback.
  */
 function tryBuildExtrudeGeometry(
   filtered: THREE.Vector3[],
   extrudeParams: ExtrudeParams,
-  effectiveWidth: number,
+  userWidth: number,
   _si: number
 ): { geometry: THREE.BufferGeometry | null; status: StrokeBuildStatus } {
-  console.log("[v0] tryBuildExtrudeGeometry", { si: _si, userWidth: extrudeParams.width, effectiveWidth })
+  console.log("[v0] tryBuildExtrudeGeometry", { si: _si, userWidth })
   const halfDepth = extrudeParams.depth / 2
   const bevel = clampBevel(extrudeParams)
 
-  const shape = buildRibbonShape(filtered, effectiveWidth)
-  if (!shape) {
-    console.log("[v0] tryBuildExtrudeGeometry FAIL: no shape", { si: _si })
-    return { geometry: null, status: { type: "rodFallback", reason: "no shape", effectiveWidth } }
+  // Helper: attempt extrude at a specific width and bevel setting
+  function attemptExtrude(width: number, bevelOn: boolean): THREE.BufferGeometry | null {
+    const shape = buildRibbonShape(filtered, width)
+    if (!shape) return null
+    const contour = validateShapeContour(shape)
+    if (!contour) return null
+    const opts: THREE.ExtrudeGeometryOptions = {
+      depth: extrudeParams.depth,
+      bevelEnabled: bevelOn,
+      bevelSize: bevelOn ? bevel.bevelSize : 0,
+      bevelThickness: bevelOn ? bevel.bevelThickness : 0,
+      bevelSegments: bevelOn ? bevel.bevelSegments : 0,
+      curveSegments: EXTRUDE_CURVE_SEGMENTS,
+    }
+    const geo = safeExtrude(shape, opts, filtered, extrudeParams.depth)
+    if (!geo) return null
+    geo.translate(0, 0, -halfDepth)
+    return geo
   }
 
-  const contour = validateShapeContour(shape)
-  if (!contour) {
-    console.log("[v0] tryBuildExtrudeGeometry FAIL: bad contour", { si: _si })
-    return { geometry: null, status: { type: "rodFallback", reason: "bad contour", effectiveWidth } }
+  // Phase 1: Try with bevel ON (if enabled)
+  for (const mult of WIDTH_RETRY_MULTIPLIERS) {
+    const tryWidth = Math.max(userWidth * mult, WIDTH_FLOOR)
+    const geo = attemptExtrude(tryWidth, extrudeParams.bevelEnabled)
+    if (geo) {
+      const isReduced = mult < 1.0 - 1e-6
+      console.log("[v0] tryBuildExtrudeGeometry OK", { si: _si, usedWidth: tryWidth, reduced: isReduced })
+      return {
+        geometry: geo,
+        status: isReduced
+          ? { type: "widthReduced", usedWidth: tryWidth }
+          : { type: "ok", usedWidth: tryWidth },
+      }
+    }
   }
 
-  const geo = safeExtrude(shape, {
-    depth: extrudeParams.depth,
-    bevelEnabled: extrudeParams.bevelEnabled,
-    bevelSize: bevel.bevelSize,
-    bevelThickness: bevel.bevelThickness,
-    bevelSegments: bevel.bevelSegments,
-    curveSegments: EXTRUDE_CURVE_SEGMENTS,
-  }, filtered, extrudeParams.depth)
-
-  if (!geo) {
-    console.log("[v0] tryBuildExtrudeGeometry FAIL: extrude failed", { si: _si })
-    return { geometry: null, status: { type: "rodFallback", reason: "extrude failed", effectiveWidth } }
+  // Phase 2: If bevel was ON, retry sequence with bevel OFF
+  if (extrudeParams.bevelEnabled) {
+    for (const mult of WIDTH_RETRY_MULTIPLIERS) {
+      const tryWidth = Math.max(userWidth * mult, WIDTH_FLOOR)
+      const geo = attemptExtrude(tryWidth, false)
+      if (geo) {
+        console.log("[v0] tryBuildExtrudeGeometry OK (bevelOff)", { si: _si, usedWidth: tryWidth })
+        return { geometry: geo, status: { type: "bevelOff", usedWidth: tryWidth } }
+      }
+    }
   }
 
-  geo.translate(0, 0, -halfDepth)
-  console.log("[v0] tryBuildExtrudeGeometry OK", { si: _si, effectiveWidth })
-  return { geometry: geo, status: { type: "ok", effectiveWidth } }
+  // All attempts failed
+  console.log("[v0] tryBuildExtrudeGeometry FAIL: rodFallback", { si: _si })
+  return { geometry: null, status: { type: "rodFallback", reason: "all attempts failed", usedWidth: userWidth } }
 }
 
 /** Build a rod tube fallback geometry for a single stroke's filtered points. */

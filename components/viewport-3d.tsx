@@ -1017,8 +1017,16 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 Build (ui={extrudeParams?.width?.toFixed(3) ?? "?"})
               </div>
               {(meshStatusRef.current ?? []).map((s, i) => (
-                <div key={i} className={s.type === "ok" ? "text-muted-foreground" : "text-red-500"}>
-                  {i}: {s.type === "ok" ? `OK w=${s.effectiveWidth.toFixed(3)}` : `rod (${s.reason}) w=${s.effectiveWidth.toFixed(3)}`}
+                <div key={i} className={
+                  s.type === "ok" ? "text-muted-foreground"
+                    : s.type === "widthReduced" ? "text-yellow-600"
+                    : s.type === "bevelOff" ? "text-orange-500"
+                    : "text-red-500"
+                }>
+                  {i}: {s.type === "ok" ? `OK w=${s.usedWidth.toFixed(3)}`
+                    : s.type === "widthReduced" ? `wReduced w=${s.usedWidth.toFixed(3)}`
+                    : s.type === "bevelOff" ? `bevelOff w=${s.usedWidth.toFixed(3)}`
+                    : `rod (${s.reason})`}
                 </div>
               ))}
             </div>
