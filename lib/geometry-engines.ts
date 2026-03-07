@@ -566,21 +566,10 @@ function clampBevel(ep: ExtrudeParams): { bevelSize: number; bevelThickness: num
 }
 
 /**
- * Clamp ribbon half-width to stroke sampling density to prevent
- * the "blobby/melted" look on tight curves where offset > segment length.
+ * Pass through user width directly. Small floor to avoid degenerate zero-width shapes.
  */
-function computeEffectiveWidth(filtered: THREE.Vector3[], userWidth: number): number {
-  if (filtered.length < 3) return userWidth
-  const segLengths: number[] = []
-  for (let i = 1; i < filtered.length; i++) {
-    segLengths.push(filtered[i].distanceTo(filtered[i - 1]))
-  }
-  segLengths.sort((a, b) => a - b)
-  const mid = segLengths.length >> 1
-  const median = segLengths.length % 2 === 0
-    ? (segLengths[mid - 1] + segLengths[mid]) / 2
-    : segLengths[mid]
-  return Math.min(userWidth, median * 0.9)
+function computeEffectiveWidth(_filtered: THREE.Vector3[], userWidth: number): number {
+  return Math.max(userWidth, 0.001)
 }
 
 /* ---- Contour validation ---- */
@@ -803,7 +792,7 @@ export const ExtrudeEngine: GeometryEngine = {
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
-      console.log("[v0] computeEffectiveWidth", { si, userWidth: extrudeParams.width, effectiveWidth, clamped: effectiveWidth < extrudeParams.width - 1e-6 })
+      console.log("[v0] computeEffectiveWidth", { si, userWidth: extrudeParams.width, effectiveWidth })
       const { geometry, status } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
       if (geometry) {
