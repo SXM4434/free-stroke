@@ -1015,8 +1015,14 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             <div className="mt-1 border-t border-border/50 pt-1">
               <div className="font-semibold text-foreground">Build status:</div>
               {(meshStatusRef.current ?? []).map((s, i) => (
-                <div key={i} className={s.type === "ok" ? "text-green-600" : "text-red-500"}>
-                  {i}: {s.type === "ok" ? "extrude ok" : `fallback: ${s.reason}`}
+                <div key={i} className={
+                  s.type === "ok" ? "text-green-600"
+                    : s.type === "bevelOff" ? "text-yellow-600"
+                    : "text-red-500"
+                }>
+                  {i}: {s.type === "ok" ? "extrude ok"
+                    : s.type === "bevelOff" ? "extrude ok (bevel off)"
+                    : `fallback rod (${s.reason}) r=${s.fallbackRadius.toFixed(3)}`}
                 </div>
               ))}
             </div>

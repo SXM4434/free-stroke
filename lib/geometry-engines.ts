@@ -69,7 +69,8 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
 /** Per-stroke build status for debug overlay */
 export type StrokeBuildStatus =
   | { type: "ok" }
-  | { type: "rodFallback"; reason: string }
+  | { type: "bevelOff" }
+  | { type: "rodFallback"; reason: string; fallbackRadius: number }
 
 /** Per-stroke mesh data used by the viewport for rendering + animation */
 export interface StrokeMeshData {
@@ -721,8 +722,9 @@ function safeExtrude(
 
 /**
  * Try to build a valid ExtrudeGeometry for a stroke.
- * Single attempt: build shape -> validate contour -> extrude.
- * If anything fails, signal fallback to rod immediately (no width shrinking).
+ * 1) Try with bevel ON (if enabled).
+ * 2) If fails and bevel was ON, retry with bevel OFF.
+ * 3) If still fails, return rodFallback.
  */
 function tryBuildExtrudeGeometry(
   filtered: THREE.Vector3[],
@@ -730,24 +732,23 @@ function tryBuildExtrudeGeometry(
   userWidth: number,
   _si: number
 ): { geometry: THREE.BufferGeometry | null; status: StrokeBuildStatus } {
-  console.log("[v0] tryBuildExtrudeGeometry", { si: _si, userWidth })
   const halfDepth = extrudeParams.depth / 2
   const bevel = clampBevel(extrudeParams)
+  const fbRadius = fallbackRodRadius(userWidth)
 
-  // Single attempt: try to build with full user parameters
+  // Build shape once (same for both attempts)
   const shape = buildRibbonShape(filtered, userWidth)
   if (!shape) {
-    console.log("[v0] tryBuildExtrudeGeometry FAIL: no shape", { si: _si })
-    return { geometry: null, status: { type: "rodFallback", reason: "no shape" } }
+    return { geometry: null, status: { type: "rodFallback", reason: "no shape", fallbackRadius: fbRadius } }
   }
 
   const contour = validateShapeContour(shape)
   if (!contour) {
-    console.log("[v0] tryBuildExtrudeGeometry FAIL: bad contour", { si: _si })
-    return { geometry: null, status: { type: "rodFallback", reason: "bad contour" } }
+    return { geometry: null, status: { type: "rodFallback", reason: "bad contour", fallbackRadius: fbRadius } }
   }
 
-  const geo = safeExtrude(shape, {
+  // Attempt 1: with bevel
+  const geo1 = safeExtrude(shape, {
     depth: extrudeParams.depth,
     bevelEnabled: extrudeParams.bevelEnabled,
     bevelSize: bevel.bevelSize,
@@ -756,24 +757,41 @@ function tryBuildExtrudeGeometry(
     curveSegments: EXTRUDE_CURVE_SEGMENTS,
   }, filtered, extrudeParams.depth)
 
-  if (!geo) {
-    console.log("[v0] tryBuildExtrudeGeometry FAIL: extrude failed", { si: _si })
-    return { geometry: null, status: { type: "rodFallback", reason: "extrude failed" } }
+  if (geo1) {
+    geo1.translate(0, 0, -halfDepth)
+    return { geometry: geo1, status: { type: "ok" } }
   }
 
-  geo.translate(0, 0, -halfDepth)
-  console.log("[v0] tryBuildExtrudeGeometry OK", { si: _si, userWidth })
-  return { geometry: geo, status: { type: "ok" } }
+  // Attempt 2: bevel OFF (if bevel was ON)
+  if (extrudeParams.bevelEnabled) {
+    const geo2 = safeExtrude(shape, {
+      depth: extrudeParams.depth,
+      bevelEnabled: false,
+      curveSegments: EXTRUDE_CURVE_SEGMENTS,
+    }, filtered, extrudeParams.depth)
+
+    if (geo2) {
+      geo2.translate(0, 0, -halfDepth)
+      return { geometry: geo2, status: { type: "bevelOff" } }
+    }
+  }
+
+  return { geometry: null, status: { type: "rodFallback", reason: "extrude failed", fallbackRadius: fbRadius } }
+}
+
+/** Derive fallback rod radius from extrude width so Width slider affects fallback strokes too */
+function fallbackRodRadius(width: number): number {
+  return Math.max(0.003, Math.min(width * 0.5, 0.08))
 }
 
 /** Build a rod tube fallback geometry for a single stroke's filtered points. */
-function buildRodFallback(filtered: THREE.Vector3[]): THREE.BufferGeometry {
+function buildRodFallback(filtered: THREE.Vector3[], radius: number = TUBE_RADIUS): THREE.BufferGeometry {
   const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
   const tubularSegments = Math.min(
     Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
     MAX_TUBULAR_SEGMENTS
   )
-  return new THREE.TubeGeometry(curve, tubularSegments, TUBE_RADIUS, RADIAL_SEGMENTS, false)
+  return new THREE.TubeGeometry(curve, tubularSegments, radius, RADIAL_SEGMENTS, false)
 }
 
 export const ExtrudeEngine: GeometryEngine = {
@@ -805,9 +823,10 @@ export const ExtrudeEngine: GeometryEngine = {
           buildStatus: status,
         })
       } else {
-        // Fallback to rod tube for this stroke
+        // Fallback to rod tube for this stroke (radius derived from userWidth)
+        const fbRadius = status.type === "rodFallback" ? status.fallbackRadius : fallbackRodRadius(extrudeParams.width)
         result.push({
-          tubeGeometry: buildRodFallback(filtered),
+          tubeGeometry: buildRodFallback(filtered, fbRadius),
           filteredCount: filtered.length,
           key: `stroke-${si}-${stroke.points.length}-rod-fallback`,
           mode: "rod",
@@ -838,10 +857,11 @@ export const ExtrudeEngine: GeometryEngine = {
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
-      const { geometry } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
+      const { geometry, status } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
       const strokeName = `stroke_${String(si).padStart(3, "0")}`
-      const finalGeo = geometry ?? buildRodFallback(filtered)
+      const fbRadius = status.type === "rodFallback" ? status.fallbackRadius : fallbackRodRadius(extrudeParams.width)
+      const finalGeo = geometry ?? buildRodFallback(filtered, fbRadius)
       const mesh = new THREE.Mesh(finalGeo, inkMaterial)
       mesh.name = strokeName
       exportObjects.push(mesh)
