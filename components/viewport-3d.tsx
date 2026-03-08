@@ -1013,20 +1013,10 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
           {/* Per-stroke extrude build status (extrude mode only) */}
           {geometryMode === "extrude" && (meshStatusRef.current?.length ?? 0) > 0 && (
             <div className="mt-1 border-t border-border/50 pt-1">
-              <div className="font-semibold text-foreground">
-                Build (ui={extrudeParams?.width?.toFixed(3) ?? "?"})
-              </div>
+              <div className="font-semibold text-foreground">Build status:</div>
               {(meshStatusRef.current ?? []).map((s, i) => (
-                <div key={i} className={
-                  s.type === "ok" ? "text-muted-foreground"
-                    : s.type === "widthReduced" ? "text-yellow-600"
-                    : s.type === "bevelOff" ? "text-orange-500"
-                    : "text-red-500"
-                }>
-                  {i}: {s.type === "ok" ? `OK w=${s.usedWidth.toFixed(3)}`
-                    : s.type === "widthReduced" ? `wReduced w=${s.usedWidth.toFixed(3)}`
-                    : s.type === "bevelOff" ? `bevelOff w=${s.usedWidth.toFixed(3)}`
-                    : `rod (${s.reason})`}
+                <div key={i} className={s.type === "ok" ? "text-green-600" : "text-red-500"}>
+                  {i}: {s.type === "ok" ? "extrude ok" : `fallback: ${s.reason}`}
                 </div>
               ))}
             </div>
