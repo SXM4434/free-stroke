@@ -42,7 +42,7 @@ function useStrokeMeshes(
   solidParams?: SolidParams
 ): StrokeMeshData[] {
   return useMemo(() => {
-    console.log("[v0] useStrokeMeshes rebuild", { mode, width: extrudeParams?.width, strokeCount: strokes.length })
+    console.log("[v0] useStrokeMeshes rebuild", { mode, strokeCount: strokes.length, width: extrudeParams?.width, depth: extrudeParams?.depth, bevelEnabled: extrudeParams?.bevelEnabled })
     const engine = getEngine(mode)
     return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
   }, [strokes, canvasWidth, canvasHeight, mode, extrudeParams, solidParams])
@@ -1021,10 +1021,13 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                     : s.type === "bevelOffTinyWidth" ? "text-orange-500"
                     : "text-red-500"
                 }>
-                  {i}: {s.type === "ok" ? "extrude ok"
-                    : s.type === "bevelOff" ? "extrude ok (bevel off)"
-                    : s.type === "bevelOffTinyWidth" ? "extrude ok (bevel off: tiny width)"
-                    : `fallback rod (${s.reason}) r=${s.fallbackRadius.toFixed(3)}`}
+                  {i}: {s.type === "ok"
+                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=${s.bevelEnabled}`
+                    : s.type === "bevelOff"
+                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(retry)`
+                    : s.type === "bevelOffTinyWidth"
+                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(tiny)`
+                    : `rod r=${s.fallbackRadius.toFixed(3)} (${s.reason}) depth=n/a bevel=n/a`}
                 </div>
               ))}
             </div>

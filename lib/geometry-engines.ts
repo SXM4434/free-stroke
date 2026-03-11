@@ -68,9 +68,9 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
 
 /** Per-stroke build status for debug overlay */
 export type StrokeBuildStatus =
-  | { type: "ok" }
-  | { type: "bevelOff" }
-  | { type: "bevelOffTinyWidth" }
+  | { type: "ok"; width: number; depth: number; bevelEnabled: boolean }
+  | { type: "bevelOff"; width: number; depth: number }
+  | { type: "bevelOffTinyWidth"; width: number; depth: number }
   | { type: "rodFallback"; reason: string; fallbackRadius: number }
 
 /** Below this width, auto-disable bevel to avoid degenerate extrusions */
@@ -780,7 +780,7 @@ function tryBuildExtrudeGeometry(
 
     if (geo1) {
       geo1.translate(0, 0, -halfDepth)
-      return { geometry: geo1, status: { type: "ok" } }
+      return { geometry: geo1, status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: true } }
     }
   }
 
@@ -795,9 +795,12 @@ function tryBuildExtrudeGeometry(
     geo2.translate(0, 0, -halfDepth)
     // Distinguish why bevel was off
     if (isTinyWidth && extrudeParams.bevelEnabled) {
-      return { geometry: geo2, status: { type: "bevelOffTinyWidth" } }
+      return { geometry: geo2, status: { type: "bevelOffTinyWidth", width: userWidth, depth: extrudeParams.depth } }
     }
-    return { geometry: geo2, status: { type: useBevel ? "bevelOff" : "ok" } }
+    if (useBevel) {
+      return { geometry: geo2, status: { type: "bevelOff", width: userWidth, depth: extrudeParams.depth } }
+    }
+    return { geometry: geo2, status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: false } }
   }
 
   return { geometry: null, status: { type: "rodFallback", reason: "extrude failed", fallbackRadius: fbRadius } }
