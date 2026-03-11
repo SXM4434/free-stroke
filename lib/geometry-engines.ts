@@ -70,7 +70,11 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
 export type StrokeBuildStatus =
   | { type: "ok" }
   | { type: "bevelOff" }
+  | { type: "bevelOffTinyWidth" }
   | { type: "rodFallback"; reason: string; fallbackRadius: number }
+
+/** Below this width, auto-disable bevel to avoid degenerate extrusions */
+const TINY_WIDTH_THRESHOLD = 0.03
 
 /** Per-stroke mesh data used by the viewport for rendering + animation */
 export interface StrokeMeshData {
@@ -638,13 +642,24 @@ function deduplicateContour(pts: THREE.Vector2[], minDist = 1e-6): THREE.Vector2
 
 /**
  * Validate a shape's flattened contour: no self-intersections, non-degenerate area,
- * enough unique vertices. Returns the deduplicated contour or null if invalid.
+ * enough unique vertices, reasonable edge lengths. Returns the deduplicated contour or null if invalid.
  */
 function validateShapeContour(shape: THREE.Shape): THREE.Vector2[] | null {
   const raw = shape.getPoints(EXTRUDE_CURVE_SEGMENTS)
   const pts = deduplicateContour(raw)
   if (pts.length < 3) return null
-  if (Math.abs(contourSignedArea(pts)) < 1e-8) return null
+
+  // Reject near-zero area shapes
+  const area = Math.abs(contourSignedArea(pts))
+  if (area < 1e-6) return null
+
+  // Reject shapes where any edge is extremely short (causes triangulation issues)
+  const minEdge = 1e-5
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length
+    if (pts[i].distanceTo(pts[j]) < minEdge) return null
+  }
+
   if (contourSelfIntersects(pts)) return null
   return pts
 }
@@ -722,9 +737,10 @@ function safeExtrude(
 
 /**
  * Try to build a valid ExtrudeGeometry for a stroke.
- * 1) Try with bevel ON (if enabled).
- * 2) If fails and bevel was ON, retry with bevel OFF.
- * 3) If still fails, return rodFallback.
+ * 1) If width < TINY_WIDTH_THRESHOLD, force bevel OFF to avoid degenerate extrusions.
+ * 2) Try with bevel ON (if enabled and width not tiny).
+ * 3) If fails and bevel was ON, retry with bevel OFF.
+ * 4) If still fails, return rodFallback.
  */
 function tryBuildExtrudeGeometry(
   filtered: THREE.Vector3[],
@@ -736,7 +752,7 @@ function tryBuildExtrudeGeometry(
   const bevel = clampBevel(extrudeParams)
   const fbRadius = fallbackRodRadius(userWidth)
 
-  // Build shape once (same for both attempts)
+  // Build shape once (same for all attempts)
   const shape = buildRibbonShape(filtered, userWidth)
   if (!shape) {
     return { geometry: null, status: { type: "rodFallback", reason: "no shape", fallbackRadius: fbRadius } }
@@ -747,33 +763,41 @@ function tryBuildExtrudeGeometry(
     return { geometry: null, status: { type: "rodFallback", reason: "bad contour", fallbackRadius: fbRadius } }
   }
 
-  // Attempt 1: with bevel
-  const geo1 = safeExtrude(shape, {
-    depth: extrudeParams.depth,
-    bevelEnabled: extrudeParams.bevelEnabled,
-    bevelSize: bevel.bevelSize,
-    bevelThickness: bevel.bevelThickness,
-    bevelSegments: bevel.bevelSegments,
-    curveSegments: EXTRUDE_CURVE_SEGMENTS,
-  }, filtered, extrudeParams.depth)
+  // For tiny widths, skip bevel entirely to avoid degenerate geometry
+  const isTinyWidth = userWidth < TINY_WIDTH_THRESHOLD
+  const useBevel = extrudeParams.bevelEnabled && !isTinyWidth
 
-  if (geo1) {
-    geo1.translate(0, 0, -halfDepth)
-    return { geometry: geo1, status: { type: "ok" } }
-  }
-
-  // Attempt 2: bevel OFF (if bevel was ON)
-  if (extrudeParams.bevelEnabled) {
-    const geo2 = safeExtrude(shape, {
+  // Attempt 1: with bevel (if enabled and not tiny)
+  if (useBevel) {
+    const geo1 = safeExtrude(shape, {
       depth: extrudeParams.depth,
-      bevelEnabled: false,
+      bevelEnabled: true,
+      bevelSize: bevel.bevelSize,
+      bevelThickness: bevel.bevelThickness,
+      bevelSegments: bevel.bevelSegments,
       curveSegments: EXTRUDE_CURVE_SEGMENTS,
     }, filtered, extrudeParams.depth)
 
-    if (geo2) {
-      geo2.translate(0, 0, -halfDepth)
-      return { geometry: geo2, status: { type: "bevelOff" } }
+    if (geo1) {
+      geo1.translate(0, 0, -halfDepth)
+      return { geometry: geo1, status: { type: "ok" } }
     }
+  }
+
+  // Attempt 2: bevel OFF (either because tiny width, or bevel attempt failed)
+  const geo2 = safeExtrude(shape, {
+    depth: extrudeParams.depth,
+    bevelEnabled: false,
+    curveSegments: EXTRUDE_CURVE_SEGMENTS,
+  }, filtered, extrudeParams.depth)
+
+  if (geo2) {
+    geo2.translate(0, 0, -halfDepth)
+    // Distinguish why bevel was off
+    if (isTinyWidth && extrudeParams.bevelEnabled) {
+      return { geometry: geo2, status: { type: "bevelOffTinyWidth" } }
+    }
+    return { geometry: geo2, status: { type: useBevel ? "bevelOff" : "ok" } }
   }
 
   return { geometry: null, status: { type: "rodFallback", reason: "extrude failed", fallbackRadius: fbRadius } }

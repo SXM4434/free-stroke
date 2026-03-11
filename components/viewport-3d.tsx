@@ -1018,10 +1018,12 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 <div key={i} className={
                   s.type === "ok" ? "text-green-600"
                     : s.type === "bevelOff" ? "text-yellow-600"
+                    : s.type === "bevelOffTinyWidth" ? "text-orange-500"
                     : "text-red-500"
                 }>
                   {i}: {s.type === "ok" ? "extrude ok"
                     : s.type === "bevelOff" ? "extrude ok (bevel off)"
+                    : s.type === "bevelOffTinyWidth" ? "extrude ok (bevel off: tiny width)"
                     : `fallback rod (${s.reason}) r=${s.fallbackRadius.toFixed(3)}`}
                 </div>
               ))}
