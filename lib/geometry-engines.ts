@@ -755,11 +755,13 @@ function tryBuildExtrudeGeometry(
   // Build shape once (same for all attempts)
   const shape = buildRibbonShape(filtered, userWidth)
   if (!shape) {
+    console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "no shape" })
     return { geometry: null, status: { type: "rodFallback", reason: "no shape", fallbackRadius: fbRadius } }
   }
 
   const contour = validateShapeContour(shape)
   if (!contour) {
+    console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "bad contour" })
     return { geometry: null, status: { type: "rodFallback", reason: "bad contour", fallbackRadius: fbRadius } }
   }
 
@@ -780,6 +782,7 @@ function tryBuildExtrudeGeometry(
 
     if (geo1) {
       geo1.translate(0, 0, -halfDepth)
+      console.log(`[v0] stroke ${_si} final: extrude`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: true })
       return { geometry: geo1, status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: true } }
     }
   }
@@ -795,14 +798,18 @@ function tryBuildExtrudeGeometry(
     geo2.translate(0, 0, -halfDepth)
     // Distinguish why bevel was off
     if (isTinyWidth && extrudeParams.bevelEnabled) {
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOffTinyWidth)`, { width: userWidth, depth: extrudeParams.depth })
       return { geometry: geo2, status: { type: "bevelOffTinyWidth", width: userWidth, depth: extrudeParams.depth } }
     }
     if (useBevel) {
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOff)`, { width: userWidth, depth: extrudeParams.depth })
       return { geometry: geo2, status: { type: "bevelOff", width: userWidth, depth: extrudeParams.depth } }
     }
+    console.log(`[v0] stroke ${_si} final: extrude`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: false })
     return { geometry: geo2, status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: false } }
   }
 
+  console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "extrude failed" })
   return { geometry: null, status: { type: "rodFallback", reason: "extrude failed", fallbackRadius: fbRadius } }
 }
 
