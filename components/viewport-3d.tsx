@@ -12,6 +12,7 @@ import {
   type GeometryMode,
   type StrokeMeshData,
   type StrokeBuildStatus,
+  type SolidBuildStatus,
   type ExtrudeParams,
   type SolidParams,
   getEngine,
@@ -478,6 +479,7 @@ function Scene({
   orbitEnabled = true,
   masterControlsRef,
   meshStatusRef,
+  solidStatusRef,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
@@ -499,16 +501,26 @@ function Scene({
   orbitEnabled?: boolean
   masterControlsRef?: React.RefObject<OrbitControlsImpl | null>
   meshStatusRef?: React.MutableRefObject<StrokeBuildStatus[]>
+  solidStatusRef?: React.MutableRefObject<SolidBuildStatus | null>
 }) {
   const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode, extrudeParams, solidParams)
   const bounds = useStrokeBounds(meshes)
 
-  // Populate meshStatusRef for debug overlay
+  // Populate meshStatusRef for debug overlay (extrude mode)
   useEffect(() => {
     if (meshStatusRef) {
       meshStatusRef.current = meshes.map((m) => m.buildStatus ?? { type: "ok" })
     }
   }, [meshes, meshStatusRef])
+
+  // Populate solidStatusRef for debug overlay (solid mode)
+  useEffect(() => {
+    if (solidStatusRef) {
+      // Find the first mesh with solidStatus (Solid mode produces a single mesh)
+      const solidMesh = meshes.find((m) => m.solidStatus)
+      solidStatusRef.current = solidMesh?.solidStatus ?? null
+    }
+  }, [meshes, solidStatusRef])
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
   useEffect(() => {
@@ -632,6 +644,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const [compare3Up, setCompare3Up] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
   const meshStatusRef = useRef<StrokeBuildStatus[]>([])
+  const solidStatusRef = useRef<SolidBuildStatus | null>(null)
 
   const { totalDuration } = useTimeline(rawStrokes)
 

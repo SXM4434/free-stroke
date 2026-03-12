@@ -66,12 +66,21 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
   depth: 0.15,
 }
 
-/** Per-stroke build status for debug overlay */
+/** Per-stroke build status for debug overlay (Extrude mode) */
 export type StrokeBuildStatus =
   | { type: "ok"; width: number; depth: number; bevelEnabled: boolean }
   | { type: "bevelOff"; width: number; depth: number }
   | { type: "bevelOffTinyWidth"; width: number; depth: number }
   | { type: "rodFallback"; reason: string; fallbackRadius: number }
+
+/** Solid mode build status for debug overlay */
+export interface SolidBuildStatus {
+  success: boolean
+  contourCount: number
+  holesCount: number
+  thickness: number
+  depth: number
+}
 
 /** Below this width, auto-disable bevel to avoid degenerate extrusions */
 const TINY_WIDTH_THRESHOLD = 0.03
@@ -93,28 +102,8 @@ export interface StrokeMeshData {
   mode: GeometryMode
   /** Build status for debug overlay (extrude mode only) */
   buildStatus?: StrokeBuildStatus
-  /**
-   * Per-filtered-point timestamps (ms, relative to stroke start = 0).
-   * Used for continuous reveal interpolation so the animation follows
-   * the actual pen speed rather than advancing at a uniform rate.
-   */
-  pointTimestamps?: number[]
-  /**
-   * Cumulative arc-length at each filtered point (world units, starting at 0).
-   * Used with pointTimestamps for arc-length-based progress mapping
-   * so curves reveal at constant spatial speed instead of per-index stepping.
-   */
-  pointArcLengths?: number[]
-  /**
-   * Normalized time fractions [0..1] at each filtered point.
-   * timeFracs[i] = pointTimestamps[i] / pointTimestamps[last]
-   */
-  timeFracs?: number[]
-  /**
-   * Normalized distance fractions [0..1] at each filtered point.
-   * distFracs[i] = pointArcLengths[i] / pointArcLengths[last]
-   */
-  distFracs?: number[]
+  /** Build status for debug overlay (solid mode only) */
+  solidStatus?: SolidBuildStatus
 }
 
 export interface PreviewParams {
@@ -955,6 +944,8 @@ export const ExtrudeEngine: GeometryEngine = {
 /* ------------------------------------------------------------------ */
 
 const SOLID_RASTER_SIZE = 512
+/** Minimum contour area (in raster pixels squared) to keep — filters tiny noise islands */
+const MIN_CONTOUR_AREA = 25
 
 /**
  * Rasterize processedStrokes into a binary mask on an offscreen 2D canvas.
@@ -1272,16 +1263,31 @@ function classifyContours(contours: { x: number; y: number }[][]): ClassifiedCon
   return results
 }
 
+/** Compute absolute area of a 2D contour in raster space */
+function contourArea(pts: { x: number; y: number }[]): number {
+  let area = 0
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
+  }
+  return Math.abs(area / 2)
+}
+
+interface SolidBuildResult {
+  geometry: THREE.BufferGeometry | null
+  contourCount: number
+  holesCount: number
+}
+
 /**
  * Build a watertight extruded mesh from raster mask contours.
- * Pipeline: rasterize -> marching squares -> simplify -> classify -> Shape -> ExtrudeGeometry
+ * Pipeline: rasterize -> marching squares -> simplify -> filter noise -> classify -> Shape -> ExtrudeGeometry
  */
 function buildSolidMeshFromMask(
   mask: boolean[],
   canvasWidth: number,
   canvasHeight: number,
   depth: number
-): THREE.BufferGeometry | null {
+): SolidBuildResult {
   const S = SOLID_RASTER_SIZE
   const scaleRef = Math.max(canvasWidth, canvasHeight)
   const normScale = 3 / scaleRef
@@ -1292,20 +1298,29 @@ function buildSolidMeshFromMask(
 
   // 1) Extract contours via marching squares
   const rawContours = marchingSquaresContours(mask, S)
-  if (rawContours.length === 0) return null
+  if (rawContours.length === 0) return { geometry: null, contourCount: 0, holesCount: 0 }
 
   // 2) Simplify contours (tolerance in raster pixels)
   const tolerance = 0.8
   const simplified = rawContours
     .map((c) => dpSimplify(c, tolerance))
     .filter((c) => c.length >= 3)
-  if (simplified.length === 0) return null
 
-  // 3) Classify into outer + holes
-  const classified = classifyContours(simplified)
-  if (classified.length === 0) return null
+  // 3) Filter out tiny noise islands by area
+  const filtered = simplified.filter((c) => contourArea(c) >= MIN_CONTOUR_AREA)
+  if (filtered.length === 0) return { geometry: null, contourCount: 0, holesCount: 0 }
 
-  // 4) Build THREE.Shape(s) and extrude
+  // 4) Classify into outer + holes
+  const classified = classifyContours(filtered)
+  if (classified.length === 0) return { geometry: null, contourCount: filtered.length, holesCount: 0 }
+
+  // Count total holes
+  let totalHoles = 0
+  for (const group of classified) {
+    totalHoles += group.holes.length
+  }
+
+  // 5) Build THREE.Shape(s) and extrude
   const geometries: THREE.BufferGeometry[] = []
   const halfDepth = depth / 2
 
@@ -1337,14 +1352,14 @@ function buildSolidMeshFromMask(
     }
   }
 
-  if (geometries.length === 0) return null
+  if (geometries.length === 0) return { geometry: null, contourCount: classified.length, holesCount: totalHoles }
 
-  if (geometries.length === 1) return geometries[0]
+  if (geometries.length === 1) return { geometry: geometries[0], contourCount: classified.length, holesCount: totalHoles }
 
   // Merge multiple shapes into one geometry
   const merged = mergeGeometriesSafe(geometries, false)
   for (const g of geometries) g.dispose()
-  return merged || null
+  return { geometry: merged || null, contourCount: classified.length, holesCount: totalHoles }
 }
 
 export const SolidEngine: GeometryEngine = {
@@ -1354,15 +1369,24 @@ export const SolidEngine: GeometryEngine = {
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) return []
 
     const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
-    const geometry = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth)
+    const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth)
 
-    if (!geometry) return []
+    const solidStatus: SolidBuildStatus = {
+      success: result.geometry !== null,
+      contourCount: result.contourCount,
+      holesCount: result.holesCount,
+      thickness: solidParams.thickness,
+      depth: solidParams.depth,
+    }
+
+    if (!result.geometry) return []
 
     return [{
-      tubeGeometry: geometry,
+      tubeGeometry: result.geometry,
       filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
       key: `solid-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
       mode: "solid",
+      solidStatus,
     }]
   },
 
@@ -1374,7 +1398,8 @@ export const SolidEngine: GeometryEngine = {
     const disposables: THREE.BufferGeometry[] = []
 
     const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
-    const geometry = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth)
+    const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth)
+    const geometry = result.geometry
 
     const rootGroup = new THREE.Group()
     rootGroup.name = "FreeStroke"
