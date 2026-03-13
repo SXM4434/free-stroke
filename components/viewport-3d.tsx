@@ -955,6 +955,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                       orbitEnabled={isMaster}
                       masterControlsRef={isMaster ? undefined : controlsRef}
                       meshStatusRef={meshStatusRef}
+                      solidStatusRef={solidStatusRef}
                     />
                   </Canvas>
                 </ViewportErrorBoundary>
@@ -1005,6 +1006,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 totalDuration={totalDuration}
                 onProgressUpdate={onProgressUpdate}
                 meshStatusRef={meshStatusRef}
+                solidStatusRef={solidStatusRef}
               />
             </Canvas>
           </ViewportErrorBoundary>
@@ -1042,6 +1044,19 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                     : `rod r=${s.fallbackRadius.toFixed(3)} (${s.reason}) depth=n/a bevel=n/a`}
                 </div>
               ))}
+            </div>
+          )}
+          {/* Solid mode build status */}
+          {geometryMode === "solid" && solidStatusRef.current && (
+            <div className="mt-1 border-t border-border/50 pt-1">
+              <div className="font-semibold text-foreground">Solid build:</div>
+              <div className={solidStatusRef.current.success ? "text-green-600" : "text-red-500"}>
+                {solidStatusRef.current.success ? "success" : "failed"}
+              </div>
+              <div>contours: {solidStatusRef.current.contourCount}</div>
+              <div>holes: {solidStatusRef.current.holesCount}</div>
+              <div>thickness: {solidStatusRef.current.thickness.toFixed(3)}</div>
+              <div>depth: {solidStatusRef.current.depth.toFixed(3)}</div>
             </div>
           )}
         </div>
