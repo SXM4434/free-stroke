@@ -807,14 +807,63 @@ function fallbackRodRadius(width: number): number {
   return Math.max(0.003, Math.min(width * 0.5, 0.08))
 }
 
-/** Build a rod tube fallback geometry for a single stroke's filtered points. */
-function buildRodFallback(filtered: THREE.Vector3[], radius: number = TUBE_RADIUS): THREE.BufferGeometry {
+interface RodGeometryData {
+  tubeGeometry: THREE.BufferGeometry
+  curve: THREE.CatmullRomCurve3
+  capPositions: THREE.Vector3[]
+  jointPositions: THREE.Vector3[]
+  jointFractions: number[]
+}
+
+/** Build full rod geometry data (tube + cap positions + joint positions) for a stroke */
+function buildRodGeometryData(filtered: THREE.Vector3[], radius: number = TUBE_RADIUS): RodGeometryData {
   const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
   const tubularSegments = Math.min(
     Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
     MAX_TUBULAR_SEGMENTS
   )
-  return new THREE.TubeGeometry(curve, tubularSegments, radius, RADIAL_SEGMENTS, false)
+  const tubeGeometry = new THREE.TubeGeometry(curve, tubularSegments, radius, RADIAL_SEGMENTS, false)
+
+  // Inset cap spheres slightly along tangent so they sit inside the tube ends
+  const inset = radius * 0.35
+  const startTangent = curve.getTangentAt(0)
+  const endTangent = curve.getTangentAt(1)
+  const startCapPos = filtered[0].clone().addScaledVector(startTangent, inset)
+  const endCapPos = filtered[filtered.length - 1].clone().addScaledVector(endTangent, -inset)
+  const capPositions = [startCapPos, endCapPos]
+
+  const { positions: jointPositions, fractions: jointFractions } = detectJoints3D(
+    filtered, filtered[0], filtered[filtered.length - 1]
+  )
+
+  return { tubeGeometry, curve, capPositions, jointPositions, jointFractions }
+}
+
+/** Build merged capped rod geometry (tube + cap spheres + joint spheres) for export */
+function buildCappedRodGeometry(filtered: THREE.Vector3[], radius: number = TUBE_RADIUS): THREE.BufferGeometry {
+  const { tubeGeometry, curve, capPositions, jointPositions } = buildRodGeometryData(filtered, radius)
+  
+  const capSphere = new THREE.SphereGeometry(radius, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+  
+  const startCapGeo = capSphere.clone().translate(capPositions[0].x, capPositions[0].y, capPositions[0].z)
+  const endCapGeo = capSphere.clone().translate(capPositions[1].x, capPositions[1].y, capPositions[1].z)
+  
+  const jointGeos: THREE.BufferGeometry[] = []
+  for (const pos of jointPositions) {
+    jointGeos.push(capSphere.clone().translate(pos.x, pos.y, pos.z))
+  }
+  
+  const parts = [tubeGeometry, startCapGeo, endCapGeo, ...jointGeos]
+  const merged = mergeGeometriesSafe(parts, false)
+  
+  // Dispose parts
+  tubeGeometry.dispose()
+  startCapGeo.dispose()
+  endCapGeo.dispose()
+  jointGeos.forEach((g) => g.dispose())
+  capSphere.dispose()
+  
+  return merged || tubeGeometry // fallback to tube if merge fails
 }
 
 export const ExtrudeEngine: GeometryEngine = {
@@ -846,10 +895,15 @@ export const ExtrudeEngine: GeometryEngine = {
           buildStatus: status,
         })
       } else {
-        // Fallback to rod tube for this stroke (radius derived from userWidth)
+        // Fallback to capped rod for this stroke (same visual as Rod mode)
         const fbRadius = status.type === "rodFallback" ? status.fallbackRadius : fallbackRodRadius(extrudeParams.width)
+        const rodData = buildRodGeometryData(filtered, fbRadius)
         result.push({
-          tubeGeometry: buildRodFallback(filtered, fbRadius),
+          tubeGeometry: rodData.tubeGeometry,
+          curve: rodData.curve,
+          capPositions: rodData.capPositions,
+          jointPositions: rodData.jointPositions,
+          jointFractions: rodData.jointFractions,
           filteredCount: filtered.length,
           key: `stroke-${si}-${stroke.points.length}-rod-fallback`,
           mode: "rod",
@@ -884,7 +938,8 @@ export const ExtrudeEngine: GeometryEngine = {
 
       const strokeName = `stroke_${String(si).padStart(3, "0")}`
       const fbRadius = status.type === "rodFallback" ? status.fallbackRadius : fallbackRodRadius(extrudeParams.width)
-      const finalGeo = geometry ?? buildRodFallback(filtered, fbRadius)
+      // Use capped rod geometry for fallback (same as Rod mode export)
+      const finalGeo = geometry ?? buildCappedRodGeometry(filtered, fbRadius)
       const mesh = new THREE.Mesh(finalGeo, inkMaterial)
       mesh.name = strokeName
       exportObjects.push(mesh)
