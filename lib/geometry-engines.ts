@@ -909,6 +909,7 @@ export const ExtrudeEngine: GeometryEngine = {
         // Fallback to capped rod for this stroke (same visual as Rod mode)
         const fbRadius = status.type === "rodFallback" ? status.fallbackRadius : fallbackRodRadius(extrudeParams.width)
         const rodData = buildRodGeometryData(filtered, fbRadius)
+        console.log(`[v0] Extrude fallback stroke ${si}`, { fbRadius, capPositions: rodData.capPositions, jointPositions: rodData.jointPositions?.length })
         result.push({
           tubeGeometry: rodData.tubeGeometry,
           curve: rodData.curve,
