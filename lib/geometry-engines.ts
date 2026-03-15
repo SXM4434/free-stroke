@@ -1093,8 +1093,8 @@ function signedAreaRaw(pts: { x: number; y: number }[]): number {
   return area / 2
 }
 
-/** Check if two line segments intersect (excluding shared endpoints) */
-function segmentsIntersect(
+/** Check if two line segments intersect (excluding shared endpoints) - object-based version */
+function segmentsIntersect2D(
   a1: { x: number; y: number }, a2: { x: number; y: number },
   b1: { x: number; y: number }, b2: { x: number; y: number }
 ): boolean {
@@ -1126,7 +1126,7 @@ function contourSelfIntersects2D(pts: { x: number; y: number }[]): boolean {
       if (j === n - 1 && i === 0) continue
       const b1 = pts[j]
       const b2 = pts[(j + 1) % n]
-      if (segmentsIntersect(a1, a2, b1, b2)) return true
+      if (segmentsIntersect2D(a1, a2, b1, b2)) return true
     }
   }
   return false
