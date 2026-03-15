@@ -73,6 +73,15 @@ export type StrokeBuildStatus =
   | { type: "bevelOffTinyWidth"; width: number; depth: number }
   | { type: "rodFallback"; reason: string; fallbackRadius: number }
 
+/** Debug contour data for Solid mode visualization */
+export interface SolidDebugContour {
+  points: { x: number; y: number }[]
+  type: "outer" | "hole" | "rejected"
+  reason?: string
+  area: number
+  isClosed: boolean
+}
+
 /** Solid mode build status for debug overlay */
 export interface SolidBuildStatus {
   success: boolean
@@ -80,6 +89,13 @@ export interface SolidBuildStatus {
   holesCount: number
   thickness: number
   depth: number
+  // Debug stats
+  rawContourCount: number
+  rejectedCount: number
+  validOuterCount: number
+  openContourCount: number
+  // Debug contour data for visualization (only populated in debug builds)
+  debugContours?: SolidDebugContour[]
 }
 
 /** Below this width, auto-disable bevel to avoid degenerate extrusions */
@@ -1012,7 +1028,67 @@ export const ExtrudeEngine: GeometryEngine = {
 
 const SOLID_RASTER_SIZE = 512
 /** Minimum contour area (in raster pixels squared) to keep — filters tiny noise islands */
-const MIN_CONTOUR_AREA = 25
+const MIN_CONTOUR_AREA = 50  // Increased from 25 for stricter filtering
+/** Minimum distance between consecutive points to consider distinct */
+const MIN_POINT_DIST = 0.5
+/** Douglas-Peucker tolerance (reduced for cleaner contours during debugging) */
+const DP_TOLERANCE = 0.3  // Reduced from 0.8
+
+/** Remove near-duplicate consecutive points from a contour */
+function deduplicateContourStrict(pts: { x: number; y: number }[]): { x: number; y: number }[] {
+  if (pts.length < 2) return pts
+  const result: { x: number; y: number }[] = [pts[0]]
+  for (let i = 1; i < pts.length; i++) {
+    const prev = result[result.length - 1]
+    const dx = pts[i].x - prev.x
+    const dy = pts[i].y - prev.y
+    if (Math.sqrt(dx * dx + dy * dy) >= MIN_POINT_DIST) {
+      result.push(pts[i])
+    }
+  }
+  // Also check if last point is too close to first (for closed contours)
+  if (result.length > 2) {
+    const first = result[0]
+    const last = result[result.length - 1]
+    const dx = last.x - first.x
+    const dy = last.y - first.y
+    if (Math.sqrt(dx * dx + dy * dy) < MIN_POINT_DIST) {
+      result.pop()
+    }
+  }
+  return result
+}
+
+/** Check if a contour is closed (first point near last point) */
+function isContourClosed(pts: { x: number; y: number }[], threshold: number = 2.0): boolean {
+  if (pts.length < 3) return false
+  const first = pts[0]
+  const last = pts[pts.length - 1]
+  const dx = last.x - first.x
+  const dy = last.y - first.y
+  return Math.sqrt(dx * dx + dy * dy) < threshold
+}
+
+/** Ensure contour has CCW winding (positive area). Returns reversed if needed. */
+function ensureWindingCCW(pts: { x: number; y: number }[]): { x: number; y: number }[] {
+  const area = signedAreaRaw(pts)
+  return area >= 0 ? pts : pts.slice().reverse()
+}
+
+/** Ensure contour has CW winding (negative area). Returns reversed if needed. */
+function ensureWindingCW(pts: { x: number; y: number }[]): { x: number; y: number }[] {
+  const area = signedAreaRaw(pts)
+  return area <= 0 ? pts : pts.slice().reverse()
+}
+
+/** Signed area without abs - positive = CCW, negative = CW */
+function signedAreaRaw(pts: { x: number; y: number }[]): number {
+  let area = 0
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
+  }
+  return area / 2
+}
 
 /**
  * Rasterize processedStrokes into a binary mask on an offscreen 2D canvas.
@@ -1343,11 +1419,16 @@ interface SolidBuildResult {
   geometry: THREE.BufferGeometry | null
   contourCount: number
   holesCount: number
+  rawContourCount: number
+  rejectedCount: number
+  validOuterCount: number
+  openContourCount: number
+  debugContours: SolidDebugContour[]
 }
 
 /**
  * Build a watertight extruded mesh from raster mask contours.
- * Pipeline: rasterize -> marching squares -> simplify -> filter noise -> classify -> Shape -> ExtrudeGeometry
+ * Pipeline: rasterize -> marching squares -> dedupe -> simplify -> validate -> classify -> winding -> Shape -> ExtrudeGeometry
  */
 function buildSolidMeshFromMask(
   mask: boolean[],
@@ -1363,44 +1444,123 @@ function buildSolidMeshFromMask(
   const toWorldX = (rx: number) => ((rx / S) * canvasWidth - canvasWidth / 2) * normScale
   const toWorldY = (ry: number) => -((ry / S) * canvasHeight - canvasHeight / 2) * normScale
 
-  // 1) Extract contours via marching squares
-  const rawContours = marchingSquaresContours(mask, S)
-  if (rawContours.length === 0) return { geometry: null, contourCount: 0, holesCount: 0 }
-
-  // 2) Simplify contours (tolerance in raster pixels)
-  const tolerance = 0.8
-  const simplified = rawContours
-    .map((c) => dpSimplify(c, tolerance))
-    .filter((c) => c.length >= 3)
-
-  // 3) Filter out tiny noise islands by area
-  const filtered = simplified.filter((c) => contourArea(c) >= MIN_CONTOUR_AREA)
-  if (filtered.length === 0) return { geometry: null, contourCount: 0, holesCount: 0 }
-
-  // 4) Classify into outer + holes
-  const classified = classifyContours(filtered)
-  if (classified.length === 0) return { geometry: null, contourCount: filtered.length, holesCount: 0 }
-
-  // Count total holes
-  let totalHoles = 0
-  for (const group of classified) {
-    totalHoles += group.holes.length
+  const debugContours: SolidDebugContour[] = []
+  const emptyResult: SolidBuildResult = {
+    geometry: null, contourCount: 0, holesCount: 0,
+    rawContourCount: 0, rejectedCount: 0, validOuterCount: 0, openContourCount: 0, debugContours
   }
 
-  // 5) Build THREE.Shape(s) and extrude
+  // 1) Extract contours via marching squares
+  const rawContours = marchingSquaresContours(mask, S)
+  if (rawContours.length === 0) return emptyResult
+
+  // 2) Deduplicate + simplify contours
+  let rejectedCount = 0
+  let openContourCount = 0
+  const validated: { x: number; y: number }[][] = []
+
+  for (const raw of rawContours) {
+    // Deduplicate near-duplicate points
+    const deduped = deduplicateContourStrict(raw)
+    
+    // Simplify with reduced tolerance for cleaner polygons
+    const simplified = dpSimplify(deduped, DP_TOLERANCE)
+    
+    // Reject if too few points
+    if (simplified.length < 4) {
+      debugContours.push({
+        points: simplified,
+        type: "rejected",
+        reason: "too few points",
+        area: contourArea(simplified),
+        isClosed: false
+      })
+      rejectedCount++
+      continue
+    }
+
+    // Check if closed
+    const closed = isContourClosed(simplified)
+    if (!closed) {
+      debugContours.push({
+        points: simplified,
+        type: "rejected",
+        reason: "open contour",
+        area: contourArea(simplified),
+        isClosed: false
+      })
+      openContourCount++
+      rejectedCount++
+      continue
+    }
+
+    // Filter by area
+    const area = contourArea(simplified)
+    if (area < MIN_CONTOUR_AREA) {
+      debugContours.push({
+        points: simplified,
+        type: "rejected",
+        reason: "too small",
+        area,
+        isClosed: true
+      })
+      rejectedCount++
+      continue
+    }
+
+    validated.push(simplified)
+  }
+
+  if (validated.length === 0) {
+    return { ...emptyResult, rawContourCount: rawContours.length, rejectedCount, openContourCount, debugContours }
+  }
+
+  // 3) Classify into outer + holes
+  const classified = classifyContours(validated)
+  if (classified.length === 0) {
+    return {
+      geometry: null, contourCount: validated.length, holesCount: 0,
+      rawContourCount: rawContours.length, rejectedCount, validOuterCount: 0, openContourCount, debugContours
+    }
+  }
+
+  // Count total holes and add debug entries
+  let totalHoles = 0
+  for (const group of classified) {
+    // Add outer to debug
+    debugContours.push({
+      points: group.outer,
+      type: "outer",
+      area: contourArea(group.outer),
+      isClosed: true
+    })
+    for (const hole of group.holes) {
+      debugContours.push({
+        points: hole,
+        type: "hole",
+        area: contourArea(hole),
+        isClosed: true
+      })
+      totalHoles++
+    }
+  }
+
+  // 4) Build THREE.Shape(s) with consistent winding and extrude
   const geometries: THREE.BufferGeometry[] = []
   const halfDepth = depth / 2
 
   for (const group of classified) {
-    // Convert outer contour to world-space THREE.Shape
-    const shapePts = group.outer.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+    // Ensure outer is CCW (positive area in screen coords = CCW)
+    const outerCCW = ensureWindingCCW(group.outer)
+    const shapePts = outerCCW.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
     if (shapePts.length < 3) continue
 
     const shape = new THREE.Shape(shapePts)
 
-    // Add holes
+    // Add holes with CW winding (opposite to outer)
     for (const hole of group.holes) {
-      const holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+      const holeCW = ensureWindingCW(hole)
+      const holePts = holeCW.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
       if (holePts.length < 3) continue
       shape.holes.push(new THREE.Path(holePts))
     }
@@ -1419,14 +1579,23 @@ function buildSolidMeshFromMask(
     }
   }
 
-  if (geometries.length === 0) return { geometry: null, contourCount: classified.length, holesCount: totalHoles }
+  const resultBase = {
+    contourCount: classified.length,
+    holesCount: totalHoles,
+    rawContourCount: rawContours.length,
+    rejectedCount,
+    validOuterCount: classified.length,
+    openContourCount,
+    debugContours
+  }
 
-  if (geometries.length === 1) return { geometry: geometries[0], contourCount: classified.length, holesCount: totalHoles }
+  if (geometries.length === 0) return { geometry: null, ...resultBase }
+  if (geometries.length === 1) return { geometry: geometries[0], ...resultBase }
 
   // Merge multiple shapes into one geometry
   const merged = mergeGeometriesSafe(geometries, false)
   for (const g of geometries) g.dispose()
-  return { geometry: merged || null, contourCount: classified.length, holesCount: totalHoles }
+  return { geometry: merged || null, ...resultBase }
 }
 
 export const SolidEngine: GeometryEngine = {
@@ -1444,6 +1613,11 @@ export const SolidEngine: GeometryEngine = {
       holesCount: result.holesCount,
       thickness: solidParams.thickness,
       depth: solidParams.depth,
+      rawContourCount: result.rawContourCount,
+      rejectedCount: result.rejectedCount,
+      validOuterCount: result.validOuterCount,
+      openContourCount: result.openContourCount,
+      debugContours: result.debugContours,
     }
 
     if (!result.geometry) return []
