@@ -1069,21 +1069,23 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               <div>holes: {solidStatusRef.current.holesCount}</div>
               <div>thickness: {solidStatusRef.current.thickness.toFixed(3)}</div>
               <div>depth: {solidStatusRef.current.depth.toFixed(3)}</div>
-              {/* Debug contour breakdown */}
+              {/* Debug contour breakdown with hierarchy info */}
               {solidStatusRef.current.debugContours && solidStatusRef.current.debugContours.length > 0 && (
                 <div className="mt-1 border-t border-border/30 pt-1 text-xs">
-                  <div className="font-semibold">Contours:</div>
-                  {solidStatusRef.current.debugContours.slice(0, 10).map((c, i) => (
+                  <div className="font-semibold">Contours (signed area: + = CW outer, - = CCW hole):</div>
+                  {solidStatusRef.current.debugContours.slice(0, 12).map((c, i) => (
                     <div key={i} className={
                       c.type === "outer" ? "text-green-600"
                         : c.type === "hole" ? "text-blue-500"
                         : "text-red-400"
                     }>
-                      {i}: {c.type} pts={c.points.length} area={c.area.toFixed(0)} {c.reason ? `(${c.reason})` : ""}
+                      #{c.contourIndex}: {c.type} pts={c.points.length} sArea={c.signedArea?.toFixed(0) ?? "?"} 
+                      {c.type === "hole" && c.parentIndex !== undefined && ` → parent #${c.parentIndex}`}
+                      {c.reason ? ` (${c.reason})` : ""}
                     </div>
                   ))}
-                  {solidStatusRef.current.debugContours.length > 10 && (
-                    <div className="text-muted-foreground">...and {solidStatusRef.current.debugContours.length - 10} more</div>
+                  {solidStatusRef.current.debugContours.length > 12 && (
+                    <div className="text-muted-foreground">...and {solidStatusRef.current.debugContours.length - 12} more</div>
                   )}
                 </div>
               )}

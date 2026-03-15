@@ -79,7 +79,10 @@ export interface SolidDebugContour {
   type: "outer" | "hole" | "rejected"
   reason?: string
   area: number
+  signedArea: number
   isClosed: boolean
+  parentIndex?: number  // Index of parent outer (for holes)
+  contourIndex: number  // Original index in the contour list
 }
 
 /** Solid mode build status for debug overlay */
@@ -1404,45 +1407,76 @@ function pointInPolygon(px: number, py: number, poly: { x: number; y: number }[]
 
 interface ClassifiedContours {
   outer: { x: number; y: number }[]
+  outerIndex: number  // Original index for debug
   holes: { x: number; y: number }[][]
+  holeIndices: number[]  // Original indices for debug
 }
 
 /**
- * Classify contours into outer boundary + holes.
- * - Sort by absolute area descending.
- * - Largest = outer shape.
- * - Remaining contours that have a sample point inside the outer = holes.
- * - Remaining contours that are outside the outer = separate outer shapes
- *   (we merge them all into one Shape with multiple sub-paths).
+ * Classify contours into outer boundary + holes using SIGNED AREA (winding direction).
+ * 
+ * In raster/screen space with Y increasing downward:
+ * - POSITIVE signed area = CW winding = OUTER boundary (filled inside)
+ * - NEGATIVE signed area = CCW winding = HOLE (empty inside)
+ * 
+ * After identifying outers vs holes by winding, we group holes with their
+ * containing outer using point-in-polygon containment.
  */
 function classifyContours(contours: { x: number; y: number }[][]): ClassifiedContours[] {
   if (contours.length === 0) return []
 
-  // Compute areas and sort by absolute area descending
-  const withArea = contours.map((c) => ({ contour: c, area: signedArea(c) }))
-  withArea.sort((a, b) => Math.abs(b.area) - Math.abs(a.area))
+  // Compute signed areas and classify by winding direction
+  const withMeta = contours.map((c, idx) => ({
+    contour: c,
+    index: idx,
+    signedArea: signedArea(c),
+    absArea: Math.abs(signedArea(c))
+  }))
 
-  const used = new Set<number>()
+  // In screen space (Y down), marching squares produces:
+  // - CW winding (positive area) for outer boundaries
+  // - CCW winding (negative area) for hole boundaries
+  const outers = withMeta.filter(m => m.signedArea > 0).sort((a, b) => b.absArea - a.absArea)
+  const holes = withMeta.filter(m => m.signedArea < 0).sort((a, b) => b.absArea - a.absArea)
+
+  // If no outers found (all holes), something is wrong - return empty
+  if (outers.length === 0) {
+    console.log("[v0] classifyContours: no outers found (all negative area)")
+    return []
+  }
+
   const results: ClassifiedContours[] = []
+  const assignedHoles = new Set<number>()
 
-  for (let i = 0; i < withArea.length; i++) {
-    if (used.has(i)) continue
-    used.add(i)
+  // For each outer, find holes that are contained within it
+  for (const outerMeta of outers) {
+    const outer = outerMeta.contour
+    const outerHoles: { x: number; y: number }[][] = []
+    const outerHoleIndices: number[] = []
 
-    const outer = withArea[i].contour
-    const holes: { x: number; y: number }[][] = []
-
-    // Find holes: smaller contours whose first point is inside this outer
-    for (let j = i + 1; j < withArea.length; j++) {
-      if (used.has(j)) continue
-      const candidate = withArea[j].contour
-      if (candidate.length > 0 && pointInPolygon(candidate[0].x, candidate[0].y, outer)) {
-        holes.push(candidate)
-        used.add(j)
+    for (const holeMeta of holes) {
+      if (assignedHoles.has(holeMeta.index)) continue
+      const hole = holeMeta.contour
+      // Check if hole's centroid (or first point) is inside the outer
+      if (hole.length > 0 && pointInPolygon(hole[0].x, hole[0].y, outer)) {
+        outerHoles.push(hole)
+        outerHoleIndices.push(holeMeta.index)
+        assignedHoles.add(holeMeta.index)
       }
     }
 
-    results.push({ outer, holes })
+    results.push({
+      outer,
+      outerIndex: outerMeta.index,
+      holes: outerHoles,
+      holeIndices: outerHoleIndices
+    })
+  }
+
+  // Log any unassigned holes (orphan holes that aren't inside any outer)
+  const unassigned = holes.filter(h => !assignedHoles.has(h.index))
+  if (unassigned.length > 0) {
+    console.log("[v0] classifyContours: orphan holes not inside any outer:", unassigned.map(h => h.index))
   }
 
   return results
@@ -1510,6 +1544,8 @@ function buildSolidMeshFromMask(
     // Only simplify if tolerance > 0 (currently disabled for debugging)
     const simplified = DP_TOLERANCE > 0 ? dpSimplify(deduped, DP_TOLERANCE) : deduped
     
+    const rawIndex = validated.length + rejectedCount  // Track original index
+    
     // Reject if too few points
     if (simplified.length < 4) {
       debugContours.push({
@@ -1517,7 +1553,9 @@ function buildSolidMeshFromMask(
         type: "rejected",
         reason: "too few points",
         area: contourArea(simplified),
-        isClosed: false
+        signedArea: signedArea(simplified),
+        isClosed: false,
+        contourIndex: rawIndex
       })
       rejectedCount++
       continue
@@ -1531,7 +1569,9 @@ function buildSolidMeshFromMask(
         type: "rejected",
         reason: "open contour",
         area: contourArea(simplified),
-        isClosed: false
+        signedArea: signedArea(simplified),
+        isClosed: false,
+        contourIndex: rawIndex
       })
       openContourCount++
       rejectedCount++
@@ -1540,13 +1580,16 @@ function buildSolidMeshFromMask(
 
     // Filter by area
     const area = contourArea(simplified)
+    const sArea = signedArea(simplified)
     if (area < MIN_CONTOUR_AREA) {
       debugContours.push({
         points: simplified,
         type: "rejected",
         reason: "too small",
         area,
-        isClosed: true
+        signedArea: sArea,
+        isClosed: true,
+        contourIndex: rawIndex
       })
       rejectedCount++
       continue
@@ -1559,7 +1602,9 @@ function buildSolidMeshFromMask(
         type: "rejected",
         reason: "self-intersects",
         area,
-        isClosed: true
+        signedArea: sArea,
+        isClosed: true,
+        contourIndex: rawIndex
       })
       selfIntersectCount++
       rejectedCount++
@@ -1573,8 +1618,10 @@ function buildSolidMeshFromMask(
     return { ...emptyResult, rawContourCount: rawContours.length, rejectedCount, openContourCount, selfIntersectCount, debugContours }
   }
 
-  // 3) Classify into outer + holes
+  // 3) Classify into outer + holes using signed area (winding direction)
+  console.log("[v0] Solid: validated contours =", validated.length, "with areas:", validated.map(c => signedArea(c).toFixed(0)))
   const classified = classifyContours(validated)
+  console.log("[v0] Solid: classified groups =", classified.length, "outers, holes per group:", classified.map(g => g.holes.length))
   if (classified.length === 0) {
     return {
       geometry: null, contourCount: validated.length, holesCount: 0,
@@ -1582,22 +1629,29 @@ function buildSolidMeshFromMask(
     }
   }
 
-  // Count total holes and add debug entries
+  // Count total holes and add debug entries with hierarchy info
   let totalHoles = 0
-  for (const group of classified) {
+  for (let gi = 0; gi < classified.length; gi++) {
+    const group = classified[gi]
     // Add outer to debug
     debugContours.push({
       points: group.outer,
       type: "outer",
       area: contourArea(group.outer),
-      isClosed: true
+      signedArea: signedArea(group.outer),
+      isClosed: true,
+      contourIndex: group.outerIndex
     })
-    for (const hole of group.holes) {
+    for (let hi = 0; hi < group.holes.length; hi++) {
+      const hole = group.holes[hi]
       debugContours.push({
         points: hole,
         type: "hole",
         area: contourArea(hole),
-        isClosed: true
+        signedArea: signedArea(hole),
+        isClosed: true,
+        contourIndex: group.holeIndices[hi],
+        parentIndex: group.outerIndex  // Link to parent outer
       })
       totalHoles++
     }
@@ -1608,17 +1662,17 @@ function buildSolidMeshFromMask(
   const halfDepth = depth / 2
 
   for (const group of classified) {
-    // Ensure outer is CCW (positive area in screen coords = CCW)
-    const outerCCW = ensureWindingCCW(group.outer)
-    const shapePts = outerCCW.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+    // Transform to world coords - Y flip inverts winding, which is what THREE.js needs:
+    // Raster CW outer (pos area) -> World CCW outer (correct for Shape)
+    // Raster CCW hole (neg area) -> World CW hole (correct for hole)
+    const shapePts = group.outer.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
     if (shapePts.length < 3) continue
 
     const shape = new THREE.Shape(shapePts)
 
-    // Add holes with CW winding (opposite to outer)
+    // Add holes - Y flip handles winding automatically
     for (const hole of group.holes) {
-      const holeCW = ensureWindingCW(hole)
-      const holePts = holeCW.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+      const holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
       if (holePts.length < 3) continue
       shape.holes.push(new THREE.Path(holePts))
     }
