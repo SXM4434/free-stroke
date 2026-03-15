@@ -93,6 +93,8 @@ export interface StrokeMeshData {
   curve?: THREE.CatmullRomCurve3
   /** Cap positions for rod-mode caps (undefined for extrude) */
   capPositions?: THREE.Vector3[]
+  /** Radius for cap/joint spheres (defaults to TUBE_RADIUS if not set) */
+  capRadius?: number
   /** Joint positions for rod-mode joints (undefined for extrude) */
   jointPositions?: THREE.Vector3[]
   jointFractions?: number[]
@@ -911,6 +913,7 @@ export const ExtrudeEngine: GeometryEngine = {
           tubeGeometry: rodData.tubeGeometry,
           curve: rodData.curve,
           capPositions: rodData.capPositions,
+          capRadius: fbRadius,
           jointPositions: rodData.jointPositions,
           jointFractions: rodData.jointFractions,
           filteredCount: filtered.length,
