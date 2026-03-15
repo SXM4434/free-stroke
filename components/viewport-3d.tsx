@@ -1063,7 +1063,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               </div>
               <div>raw contours: {solidStatusRef.current.rawContourCount}</div>
               <div className={solidStatusRef.current.rejectedCount > 0 ? "text-yellow-600" : ""}>
-                rejected: {solidStatusRef.current.rejectedCount} (open: {solidStatusRef.current.openContourCount})
+                rejected: {solidStatusRef.current.rejectedCount} (open: {solidStatusRef.current.openContourCount}, self-x: {solidStatusRef.current.selfIntersectCount})
               </div>
               <div>valid outers: {solidStatusRef.current.validOuterCount}</div>
               <div>holes: {solidStatusRef.current.holesCount}</div>
@@ -1090,6 +1090,66 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             </div>
           )}
         </div>
+      )}
+
+      {/* 2D Contour Debug Canvas Overlay (Solid mode only, when debug is on) */}
+      {showDebug && geometryMode === "solid" && solidStatusRef.current?.debugContours && (
+        <canvas
+          ref={(canvas) => {
+            if (!canvas || !solidStatusRef.current?.debugContours) return
+            const ctx = canvas.getContext("2d")
+            if (!ctx) return
+            
+            const S = solidStatusRef.current.rasterSize || 512
+            const scale = Math.min(canvas.width, canvas.height) / S
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+            ctx.save()
+            ctx.scale(scale, scale)
+            
+            // Draw each contour
+            for (const contour of solidStatusRef.current.debugContours) {
+              if (contour.points.length < 2) continue
+              
+              ctx.beginPath()
+              ctx.moveTo(contour.points[0].x, contour.points[0].y)
+              for (let i = 1; i < contour.points.length; i++) {
+                ctx.lineTo(contour.points[i].x, contour.points[i].y)
+              }
+              ctx.closePath()
+              
+              // Style based on type
+              if (contour.type === "outer") {
+                ctx.strokeStyle = "#22c55e" // green
+                ctx.lineWidth = 2 / scale
+                ctx.fillStyle = "rgba(34, 197, 94, 0.15)"
+                ctx.fill()
+              } else if (contour.type === "hole") {
+                ctx.strokeStyle = "#3b82f6" // blue
+                ctx.lineWidth = 2 / scale
+                ctx.fillStyle = "rgba(59, 130, 246, 0.15)"
+                ctx.fill()
+              } else {
+                ctx.strokeStyle = "#ef4444" // red
+                ctx.lineWidth = 1.5 / scale
+                ctx.setLineDash([4 / scale, 4 / scale])
+              }
+              ctx.stroke()
+              ctx.setLineDash([])
+              
+              // Label first point
+              ctx.fillStyle = contour.type === "outer" ? "#22c55e" : contour.type === "hole" ? "#3b82f6" : "#ef4444"
+              ctx.font = `${10 / scale}px monospace`
+              ctx.fillText(`${contour.type[0].toUpperCase()}${contour.points.length}`, contour.points[0].x + 2 / scale, contour.points[0].y - 2 / scale)
+            }
+            
+            ctx.restore()
+          }}
+          width={200}
+          height={200}
+          className="pointer-events-none absolute right-3 top-3 rounded border border-border bg-background/80 backdrop-blur-sm"
+          style={{ width: 200, height: 200 }}
+        />
       )}
 
       {/* Animation controls */}

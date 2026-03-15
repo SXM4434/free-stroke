@@ -94,8 +94,11 @@ export interface SolidBuildStatus {
   rejectedCount: number
   validOuterCount: number
   openContourCount: number
+  selfIntersectCount: number
   // Debug contour data for visualization (only populated in debug builds)
   debugContours?: SolidDebugContour[]
+  // Raster size for 2D overlay rendering
+  rasterSize: number
 }
 
 /** Below this width, auto-disable bevel to avoid degenerate extrusions */
@@ -1031,8 +1034,8 @@ const SOLID_RASTER_SIZE = 512
 const MIN_CONTOUR_AREA = 50  // Increased from 25 for stricter filtering
 /** Minimum distance between consecutive points to consider distinct */
 const MIN_POINT_DIST = 0.5
-/** Douglas-Peucker tolerance (reduced for cleaner contours during debugging) */
-const DP_TOLERANCE = 0.3  // Reduced from 0.8
+/** Douglas-Peucker tolerance — set to 0 to DISABLE simplification during debugging */
+const DP_TOLERANCE = 0  // DISABLED: was 0.3, simplification can break contours
 
 /** Remove near-duplicate consecutive points from a contour */
 function deduplicateContourStrict(pts: { x: number; y: number }[]): { x: number; y: number }[] {
@@ -1088,6 +1091,45 @@ function signedAreaRaw(pts: { x: number; y: number }[]): number {
     area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
   }
   return area / 2
+}
+
+/** Check if two line segments intersect (excluding shared endpoints) */
+function segmentsIntersect(
+  a1: { x: number; y: number }, a2: { x: number; y: number },
+  b1: { x: number; y: number }, b2: { x: number; y: number }
+): boolean {
+  const d1x = a2.x - a1.x, d1y = a2.y - a1.y
+  const d2x = b2.x - b1.x, d2y = b2.y - b1.y
+  const cross = d1x * d2y - d1y * d2x
+  if (Math.abs(cross) < 1e-10) return false // parallel
+  
+  const dx = b1.x - a1.x, dy = b1.y - a1.y
+  const t = (dx * d2y - dy * d2x) / cross
+  const u = (dx * d1y - dy * d1x) / cross
+  
+  // Exclude endpoints (t and u strictly between 0 and 1)
+  const eps = 1e-6
+  return t > eps && t < 1 - eps && u > eps && u < 1 - eps
+}
+
+/** Check if a contour self-intersects (any non-adjacent edges cross) */
+function contourSelfIntersects2D(pts: { x: number; y: number }[]): boolean {
+  const n = pts.length
+  if (n < 4) return false
+  
+  for (let i = 0; i < n; i++) {
+    const a1 = pts[i]
+    const a2 = pts[(i + 1) % n]
+    // Check against non-adjacent edges
+    for (let j = i + 2; j < n; j++) {
+      // Skip if j+1 wraps to i (adjacent edge)
+      if (j === n - 1 && i === 0) continue
+      const b1 = pts[j]
+      const b2 = pts[(j + 1) % n]
+      if (segmentsIntersect(a1, a2, b1, b2)) return true
+    }
+  }
+  return false
 }
 
 /**
@@ -1423,6 +1465,7 @@ interface SolidBuildResult {
   rejectedCount: number
   validOuterCount: number
   openContourCount: number
+  selfIntersectCount: number
   debugContours: SolidDebugContour[]
 }
 
@@ -1447,7 +1490,7 @@ function buildSolidMeshFromMask(
   const debugContours: SolidDebugContour[] = []
   const emptyResult: SolidBuildResult = {
     geometry: null, contourCount: 0, holesCount: 0,
-    rawContourCount: 0, rejectedCount: 0, validOuterCount: 0, openContourCount: 0, debugContours
+    rawContourCount: 0, rejectedCount: 0, validOuterCount: 0, openContourCount: 0, selfIntersectCount: 0, debugContours
   }
 
   // 1) Extract contours via marching squares
@@ -1457,14 +1500,15 @@ function buildSolidMeshFromMask(
   // 2) Deduplicate + simplify contours
   let rejectedCount = 0
   let openContourCount = 0
+  let selfIntersectCount = 0
   const validated: { x: number; y: number }[][] = []
 
   for (const raw of rawContours) {
     // Deduplicate near-duplicate points
     const deduped = deduplicateContourStrict(raw)
     
-    // Simplify with reduced tolerance for cleaner polygons
-    const simplified = dpSimplify(deduped, DP_TOLERANCE)
+    // Only simplify if tolerance > 0 (currently disabled for debugging)
+    const simplified = DP_TOLERANCE > 0 ? dpSimplify(deduped, DP_TOLERANCE) : deduped
     
     // Reject if too few points
     if (simplified.length < 4) {
@@ -1508,11 +1552,25 @@ function buildSolidMeshFromMask(
       continue
     }
 
+    // Reject self-intersecting contours
+    if (contourSelfIntersects2D(simplified)) {
+      debugContours.push({
+        points: simplified,
+        type: "rejected",
+        reason: "self-intersects",
+        area,
+        isClosed: true
+      })
+      selfIntersectCount++
+      rejectedCount++
+      continue
+    }
+
     validated.push(simplified)
   }
 
   if (validated.length === 0) {
-    return { ...emptyResult, rawContourCount: rawContours.length, rejectedCount, openContourCount, debugContours }
+    return { ...emptyResult, rawContourCount: rawContours.length, rejectedCount, openContourCount, selfIntersectCount, debugContours }
   }
 
   // 3) Classify into outer + holes
@@ -1520,7 +1578,7 @@ function buildSolidMeshFromMask(
   if (classified.length === 0) {
     return {
       geometry: null, contourCount: validated.length, holesCount: 0,
-      rawContourCount: rawContours.length, rejectedCount, validOuterCount: 0, openContourCount, debugContours
+      rawContourCount: rawContours.length, rejectedCount, validOuterCount: 0, openContourCount, selfIntersectCount, debugContours
     }
   }
 
@@ -1586,6 +1644,7 @@ function buildSolidMeshFromMask(
     rejectedCount,
     validOuterCount: classified.length,
     openContourCount,
+    selfIntersectCount,
     debugContours
   }
 
@@ -1617,7 +1676,9 @@ export const SolidEngine: GeometryEngine = {
       rejectedCount: result.rejectedCount,
       validOuterCount: result.validOuterCount,
       openContourCount: result.openContourCount,
+      selfIntersectCount: result.selfIntersectCount,
       debugContours: result.debugContours,
+      rasterSize: SOLID_RASTER_SIZE,
     }
 
     if (!result.geometry) return []
