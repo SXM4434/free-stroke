@@ -841,7 +841,7 @@ function buildRodGeometryData(filtered: THREE.Vector3[], radius: number = TUBE_R
 
 /** Build merged capped rod geometry (tube + cap spheres + joint spheres) for export */
 function buildCappedRodGeometry(filtered: THREE.Vector3[], radius: number = TUBE_RADIUS): THREE.BufferGeometry {
-  const { tubeGeometry, curve, capPositions, jointPositions } = buildRodGeometryData(filtered, radius)
+  const { tubeGeometry, capPositions, jointPositions } = buildRodGeometryData(filtered, radius)
   
   const capSphere = new THREE.SphereGeometry(radius, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
   
@@ -856,14 +856,23 @@ function buildCappedRodGeometry(filtered: THREE.Vector3[], radius: number = TUBE
   const parts = [tubeGeometry, startCapGeo, endCapGeo, ...jointGeos]
   const merged = mergeGeometriesSafe(parts, false)
   
-  // Dispose parts
-  tubeGeometry.dispose()
+  // Dispose cap/joint geometries (but NOT tubeGeometry if merge failed)
+  capSphere.dispose()
+  
+  if (merged) {
+    // Merge succeeded - dispose all parts
+    tubeGeometry.dispose()
+    startCapGeo.dispose()
+    endCapGeo.dispose()
+    jointGeos.forEach((g) => g.dispose())
+    return merged
+  }
+  
+  // Merge failed - dispose only the extra parts, return tube as fallback
   startCapGeo.dispose()
   endCapGeo.dispose()
   jointGeos.forEach((g) => g.dispose())
-  capSphere.dispose()
-  
-  return merged || tubeGeometry // fallback to tube if merge fails
+  return tubeGeometry
 }
 
 export const ExtrudeEngine: GeometryEngine = {
