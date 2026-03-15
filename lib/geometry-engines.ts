@@ -906,12 +906,14 @@ export const ExtrudeEngine: GeometryEngine = {
           buildStatus: status,
         })
       } else {
-        // Fallback to rod - use EXACT same geometry as Rod mode (TUBE_RADIUS, same inset, same joints)
-        const rodData = buildRodGeometryData(filtered, TUBE_RADIUS)
+        // Fallback to rod - same builder as Rod mode but with radius derived from Width slider
+        const fbRadius = fallbackRodRadius(extrudeParams.width)
+        const rodData = buildRodGeometryData(filtered, fbRadius)
         result.push({
           tubeGeometry: rodData.tubeGeometry,
           curve: rodData.curve,
           capPositions: rodData.capPositions,
+          capRadius: fbRadius,
           jointPositions: rodData.jointPositions,
           jointFractions: rodData.jointFractions,
           filteredCount: filtered.length,
@@ -947,8 +949,9 @@ export const ExtrudeEngine: GeometryEngine = {
       const { geometry, status } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
       const strokeName = `stroke_${String(si).padStart(3, "0")}`
-      // Use capped rod geometry for fallback (same TUBE_RADIUS as Rod mode export)
-      const finalGeo = geometry ?? buildCappedRodGeometry(filtered, TUBE_RADIUS)
+      // Use capped rod geometry for fallback with radius derived from Width slider
+      const fbRadius = fallbackRodRadius(extrudeParams.width)
+      const finalGeo = geometry ?? buildCappedRodGeometry(filtered, fbRadius)
       const mesh = new THREE.Mesh(finalGeo, inkMaterial)
       mesh.name = strokeName
       exportObjects.push(mesh)
