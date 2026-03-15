@@ -376,45 +376,35 @@ function AnimatedStrokes({
               geometry={data.tubeGeometry}
               material={strokeMaterial}
             />
-            {/* Rod-mode only: caps + joints */}
-            {data.mode === "rod" && data.capPositions && (() => {
-              // Use custom radius sphere for fallback rods, default for normal rods
-              const r = data.capRadius ?? TUBE_RADIUS
-              console.log(`[v0] Rendering caps for stroke ${si}`, { mode: data.mode, capRadius: data.capRadius, r, pos0: data.capPositions[0], pos1: data.capPositions[1] })
-              const capGeo = r === TUBE_RADIUS ? sphereGeometry : new THREE.SphereGeometry(r, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-              return (
-                <>
+            {/* Rod-mode only: caps + joints (fallback uses same TUBE_RADIUS as Rod mode) */}
+            {data.mode === "rod" && data.capPositions && (
+              <>
+                <mesh
+                  ref={(el) => { startCapRefs.current[si] = el }}
+                  geometry={sphereGeometry}
+                  material={strokeMaterial}
+                  position={data.capPositions[0]}
+                />
+                <mesh
+                  ref={(el) => { endCapRefs.current[si] = el }}
+                  geometry={sphereGeometry}
+                  material={strokeMaterial}
+                  position={data.capPositions[1]}
+                />
+              </>
+            )}
+            {data.mode === "rod" && data.jointPositions && (
+              <group ref={(el) => { jointGroupRefs.current[si] = el }}>
+                {data.jointPositions.map((pos, ji) => (
                   <mesh
-                    ref={(el) => { startCapRefs.current[si] = el }}
-                    geometry={capGeo}
+                    key={`${data.key}-joint-${ji}`}
+                    geometry={sphereGeometry}
                     material={strokeMaterial}
-                    position={data.capPositions[0]}
+                    position={pos}
                   />
-                  <mesh
-                    ref={(el) => { endCapRefs.current[si] = el }}
-                    geometry={capGeo}
-                    material={strokeMaterial}
-                    position={data.capPositions[1]}
-                  />
-                </>
-              )
-            })()}
-            {data.mode === "rod" && data.jointPositions && (() => {
-              const r = data.capRadius ?? TUBE_RADIUS
-              const jointGeo = r === TUBE_RADIUS ? sphereGeometry : new THREE.SphereGeometry(r, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-              return (
-                <group ref={(el) => { jointGroupRefs.current[si] = el }}>
-                  {data.jointPositions.map((pos, ji) => (
-                    <mesh
-                      key={`${data.key}-joint-${ji}`}
-                      geometry={jointGeo}
-                      material={strokeMaterial}
-                      position={pos}
-                    />
-                  ))}
-                </group>
-              )
-            })()}
+                ))}
+              </group>
+            )}
           </group>
         ))}
       </group>

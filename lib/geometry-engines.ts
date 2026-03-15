@@ -906,15 +906,12 @@ export const ExtrudeEngine: GeometryEngine = {
           buildStatus: status,
         })
       } else {
-        // Fallback to capped rod for this stroke (same visual as Rod mode)
-        const fbRadius = status.type === "rodFallback" ? status.fallbackRadius : fallbackRodRadius(extrudeParams.width)
-        const rodData = buildRodGeometryData(filtered, fbRadius)
-        console.log(`[v0] Extrude fallback stroke ${si}`, { fbRadius, capPositions: rodData.capPositions, jointPositions: rodData.jointPositions?.length })
+        // Fallback to rod - use EXACT same geometry as Rod mode (TUBE_RADIUS, same inset, same joints)
+        const rodData = buildRodGeometryData(filtered, TUBE_RADIUS)
         result.push({
           tubeGeometry: rodData.tubeGeometry,
           curve: rodData.curve,
           capPositions: rodData.capPositions,
-          capRadius: fbRadius,
           jointPositions: rodData.jointPositions,
           jointFractions: rodData.jointFractions,
           filteredCount: filtered.length,
@@ -950,9 +947,8 @@ export const ExtrudeEngine: GeometryEngine = {
       const { geometry, status } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
       const strokeName = `stroke_${String(si).padStart(3, "0")}`
-      const fbRadius = status.type === "rodFallback" ? status.fallbackRadius : fallbackRodRadius(extrudeParams.width)
-      // Use capped rod geometry for fallback (same as Rod mode export)
-      const finalGeo = geometry ?? buildCappedRodGeometry(filtered, fbRadius)
+      // Use capped rod geometry for fallback (same TUBE_RADIUS as Rod mode export)
+      const finalGeo = geometry ?? buildCappedRodGeometry(filtered, TUBE_RADIUS)
       const mesh = new THREE.Mesh(finalGeo, inkMaterial)
       mesh.name = strokeName
       exportObjects.push(mesh)
