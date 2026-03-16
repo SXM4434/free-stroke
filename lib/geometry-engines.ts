@@ -1677,8 +1677,8 @@ function shouldKeepHole(
 }
 
 /**
- * Build a watertight extruded mesh from raster mask contours.
- * Pipeline: rasterize -> close mask -> marching squares -> dedupe -> simplify -> validate -> classify -> filter holes -> Shape -> ExtrudeGeometry
+ * Build a watertight extruded mesh from raster mask using connected-component boundary tracing.
+ * Pipeline: connected components -> largest component -> Moore boundary trace -> simplify -> THREE.Shape -> extrude
  */
 function buildSolidMeshFromMask(
   mask: boolean[],
@@ -1698,211 +1698,226 @@ function buildSolidMeshFromMask(
   // Convert thickness from world units to raster pixels
   const thicknessInPixels = (thickness / normScale / scaleRef) * S
   
-  // Skip morphological close for now - it's too expensive O(S^2 * r^2)
-  // Just count pixels for debug stats
   const pixelsBefore = countMaskPixels(mask)
-  const pixelsAfter = pixelsBefore  // No change when morphological close is disabled
-  const closedMask = mask  // Use raw mask directly
-  
-
-
   const debugContours: SolidDebugContour[] = []
   const emptyResult: SolidBuildResult = {
     geometry: null, contourCount: 0, holesCount: 0,
     rawContourCount: 0, rejectedCount: 0, validOuterCount: 0, openContourCount: 0, selfIntersectCount: 0,
-    pixelsBefore, pixelsAfter, holesKept: 0, holesFilled: 0, debugContours
+    pixelsBefore, pixelsAfter: pixelsBefore, holesKept: 0, holesFilled: 0, debugContours
   }
 
-  // 1) Extract contours via marching squares from CLEANED mask
-  const rawContours = marchingSquaresContours(closedMask, S)
-  if (rawContours.length === 0) return emptyResult
+  // ========== NEW ROBUST PIPELINE ==========
+  // 1) Connected component labeling - find all distinct filled regions
+  const { labels, componentCount, componentSizes } = labelConnectedComponents(mask, S)
+  if (componentCount === 0) return emptyResult
 
-  // 2) Deduplicate + simplify contours
-  let rejectedCount = 0
-  let openContourCount = 0
-  const selfIntersectCount = 0  // Self-intersection check disabled for performance
-  const validated: { x: number; y: number }[][] = []
-
-  for (const raw of rawContours) {
-    // Deduplicate near-duplicate points
-    const deduped = deduplicateContourStrict(raw)
-    
-    // Only simplify if tolerance > 0 (currently disabled for debugging)
-    const simplified = DP_TOLERANCE > 0 ? dpSimplify(deduped, DP_TOLERANCE) : deduped
-    
-    const rawIndex = validated.length + rejectedCount  // Track original index
-    
-    // Reject if too few points
-    if (simplified.length < 4) {
-      debugContours.push({
-        points: simplified,
-        type: "rejected",
-        reason: "too few points",
-        area: contourArea(simplified),
-        signedArea: signedArea(simplified),
-        isClosed: false,
-        nestingDepth: -1,
-        contourIndex: rawIndex
-      })
-      rejectedCount++
-      continue
+  // 2) Keep only the largest component (MVP: single solid body)
+  let largestLabel = 1, largestSize = 0
+  for (let i = 1; i <= componentCount; i++) {
+    if (componentSizes[i] > largestSize) {
+      largestSize = componentSizes[i]
+      largestLabel = i
     }
-
-    // Check if closed
-    const closed = isContourClosed(simplified)
-    if (!closed) {
-      debugContours.push({
-        points: simplified,
-        type: "rejected",
-        reason: "open contour",
-        area: contourArea(simplified),
-        signedArea: signedArea(simplified),
-        isClosed: false,
-        nestingDepth: -1,
-        contourIndex: rawIndex
-      })
-      openContourCount++
-      rejectedCount++
-      continue
-    }
-
-    // Filter by area
-    const area = contourArea(simplified)
-    const sArea = signedArea(simplified)
-    if (area < MIN_CONTOUR_AREA) {
-      debugContours.push({
-        points: simplified,
-        type: "rejected",
-        reason: "too small",
-        area,
-        signedArea: sArea,
-        isClosed: true,
-        nestingDepth: -1,
-        contourIndex: rawIndex
-      })
-      rejectedCount++
-      continue
-    }
-
-    // Self-intersection check disabled - too expensive O(n^2) per contour
-    // THREE.js ExtrudeGeometry will handle simple cases gracefully
-    validated.push(simplified)
   }
 
-  if (validated.length === 0) {
-    return { ...emptyResult, rawContourCount: rawContours.length, rejectedCount, openContourCount, selfIntersectCount, debugContours }
+  // 3) Create binary mask for just the largest component
+  const componentMask: boolean[] = new Array(S * S)
+  for (let i = 0; i < S * S; i++) {
+    componentMask[i] = labels[i] === largestLabel
   }
 
-  // 3) Build hierarchy and classify using containment depth
-  const hierarchy = buildContourHierarchy(validated)
-  const classified = classifyContours(validated)
-  
-  console.log("[v0] Solid: validated=" + validated.length + ", classified=" + classified.length + 
-    (classified.length > 0 ? ", outer area=" + contourArea(classified[0].outer).toFixed(0) + ", holes=" + classified[0].holes.length : ""))
-  
-  // Add all validated contours to debug with hierarchy info
-  for (const meta of hierarchy) {
-    const isTopOuter = meta.nestingDepth === 0
-    const isHole = meta.nestingDepth === 1
-    const isDiscarded = meta.nestingDepth === -1  // Parallel boundary artifact
+  // 4) Trace outer boundary using Moore neighborhood tracing
+  const outerBoundary = traceOuterBoundaryMoore(componentMask, S)
+  if (outerBoundary.length < 4) return emptyResult
+
+  // 5) Simplify the boundary
+  const simplifiedOuter = dpSimplify(outerBoundary, DP_TOLERANCE)
+  if (simplifiedOuter.length < 3) return emptyResult
+
+  // 6) Find holes (enclosed FALSE regions within the component's bounding box)
+  const holes = findEnclosedHoles(componentMask, S, simplifiedOuter)
+
+  // Debug info
+  debugContours.push({
+    points: simplifiedOuter,
+    type: "outer",
+    area: contourArea(simplifiedOuter),
+    signedArea: signedArea(simplifiedOuter),
+    isClosed: true,
+    nestingDepth: 0,
+    contourIndex: 0
+  })
+  for (let i = 0; i < holes.length; i++) {
     debugContours.push({
-      points: meta.contour,
-      type: isTopOuter ? "outer" : isHole ? "hole" : "rejected",
-      reason: isDiscarded ? "parallel boundary (not inside largest)" : (meta.nestingDepth > 1 ? `nested depth ${meta.nestingDepth}` : undefined),
-      area: meta.absArea,
-      signedArea: meta.signedArea,
+      points: holes[i],
+      type: "hole",
+      area: contourArea(holes[i]),
+      signedArea: signedArea(holes[i]),
       isClosed: true,
-      nestingDepth: meta.nestingDepth,
-      parentIndex: meta.parentIndex >= 0 ? meta.parentIndex : undefined,
-      contourIndex: meta.index
+      nestingDepth: 1,
+      parentIndex: 0,
+      contourIndex: i + 1
     })
   }
 
-  if (classified.length === 0) {
-    return {
-      geometry: null, contourCount: validated.length, holesCount: 0,
-      rawContourCount: rawContours.length, rejectedCount, validOuterCount: 0, openContourCount, selfIntersectCount,
-      pixelsBefore, pixelsAfter, holesKept: 0, holesFilled: 0, debugContours
+  // 7) Transform to world coords and build THREE.Shape
+  let shapePts = simplifiedOuter.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+
+  // Ensure CCW winding for THREE.js outer
+  const outerWindingArea = computeShapeArea(shapePts)
+  if (outerWindingArea < 0) {
+    shapePts = shapePts.slice().reverse()
+  }
+
+  const shape = new THREE.Shape(shapePts)
+  let holesKept = 0
+
+  // Add holes with correct winding (CW for THREE.js)
+  for (const hole of holes) {
+    if (hole.length < 3) continue
+    let holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+    const holeWindingArea = computeShapeArea(holePts)
+    if (holeWindingArea > 0) {
+      holePts = holePts.slice().reverse()
+    }
+    shape.holes.push(new THREE.Path(holePts))
+    holesKept++
+  }
+
+  // 8) Extrude
+  const halfDepth = depth / 2
+  let geometry: THREE.BufferGeometry | null = null
+  try {
+    geometry = new THREE.ExtrudeGeometry(shape, {
+      depth,
+      bevelEnabled: false,
+      curveSegments: 1,
+    })
+    geometry.translate(0, 0, -halfDepth)
+  } catch {
+    // Triangulation failed
+    return emptyResult
+  }
+
+  return {
+    geometry,
+    contourCount: 1,
+    holesCount: holesKept,
+    rawContourCount: 1,
+    rejectedCount: 0,
+    validOuterCount: 1,
+    openContourCount: 0,
+    selfIntersectCount: 0,
+    pixelsBefore,
+    pixelsAfter: largestSize,
+    holesKept,
+    holesFilled: holes.length - holesKept,
+    debugContours
+  }
+}
+
+/** Connected component labeling using flood fill */
+function labelConnectedComponents(mask: boolean[], S: number): { labels: number[], componentCount: number, componentSizes: number[] } {
+  const labels = new Array(S * S).fill(0)
+  const componentSizes: number[] = [0]  // Index 0 unused
+  let componentCount = 0
+
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const idx = y * S + x
+      if (mask[idx] && labels[idx] === 0) {
+        componentCount++
+        let size = 0
+        // Flood fill using a queue (BFS to avoid stack overflow)
+        const queue: number[] = [idx]
+        labels[idx] = componentCount
+        while (queue.length > 0) {
+          const ci = queue.shift()!
+          size++
+          const cx = ci % S, cy = Math.floor(ci / S)
+          // 4-connected neighbors
+          const neighbors = [
+            cy > 0 ? ci - S : -1,      // up
+            cy < S - 1 ? ci + S : -1,  // down
+            cx > 0 ? ci - 1 : -1,      // left
+            cx < S - 1 ? ci + 1 : -1   // right
+          ]
+          for (const ni of neighbors) {
+            if (ni >= 0 && mask[ni] && labels[ni] === 0) {
+              labels[ni] = componentCount
+              queue.push(ni)
+            }
+          }
+        }
+        componentSizes.push(size)
+      }
     }
   }
 
-  // 4) Build THREE.Shape(s) with hole filtering based on geometry
-  const geometries: THREE.BufferGeometry[] = []
-  const halfDepth = depth / 2
-  let holesKept = 0
-  let holesFilled = 0
+  return { labels, componentCount, componentSizes }
+}
 
-  for (const group of classified) {
-    // Transform to world coords
-    let shapePts = group.outer.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
-    if (shapePts.length < 3) continue
+/** Moore neighborhood boundary tracing - traces the outer edge of a binary region */
+function traceOuterBoundaryMoore(mask: boolean[], S: number): { x: number, y: number }[] {
+  // Find starting point: topmost-leftmost TRUE pixel
+  let startIdx = -1
+  for (let i = 0; i < S * S; i++) {
+    if (mask[i]) { startIdx = i; break }
+  }
+  if (startIdx < 0) return []
 
-    // THREE.js Shape requires CCW winding for outer (positive area in 2D)
-    // Check winding and reverse if needed
-    const outerWindingArea = computeShapeArea(shapePts)
-    if (outerWindingArea < 0) {
-      shapePts = shapePts.slice().reverse()
-    }
+  const startX = startIdx % S, startY = Math.floor(startIdx / S)
+  
+  // Moore neighborhood: 8 directions starting from left, going clockwise
+  // 0=left, 1=up-left, 2=up, 3=up-right, 4=right, 5=down-right, 6=down, 7=down-left
+  const dx = [-1, -1, 0, 1, 1, 1, 0, -1]
+  const dy = [0, -1, -1, -1, 0, 1, 1, 1]
 
-    const shape = new THREE.Shape(shapePts)
-    const outerArea = contourArea(group.outer)
+  const boundary: { x: number, y: number }[] = []
+  let x = startX, y = startY
+  let dir = 0  // Start looking left (we entered from the left since this is topmost-leftmost)
 
-    // Filter holes by geometry before adding to shape
-    for (const hole of group.holes) {
-      const { keep } = shouldKeepHole(hole, outerArea, thicknessInPixels)
-      if (keep) {
-        let holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
-        if (holePts.length >= 3) {
-          // THREE.js holes require CW winding (negative area)
-          const holeWindingArea = computeShapeArea(holePts)
-          if (holeWindingArea > 0) {
-            holePts = holePts.slice().reverse()
-          }
-          shape.holes.push(new THREE.Path(holePts))
-          holesKept++
-        }
-      } else {
-        holesFilled++
+  const maxIterations = S * S * 2  // Safety limit
+  let iterations = 0
+
+  do {
+    boundary.push({ x: x + 0.5, y: y + 0.5 })  // Use pixel center
+    
+    // Look for next boundary pixel by rotating clockwise from (dir + 5) % 8
+    // This is the Moore neighbor tracing algorithm
+    let found = false
+    const startDir = (dir + 5) % 8  // Start from the direction we came from + 1 (backtrack)
+    
+    for (let i = 0; i < 8; i++) {
+      const checkDir = (startDir + i) % 8
+      const nx = x + dx[checkDir]
+      const ny = y + dy[checkDir]
+      
+      if (nx >= 0 && nx < S && ny >= 0 && ny < S && mask[ny * S + nx]) {
+        x = nx
+        y = ny
+        dir = checkDir
+        found = true
+        break
       }
     }
 
-    try {
-      const geo = new THREE.ExtrudeGeometry(shape, {
-        depth,
-        bevelEnabled: false,
-        curveSegments: 1,
-      })
-      geo.translate(0, 0, -halfDepth)
-      geometries.push(geo)
-    } catch {
-      // Triangulation can fail on degenerate shapes — skip silently
-      continue
-    }
-  }
+    if (!found) break  // Isolated pixel
+    iterations++
+  } while ((x !== startX || y !== startY) && iterations < maxIterations)
 
-  const resultBase = {
-    contourCount: classified.length,
-    holesCount: holesKept,
-    rawContourCount: rawContours.length,
-    rejectedCount,
-    validOuterCount: classified.length,
-    openContourCount,
-    selfIntersectCount,
-    pixelsBefore,
-    pixelsAfter,
-    holesKept,
-    holesFilled,
-    debugContours
-  }
-
-  if (geometries.length === 0) return { geometry: null, ...resultBase }
-  if (geometries.length === 1) return { geometry: geometries[0], ...resultBase }
-
-  // Merge multiple shapes into one geometry
-  const merged = mergeGeometriesSafe(geometries, false)
-  for (const g of geometries) g.dispose()
-  return { geometry: merged || null, ...resultBase }
+  return boundary
 }
+
+/** Find enclosed holes within a component */
+function findEnclosedHoles(componentMask: boolean[], S: number, outerBoundary: { x: number, y: number }[]): { x: number, y: number }[][] {
+  // For MVP: skip hole detection to ensure clean solid
+  // True holes would require finding FALSE regions completely surrounded by TRUE
+  // This is complex and error-prone; returning empty for now
+  return []
+}
+
+
 
 export const SolidEngine: GeometryEngine = {
   buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
