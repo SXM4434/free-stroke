@@ -1043,8 +1043,8 @@ const SOLID_RASTER_SIZE = 512
 const MIN_CONTOUR_AREA = 50  // Increased from 25 for stricter filtering
 /** Minimum distance between consecutive points to consider distinct */
 const MIN_POINT_DIST = 0.5
-/** Douglas-Peucker tolerance — set to 0 to DISABLE simplification during debugging */
-const DP_TOLERANCE = 0  // DISABLED: was 0.3, simplification can break contours
+/** Douglas-Peucker tolerance for contour simplification */
+const DP_TOLERANCE = 1.0  // Re-enabled: reduces point count for cleaner shapes
 
 /** Remove near-duplicate consecutive points from a contour */
 function deduplicateContourStrict(pts: { x: number; y: number }[]): { x: number; y: number }[] {
@@ -1474,12 +1474,7 @@ function classifyContours(contours: { x: number; y: number }[][]): ClassifiedCon
     m.parentIndex = immediateParent
   }
 
-  // Debug: log hierarchy
-  console.log("[v0] classifyContours hierarchy:")
-  for (const m of metas) {
-    const role = m.nestingDepth % 2 === 0 ? "OUTER" : "HOLE"
-    console.log(`  #${m.index}: area=${m.absArea.toFixed(0)} depth=${m.nestingDepth} parent=${m.parentIndex} -> ${role}`)
-  }
+
 
   // Classify: even depth = outer, odd depth = hole
   // Only depth-0 outers become extruded shapes
@@ -1488,7 +1483,6 @@ function classifyContours(contours: { x: number; y: number }[][]): ClassifiedCon
   const depth1Holes = metas.filter(m => m.nestingDepth === 1)
 
   if (topLevelOuters.length === 0) {
-    console.log("[v0] classifyContours: no top-level outers found")
     return []
   }
 
@@ -1505,10 +1499,6 @@ function classifyContours(contours: { x: number; y: number }[][]): ClassifiedCon
       holeIndices: myHoles.map(h => h.index)
     })
   }
-
-  // Log summary
-  const totalHoles = results.reduce((sum, r) => sum + r.holes.length, 0)
-  console.log(`[v0] classifyContours: ${topLevelOuters.length} top-level outers, ${totalHoles} holes assigned, ${depth1Holes.length - totalHoles} orphan holes`)
 
   return results
 }
@@ -1719,16 +1709,14 @@ function buildSolidMeshFromMask(
 
   // Convert thickness from world units to raster pixels
   const thicknessInPixels = (thickness / normScale / scaleRef) * S
-  const closeRadius = Math.max(1, thicknessInPixels * 0.5)  // Close gaps up to half thickness
   
-  // Count pixels before cleanup
+  // Skip morphological close for now - it's too expensive O(S^2 * r^2)
+  // Just count pixels for debug stats
   const pixelsBefore = countMaskPixels(mask)
+  const pixelsAfter = pixelsBefore  // No change when morphological close is disabled
+  const closedMask = mask  // Use raw mask directly
   
-  // 0) Morphological close to fill narrow internal voids
-  const closedMask = morphologicalClose(mask, S, closeRadius)
-  const pixelsAfter = countMaskPixels(closedMask)
-  
-  console.log(`[v0] Solid mask cleanup: pixels ${pixelsBefore} -> ${pixelsAfter}, closeRadius=${closeRadius.toFixed(1)}px, thicknessInPixels=${thicknessInPixels.toFixed(1)}`)
+
 
   const debugContours: SolidDebugContour[] = []
   const emptyResult: SolidBuildResult = {
@@ -1744,7 +1732,7 @@ function buildSolidMeshFromMask(
   // 2) Deduplicate + simplify contours
   let rejectedCount = 0
   let openContourCount = 0
-  let selfIntersectCount = 0
+  const selfIntersectCount = 0  // Self-intersection check disabled for performance
   const validated: { x: number; y: number }[][] = []
 
   for (const raw of rawContours) {
@@ -1808,23 +1796,8 @@ function buildSolidMeshFromMask(
       continue
     }
 
-    // Reject self-intersecting contours
-    if (contourSelfIntersects2D(simplified)) {
-      debugContours.push({
-        points: simplified,
-        type: "rejected",
-        reason: "self-intersects",
-        area,
-        signedArea: sArea,
-        isClosed: true,
-        nestingDepth: -1,
-        contourIndex: rawIndex
-      })
-      selfIntersectCount++
-      rejectedCount++
-      continue
-    }
-
+    // Self-intersection check disabled - too expensive O(n^2) per contour
+    // THREE.js ExtrudeGeometry will handle simple cases gracefully
     validated.push(simplified)
   }
 
@@ -1834,9 +1807,7 @@ function buildSolidMeshFromMask(
 
   // 3) Build hierarchy and classify using containment depth
   const hierarchy = buildContourHierarchy(validated)
-  console.log("[v0] Solid: validated contours =", validated.length)
   const classified = classifyContours(validated)
-  console.log("[v0] Solid: classified =", classified.length, "top-level outers, holes per group:", classified.map(g => g.holes.length))
   
   // Add all validated contours to debug with hierarchy info
   for (const meta of hierarchy) {
@@ -1879,17 +1850,15 @@ function buildSolidMeshFromMask(
 
     // Filter holes by geometry before adding to shape
     for (const hole of group.holes) {
-      const { keep, reason } = shouldKeepHole(hole, outerArea, thicknessInPixels)
+      const { keep } = shouldKeepHole(hole, outerArea, thicknessInPixels)
       if (keep) {
         const holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
         if (holePts.length >= 3) {
           shape.holes.push(new THREE.Path(holePts))
           holesKept++
-          console.log(`[v0] Solid: hole KEPT - ${reason}, area=${contourArea(hole).toFixed(0)}`)
         }
       } else {
         holesFilled++
-        console.log(`[v0] Solid: hole FILLED - ${reason}`)
       }
     }
 
@@ -1906,8 +1875,6 @@ function buildSolidMeshFromMask(
       continue
     }
   }
-
-  console.log(`[v0] Solid: holes kept=${holesKept}, filled=${holesFilled}`)
 
   const resultBase = {
     contourCount: classified.length,
