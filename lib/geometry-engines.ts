@@ -1428,82 +1428,71 @@ interface ClassifiedContours {
 }
 
 /**
- * Classify contours into outer boundary + holes using CONTAINMENT HIERARCHY.
+ * Classify contours for SOLID mode: single largest outer + interior holes only.
  * 
- * Algorithm:
- * 1. Sort contours by area descending (largest first)
- * 2. For each contour, count how many LARGER contours contain it (nesting depth)
- * 3. Even nesting depth (0, 2, 4...) = outer, odd depth (1, 3, 5...) = hole
- * 4. Holes are assigned to their immediate parent (depth - 1)
- * 5. Only depth-0 outers get extruded; depth-1 holes attach to them
+ * KEY INSIGHT: Marching squares extracts BOUNDARY contours (edges of filled regions).
+ * For a thick stroke that doesn't self-overlap, we get TWO parallel contours (inner and outer edges).
+ * These are NOT nested - neither contains the other - so nesting-depth classification fails.
+ * 
+ * SOLUTION: Use the LARGEST contour as the single filled body. Any smaller contours
+ * that are GEOMETRICALLY INSIDE the largest become holes. All others are discarded.
+ * This produces a clean filled solid instead of ribbon artifacts.
  */
 function classifyContours(contours: { x: number; y: number }[][]): ClassifiedContours[] {
   if (contours.length === 0) return []
 
-  // Build metadata sorted by area descending
-  const metas: ContourMeta[] = contours.map((c, idx) => ({
-    contour: c,
-    index: idx,
-    absArea: contourArea(c),
-    signedArea: signedArea(c),
-    nestingDepth: 0,
-    parentIndex: -1
-  }))
-  metas.sort((a, b) => b.absArea - a.absArea)
+  // Sort by area descending - largest first
+  const sorted = contours
+    .map((c, idx) => ({ contour: c, index: idx, area: contourArea(c) }))
+    .sort((a, b) => b.area - a.area)
 
-  // Compute nesting depth and parent for each contour
-  // A contour is "inside" another if its sample point is contained by that contour
-  for (let i = 0; i < metas.length; i++) {
-    const m = metas[i]
-    const samplePt = m.contour[0]
-    if (!samplePt) continue
+  // The LARGEST contour is the outer boundary of the filled solid
+  const largest = sorted[0]
+  
+  // Find holes: smaller contours whose CENTROID is inside the largest
+  const holes: { x: number; y: number }[][] = []
+  const holeIndices: number[] = []
 
-    let depth = 0
-    let immediateParent = -1
-
-    // Check all LARGER contours (earlier in sorted list) for containment
-    for (let j = 0; j < i; j++) {
-      const larger = metas[j]
-      if (pointInPolygon(samplePt.x, samplePt.y, larger.contour)) {
-        depth++
-        immediateParent = larger.index  // Track the smallest containing contour (latest in containment chain)
-      }
+  for (let i = 1; i < sorted.length; i++) {
+    const candidate = sorted[i]
+    // Use centroid for more robust inside test
+    const centroid = contourCentroid(candidate.contour)
+    if (pointInPolygon(centroid.x, centroid.y, largest.contour)) {
+      holes.push(candidate.contour)
+      holeIndices.push(candidate.index)
     }
-
-    m.nestingDepth = depth
-    m.parentIndex = immediateParent
+    // Contours NOT inside the largest are discarded (they're parallel boundary artifacts)
   }
 
-
-
-  // Classify: even depth = outer, odd depth = hole
-  // Only depth-0 outers become extruded shapes
-  // Depth-1 holes attach to their depth-0 parent
-  const topLevelOuters = metas.filter(m => m.nestingDepth === 0)
-  const depth1Holes = metas.filter(m => m.nestingDepth === 1)
-
-  if (topLevelOuters.length === 0) {
-    return []
-  }
-
-  const results: ClassifiedContours[] = []
-
-  for (const outerMeta of topLevelOuters) {
-    // Find depth-1 holes whose parent is this outer
-    const myHoles = depth1Holes.filter(h => h.parentIndex === outerMeta.index)
-
-    results.push({
-      outer: outerMeta.contour,
-      outerIndex: outerMeta.index,
-      holes: myHoles.map(h => h.contour),
-      holeIndices: myHoles.map(h => h.index)
-    })
-  }
-
-  return results
+  return [{
+    outer: largest.contour,
+    outerIndex: largest.index,
+    holes,
+    holeIndices
+  }]
 }
 
-/** Return metadata for all contours for debug visualization */
+/** Compute centroid of a contour */
+function contourCentroid(pts: { x: number; y: number }[]): { x: number; y: number } {
+  if (pts.length === 0) return { x: 0, y: 0 }
+  let cx = 0, cy = 0
+  for (const p of pts) {
+    cx += p.x
+    cy += p.y
+  }
+  return { x: cx / pts.length, y: cy / pts.length }
+}
+
+/** Compute signed area of a THREE.Vector2 polygon (for winding check) */
+function computeShapeArea(pts: THREE.Vector2[]): number {
+  let area = 0
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
+  }
+  return area / 2  // Positive = CCW, Negative = CW
+}
+
+/** Return metadata for all contours for debug visualization (simplified: largest is outer, inside = hole) */
 function buildContourHierarchy(contours: { x: number; y: number }[][]): ContourMeta[] {
   if (contours.length === 0) return []
 
@@ -1517,24 +1506,23 @@ function buildContourHierarchy(contours: { x: number; y: number }[][]): ContourM
   }))
   metas.sort((a, b) => b.absArea - a.absArea)
 
-  for (let i = 0; i < metas.length; i++) {
-    const m = metas[i]
-    const samplePt = m.contour[0]
-    if (!samplePt) continue
+  // Largest is the outer (depth 0), everything inside it is a hole (depth 1), rest is discarded (depth -1)
+  if (metas.length > 0) {
+    const largest = metas[0]
+    largest.nestingDepth = 0
+    largest.parentIndex = -1
 
-    let depth = 0
-    let immediateParent = -1
-
-    for (let j = 0; j < i; j++) {
-      const larger = metas[j]
-      if (pointInPolygon(samplePt.x, samplePt.y, larger.contour)) {
-        depth++
-        immediateParent = larger.index
+    for (let i = 1; i < metas.length; i++) {
+      const m = metas[i]
+      const centroid = contourCentroid(m.contour)
+      if (pointInPolygon(centroid.x, centroid.y, largest.contour)) {
+        m.nestingDepth = 1  // Hole inside the largest
+        m.parentIndex = largest.index
+      } else {
+        m.nestingDepth = -1  // Discarded (parallel boundary artifact)
+        m.parentIndex = -1
       }
     }
-
-    m.nestingDepth = depth
-    m.parentIndex = immediateParent
   }
 
   return metas
@@ -1809,14 +1797,18 @@ function buildSolidMeshFromMask(
   const hierarchy = buildContourHierarchy(validated)
   const classified = classifyContours(validated)
   
+  console.log("[v0] Solid: validated=" + validated.length + ", classified=" + classified.length + 
+    (classified.length > 0 ? ", outer area=" + contourArea(classified[0].outer).toFixed(0) + ", holes=" + classified[0].holes.length : ""))
+  
   // Add all validated contours to debug with hierarchy info
   for (const meta of hierarchy) {
     const isTopOuter = meta.nestingDepth === 0
     const isHole = meta.nestingDepth === 1
+    const isDiscarded = meta.nestingDepth === -1  // Parallel boundary artifact
     debugContours.push({
       points: meta.contour,
       type: isTopOuter ? "outer" : isHole ? "hole" : "rejected",
-      reason: meta.nestingDepth > 1 ? `nested depth ${meta.nestingDepth}` : undefined,
+      reason: isDiscarded ? "parallel boundary (not inside largest)" : (meta.nestingDepth > 1 ? `nested depth ${meta.nestingDepth}` : undefined),
       area: meta.absArea,
       signedArea: meta.signedArea,
       isClosed: true,
@@ -1841,9 +1833,16 @@ function buildSolidMeshFromMask(
   let holesFilled = 0
 
   for (const group of classified) {
-    // Transform to world coords - Y flip inverts winding, which is what THREE.js needs
-    const shapePts = group.outer.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+    // Transform to world coords
+    let shapePts = group.outer.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
     if (shapePts.length < 3) continue
+
+    // THREE.js Shape requires CCW winding for outer (positive area in 2D)
+    // Check winding and reverse if needed
+    const outerWindingArea = computeShapeArea(shapePts)
+    if (outerWindingArea < 0) {
+      shapePts = shapePts.slice().reverse()
+    }
 
     const shape = new THREE.Shape(shapePts)
     const outerArea = contourArea(group.outer)
@@ -1852,8 +1851,13 @@ function buildSolidMeshFromMask(
     for (const hole of group.holes) {
       const { keep } = shouldKeepHole(hole, outerArea, thicknessInPixels)
       if (keep) {
-        const holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+        let holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
         if (holePts.length >= 3) {
+          // THREE.js holes require CW winding (negative area)
+          const holeWindingArea = computeShapeArea(holePts)
+          if (holeWindingArea > 0) {
+            holePts = holePts.slice().reverse()
+          }
           shape.holes.push(new THREE.Path(holePts))
           holesKept++
         }
