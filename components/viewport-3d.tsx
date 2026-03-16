@@ -1061,12 +1061,17 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               <div className={solidStatusRef.current.success ? "text-green-600" : "text-red-500"}>
                 {solidStatusRef.current.success ? "success" : "failed"}
               </div>
+              <div className="text-muted-foreground">
+                mask: {solidStatusRef.current.pixelsBefore} → {solidStatusRef.current.pixelsAfter} px
+              </div>
               <div>raw contours: {solidStatusRef.current.rawContourCount}</div>
               <div className={solidStatusRef.current.rejectedCount > 0 ? "text-yellow-600" : ""}>
                 rejected: {solidStatusRef.current.rejectedCount} (open: {solidStatusRef.current.openContourCount}, self-x: {solidStatusRef.current.selfIntersectCount})
               </div>
               <div>valid outers: {solidStatusRef.current.validOuterCount}</div>
-              <div>holes: {solidStatusRef.current.holesCount}</div>
+              <div className={solidStatusRef.current.holesFilled > 0 ? "text-cyan-600" : ""}>
+                holes: kept={solidStatusRef.current.holesKept} filled={solidStatusRef.current.holesFilled}
+              </div>
               <div>thickness: {solidStatusRef.current.thickness.toFixed(3)}</div>
               <div>depth: {solidStatusRef.current.depth.toFixed(3)}</div>
               {/* Debug contour breakdown with hierarchy info */}

@@ -99,6 +99,11 @@ export interface SolidBuildStatus {
   validOuterCount: number
   openContourCount: number
   selfIntersectCount: number
+  // Mask cleanup metrics
+  pixelsBefore: number
+  pixelsAfter: number
+  holesKept: number
+  holesFilled: number
   // Debug contour data for visualization (only populated in debug builds)
   debugContours?: SolidDebugContour[]
   // Raster size for 2D overlay rendering
@@ -1563,18 +1568,146 @@ interface SolidBuildResult {
   validOuterCount: number
   openContourCount: number
   selfIntersectCount: number
+  pixelsBefore: number
+  pixelsAfter: number
+  holesKept: number
+  holesFilled: number
   debugContours: SolidDebugContour[]
+}
+
+/** Count true pixels in mask */
+function countMaskPixels(mask: boolean[]): number {
+  let count = 0
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i]) count++
+  }
+  return count
+}
+
+/**
+ * Morphological dilation - expand true pixels by radius.
+ * For each true pixel, set all pixels within radius to true.
+ */
+function dilateMask(mask: boolean[], S: number, radius: number): boolean[] {
+  if (radius <= 0) return mask.slice()
+  const result = mask.slice()
+  const r = Math.ceil(radius)
+  
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (!mask[y * S + x]) continue
+      // Set all pixels within radius to true
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dy * dy > radius * radius) continue
+          const nx = x + dx, ny = y + dy
+          if (nx < 0 || nx >= S || ny < 0 || ny >= S) continue
+          result[ny * S + nx] = true
+        }
+      }
+    }
+  }
+  return result
+}
+
+/**
+ * Morphological erosion - shrink true pixels by radius.
+ * A pixel remains true only if all pixels within radius are true.
+ */
+function erodeMask(mask: boolean[], S: number, radius: number): boolean[] {
+  if (radius <= 0) return mask.slice()
+  const result: boolean[] = new Array(S * S).fill(false)
+  const r = Math.ceil(radius)
+  
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (!mask[y * S + x]) continue
+      // Check if all pixels within radius are true
+      let allTrue = true
+      outer: for (let dy = -r; dy <= r && allTrue; dy++) {
+        for (let dx = -r; dx <= r && allTrue; dx++) {
+          if (dx * dx + dy * dy > radius * radius) continue
+          const nx = x + dx, ny = y + dy
+          if (nx < 0 || nx >= S || ny < 0 || ny >= S) {
+            allTrue = false
+            break outer
+          }
+          if (!mask[ny * S + nx]) {
+            allTrue = false
+            break outer
+          }
+        }
+      }
+      result[y * S + x] = allTrue
+    }
+  }
+  return result
+}
+
+/**
+ * Morphological close (dilation then erosion) - fills narrow gaps.
+ * Radius should be based on stroke thickness to close internal voids.
+ */
+function morphologicalClose(mask: boolean[], S: number, radius: number): boolean[] {
+  const dilated = dilateMask(mask, S, radius)
+  return erodeMask(dilated, S, radius)
+}
+
+/** Compute bounding box of a contour and return min dimension */
+function contourMinDimension(pts: { x: number; y: number }[]): number {
+  if (pts.length === 0) return 0
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const p of pts) {
+    minX = Math.min(minX, p.x)
+    minY = Math.min(minY, p.y)
+    maxX = Math.max(maxX, p.x)
+    maxY = Math.max(maxY, p.y)
+  }
+  const width = maxX - minX
+  const height = maxY - minY
+  return Math.min(width, height)
+}
+
+/** Check if a hole should be kept based on geometry relative to thickness */
+function shouldKeepHole(
+  hole: { x: number; y: number }[],
+  outerArea: number,
+  thicknessInPixels: number
+): { keep: boolean; reason: string } {
+  const area = contourArea(hole)
+  const minDim = contourMinDimension(hole)
+  
+  // Minimum area threshold: hole must be at least 2x thickness squared
+  const minAreaThreshold = thicknessInPixels * thicknessInPixels * 4
+  if (area < minAreaThreshold) {
+    return { keep: false, reason: `area ${area.toFixed(0)} < ${minAreaThreshold.toFixed(0)} (4*thick^2)` }
+  }
+  
+  // Minimum dimension threshold: hole must be at least 2x thickness wide
+  const minDimThreshold = thicknessInPixels * 2
+  if (minDim < minDimThreshold) {
+    return { keep: false, reason: `minDim ${minDim.toFixed(0)} < ${minDimThreshold.toFixed(0)} (2*thick)` }
+  }
+  
+  // Ratio threshold: hole must be at least 10% of outer area to be meaningful
+  const ratioThreshold = 0.10
+  if (area / outerArea < ratioThreshold) {
+    return { keep: false, reason: `ratio ${(area / outerArea * 100).toFixed(1)}% < ${ratioThreshold * 100}%` }
+  }
+  
+  return { keep: true, reason: "substantial" }
 }
 
 /**
  * Build a watertight extruded mesh from raster mask contours.
- * Pipeline: rasterize -> marching squares -> dedupe -> simplify -> validate -> classify -> winding -> Shape -> ExtrudeGeometry
+ * Pipeline: rasterize -> close mask -> marching squares -> dedupe -> simplify -> validate -> classify -> filter holes -> Shape -> ExtrudeGeometry
  */
 function buildSolidMeshFromMask(
   mask: boolean[],
   canvasWidth: number,
   canvasHeight: number,
-  depth: number
+  depth: number,
+  thickness: number
 ): SolidBuildResult {
   const S = SOLID_RASTER_SIZE
   const scaleRef = Math.max(canvasWidth, canvasHeight)
@@ -1584,14 +1717,28 @@ function buildSolidMeshFromMask(
   const toWorldX = (rx: number) => ((rx / S) * canvasWidth - canvasWidth / 2) * normScale
   const toWorldY = (ry: number) => -((ry / S) * canvasHeight - canvasHeight / 2) * normScale
 
+  // Convert thickness from world units to raster pixels
+  const thicknessInPixels = (thickness / normScale / scaleRef) * S
+  const closeRadius = Math.max(1, thicknessInPixels * 0.5)  // Close gaps up to half thickness
+  
+  // Count pixels before cleanup
+  const pixelsBefore = countMaskPixels(mask)
+  
+  // 0) Morphological close to fill narrow internal voids
+  const closedMask = morphologicalClose(mask, S, closeRadius)
+  const pixelsAfter = countMaskPixels(closedMask)
+  
+  console.log(`[v0] Solid mask cleanup: pixels ${pixelsBefore} -> ${pixelsAfter}, closeRadius=${closeRadius.toFixed(1)}px, thicknessInPixels=${thicknessInPixels.toFixed(1)}`)
+
   const debugContours: SolidDebugContour[] = []
   const emptyResult: SolidBuildResult = {
     geometry: null, contourCount: 0, holesCount: 0,
-    rawContourCount: 0, rejectedCount: 0, validOuterCount: 0, openContourCount: 0, selfIntersectCount: 0, debugContours
+    rawContourCount: 0, rejectedCount: 0, validOuterCount: 0, openContourCount: 0, selfIntersectCount: 0,
+    pixelsBefore, pixelsAfter, holesKept: 0, holesFilled: 0, debugContours
   }
 
-  // 1) Extract contours via marching squares
-  const rawContours = marchingSquaresContours(mask, S)
+  // 1) Extract contours via marching squares from CLEANED mask
+  const rawContours = marchingSquaresContours(closedMask, S)
   if (rawContours.length === 0) return emptyResult
 
   // 2) Deduplicate + simplify contours
@@ -1711,34 +1858,39 @@ function buildSolidMeshFromMask(
   if (classified.length === 0) {
     return {
       geometry: null, contourCount: validated.length, holesCount: 0,
-      rawContourCount: rawContours.length, rejectedCount, validOuterCount: 0, openContourCount, selfIntersectCount, debugContours
+      rawContourCount: rawContours.length, rejectedCount, validOuterCount: 0, openContourCount, selfIntersectCount,
+      pixelsBefore, pixelsAfter, holesKept: 0, holesFilled: 0, debugContours
     }
   }
 
-  // Count total holes
-  let totalHoles = 0
-  for (const group of classified) {
-    totalHoles += group.holes.length
-  }
-
-  // 4) Build THREE.Shape(s) with consistent winding and extrude
+  // 4) Build THREE.Shape(s) with hole filtering based on geometry
   const geometries: THREE.BufferGeometry[] = []
   const halfDepth = depth / 2
+  let holesKept = 0
+  let holesFilled = 0
 
   for (const group of classified) {
-    // Transform to world coords - Y flip inverts winding, which is what THREE.js needs:
-    // Raster CW outer (pos area) -> World CCW outer (correct for Shape)
-    // Raster CCW hole (neg area) -> World CW hole (correct for hole)
+    // Transform to world coords - Y flip inverts winding, which is what THREE.js needs
     const shapePts = group.outer.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
     if (shapePts.length < 3) continue
 
     const shape = new THREE.Shape(shapePts)
+    const outerArea = contourArea(group.outer)
 
-    // Add holes - Y flip handles winding automatically
+    // Filter holes by geometry before adding to shape
     for (const hole of group.holes) {
-      const holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
-      if (holePts.length < 3) continue
-      shape.holes.push(new THREE.Path(holePts))
+      const { keep, reason } = shouldKeepHole(hole, outerArea, thicknessInPixels)
+      if (keep) {
+        const holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+        if (holePts.length >= 3) {
+          shape.holes.push(new THREE.Path(holePts))
+          holesKept++
+          console.log(`[v0] Solid: hole KEPT - ${reason}, area=${contourArea(hole).toFixed(0)}`)
+        }
+      } else {
+        holesFilled++
+        console.log(`[v0] Solid: hole FILLED - ${reason}`)
+      }
     }
 
     try {
@@ -1755,14 +1907,20 @@ function buildSolidMeshFromMask(
     }
   }
 
+  console.log(`[v0] Solid: holes kept=${holesKept}, filled=${holesFilled}`)
+
   const resultBase = {
     contourCount: classified.length,
-    holesCount: totalHoles,
+    holesCount: holesKept,
     rawContourCount: rawContours.length,
     rejectedCount,
     validOuterCount: classified.length,
     openContourCount,
     selfIntersectCount,
+    pixelsBefore,
+    pixelsAfter,
+    holesKept,
+    holesFilled,
     debugContours
   }
 
@@ -1782,7 +1940,7 @@ export const SolidEngine: GeometryEngine = {
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) return []
 
     const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
-    const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth)
+    const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth, solidParams.thickness)
 
     const solidStatus: SolidBuildStatus = {
       success: result.geometry !== null,
@@ -1795,6 +1953,10 @@ export const SolidEngine: GeometryEngine = {
       validOuterCount: result.validOuterCount,
       openContourCount: result.openContourCount,
       selfIntersectCount: result.selfIntersectCount,
+      pixelsBefore: result.pixelsBefore,
+      pixelsAfter: result.pixelsAfter,
+      holesKept: result.holesKept,
+      holesFilled: result.holesFilled,
       debugContours: result.debugContours,
       rasterSize: SOLID_RASTER_SIZE,
     }
@@ -1818,7 +1980,7 @@ export const SolidEngine: GeometryEngine = {
     const disposables: THREE.BufferGeometry[] = []
 
     const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
-    const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth)
+    const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth, solidParams.thickness)
     const geometry = result.geometry
 
     const rootGroup = new THREE.Group()
