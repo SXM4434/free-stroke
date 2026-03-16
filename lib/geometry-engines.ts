@@ -81,7 +81,8 @@ export interface SolidDebugContour {
   area: number
   signedArea: number
   isClosed: boolean
-  parentIndex?: number  // Index of parent outer (for holes)
+  parentIndex?: number  // Index of immediate parent (for containment tree)
+  nestingDepth: number  // 0 = top-level, 1 = inside one contour, 2 = inside two, etc.
   contourIndex: number  // Original index in the contour list
 }
 
@@ -1405,81 +1406,143 @@ function pointInPolygon(px: number, py: number, poly: { x: number; y: number }[]
   return inside
 }
 
+interface ContourMeta {
+  contour: { x: number; y: number }[]
+  index: number
+  absArea: number
+  signedArea: number
+  nestingDepth: number
+  parentIndex: number  // -1 if top-level
+}
+
 interface ClassifiedContours {
   outer: { x: number; y: number }[]
-  outerIndex: number  // Original index for debug
+  outerIndex: number
   holes: { x: number; y: number }[][]
-  holeIndices: number[]  // Original indices for debug
+  holeIndices: number[]
 }
 
 /**
- * Classify contours into outer boundary + holes using SIGNED AREA (winding direction).
+ * Classify contours into outer boundary + holes using CONTAINMENT HIERARCHY.
  * 
- * In raster/screen space with Y increasing downward:
- * - POSITIVE signed area = CW winding = OUTER boundary (filled inside)
- * - NEGATIVE signed area = CCW winding = HOLE (empty inside)
- * 
- * After identifying outers vs holes by winding, we group holes with their
- * containing outer using point-in-polygon containment.
+ * Algorithm:
+ * 1. Sort contours by area descending (largest first)
+ * 2. For each contour, count how many LARGER contours contain it (nesting depth)
+ * 3. Even nesting depth (0, 2, 4...) = outer, odd depth (1, 3, 5...) = hole
+ * 4. Holes are assigned to their immediate parent (depth - 1)
+ * 5. Only depth-0 outers get extruded; depth-1 holes attach to them
  */
 function classifyContours(contours: { x: number; y: number }[][]): ClassifiedContours[] {
   if (contours.length === 0) return []
 
-  // Compute signed areas and classify by winding direction
-  const withMeta = contours.map((c, idx) => ({
+  // Build metadata sorted by area descending
+  const metas: ContourMeta[] = contours.map((c, idx) => ({
     contour: c,
     index: idx,
+    absArea: contourArea(c),
     signedArea: signedArea(c),
-    absArea: Math.abs(signedArea(c))
+    nestingDepth: 0,
+    parentIndex: -1
   }))
+  metas.sort((a, b) => b.absArea - a.absArea)
 
-  // In screen space (Y down), marching squares produces:
-  // - CW winding (positive area) for outer boundaries
-  // - CCW winding (negative area) for hole boundaries
-  const outers = withMeta.filter(m => m.signedArea > 0).sort((a, b) => b.absArea - a.absArea)
-  const holes = withMeta.filter(m => m.signedArea < 0).sort((a, b) => b.absArea - a.absArea)
+  // Compute nesting depth and parent for each contour
+  // A contour is "inside" another if its sample point is contained by that contour
+  for (let i = 0; i < metas.length; i++) {
+    const m = metas[i]
+    const samplePt = m.contour[0]
+    if (!samplePt) continue
 
-  // If no outers found (all holes), something is wrong - return empty
-  if (outers.length === 0) {
-    console.log("[v0] classifyContours: no outers found (all negative area)")
+    let depth = 0
+    let immediateParent = -1
+
+    // Check all LARGER contours (earlier in sorted list) for containment
+    for (let j = 0; j < i; j++) {
+      const larger = metas[j]
+      if (pointInPolygon(samplePt.x, samplePt.y, larger.contour)) {
+        depth++
+        immediateParent = larger.index  // Track the smallest containing contour (latest in containment chain)
+      }
+    }
+
+    m.nestingDepth = depth
+    m.parentIndex = immediateParent
+  }
+
+  // Debug: log hierarchy
+  console.log("[v0] classifyContours hierarchy:")
+  for (const m of metas) {
+    const role = m.nestingDepth % 2 === 0 ? "OUTER" : "HOLE"
+    console.log(`  #${m.index}: area=${m.absArea.toFixed(0)} depth=${m.nestingDepth} parent=${m.parentIndex} -> ${role}`)
+  }
+
+  // Classify: even depth = outer, odd depth = hole
+  // Only depth-0 outers become extruded shapes
+  // Depth-1 holes attach to their depth-0 parent
+  const topLevelOuters = metas.filter(m => m.nestingDepth === 0)
+  const depth1Holes = metas.filter(m => m.nestingDepth === 1)
+
+  if (topLevelOuters.length === 0) {
+    console.log("[v0] classifyContours: no top-level outers found")
     return []
   }
 
   const results: ClassifiedContours[] = []
-  const assignedHoles = new Set<number>()
 
-  // For each outer, find holes that are contained within it
-  for (const outerMeta of outers) {
-    const outer = outerMeta.contour
-    const outerHoles: { x: number; y: number }[][] = []
-    const outerHoleIndices: number[] = []
-
-    for (const holeMeta of holes) {
-      if (assignedHoles.has(holeMeta.index)) continue
-      const hole = holeMeta.contour
-      // Check if hole's centroid (or first point) is inside the outer
-      if (hole.length > 0 && pointInPolygon(hole[0].x, hole[0].y, outer)) {
-        outerHoles.push(hole)
-        outerHoleIndices.push(holeMeta.index)
-        assignedHoles.add(holeMeta.index)
-      }
-    }
+  for (const outerMeta of topLevelOuters) {
+    // Find depth-1 holes whose parent is this outer
+    const myHoles = depth1Holes.filter(h => h.parentIndex === outerMeta.index)
 
     results.push({
-      outer,
+      outer: outerMeta.contour,
       outerIndex: outerMeta.index,
-      holes: outerHoles,
-      holeIndices: outerHoleIndices
+      holes: myHoles.map(h => h.contour),
+      holeIndices: myHoles.map(h => h.index)
     })
   }
 
-  // Log any unassigned holes (orphan holes that aren't inside any outer)
-  const unassigned = holes.filter(h => !assignedHoles.has(h.index))
-  if (unassigned.length > 0) {
-    console.log("[v0] classifyContours: orphan holes not inside any outer:", unassigned.map(h => h.index))
-  }
+  // Log summary
+  const totalHoles = results.reduce((sum, r) => sum + r.holes.length, 0)
+  console.log(`[v0] classifyContours: ${topLevelOuters.length} top-level outers, ${totalHoles} holes assigned, ${depth1Holes.length - totalHoles} orphan holes`)
 
   return results
+}
+
+/** Return metadata for all contours for debug visualization */
+function buildContourHierarchy(contours: { x: number; y: number }[][]): ContourMeta[] {
+  if (contours.length === 0) return []
+
+  const metas: ContourMeta[] = contours.map((c, idx) => ({
+    contour: c,
+    index: idx,
+    absArea: contourArea(c),
+    signedArea: signedArea(c),
+    nestingDepth: 0,
+    parentIndex: -1
+  }))
+  metas.sort((a, b) => b.absArea - a.absArea)
+
+  for (let i = 0; i < metas.length; i++) {
+    const m = metas[i]
+    const samplePt = m.contour[0]
+    if (!samplePt) continue
+
+    let depth = 0
+    let immediateParent = -1
+
+    for (let j = 0; j < i; j++) {
+      const larger = metas[j]
+      if (pointInPolygon(samplePt.x, samplePt.y, larger.contour)) {
+        depth++
+        immediateParent = larger.index
+      }
+    }
+
+    m.nestingDepth = depth
+    m.parentIndex = immediateParent
+  }
+
+  return metas
 }
 
 /** Compute absolute area of a 2D contour in raster space */
@@ -1555,6 +1618,7 @@ function buildSolidMeshFromMask(
         area: contourArea(simplified),
         signedArea: signedArea(simplified),
         isClosed: false,
+        nestingDepth: -1,
         contourIndex: rawIndex
       })
       rejectedCount++
@@ -1571,6 +1635,7 @@ function buildSolidMeshFromMask(
         area: contourArea(simplified),
         signedArea: signedArea(simplified),
         isClosed: false,
+        nestingDepth: -1,
         contourIndex: rawIndex
       })
       openContourCount++
@@ -1589,6 +1654,7 @@ function buildSolidMeshFromMask(
         area,
         signedArea: sArea,
         isClosed: true,
+        nestingDepth: -1,
         contourIndex: rawIndex
       })
       rejectedCount++
@@ -1604,6 +1670,7 @@ function buildSolidMeshFromMask(
         area,
         signedArea: sArea,
         isClosed: true,
+        nestingDepth: -1,
         contourIndex: rawIndex
       })
       selfIntersectCount++
@@ -1618,10 +1685,29 @@ function buildSolidMeshFromMask(
     return { ...emptyResult, rawContourCount: rawContours.length, rejectedCount, openContourCount, selfIntersectCount, debugContours }
   }
 
-  // 3) Classify into outer + holes using signed area (winding direction)
-  console.log("[v0] Solid: validated contours =", validated.length, "with areas:", validated.map(c => signedArea(c).toFixed(0)))
+  // 3) Build hierarchy and classify using containment depth
+  const hierarchy = buildContourHierarchy(validated)
+  console.log("[v0] Solid: validated contours =", validated.length)
   const classified = classifyContours(validated)
-  console.log("[v0] Solid: classified groups =", classified.length, "outers, holes per group:", classified.map(g => g.holes.length))
+  console.log("[v0] Solid: classified =", classified.length, "top-level outers, holes per group:", classified.map(g => g.holes.length))
+  
+  // Add all validated contours to debug with hierarchy info
+  for (const meta of hierarchy) {
+    const isTopOuter = meta.nestingDepth === 0
+    const isHole = meta.nestingDepth === 1
+    debugContours.push({
+      points: meta.contour,
+      type: isTopOuter ? "outer" : isHole ? "hole" : "rejected",
+      reason: meta.nestingDepth > 1 ? `nested depth ${meta.nestingDepth}` : undefined,
+      area: meta.absArea,
+      signedArea: meta.signedArea,
+      isClosed: true,
+      nestingDepth: meta.nestingDepth,
+      parentIndex: meta.parentIndex >= 0 ? meta.parentIndex : undefined,
+      contourIndex: meta.index
+    })
+  }
+
   if (classified.length === 0) {
     return {
       geometry: null, contourCount: validated.length, holesCount: 0,
@@ -1629,32 +1715,10 @@ function buildSolidMeshFromMask(
     }
   }
 
-  // Count total holes and add debug entries with hierarchy info
+  // Count total holes
   let totalHoles = 0
-  for (let gi = 0; gi < classified.length; gi++) {
-    const group = classified[gi]
-    // Add outer to debug
-    debugContours.push({
-      points: group.outer,
-      type: "outer",
-      area: contourArea(group.outer),
-      signedArea: signedArea(group.outer),
-      isClosed: true,
-      contourIndex: group.outerIndex
-    })
-    for (let hi = 0; hi < group.holes.length; hi++) {
-      const hole = group.holes[hi]
-      debugContours.push({
-        points: hole,
-        type: "hole",
-        area: contourArea(hole),
-        signedArea: signedArea(hole),
-        isClosed: true,
-        contourIndex: group.holeIndices[hi],
-        parentIndex: group.outerIndex  // Link to parent outer
-      })
-      totalHoles++
-    }
+  for (const group of classified) {
+    totalHoles += group.holes.length
   }
 
   // 4) Build THREE.Shape(s) with consistent winding and extrude
