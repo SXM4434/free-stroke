@@ -1,25 +1,24 @@
 /**
  * Vector-based Solid Mode Pipeline
  * 
- * This module implements a clean Solid mode using vector stroke expansion
- * instead of raster-based contour extraction.
+ * Uses js-angusj-clipper for robust polygon offset and boolean union operations.
+ * This handles self-overlapping strokes correctly by unioning the expanded outline.
  * 
  * Pipeline:
  * 1. Take processed centerline polyline
- * 2. Expand stroke by Thickness into 2D outline (offset operation)
- * 3. Union self-overlaps using polygon boolean operations
- * 4. Clean the resulting polygon(s)
- * 5. Keep valid filled body and enclosed holes
+ * 2. Expand stroke by Thickness using Clipper's offset operation (round join/cap)
+ * 3. Union all expanded polygons to handle overlaps
+ * 4. Simplify result
+ * 5. Extract outer boundaries and true enclosed holes
  * 6. Extrude into watertight mesh
- * 
- * Uses js-angusj-clipper for robust polygon offset and boolean operations.
  */
 
 import * as THREE from "three"
+import * as ClipperLib from "js-angusj-clipper"
 import type { ProcessedStroke } from "@/lib/stroke-processing"
 
 // Clipper uses integer coordinates, so we scale up for precision
-const CLIPPER_SCALE = 1000
+const CLIPPER_SCALE = 100000
 
 // Types for our polygon representation
 interface Point2D {
@@ -32,11 +31,37 @@ interface Polygon {
   holes: Point2D[][]
 }
 
+export interface VectorSolidDebugStats {
+  inputPointCount: number
+  expandedOutlineCount: number
+  polygonCountBeforeUnion: number
+  polygonCountAfterUnion: number
+  holeCount: number
+  rebuildTimeMs: number
+}
+
 export interface VectorSolidResult {
   geometry: THREE.BufferGeometry | null
-  polygons: Polygon[]  // For debug visualization
+  polygons: Polygon[]
+  expandedOutlines: Point2D[][]  // Before union, for debug visualization
   success: boolean
   error?: string
+  stats: VectorSolidDebugStats
+}
+
+// Clipper instance (loaded asynchronously)
+let clipperInstance: ClipperLib.ClipperLibWrapper | null = null
+let clipperLoadPromise: Promise<ClipperLib.ClipperLibWrapper> | null = null
+
+async function getClipper(): Promise<ClipperLib.ClipperLibWrapper> {
+  if (clipperInstance) return clipperInstance
+  if (clipperLoadPromise) return clipperLoadPromise
+  
+  clipperLoadPromise = ClipperLib.loadNativeClipperLibInstanceAsync(
+    ClipperLib.NativeClipperLibRequestedFormat.WasmWithAsmJsFallback
+  )
+  clipperInstance = await clipperLoadPromise
+  return clipperInstance
 }
 
 /**
@@ -57,118 +82,128 @@ function strokeTo2D(
 }
 
 /**
- * Expand a polyline into a polygon outline with the given thickness.
- * Uses round joins and round end caps for smooth appearance.
+ * Convert Point2D array to Clipper path (scaled integers)
  */
-function expandPolylineManual(
-  points: Point2D[],
-  thickness: number
-): Point2D[] {
-  if (points.length < 2) return []
-  
-  const halfWidth = thickness / 2
-  const result: Point2D[] = []
-  
-  // Generate offset points on both sides of the polyline
-  const leftSide: Point2D[] = []
-  const rightSide: Point2D[] = []
-  
-  for (let i = 0; i < points.length; i++) {
-    const prev = points[Math.max(0, i - 1)]
-    const curr = points[i]
-    const next = points[Math.min(points.length - 1, i + 1)]
-    
-    // Calculate tangent direction
-    let tx: number, ty: number
-    if (i === 0) {
-      tx = next.x - curr.x
-      ty = next.y - curr.y
-    } else if (i === points.length - 1) {
-      tx = curr.x - prev.x
-      ty = curr.y - prev.y
-    } else {
-      // Average of incoming and outgoing tangents
-      const t1x = curr.x - prev.x, t1y = curr.y - prev.y
-      const t2x = next.x - curr.x, t2y = next.y - curr.y
-      const len1 = Math.sqrt(t1x * t1x + t1y * t1y) || 1
-      const len2 = Math.sqrt(t2x * t2x + t2y * t2y) || 1
-      tx = t1x / len1 + t2x / len2
-      ty = t1y / len1 + t2y / len2
-    }
-    
-    // Normalize tangent
-    const tlen = Math.sqrt(tx * tx + ty * ty) || 1
-    tx /= tlen
-    ty /= tlen
-    
-    // Normal (perpendicular to tangent)
-    const nx = -ty
-    const ny = tx
-    
-    // Offset points
-    leftSide.push({
-      x: curr.x + nx * halfWidth,
-      y: curr.y + ny * halfWidth
-    })
-    rightSide.push({
-      x: curr.x - nx * halfWidth,
-      y: curr.y - ny * halfWidth
-    })
-  }
-  
-  // Build closed polygon: left side forward, right side backward
-  // Add round end caps
-  const startCap = generateRoundCap(points[0], leftSide[0], rightSide[0], halfWidth, true)
-  const endCap = generateRoundCap(points[points.length - 1], leftSide[leftSide.length - 1], rightSide[rightSide.length - 1], halfWidth, false)
-  
-  result.push(...startCap)
-  result.push(...leftSide)
-  result.push(...endCap)
-  result.push(...rightSide.reverse())
-  
-  return result
+function toClipperPath(pts: Point2D[]): ClipperLib.Path {
+  return pts.map(p => ({
+    x: Math.round(p.x * CLIPPER_SCALE),
+    y: Math.round(p.y * CLIPPER_SCALE)
+  }))
 }
 
 /**
- * Generate round cap points
+ * Convert Clipper path back to Point2D array
  */
-function generateRoundCap(
-  center: Point2D,
-  left: Point2D,
-  right: Point2D,
-  radius: number,
-  isStart: boolean
-): Point2D[] {
-  const points: Point2D[] = []
-  const segments = 8  // Number of segments for the semicircle
+function fromClipperPath(path: ClipperLib.Path): Point2D[] {
+  return path.map(p => ({
+    x: p.x / CLIPPER_SCALE,
+    y: p.y / CLIPPER_SCALE
+  }))
+}
+
+/**
+ * Expand a polyline into a polygon using Clipper's offset operation.
+ * Uses round joins and round end caps for smooth appearance.
+ */
+function expandPolylineWithClipper(
+  clipper: ClipperLib.ClipperLibWrapper,
+  points: Point2D[],
+  thickness: number
+): Point2D[][] {
+  if (points.length < 2) return []
   
-  // Calculate angles for left and right points relative to center
-  const leftAngle = Math.atan2(left.y - center.y, left.x - center.x)
-  const rightAngle = Math.atan2(right.y - center.y, right.x - center.x)
+  const halfWidth = thickness / 2
+  const clipperPath = toClipperPath(points)
+  const delta = Math.round(halfWidth * CLIPPER_SCALE)
   
-  // Determine sweep direction
-  let startAngle: number, endAngle: number
-  if (isStart) {
-    startAngle = rightAngle
-    endAngle = leftAngle
-    // Ensure we go the long way around (semicircle on the cap side)
-    if (endAngle > startAngle) endAngle -= Math.PI * 2
-  } else {
-    startAngle = leftAngle
-    endAngle = rightAngle
-    if (endAngle < startAngle) endAngle += Math.PI * 2
-  }
-  
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments
-    const angle = startAngle + (endAngle - startAngle) * t
-    points.push({
-      x: center.x + Math.cos(angle) * radius,
-      y: center.y + Math.sin(angle) * radius
+  try {
+    // Use ClipperOffset for polyline expansion
+    const result = clipper.offsetToPaths({
+      delta,
+      offsetInputs: [{
+        data: clipperPath,
+        joinType: ClipperLib.JoinType.Round,
+        endType: ClipperLib.EndType.OpenRound  // Round end caps for open polyline
+      }],
+      arcTolerance: delta * 0.02,  // Smooth arcs
+      miterLimit: 2
     })
+    
+    if (!result || result.length === 0) return []
+    
+    return result.map(fromClipperPath)
+  } catch (e) {
+    console.error("[v0] Clipper offset failed:", e)
+    return []
   }
+}
+
+/**
+ * Union multiple polygons using Clipper's boolean operations.
+ * This handles self-overlapping regions correctly.
+ */
+function unionPolygonsWithClipper(
+  clipper: ClipperLib.ClipperLibWrapper,
+  polygons: Point2D[][]
+): Polygon[] {
+  if (polygons.length === 0) return []
   
-  return points
+  try {
+    // Convert all polygons to Clipper paths
+    const clipperPaths = polygons.map(toClipperPath)
+    
+    // Union all paths together using NonZero fill rule
+    // This correctly handles self-overlapping regions
+    const result = clipper.clipToPaths({
+      clipType: ClipperLib.ClipType.Union,
+      subjectInputs: clipperPaths.map(data => ({ data, closed: true })),
+      subjectFillType: ClipperLib.PolyFillType.NonZero
+    })
+    
+    if (!result || result.length === 0) return []
+    
+    // Separate outer boundaries and holes based on orientation
+    // Clipper returns CCW for outers and CW for holes
+    const outers: Point2D[][] = []
+    const holes: Point2D[][] = []
+    
+    for (const path of result) {
+      const pts = fromClipperPath(path)
+      if (pts.length < 3) continue
+      
+      // Check orientation: positive area = CCW = outer, negative = CW = hole
+      const area = signedArea(pts)
+      if (area > 0) {
+        outers.push(pts)
+      } else {
+        holes.push(pts)
+      }
+    }
+    
+    // Assign holes to their containing outers
+    const polygonsWithHoles: Polygon[] = outers.map(outer => ({
+      outer,
+      holes: []
+    }))
+    
+    // For each hole, find which outer contains it
+    for (const hole of holes) {
+      // Use first point of hole to test containment
+      const testPt = hole[0]
+      for (const poly of polygonsWithHoles) {
+        if (pointInPolygon(testPt, poly.outer)) {
+          poly.holes.push(hole)
+          break
+        }
+      }
+    }
+    
+    return polygonsWithHoles
+    
+  } catch (e) {
+    console.error("[v0] Clipper union failed:", e)
+    return []
+  }
 }
 
 /**
@@ -179,78 +214,58 @@ function signedArea(pts: Point2D[]): number {
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
     area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
   }
-  return area / 2
+  return -area / 2  // Negate because of coordinate system
 }
 
 /**
- * Simple polygon union using winding rule.
- * For self-overlapping strokes, we treat the expanded outline as a single filled region.
+ * Point in polygon test using ray casting
  */
-function unionPolygonsSimple(polygons: Point2D[][]): Polygon[] {
-  if (polygons.length === 0) return []
-  if (polygons.length === 1) {
-    const poly = polygons[0]
-    // Ensure CCW winding for outer
-    const area = signedArea(poly)
-    return [{
-      outer: area < 0 ? poly.slice().reverse() : poly,
-      holes: []
-    }]
-  }
-  
-  // For multiple strokes, we need proper boolean union
-  // For now, just return all as separate bodies (MVP)
-  return polygons.map(poly => {
-    const area = signedArea(poly)
-    return {
-      outer: area < 0 ? poly.slice().reverse() : poly,
-      holes: []
-    }
-  })
-}
-
-/**
- * Douglas-Peucker simplification for 2D points
- */
-function simplifyPolygon(pts: Point2D[], tolerance: number): Point2D[] {
-  if (pts.length < 3 || tolerance <= 0) return pts
-  
-  function perpendicularDistance(p: Point2D, a: Point2D, b: Point2D): number {
-    const dx = b.x - a.x
-    const dy = b.y - a.y
-    const lenSq = dx * dx + dy * dy
-    if (lenSq === 0) return Math.sqrt((p.x - a.x) ** 2 + (p.y - a.y) ** 2)
-    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq))
-    const projX = a.x + t * dx
-    const projY = a.y + t * dy
-    return Math.sqrt((p.x - projX) ** 2 + (p.y - projY) ** 2)
-  }
-  
-  function douglasPeucker(pts: Point2D[], start: number, end: number): Point2D[] {
-    if (end <= start + 1) return [pts[start]]
+function pointInPolygon(pt: Point2D, polygon: Point2D[]): boolean {
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y
+    const xj = polygon[j].x, yj = polygon[j].y
     
-    let maxDist = 0
-    let maxIdx = start
-    for (let i = start + 1; i < end; i++) {
-      const d = perpendicularDistance(pts[i], pts[start], pts[end])
-      if (d > maxDist) {
-        maxDist = d
-        maxIdx = i
+    if (((yi > pt.y) !== (yj > pt.y)) &&
+        (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi)) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+/**
+ * Simplify polygon using Clipper's built-in simplification
+ */
+function simplifyPolygonWithClipper(
+  clipper: ClipperLib.ClipperLibWrapper,
+  pts: Point2D[],
+  tolerance: number
+): Point2D[] {
+  if (pts.length < 3) return pts
+  
+  const clipperPath = toClipperPath(pts)
+  const epsilon = Math.round(tolerance * CLIPPER_SCALE)
+  
+  try {
+    const result = clipper.simplifyPolygon(clipperPath, ClipperLib.PolyFillType.NonZero)
+    if (!result || result.length === 0) return pts
+    
+    // Return the largest polygon from result
+    let largest = result[0]
+    let largestArea = 0
+    for (const path of result) {
+      const area = Math.abs(clipper.area(path))
+      if (area > largestArea) {
+        largestArea = area
+        largest = path
       }
     }
     
-    if (maxDist > tolerance) {
-      const left = douglasPeucker(pts, start, maxIdx)
-      const right = douglasPeucker(pts, maxIdx, end)
-      return [...left, ...right]
-    } else {
-      return [pts[start]]
-    }
+    return fromClipperPath(largest)
+  } catch {
+    return pts
   }
-  
-  const result = douglasPeucker(pts, 0, pts.length - 1)
-  result.push(pts[pts.length - 1])  // Include last point
-  return result
 }
 
 /**
@@ -262,7 +277,7 @@ function extrudePolygon(
 ): THREE.BufferGeometry | null {
   if (polygon.outer.length < 3) return null
   
-  // Create shape from outer boundary (CCW winding)
+  // Create shape from outer boundary
   const shapePts = polygon.outer.map(p => new THREE.Vector2(p.x, p.y))
   
   // Ensure CCW winding for THREE.js Shape
@@ -273,7 +288,7 @@ function extrudePolygon(
   
   const shape = new THREE.Shape(shapePts)
   
-  // Add holes (CW winding)
+  // Add holes (need CW winding for THREE.js)
   for (const hole of polygon.holes) {
     if (hole.length < 3) continue
     const holePts = hole.map(p => new THREE.Vector2(p.x, p.y))
@@ -299,44 +314,87 @@ function extrudePolygon(
 
 /**
  * Main entry point: Build vector-based Solid geometry from strokes
+ * This is the SYNCHRONOUS version that requires clipper to be pre-loaded
  */
-export function buildVectorSolid(
+export function buildVectorSolidSync(
+  clipper: ClipperLib.ClipperLibWrapper,
   strokes: ProcessedStroke[],
   canvasWidth: number,
   canvasHeight: number,
   thickness: number,
   depth: number
 ): VectorSolidResult {
+  const startTime = performance.now()
+  
+  const emptyStats: VectorSolidDebugStats = {
+    inputPointCount: 0,
+    expandedOutlineCount: 0,
+    polygonCountBeforeUnion: 0,
+    polygonCountAfterUnion: 0,
+    holeCount: 0,
+    rebuildTimeMs: 0
+  }
+  
   if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
-    return { geometry: null, polygons: [], success: false, error: "No strokes" }
+    return { 
+      geometry: null, 
+      polygons: [], 
+      expandedOutlines: [],
+      success: false, 
+      error: "No strokes",
+      stats: emptyStats
+    }
   }
   
   try {
-    // 1. Convert each stroke to 2D and expand into polygon outline
+    // 1. Convert each stroke to 2D and expand using Clipper offset
     const expandedPolygons: Point2D[][] = []
+    let totalInputPoints = 0
     
     for (const stroke of strokes) {
       const pts2D = strokeTo2D(stroke, canvasWidth, canvasHeight)
+      totalInputPoints += pts2D.length
       if (pts2D.length < 2) continue
       
-      const expanded = expandPolylineManual(pts2D, thickness)
-      if (expanded.length < 4) continue
-      
-      // Simplify to reduce point count
-      const simplified = simplifyPolygon(expanded, thickness * 0.05)
-      expandedPolygons.push(simplified)
+      const expanded = expandPolylineWithClipper(clipper, pts2D, thickness)
+      expandedPolygons.push(...expanded)
     }
     
     if (expandedPolygons.length === 0) {
-      return { geometry: null, polygons: [], success: false, error: "No valid polygons" }
+      return { 
+        geometry: null, 
+        polygons: [], 
+        expandedOutlines: [],
+        success: false, 
+        error: "No valid expanded polygons",
+        stats: { ...emptyStats, inputPointCount: totalInputPoints, rebuildTimeMs: performance.now() - startTime }
+      }
     }
     
-    // 2. Union all polygons (for multi-stroke, handles overlaps)
-    const unionedPolygons = unionPolygonsSimple(expandedPolygons)
+    const polygonCountBeforeUnion = expandedPolygons.length
+    
+    // 2. Union all polygons (handles self-overlaps)
+    const unionedPolygons = unionPolygonsWithClipper(clipper, expandedPolygons)
     
     if (unionedPolygons.length === 0) {
-      return { geometry: null, polygons: [], success: false, error: "Union failed" }
+      return { 
+        geometry: null, 
+        polygons: [], 
+        expandedOutlines: expandedPolygons,
+        success: false, 
+        error: "Union failed",
+        stats: { 
+          ...emptyStats, 
+          inputPointCount: totalInputPoints,
+          expandedOutlineCount: expandedPolygons.reduce((s, p) => s + p.length, 0),
+          polygonCountBeforeUnion,
+          rebuildTimeMs: performance.now() - startTime 
+        }
+      }
     }
+    
+    // Count holes
+    const totalHoles = unionedPolygons.reduce((sum, p) => sum + p.holes.length, 0)
     
     // 3. Extrude each polygon
     const geometries: THREE.BufferGeometry[] = []
@@ -347,7 +405,21 @@ export function buildVectorSolid(
     }
     
     if (geometries.length === 0) {
-      return { geometry: null, polygons: unionedPolygons, success: false, error: "Extrusion failed" }
+      return { 
+        geometry: null, 
+        polygons: unionedPolygons, 
+        expandedOutlines: expandedPolygons,
+        success: false, 
+        error: "Extrusion failed",
+        stats: { 
+          inputPointCount: totalInputPoints,
+          expandedOutlineCount: expandedPolygons.reduce((s, p) => s + p.length, 0),
+          polygonCountBeforeUnion,
+          polygonCountAfterUnion: unionedPolygons.length,
+          holeCount: totalHoles,
+          rebuildTimeMs: performance.now() - startTime 
+        }
+      }
     }
     
     // 4. Merge if multiple geometries
@@ -355,29 +427,74 @@ export function buildVectorSolid(
     if (geometries.length === 1) {
       finalGeometry = geometries[0]
     } else {
-      // Simple merge: just use the first one for MVP
-      // TODO: proper merge with BufferGeometryUtils
-      finalGeometry = geometries[0]
-      for (let i = 1; i < geometries.length; i++) {
-        geometries[i].dispose()
+      // Merge geometries manually
+      const positions: number[] = []
+      const normals: number[] = []
+      
+      for (const geo of geometries) {
+        const pos = geo.getAttribute("position")
+        const norm = geo.getAttribute("normal")
+        for (let i = 0; i < pos.count; i++) {
+          positions.push(pos.getX(i), pos.getY(i), pos.getZ(i))
+          if (norm) normals.push(norm.getX(i), norm.getY(i), norm.getZ(i))
+        }
+        geo.dispose()
       }
+      
+      finalGeometry = new THREE.BufferGeometry()
+      finalGeometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
+      if (normals.length > 0) {
+        finalGeometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3))
+      }
+    }
+    
+    const stats: VectorSolidDebugStats = {
+      inputPointCount: totalInputPoints,
+      expandedOutlineCount: expandedPolygons.reduce((s, p) => s + p.length, 0),
+      polygonCountBeforeUnion,
+      polygonCountAfterUnion: unionedPolygons.length,
+      holeCount: totalHoles,
+      rebuildTimeMs: performance.now() - startTime
     }
     
     return {
       geometry: finalGeometry,
       polygons: unionedPolygons,
-      success: true
+      expandedOutlines: expandedPolygons,
+      success: true,
+      stats
     }
     
   } catch (e) {
     return {
       geometry: null,
       polygons: [],
+      expandedOutlines: [],
       success: false,
-      error: e instanceof Error ? e.message : "Unknown error"
+      error: e instanceof Error ? e.message : "Unknown error",
+      stats: { ...emptyStats, rebuildTimeMs: performance.now() - startTime }
     }
   }
 }
+
+/**
+ * Async wrapper that loads Clipper first
+ */
+export async function buildVectorSolid(
+  strokes: ProcessedStroke[],
+  canvasWidth: number,
+  canvasHeight: number,
+  thickness: number,
+  depth: number
+): Promise<VectorSolidResult> {
+  const clipper = await getClipper()
+  return buildVectorSolidSync(clipper, strokes, canvasWidth, canvasHeight, thickness, depth)
+}
+
+/**
+ * Get the Clipper instance (for use in React components)
+ */
+export { getClipper }
 
 // ============================================================================
 // Test cases for sandbox validation
@@ -461,6 +578,35 @@ export function generateTestStrokes(): {
           { x: 200, y: 300 },
           { x: 300, y: 300 },
           { x: 400, y: 300 }
+        ],
+        cornerCount: 0
+      }
+    },
+    {
+      name: "Tight Loops",
+      description: "Very tight loops and near-touching segments - stress test for union",
+      stroke: {
+        points: [
+          { x: 150, y: 300 },
+          { x: 200, y: 280 },
+          { x: 220, y: 320 },
+          { x: 180, y: 340 },
+          { x: 160, y: 300 },
+          { x: 200, y: 260 },
+          { x: 260, y: 280 },
+          { x: 280, y: 340 },
+          { x: 240, y: 360 },
+          { x: 200, y: 320 },
+          { x: 220, y: 280 },
+          { x: 280, y: 260 },
+          { x: 340, y: 300 },
+          { x: 320, y: 360 },
+          { x: 260, y: 340 },
+          { x: 240, y: 300 },
+          { x: 300, y: 280 },
+          { x: 380, y: 320 },
+          { x: 400, y: 380 },
+          { x: 350, y: 400 }
         ],
         cornerCount: 0
       }

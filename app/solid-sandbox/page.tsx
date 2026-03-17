@@ -1,26 +1,57 @@
 "use client"
 
-import { useState, useMemo, useRef, useEffect } from "react"
+import { useState, useMemo, useRef, useEffect, useCallback } from "react"
 import { Canvas } from "@react-three/fiber"
-import { OrbitControls, PerspectiveCamera, Environment } from "@react-three/drei"
+import { OrbitControls, PerspectiveCamera } from "@react-three/drei"
 import * as THREE from "three"
-import { Button } from "@/components/ui/button"
-import { Slider } from "@/components/ui/slider"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { buildVectorSolid, generateTestStrokes, type VectorSolidResult } from "@/lib/solid-vector"
+import { Slider } from "@/components/ui/slider"
+import { Badge } from "@/components/ui/badge"
+import { 
+  buildVectorSolidSync, 
+  generateTestStrokes, 
+  getClipper,
+  type VectorSolidResult,
+  type VectorSolidDebugStats
+} from "@/lib/solid-vector"
+import type { ClipperLibWrapper } from "js-angusj-clipper"
 
 const TEST_CANVAS_WIDTH = 600
 const TEST_CANVAS_HEIGHT = 600
 
-// 2D Canvas to show source stroke and expanded polygon
+// Debounce hook
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value)
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value)
+    }, delay)
+    return () => clearTimeout(handler)
+  }, [value, delay])
+
+  return debouncedValue
+}
+
+// Convert world coords to canvas coords for rendering
+function worldToCanvas(wx: number, wy: number): { x: number; y: number } {
+  const scaleRef = Math.max(TEST_CANVAS_WIDTH, TEST_CANVAS_HEIGHT)
+  const normScale = 3 / scaleRef
+  return {
+    x: wx / normScale + TEST_CANVAS_WIDTH / 2,
+    y: -wy / normScale + TEST_CANVAS_HEIGHT / 2
+  }
+}
+
+// 2D Canvas showing all stages: centerline, expanded outlines before union, post-union polygon
 function StrokePreview2D({ 
   stroke, 
-  result, 
-  thickness 
+  result,
+  showPreUnion
 }: { 
   stroke: { x: number; y: number }[]
   result: VectorSolidResult
-  thickness: number 
+  showPreUnion: boolean
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -34,70 +65,83 @@ function StrokePreview2D({
     const height = canvas.height
     
     ctx.clearRect(0, 0, width, height)
-    ctx.fillStyle = "#1a1a2e"
+    ctx.fillStyle = "#0f0f1a"
     ctx.fillRect(0, 0, width, height)
 
     // Scale to fit
-    const scale = Math.min(width, height) / TEST_CANVAS_WIDTH * 0.8
+    const scale = Math.min(width, height) / TEST_CANVAS_WIDTH * 0.85
     const offsetX = (width - TEST_CANVAS_WIDTH * scale) / 2
     const offsetY = (height - TEST_CANVAS_HEIGHT * scale) / 2
 
     const toCanvasX = (x: number) => offsetX + x * scale
     const toCanvasY = (y: number) => offsetY + y * scale
 
-    // Draw expanded polygon (filled)
-    if (result.polygons.length > 0) {
-      const scaleRef = Math.max(TEST_CANVAS_WIDTH, TEST_CANVAS_HEIGHT)
-      const normScale = 3 / scaleRef
+    // 1. Draw expanded outlines BEFORE union (yellow, dashed)
+    if (showPreUnion && result.expandedOutlines.length > 0) {
+      ctx.strokeStyle = "#fbbf24"
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 4])
       
-      ctx.fillStyle = "rgba(59, 130, 246, 0.3)"
-      ctx.strokeStyle = "#3b82f6"
-      ctx.lineWidth = 2
-
-      for (const poly of result.polygons) {
+      for (const outline of result.expandedOutlines) {
+        if (outline.length < 3) continue
         ctx.beginPath()
-        const outer = poly.outer
-        if (outer.length > 0) {
-          // Convert back from world coords to canvas coords
-          const firstX = outer[0].x / normScale + TEST_CANVAS_WIDTH / 2
-          const firstY = -outer[0].y / normScale + TEST_CANVAS_HEIGHT / 2
-          ctx.moveTo(toCanvasX(firstX), toCanvasY(firstY))
-          
-          for (let i = 1; i < outer.length; i++) {
-            const px = outer[i].x / normScale + TEST_CANVAS_WIDTH / 2
-            const py = -outer[i].y / normScale + TEST_CANVAS_HEIGHT / 2
-            ctx.lineTo(toCanvasX(px), toCanvasY(py))
+        const first = worldToCanvas(outline[0].x, outline[0].y)
+        ctx.moveTo(toCanvasX(first.x), toCanvasY(first.y))
+        for (let i = 1; i < outline.length; i++) {
+          const pt = worldToCanvas(outline[i].x, outline[i].y)
+          ctx.lineTo(toCanvasX(pt.x), toCanvasY(pt.y))
+        }
+        ctx.closePath()
+        ctx.stroke()
+      }
+      ctx.setLineDash([])
+    }
+
+    // 2. Draw POST-UNION filled polygon (blue fill, solid stroke)
+    if (result.polygons.length > 0) {
+      for (const poly of result.polygons) {
+        // Fill outer
+        ctx.fillStyle = "rgba(59, 130, 246, 0.4)"
+        ctx.strokeStyle = "#3b82f6"
+        ctx.lineWidth = 2
+
+        if (poly.outer.length > 0) {
+          ctx.beginPath()
+          const first = worldToCanvas(poly.outer[0].x, poly.outer[0].y)
+          ctx.moveTo(toCanvasX(first.x), toCanvasY(first.y))
+          for (let i = 1; i < poly.outer.length; i++) {
+            const pt = worldToCanvas(poly.outer[i].x, poly.outer[i].y)
+            ctx.lineTo(toCanvasX(pt.x), toCanvasY(pt.y))
           }
           ctx.closePath()
-        }
-        ctx.fill()
-        ctx.stroke()
-
-        // Draw holes
-        ctx.fillStyle = "#1a1a2e"
-        for (const hole of poly.holes) {
-          ctx.beginPath()
-          if (hole.length > 0) {
-            const firstX = hole[0].x / normScale + TEST_CANVAS_WIDTH / 2
-            const firstY = -hole[0].y / normScale + TEST_CANVAS_HEIGHT / 2
-            ctx.moveTo(toCanvasX(firstX), toCanvasY(firstY))
-            
-            for (let i = 1; i < hole.length; i++) {
-              const px = hole[i].x / normScale + TEST_CANVAS_WIDTH / 2
-              const py = -hole[i].y / normScale + TEST_CANVAS_HEIGHT / 2
-              ctx.lineTo(toCanvasX(px), toCanvasY(py))
-            }
-            ctx.closePath()
-          }
           ctx.fill()
+          ctx.stroke()
+        }
+
+        // Cut out holes (draw with background color)
+        ctx.fillStyle = "#0f0f1a"
+        ctx.strokeStyle = "#f97316"
+        ctx.lineWidth = 1.5
+        for (const hole of poly.holes) {
+          if (hole.length < 3) continue
+          ctx.beginPath()
+          const first = worldToCanvas(hole[0].x, hole[0].y)
+          ctx.moveTo(toCanvasX(first.x), toCanvasY(first.y))
+          for (let i = 1; i < hole.length; i++) {
+            const pt = worldToCanvas(hole[i].x, hole[i].y)
+            ctx.lineTo(toCanvasX(pt.x), toCanvasY(pt.y))
+          }
+          ctx.closePath()
+          ctx.fill()
+          ctx.stroke()
         }
       }
     }
 
-    // Draw source stroke (centerline)
+    // 3. Draw source stroke centerline (red dashed)
     ctx.strokeStyle = "#ef4444"
-    ctx.lineWidth = 3
-    ctx.setLineDash([5, 5])
+    ctx.lineWidth = 2
+    ctx.setLineDash([6, 4])
     ctx.beginPath()
     if (stroke.length > 0) {
       ctx.moveTo(toCanvasX(stroke[0].x), toCanvasY(stroke[0].y))
@@ -108,28 +152,34 @@ function StrokePreview2D({
     ctx.stroke()
     ctx.setLineDash([])
 
-    // Draw stroke points
+    // 4. Draw stroke points
     ctx.fillStyle = "#ef4444"
     for (const p of stroke) {
       ctx.beginPath()
-      ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 4, 0, Math.PI * 2)
+      ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 3, 0, Math.PI * 2)
       ctx.fill()
     }
 
     // Legend
-    ctx.font = "12px monospace"
+    ctx.font = "11px system-ui, sans-serif"
     ctx.fillStyle = "#ef4444"
-    ctx.fillText("--- Source Stroke", 10, 20)
+    ctx.fillText("--- Centerline", 8, 16)
+    if (showPreUnion) {
+      ctx.fillStyle = "#fbbf24"
+      ctx.fillText("--- Pre-Union Outline", 8, 30)
+    }
     ctx.fillStyle = "#3b82f6"
-    ctx.fillText("■ Expanded Polygon", 10, 36)
+    ctx.fillText("■ Post-Union Filled", 8, showPreUnion ? 44 : 30)
+    ctx.fillStyle = "#f97316"
+    ctx.fillText("○ Holes", 8, showPreUnion ? 58 : 44)
 
-  }, [stroke, result, thickness])
+  }, [stroke, result, showPreUnion])
 
   return (
     <canvas
       ref={canvasRef}
-      width={300}
-      height={300}
+      width={320}
+      height={320}
       className="rounded-lg border border-border"
     />
   )
@@ -137,19 +187,17 @@ function StrokePreview2D({
 
 // 3D View for the extruded result
 function ExtrudedMesh3D({ result }: { result: VectorSolidResult }) {
-  const meshRef = useRef<THREE.Mesh>(null)
-
   if (!result.geometry) {
     return (
       <mesh>
-        <boxGeometry args={[0.1, 0.1, 0.1]} />
-        <meshStandardMaterial color="red" />
+        <boxGeometry args={[0.2, 0.2, 0.2]} />
+        <meshStandardMaterial color="#ef4444" wireframe />
       </mesh>
     )
   }
 
   return (
-    <mesh ref={meshRef} geometry={result.geometry}>
+    <mesh geometry={result.geometry}>
       <meshStandardMaterial 
         color="#3b82f6" 
         metalness={0.1} 
@@ -160,52 +208,106 @@ function ExtrudedMesh3D({ result }: { result: VectorSolidResult }) {
   )
 }
 
+// Debug stats display
+function DebugStats({ stats, success }: { stats: VectorSolidDebugStats; success: boolean }) {
+  return (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs font-mono">
+      <div className="text-muted-foreground">Input points:</div>
+      <div>{stats.inputPointCount}</div>
+      <div className="text-muted-foreground">Expanded outline pts:</div>
+      <div>{stats.expandedOutlineCount}</div>
+      <div className="text-muted-foreground">Polygons before union:</div>
+      <div>{stats.polygonCountBeforeUnion}</div>
+      <div className="text-muted-foreground">Polygons after union:</div>
+      <div className={stats.polygonCountAfterUnion === 1 ? "text-green-500" : "text-yellow-500"}>
+        {stats.polygonCountAfterUnion}
+      </div>
+      <div className="text-muted-foreground">Holes:</div>
+      <div>{stats.holeCount}</div>
+      <div className="text-muted-foreground">Rebuild time:</div>
+      <div>{stats.rebuildTimeMs.toFixed(1)} ms</div>
+    </div>
+  )
+}
+
 // Single test case card
 function TestCaseCard({
   name,
   description,
   stroke,
   thickness,
-  depth
+  depth,
+  clipper,
+  showPreUnion
 }: {
   name: string
   description: string
   stroke: { points: { x: number; y: number }[]; cornerCount: number }
   thickness: number
   depth: number
+  clipper: ClipperLibWrapper | null
+  showPreUnion: boolean
 }) {
   const result = useMemo(() => {
-    return buildVectorSolid(
+    if (!clipper) {
+      return {
+        geometry: null,
+        polygons: [],
+        expandedOutlines: [],
+        success: false,
+        error: "Clipper loading...",
+        stats: {
+          inputPointCount: 0,
+          expandedOutlineCount: 0,
+          polygonCountBeforeUnion: 0,
+          polygonCountAfterUnion: 0,
+          holeCount: 0,
+          rebuildTimeMs: 0
+        }
+      } as VectorSolidResult
+    }
+    return buildVectorSolidSync(
+      clipper,
       [stroke],
       TEST_CANVAS_WIDTH,
       TEST_CANVAS_HEIGHT,
       thickness,
       depth
     )
-  }, [stroke, thickness, depth])
+  }, [stroke, thickness, depth, clipper])
+
+  // Determine pass/fail criteria
+  const isPassing = result.success && 
+    result.stats.polygonCountAfterUnion === 1 && 
+    result.stats.rebuildTimeMs < 100
 
   return (
-    <Card className="w-full">
-      <CardHeader>
-        <CardTitle>{name}</CardTitle>
-        <CardDescription>{description}</CardDescription>
+    <Card className={`w-full ${isPassing ? "border-green-500/50" : "border-yellow-500/50"}`}>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg">{name}</CardTitle>
+          <Badge variant={isPassing ? "default" : "secondary"} className={isPassing ? "bg-green-600" : "bg-yellow-600"}>
+            {isPassing ? "PASS" : "CHECK"}
+          </Badge>
+        </div>
+        <CardDescription className="text-xs">{description}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex gap-4 flex-wrap justify-center">
-          {/* 2D Source + Expanded */}
+          {/* 2D Source + Expanded + Union */}
           <div className="flex flex-col items-center gap-2">
-            <div className="text-sm font-medium text-muted-foreground">2D Source + Expanded</div>
+            <div className="text-xs font-medium text-muted-foreground">2D Pipeline Stages</div>
             <StrokePreview2D
               stroke={stroke.points}
               result={result}
-              thickness={thickness}
+              showPreUnion={showPreUnion}
             />
           </div>
 
           {/* 3D Extruded Result */}
           <div className="flex flex-col items-center gap-2">
-            <div className="text-sm font-medium text-muted-foreground">3D Extruded Result</div>
-            <div className="w-[300px] h-[300px] rounded-lg border border-border bg-background">
+            <div className="text-xs font-medium text-muted-foreground">3D Extruded Result</div>
+            <div className="w-[320px] h-[320px] rounded-lg border border-border bg-background">
               <Canvas>
                 <PerspectiveCamera makeDefault position={[0, 0, 4]} />
                 <OrbitControls enablePan={false} />
@@ -218,17 +320,15 @@ function TestCaseCard({
           </div>
         </div>
 
-        {/* Status */}
-        <div className="text-sm">
-          <span className={result.success ? "text-green-500" : "text-red-500"}>
-            {result.success ? "SUCCESS" : "FAILED"}
-          </span>
-          {result.error && <span className="text-red-400 ml-2">({result.error})</span>}
-          <span className="text-muted-foreground ml-4">
-            Polygons: {result.polygons.length}, 
-            Outer pts: {result.polygons[0]?.outer.length ?? 0},
-            Holes: {result.polygons.reduce((sum, p) => sum + p.holes.length, 0)}
-          </span>
+        {/* Debug Stats */}
+        <div className="flex items-start justify-between gap-4 pt-2 border-t border-border">
+          <div className="flex items-center gap-2">
+            <span className={`text-sm font-medium ${result.success ? "text-green-500" : "text-red-500"}`}>
+              {result.success ? "SUCCESS" : "FAILED"}
+            </span>
+            {result.error && <span className="text-xs text-red-400">({result.error})</span>}
+          </div>
+          <DebugStats stats={result.stats} success={result.success} />
         </div>
       </CardContent>
     </Card>
@@ -238,78 +338,108 @@ function TestCaseCard({
 export default function SolidSandboxPage() {
   const [thickness, setThickness] = useState(0.15)
   const [depth, setDepth] = useState(0.3)
+  const [showPreUnion, setShowPreUnion] = useState(true)
+  const [clipper, setClipper] = useState<ClipperLibWrapper | null>(null)
+
+  // Debounce thickness and depth to prevent rebuild spam
+  const debouncedThickness = useDebounce(thickness, 50)
+  const debouncedDepth = useDebounce(depth, 50)
+
+  // Load Clipper on mount
+  useEffect(() => {
+    getClipper().then(setClipper)
+  }, [])
 
   const testCases = useMemo(() => generateTestStrokes(), [])
 
   return (
-    <div className="min-h-screen bg-background p-8">
-      <div className="max-w-6xl mx-auto space-y-8">
-        <div className="text-center space-y-2">
-          <h1 className="text-3xl font-bold">Vector Solid Mode Sandbox</h1>
-          <p className="text-muted-foreground">
-            Testing the new vector-based Solid pipeline with stroke expansion + polygon union
+    <div className="min-h-screen bg-background p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
+        <div className="text-center space-y-1">
+          <h1 className="text-2xl font-bold">Vector Solid Mode Sandbox</h1>
+          <p className="text-sm text-muted-foreground">
+            Testing vector-based Solid pipeline with Clipper offset + union
           </p>
+          {!clipper && (
+            <p className="text-sm text-yellow-500">Loading Clipper library...</p>
+          )}
         </div>
 
         {/* Controls */}
         <Card>
-          <CardHeader>
-            <CardTitle>Parameters</CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Parameters</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-2">
-              <div className="flex justify-between">
-                <label className="text-sm font-medium">Thickness</label>
-                <span className="text-sm text-muted-foreground">{thickness.toFixed(3)}</span>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <label className="font-medium">Thickness</label>
+                  <span className="text-muted-foreground font-mono">{thickness.toFixed(3)}</span>
+                </div>
+                <Slider
+                  value={[thickness]}
+                  onValueChange={([v]) => setThickness(v)}
+                  min={0.02}
+                  max={0.5}
+                  step={0.005}
+                />
               </div>
-              <Slider
-                value={[thickness]}
-                onValueChange={([v]) => setThickness(v)}
-                min={0.02}
-                max={0.5}
-                step={0.01}
-              />
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <label className="font-medium">Depth</label>
+                  <span className="text-muted-foreground font-mono">{depth.toFixed(3)}</span>
+                </div>
+                <Slider
+                  value={[depth]}
+                  onValueChange={([v]) => setDepth(v)}
+                  min={0.05}
+                  max={1.0}
+                  step={0.01}
+                />
+              </div>
             </div>
-            <div className="space-y-2">
-              <div className="flex justify-between">
-                <label className="text-sm font-medium">Depth</label>
-                <span className="text-sm text-muted-foreground">{depth.toFixed(3)}</span>
-              </div>
-              <Slider
-                value={[depth]}
-                onValueChange={([v]) => setDepth(v)}
-                min={0.05}
-                max={1.0}
-                step={0.01}
+            <div className="flex items-center gap-2">
+              <input 
+                type="checkbox" 
+                id="showPreUnion" 
+                checked={showPreUnion}
+                onChange={(e) => setShowPreUnion(e.target.checked)}
+                className="rounded"
               />
+              <label htmlFor="showPreUnion" className="text-sm">
+                Show pre-union outline (yellow dashed)
+              </label>
             </div>
           </CardContent>
         </Card>
 
         {/* Test Cases */}
-        <div className="space-y-6">
+        <div className="grid gap-6">
           {testCases.map((tc, i) => (
             <TestCaseCard
               key={i}
               name={tc.name}
               description={tc.description}
               stroke={tc.stroke}
-              thickness={thickness}
-              depth={depth}
+              thickness={debouncedThickness}
+              depth={debouncedDepth}
+              clipper={clipper}
+              showPreUnion={showPreUnion}
             />
           ))}
         </div>
 
         {/* Implementation Notes */}
         <Card>
-          <CardHeader>
-            <CardTitle>Implementation Notes</CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Implementation Details</CardTitle>
           </CardHeader>
-          <CardContent className="text-sm text-muted-foreground space-y-2">
-            <p><strong>Pipeline:</strong> Centerline polyline → Expand by thickness → Union overlaps → Simplify → Extrude</p>
-            <p><strong>Library:</strong> Manual polyline expansion with round caps (js-angusj-clipper available for complex union)</p>
+          <CardContent className="text-xs text-muted-foreground space-y-1">
+            <p><strong>Library:</strong> js-angusj-clipper (WASM with ASM.js fallback)</p>
+            <p><strong>Clipper Operations:</strong> offsetToPaths (JoinType.Round, EndType.OpenRound) + clipToPaths (ClipType.Union, NonZero fill)</p>
+            <p><strong>Pass Criteria:</strong> 1 polygon after union, no artifacts, &lt;100ms rebuild time</p>
             <p><strong>Winding:</strong> CCW for outer boundary, CW for holes (THREE.js requirement)</p>
-            <p><strong>MVP Scope:</strong> Single stroke works reliably. Multi-stroke union for overlapping strokes coming next.</p>
           </CardContent>
         </Card>
       </div>
