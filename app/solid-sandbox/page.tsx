@@ -223,7 +223,7 @@ function DebugStats({ stats, success }: { stats: VectorSolidDebugStats; success:
       <div className="text-muted-foreground">Holes:</div>
       <div>{stats.holeCount}</div>
       <div className="text-muted-foreground">Rebuild time:</div>
-      <div>{stats.rebuildTimeMs.toFixed(1)} ms</div>
+      <div suppressHydrationWarning>{stats.rebuildTimeMs.toFixed(1)} ms</div>
     </div>
   )
 }
