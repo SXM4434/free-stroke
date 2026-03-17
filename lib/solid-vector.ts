@@ -251,39 +251,57 @@ function pointLineDistance(p: Point2D, a: Point2D, b: Point2D): number {
 
 /**
  * Union multiple polygons using polygon-clipping library
+ * 
+ * polygon-clipping format:
+ * - Ring: [number, number][] - array of [x, y] points
+ * - Polygon: Ring[] - outer ring + hole rings
+ * - MultiPolygon (Geom): Polygon[] - array of polygons
+ * 
+ * union() takes two Geom arguments and returns a Geom
  */
 function unionPolygons(polygons: Point2D[][]): Polygon[] {
   if (polygons.length === 0) return []
+  if (polygons.length === 1) {
+    return [{ outer: polygons[0], holes: [] }]
+  }
   
-  // Convert to polygon-clipping format: each polygon is [[outer], [hole1], [hole2], ...]
+  // Convert to polygon-clipping Geom format: Polygon[][] where each Polygon is [outerRing, ...holeRings]
   // For our expanded outlines, we just have outers (no holes yet)
-  const multiPolygons: [number, number][][][] = polygons.map(pts => [toRing(pts)])
+  // Each input polygon becomes a single-polygon Geom: [[ring]]
+  const geoms: [number, number][][][] = polygons.map(pts => [[...toRing(pts)]])
   
   try {
-    // Union all polygons
-    let result = multiPolygons[0]
-    for (let i = 1; i < multiPolygons.length; i++) {
-      result = polygonClipping.union(result, multiPolygons[i])
+    // Union all polygons progressively
+    // polygon-clipping.union takes Geom arguments and returns Geom
+    let result: [number, number][][][] = geoms[0]
+    for (let i = 1; i < geoms.length; i++) {
+      result = polygonClipping.union(result, geoms[i]) as [number, number][][][]
     }
     
     // Convert result back to Polygon[]
-    // Result is MultiPolygon format: each element is a polygon with [outer, ...holes]
+    // Result is Geom format: array of polygons, each polygon is [outer, ...holes]
     const output: Polygon[] = []
     
     for (const poly of result) {
-      if (poly.length === 0) continue
+      if (!poly || poly.length === 0) continue
       
-      const outer = fromRing(poly[0])
+      const outerRing = poly[0]
+      if (!outerRing || outerRing.length < 3) continue
+      
+      const outer = fromRing(outerRing as [number, number][])
       const holes: Point2D[][] = []
       
       for (let i = 1; i < poly.length; i++) {
-        holes.push(fromRing(poly[i]))
+        const holeRing = poly[i]
+        if (holeRing && holeRing.length >= 3) {
+          holes.push(fromRing(holeRing as [number, number][]))
+        }
       }
       
       output.push({ outer, holes })
     }
     
-    return output
+    return output.length > 0 ? output : polygons.map(pts => ({ outer: pts, holes: [] }))
     
   } catch (e) {
     console.error("[v0] polygon-clipping union failed:", e)
