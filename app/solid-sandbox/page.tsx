@@ -2,415 +2,367 @@
 
 import { useState, useMemo, useRef, useEffect } from "react"
 import { Canvas } from "@react-three/fiber"
-import { OrbitControls, PerspectiveCamera } from "@react-three/drei"
+import { OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { Badge } from "@/components/ui/badge"
-import { 
-  buildVectorSolid, 
-  generateTestStrokes, 
-  type VectorSolidResult,
-  type VectorSolidDebugStats
-} from "@/lib/solid-vector"
+import { buildMaskSolid, generateTestStrokes, type MaskSolidResult, type MaskSolidStats, type Point2D, type TestStroke } from "@/lib/solid-mask"
 
-const TEST_CANVAS_WIDTH = 600
-const TEST_CANVAS_HEIGHT = 600
-
-// Debounce hook
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value)
-
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value)
-    }, delay)
-    return () => clearTimeout(handler)
-  }, [value, delay])
-
-  return debouncedValue
-}
-
-// Convert world coords to canvas coords for rendering
-function worldToCanvas(wx: number, wy: number): { x: number; y: number } {
-  const scaleRef = Math.max(TEST_CANVAS_WIDTH, TEST_CANVAS_HEIGHT)
-  const normScale = 3 / scaleRef
-  return {
-    x: wx / normScale + TEST_CANVAS_WIDTH / 2,
-    y: -wy / normScale + TEST_CANVAS_HEIGHT / 2
-  }
-}
-
-// 2D Canvas showing all stages: centerline, expanded outlines before union, post-union polygon
-function StrokePreview2D({ 
-  stroke, 
-  result,
-  showPreUnion
-}: { 
-  stroke: { x: number; y: number }[]
-  result: VectorSolidResult
-  showPreUnion: boolean
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    const width = canvas.width
-    const height = canvas.height
-    
-    ctx.clearRect(0, 0, width, height)
-    ctx.fillStyle = "#0f0f1a"
-    ctx.fillRect(0, 0, width, height)
-
-    // Scale to fit
-    const scale = Math.min(width, height) / TEST_CANVAS_WIDTH * 0.85
-    const offsetX = (width - TEST_CANVAS_WIDTH * scale) / 2
-    const offsetY = (height - TEST_CANVAS_HEIGHT * scale) / 2
-
-    const toCanvasX = (x: number) => offsetX + x * scale
-    const toCanvasY = (y: number) => offsetY + y * scale
-
-    // 1. Draw expanded outlines BEFORE union (yellow, dashed)
-    if (showPreUnion && result.expandedOutlines.length > 0) {
-      ctx.strokeStyle = "#fbbf24"
-      ctx.lineWidth = 1
-      ctx.setLineDash([4, 4])
-      
-      for (const outline of result.expandedOutlines) {
-        if (outline.length < 3) continue
-        ctx.beginPath()
-        const first = worldToCanvas(outline[0].x, outline[0].y)
-        ctx.moveTo(toCanvasX(first.x), toCanvasY(first.y))
-        for (let i = 1; i < outline.length; i++) {
-          const pt = worldToCanvas(outline[i].x, outline[i].y)
-          ctx.lineTo(toCanvasX(pt.x), toCanvasY(pt.y))
-        }
-        ctx.closePath()
-        ctx.stroke()
-      }
-      ctx.setLineDash([])
-    }
-
-    // 2. Draw POST-UNION filled polygon (blue fill, solid stroke)
-    if (result.polygons.length > 0) {
-      for (const poly of result.polygons) {
-        // Fill outer
-        ctx.fillStyle = "rgba(59, 130, 246, 0.4)"
-        ctx.strokeStyle = "#3b82f6"
-        ctx.lineWidth = 2
-
-        if (poly.outer.length > 0) {
-          ctx.beginPath()
-          const first = worldToCanvas(poly.outer[0].x, poly.outer[0].y)
-          ctx.moveTo(toCanvasX(first.x), toCanvasY(first.y))
-          for (let i = 1; i < poly.outer.length; i++) {
-            const pt = worldToCanvas(poly.outer[i].x, poly.outer[i].y)
-            ctx.lineTo(toCanvasX(pt.x), toCanvasY(pt.y))
-          }
-          ctx.closePath()
-          ctx.fill()
-          ctx.stroke()
-        }
-
-        // Cut out holes (draw with background color)
-        ctx.fillStyle = "#0f0f1a"
-        ctx.strokeStyle = "#f97316"
-        ctx.lineWidth = 1.5
-        for (const hole of poly.holes) {
-          if (hole.length < 3) continue
-          ctx.beginPath()
-          const first = worldToCanvas(hole[0].x, hole[0].y)
-          ctx.moveTo(toCanvasX(first.x), toCanvasY(first.y))
-          for (let i = 1; i < hole.length; i++) {
-            const pt = worldToCanvas(hole[i].x, hole[i].y)
-            ctx.lineTo(toCanvasX(pt.x), toCanvasY(pt.y))
-          }
-          ctx.closePath()
-          ctx.fill()
-          ctx.stroke()
-        }
-      }
-    }
-
-    // 3. Draw source stroke centerline (red dashed)
-    ctx.strokeStyle = "#ef4444"
-    ctx.lineWidth = 2
-    ctx.setLineDash([6, 4])
-    ctx.beginPath()
-    if (stroke.length > 0) {
-      ctx.moveTo(toCanvasX(stroke[0].x), toCanvasY(stroke[0].y))
-      for (let i = 1; i < stroke.length; i++) {
-        ctx.lineTo(toCanvasX(stroke[i].x), toCanvasY(stroke[i].y))
-      }
-    }
-    ctx.stroke()
-    ctx.setLineDash([])
-
-    // 4. Draw stroke points
-    ctx.fillStyle = "#ef4444"
-    for (const p of stroke) {
-      ctx.beginPath()
-      ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 3, 0, Math.PI * 2)
-      ctx.fill()
-    }
-
-    // Legend
-    ctx.font = "11px system-ui, sans-serif"
-    ctx.fillStyle = "#ef4444"
-    ctx.fillText("--- Centerline", 8, 16)
-    if (showPreUnion) {
-      ctx.fillStyle = "#fbbf24"
-      ctx.fillText("--- Pre-Union Outline", 8, 30)
-    }
-    ctx.fillStyle = "#3b82f6"
-    ctx.fillText("Filled Polygon", 8, showPreUnion ? 44 : 30)
-    ctx.fillStyle = "#f97316"
-    ctx.fillText("Holes", 8, showPreUnion ? 58 : 44)
-
-  }, [stroke, result, showPreUnion])
-
+export default function SolidSandboxPage() {
+  const [thickness, setThickness] = useState(0.15)
+  const [depth, setDepth] = useState(0.3)
+  
+  const testCases = generateTestStrokes()
+  
   return (
-    <canvas
-      ref={canvasRef}
-      width={320}
-      height={320}
-      className="rounded-lg border border-border"
-    />
-  )
-}
-
-// 3D View for the extruded result
-function ExtrudedMesh3D({ result }: { result: VectorSolidResult }) {
-  if (!result.geometry) {
-    return (
-      <mesh>
-        <boxGeometry args={[0.2, 0.2, 0.2]} />
-        <meshStandardMaterial color="#ef4444" wireframe />
-      </mesh>
-    )
-  }
-
-  return (
-    <mesh geometry={result.geometry}>
-      <meshStandardMaterial 
-        color="#3b82f6" 
-        metalness={0.1} 
-        roughness={0.4}
-        side={THREE.DoubleSide}
-      />
-    </mesh>
-  )
-}
-
-// Debug stats display
-function DebugStats({ stats, success }: { stats: VectorSolidDebugStats; success: boolean }) {
-  return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs font-mono">
-      <div className="text-muted-foreground">Input points:</div>
-      <div>{stats.inputPointCount}</div>
-      <div className="text-muted-foreground">Expanded outline pts:</div>
-      <div>{stats.expandedOutlineCount}</div>
-      <div className="text-muted-foreground">Polygons before union:</div>
-      <div>{stats.polygonCountBeforeUnion}</div>
-      <div className="text-muted-foreground">Polygons after union:</div>
-      <div className={stats.polygonCountAfterUnion === 1 ? "text-green-500" : "text-yellow-500"}>
-        {stats.polygonCountAfterUnion}
+    <div className="min-h-screen bg-background p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Solid Mode Sandbox - MASK-FIRST Pipeline</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium">Thickness: {thickness.toFixed(2)}</label>
+                <Slider
+                  value={[thickness]}
+                  onValueChange={([v]) => setThickness(v)}
+                  min={0.05}
+                  max={0.4}
+                  step={0.01}
+                  className="mt-2"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Depth: {depth.toFixed(2)}</label>
+                <Slider
+                  value={[depth]}
+                  onValueChange={([v]) => setDepth(v)}
+                  min={0.1}
+                  max={1.0}
+                  step={0.05}
+                  className="mt-2"
+                />
+              </div>
+            </div>
+            
+            <div className="text-xs text-muted-foreground">
+              Pipeline: Canvas2D render → Binary mask → Connected components → Contour tracing → Simplify → Extrude
+            </div>
+          </CardContent>
+        </Card>
+        
+        <div className="grid gap-6">
+          {testCases.map((tc) => (
+            <TestCaseCard
+              key={tc.name}
+              name={tc.name}
+              description={tc.description}
+              stroke={tc.stroke}
+              thickness={thickness}
+              depth={depth}
+            />
+          ))}
+        </div>
       </div>
-      <div className="text-muted-foreground">Holes:</div>
-      <div>{stats.holeCount}</div>
-      <div className="text-muted-foreground">Rebuild time:</div>
-      <div suppressHydrationWarning>{stats.rebuildTimeMs.toFixed(1)} ms</div>
     </div>
   )
 }
 
-// Single test case card
-function TestCaseCard({
-  name,
-  description,
-  stroke,
-  thickness,
-  depth,
-  showPreUnion
-}: {
+interface TestCaseCardProps {
   name: string
   description: string
-  stroke: { points: { x: number; y: number }[]; cornerCount: number }
+  stroke: TestStroke
   thickness: number
   depth: number
-  showPreUnion: boolean
-}) {
+}
+
+function TestCaseCard({ name, description, stroke, thickness, depth }: TestCaseCardProps) {
   const result = useMemo(() => {
-    return buildVectorSolid(
-      [stroke],
-      TEST_CANVAS_WIDTH,
-      TEST_CANVAS_HEIGHT,
-      thickness,
-      depth
-    )
+    return buildMaskSolid(stroke, thickness, depth, 800, 600)
   }, [stroke, thickness, depth])
-
-  // Determine pass/fail criteria
-  const isPassing = result.success && 
-    result.stats.polygonCountAfterUnion === 1 && 
-    result.stats.rebuildTimeMs < 100
-
+  
+  const success = result.geometry !== null
+  
   return (
-    <Card className={`w-full ${isPassing ? "border-green-500/50" : "border-yellow-500/50"}`}>
+    <Card className={`border-2 ${success ? "border-green-500/50" : "border-red-500/50"}`}>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-lg">{name}</CardTitle>
-          <Badge variant={isPassing ? "default" : "secondary"} className={isPassing ? "bg-green-600" : "bg-yellow-600"}>
-            {isPassing ? "PASS" : "CHECK"}
+          <div>
+            <CardTitle className="text-lg">{name}</CardTitle>
+            <p className="text-sm text-muted-foreground">{description}</p>
+          </div>
+          <Badge variant={success ? "default" : "destructive"}>
+            {success ? "PASS" : "FAIL"}
           </Badge>
         </div>
-        <CardDescription className="text-xs">{description}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex gap-4 flex-wrap justify-center">
-          {/* 2D Source + Expanded + Union */}
-          <div className="flex flex-col items-center gap-2">
-            <div className="text-xs font-medium text-muted-foreground">2D Pipeline Stages</div>
-            <StrokePreview2D
-              stroke={stroke.points}
-              result={result}
-              showPreUnion={showPreUnion}
-            />
-          </div>
-
-          {/* 3D Extruded Result */}
-          <div className="flex flex-col items-center gap-2">
-            <div className="text-xs font-medium text-muted-foreground">3D Extruded Result</div>
-            <div className="w-[320px] h-[320px] rounded-lg border border-border bg-background">
-              <Canvas>
-                <PerspectiveCamera makeDefault position={[0, 0, 4]} />
-                <OrbitControls enablePan={false} />
+      <CardContent>
+        <div className="grid grid-cols-4 gap-4">
+          {/* Stage 1: Centerline */}
+          <StageView title="1. Centerline">
+            <CenterlineCanvas points={stroke.points} />
+          </StageView>
+          
+          {/* Stage 2: Raster Mask */}
+          <StageView title="2. Raster Mask">
+            <MaskCanvas stages={result.stages} />
+          </StageView>
+          
+          {/* Stage 3: Traced Contours */}
+          <StageView title="3. Traced Contours">
+            <ContourCanvas stages={result.stages} />
+          </StageView>
+          
+          {/* Stage 4: 3D Extrusion */}
+          <StageView title="4. 3D Extrusion">
+            <div className="aspect-square bg-muted rounded overflow-hidden">
+              <Canvas camera={{ position: [0, 0, 3], fov: 50 }}>
                 <ambientLight intensity={0.5} />
                 <directionalLight position={[5, 5, 5]} intensity={1} />
-                <ExtrudedMesh3D result={result} />
-                <gridHelper args={[4, 20, "#333", "#222"]} rotation={[Math.PI / 2, 0, 0]} />
+                {result.geometry && (
+                  <mesh geometry={result.geometry}>
+                    <meshStandardMaterial color="#6366f1" side={THREE.DoubleSide} />
+                  </mesh>
+                )}
+                <OrbitControls enableZoom={true} enablePan={false} />
               </Canvas>
             </div>
-          </div>
+          </StageView>
         </div>
-
+        
         {/* Debug Stats */}
-        <div className="flex items-start justify-between gap-4 pt-2 border-t border-border">
-          <div className="flex items-center gap-2">
-            <span className={`text-sm font-medium ${result.success ? "text-green-500" : "text-red-500"}`}>
-              {result.success ? "SUCCESS" : "FAILED"}
-            </span>
-            {result.error && <span className="text-xs text-red-400">({result.error})</span>}
-          </div>
-          <DebugStats stats={result.stats} success={result.success} />
-        </div>
+        <DebugStats stats={result.stats} success={success} />
       </CardContent>
     </Card>
   )
 }
 
-export default function SolidSandboxPage() {
-  const [thickness, setThickness] = useState(0.15)
-  const [depth, setDepth] = useState(0.3)
-  const [showPreUnion, setShowPreUnion] = useState(true)
-
-  // Debounce thickness and depth to prevent rebuild spam
-  const debouncedThickness = useDebounce(thickness, 50)
-  const debouncedDepth = useDebounce(depth, 50)
-
-  const testCases = useMemo(() => generateTestStrokes(), [])
-
+function StageView({ title, children }: { title: string, children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-background p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
-        <div className="text-center space-y-1">
-          <h1 className="text-2xl font-bold">Vector Solid Mode Sandbox</h1>
-          <p className="text-sm text-muted-foreground">
-            Testing vector-based Solid pipeline with polygon-clipping union
-          </p>
-        </div>
+    <div>
+      <div className="text-xs font-medium text-muted-foreground mb-1">{title}</div>
+      {children}
+    </div>
+  )
+}
 
-        {/* Controls */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Parameters</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <label className="font-medium">Thickness</label>
-                  <span className="text-muted-foreground font-mono">{thickness.toFixed(3)}</span>
-                </div>
-                <Slider
-                  value={[thickness]}
-                  onValueChange={([v]) => setThickness(v)}
-                  min={0.02}
-                  max={0.5}
-                  step={0.005}
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <label className="font-medium">Depth</label>
-                  <span className="text-muted-foreground font-mono">{depth.toFixed(3)}</span>
-                </div>
-                <Slider
-                  value={[depth]}
-                  onValueChange={([v]) => setDepth(v)}
-                  min={0.05}
-                  max={1.0}
-                  step={0.01}
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <input 
-                type="checkbox" 
-                id="showPreUnion" 
-                checked={showPreUnion}
-                onChange={(e) => setShowPreUnion(e.target.checked)}
-                className="rounded"
-              />
-              <label htmlFor="showPreUnion" className="text-sm">
-                Show pre-union outline (yellow dashed)
-              </label>
-            </div>
-          </CardContent>
-        </Card>
+function CenterlineCanvas({ points }: { points: Point2D[] }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    
+    const size = canvas.width
+    ctx.clearRect(0, 0, size, size)
+    
+    // Background
+    ctx.fillStyle = "#1e1e2e"
+    ctx.fillRect(0, 0, size, size)
+    
+    if (points.length < 2) return
+    
+    // Transform: world coords (-1.5, 1.5) to canvas (0, size)
+    const toCanvasX = (x: number) => (x + 1.5) / 3 * size
+    const toCanvasY = (y: number) => (-y + 1.5) / 3 * size
+    
+    // Draw centerline
+    ctx.strokeStyle = "#ef4444"
+    ctx.lineWidth = 2
+    ctx.setLineDash([4, 4])
+    ctx.beginPath()
+    ctx.moveTo(toCanvasX(points[0].x), toCanvasY(points[0].y))
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(toCanvasX(points[i].x), toCanvasY(points[i].y))
+    }
+    ctx.stroke()
+    ctx.setLineDash([])
+    
+    // Draw points
+    ctx.fillStyle = "#ef4444"
+    for (const p of points) {
+      ctx.beginPath()
+      ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 2, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }, [points])
+  
+  return (
+    <canvas
+      ref={canvasRef}
+      width={200}
+      height={200}
+      className="aspect-square bg-muted rounded w-full"
+    />
+  )
+}
 
-        {/* Test Cases */}
-        <div className="grid gap-6">
-          {testCases.map((tc, i) => (
-            <TestCaseCard
-              key={i}
-              name={tc.name}
-              description={tc.description}
-              stroke={tc.stroke}
-              thickness={debouncedThickness}
-              depth={debouncedDepth}
-              showPreUnion={showPreUnion}
-            />
-          ))}
-        </div>
+function MaskCanvas({ stages }: { stages: MaskSolidResult["stages"] }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    
+    const { maskData, maskWidth, maskHeight } = stages
+    const size = canvas.width
+    
+    ctx.clearRect(0, 0, size, size)
+    ctx.fillStyle = "#1e1e2e"
+    ctx.fillRect(0, 0, size, size)
+    
+    if (maskData.length === 0 || maskWidth === 0) return
+    
+    // Draw mask scaled to canvas
+    const imageData = ctx.createImageData(size, size)
+    const scaleX = maskWidth / size
+    const scaleY = maskHeight / size
+    
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const mx = Math.floor(x * scaleX)
+        const my = Math.floor(y * scaleY)
+        const maskIdx = my * maskWidth + mx
+        const pixelIdx = (y * size + x) * 4
+        
+        if (maskData[maskIdx]) {
+          imageData.data[pixelIdx] = 99      // R
+          imageData.data[pixelIdx + 1] = 102 // G
+          imageData.data[pixelIdx + 2] = 241 // B (indigo)
+          imageData.data[pixelIdx + 3] = 255 // A
+        } else {
+          imageData.data[pixelIdx] = 30
+          imageData.data[pixelIdx + 1] = 30
+          imageData.data[pixelIdx + 2] = 46
+          imageData.data[pixelIdx + 3] = 255
+        }
+      }
+    }
+    
+    ctx.putImageData(imageData, 0, 0)
+  }, [stages])
+  
+  return (
+    <canvas
+      ref={canvasRef}
+      width={200}
+      height={200}
+      className="aspect-square bg-muted rounded w-full"
+    />
+  )
+}
 
-        {/* Implementation Notes */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Implementation Details</CardTitle>
-          </CardHeader>
-          <CardContent className="text-xs text-muted-foreground space-y-1">
-            <p><strong>Library:</strong> polygon-clipping (pure JavaScript)</p>
-            <p><strong>Expansion:</strong> Manual polyline offset with round caps and joins</p>
-            <p><strong>Union:</strong> polygon-clipping union operation</p>
-            <p><strong>Pass Criteria:</strong> 1 polygon after union, no artifacts, rebuild time under 100ms</p>
-            <p><strong>Winding:</strong> CCW for outer boundary, CW for holes (THREE.js requirement)</p>
-          </CardContent>
-        </Card>
+function ContourCanvas({ stages }: { stages: MaskSolidResult["stages"] }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    
+    const { maskWidth, maskHeight, simplifiedOuter, simplifiedHoles } = stages
+    const size = canvas.width
+    
+    ctx.clearRect(0, 0, size, size)
+    ctx.fillStyle = "#1e1e2e"
+    ctx.fillRect(0, 0, size, size)
+    
+    if (maskWidth === 0 || simplifiedOuter.length < 3) return
+    
+    // Transform: mask coords to canvas
+    const scaleX = size / maskWidth
+    const scaleY = size / maskHeight
+    const scale = Math.min(scaleX, scaleY)
+    
+    const toCanvasX = (x: number) => x * scale
+    const toCanvasY = (y: number) => y * scale
+    
+    // Draw outer contour filled
+    ctx.fillStyle = "rgba(99, 102, 241, 0.3)"
+    ctx.strokeStyle = "#22c55e"
+    ctx.lineWidth = 2
+    
+    ctx.beginPath()
+    ctx.moveTo(toCanvasX(simplifiedOuter[0].x), toCanvasY(simplifiedOuter[0].y))
+    for (let i = 1; i < simplifiedOuter.length; i++) {
+      ctx.lineTo(toCanvasX(simplifiedOuter[i].x), toCanvasY(simplifiedOuter[i].y))
+    }
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    
+    // Draw holes
+    ctx.strokeStyle = "#3b82f6"
+    ctx.fillStyle = "rgba(59, 130, 246, 0.3)"
+    for (const hole of simplifiedHoles) {
+      if (hole.length < 3) continue
+      ctx.beginPath()
+      ctx.moveTo(toCanvasX(hole[0].x), toCanvasY(hole[0].y))
+      for (let i = 1; i < hole.length; i++) {
+        ctx.lineTo(toCanvasX(hole[i].x), toCanvasY(hole[i].y))
+      }
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+    }
+    
+    // Draw vertices
+    ctx.fillStyle = "#22c55e"
+    for (const p of simplifiedOuter) {
+      ctx.beginPath()
+      ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }, [stages])
+  
+  return (
+    <canvas
+      ref={canvasRef}
+      width={200}
+      height={200}
+      className="aspect-square bg-muted rounded w-full"
+    />
+  )
+}
+
+function DebugStats({ stats, success }: { stats: MaskSolidStats, success: boolean }) {
+  return (
+    <div className="mt-4 grid grid-cols-6 gap-x-4 gap-y-1 text-xs font-mono bg-muted/50 p-3 rounded">
+      <div className="text-muted-foreground">Mask res:</div>
+      <div>{stats.maskResolution}x{stats.maskResolution}</div>
+      
+      <div className="text-muted-foreground">Filled px:</div>
+      <div>{stats.filledPixelCount.toLocaleString()}</div>
+      
+      <div className="text-muted-foreground">Components:</div>
+      <div>{stats.componentCount}</div>
+      
+      <div className="text-muted-foreground">Largest:</div>
+      <div>{stats.largestComponentPixels.toLocaleString()} px</div>
+      
+      <div className="text-muted-foreground">Outer pts:</div>
+      <div>{stats.outerContourPoints} → {stats.simplifiedOuterPoints}</div>
+      
+      <div className="text-muted-foreground">Holes:</div>
+      <div>{stats.holeCount}</div>
+      
+      <div className="text-muted-foreground">Time:</div>
+      <div suppressHydrationWarning>{stats.rebuildTimeMs.toFixed(1)} ms</div>
+      
+      <div className="text-muted-foreground">Status:</div>
+      <div className={success ? "text-green-500" : "text-red-500"}>
+        {success ? "Geometry OK" : "Failed"}
       </div>
     </div>
   )
