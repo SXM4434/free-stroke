@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useRef, useEffect, useCallback } from "react"
+import { useState, useMemo, useRef, useEffect } from "react"
 import { Canvas } from "@react-three/fiber"
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei"
 import * as THREE from "three"
@@ -8,13 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Slider } from "@/components/ui/slider"
 import { Badge } from "@/components/ui/badge"
 import { 
-  buildVectorSolidSync, 
+  buildVectorSolid, 
   generateTestStrokes, 
-  getClipper,
   type VectorSolidResult,
   type VectorSolidDebugStats
 } from "@/lib/solid-vector"
-import type { ClipperLibWrapper } from "js-angusj-clipper"
 
 const TEST_CANVAS_WIDTH = 600
 const TEST_CANVAS_HEIGHT = 600
@@ -169,9 +167,9 @@ function StrokePreview2D({
       ctx.fillText("--- Pre-Union Outline", 8, 30)
     }
     ctx.fillStyle = "#3b82f6"
-    ctx.fillText("■ Post-Union Filled", 8, showPreUnion ? 44 : 30)
+    ctx.fillText("Filled Polygon", 8, showPreUnion ? 44 : 30)
     ctx.fillStyle = "#f97316"
-    ctx.fillText("○ Holes", 8, showPreUnion ? 58 : 44)
+    ctx.fillText("Holes", 8, showPreUnion ? 58 : 44)
 
   }, [stroke, result, showPreUnion])
 
@@ -237,7 +235,6 @@ function TestCaseCard({
   stroke,
   thickness,
   depth,
-  clipper,
   showPreUnion
 }: {
   name: string
@@ -245,36 +242,17 @@ function TestCaseCard({
   stroke: { points: { x: number; y: number }[]; cornerCount: number }
   thickness: number
   depth: number
-  clipper: ClipperLibWrapper | null
   showPreUnion: boolean
 }) {
   const result = useMemo(() => {
-    if (!clipper) {
-      return {
-        geometry: null,
-        polygons: [],
-        expandedOutlines: [],
-        success: false,
-        error: "Clipper loading...",
-        stats: {
-          inputPointCount: 0,
-          expandedOutlineCount: 0,
-          polygonCountBeforeUnion: 0,
-          polygonCountAfterUnion: 0,
-          holeCount: 0,
-          rebuildTimeMs: 0
-        }
-      } as VectorSolidResult
-    }
-    return buildVectorSolidSync(
-      clipper,
+    return buildVectorSolid(
       [stroke],
       TEST_CANVAS_WIDTH,
       TEST_CANVAS_HEIGHT,
       thickness,
       depth
     )
-  }, [stroke, thickness, depth, clipper])
+  }, [stroke, thickness, depth])
 
   // Determine pass/fail criteria
   const isPassing = result.success && 
@@ -339,16 +317,10 @@ export default function SolidSandboxPage() {
   const [thickness, setThickness] = useState(0.15)
   const [depth, setDepth] = useState(0.3)
   const [showPreUnion, setShowPreUnion] = useState(true)
-  const [clipper, setClipper] = useState<ClipperLibWrapper | null>(null)
 
   // Debounce thickness and depth to prevent rebuild spam
   const debouncedThickness = useDebounce(thickness, 50)
   const debouncedDepth = useDebounce(depth, 50)
-
-  // Load Clipper on mount
-  useEffect(() => {
-    getClipper().then(setClipper)
-  }, [])
 
   const testCases = useMemo(() => generateTestStrokes(), [])
 
@@ -358,11 +330,8 @@ export default function SolidSandboxPage() {
         <div className="text-center space-y-1">
           <h1 className="text-2xl font-bold">Vector Solid Mode Sandbox</h1>
           <p className="text-sm text-muted-foreground">
-            Testing vector-based Solid pipeline with Clipper offset + union
+            Testing vector-based Solid pipeline with polygon-clipping union
           </p>
-          {!clipper && (
-            <p className="text-sm text-yellow-500">Loading Clipper library...</p>
-          )}
         </div>
 
         {/* Controls */}
@@ -424,7 +393,6 @@ export default function SolidSandboxPage() {
               stroke={tc.stroke}
               thickness={debouncedThickness}
               depth={debouncedDepth}
-              clipper={clipper}
               showPreUnion={showPreUnion}
             />
           ))}
@@ -436,9 +404,10 @@ export default function SolidSandboxPage() {
             <CardTitle className="text-base">Implementation Details</CardTitle>
           </CardHeader>
           <CardContent className="text-xs text-muted-foreground space-y-1">
-            <p><strong>Library:</strong> js-angusj-clipper (WASM with ASM.js fallback)</p>
-            <p><strong>Clipper Operations:</strong> offsetToPaths (JoinType.Round, EndType.OpenRound) + clipToPaths (ClipType.Union, NonZero fill)</p>
-            <p><strong>Pass Criteria:</strong> 1 polygon after union, no artifacts, &lt;100ms rebuild time</p>
+            <p><strong>Library:</strong> polygon-clipping (pure JavaScript)</p>
+            <p><strong>Expansion:</strong> Manual polyline offset with round caps and joins</p>
+            <p><strong>Union:</strong> polygon-clipping union operation</p>
+            <p><strong>Pass Criteria:</strong> 1 polygon after union, no artifacts, rebuild time under 100ms</p>
             <p><strong>Winding:</strong> CCW for outer boundary, CW for holes (THREE.js requirement)</p>
           </CardContent>
         </Card>
