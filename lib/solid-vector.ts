@@ -1,5 +1,5 @@
 /**
- * Vector-based Solid Mode Pipeline
+ * Vector-based Solid Mode Pipeline (v2)
  * 
  * Uses polygon-clipping for boolean union operations and manual polyline expansion.
  * This handles self-overlapping strokes correctly by unioning the expanded outline.
