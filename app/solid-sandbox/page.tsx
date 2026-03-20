@@ -80,22 +80,28 @@ interface TestCaseCardProps {
 }
 
 function TestCaseCard({ name, description, stroke, thickness, depth }: TestCaseCardProps) {
-  const result = useMemo(() => {
-    return buildMaskSolid(stroke, thickness, depth, 800, 600)
+  const [result, setResult] = useState<ReturnType<typeof buildMaskSolid> | null>(null)
+  
+  // Run on client only (canvas requires document)
+  useEffect(() => {
+    if (typeof document === "undefined") return
+    const r = buildMaskSolid(stroke, thickness, depth, 800, 600)
+    setResult(r)
   }, [stroke, thickness, depth])
   
-  const success = result.geometry !== null
+  const success = result?.geometry !== null
+  const isLoading = result === null
   
   return (
-    <Card className={`border-2 ${success ? "border-green-500/50" : "border-red-500/50"}`}>
+    <Card className={`border-2 ${isLoading ? "border-muted" : success ? "border-green-500/50" : "border-red-500/50"}`}>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <div>
             <CardTitle className="text-lg">{name}</CardTitle>
             <p className="text-sm text-muted-foreground">{description}</p>
           </div>
-          <Badge variant={success ? "default" : "destructive"}>
-            {success ? "PASS" : "FAIL"}
+          <Badge variant={isLoading ? "secondary" : success ? "default" : "destructive"}>
+            {isLoading ? "Loading..." : success ? "PASS" : "FAIL"}
           </Badge>
         </div>
       </CardHeader>
@@ -108,35 +114,45 @@ function TestCaseCard({ name, description, stroke, thickness, depth }: TestCaseC
           
           {/* Stage 2: Raster Mask */}
           <StageView title="2. Raster Mask">
-            <MaskCanvas stages={result.stages} />
+            {result ? <MaskCanvas stages={result.stages} /> : <LoadingPlaceholder />}
           </StageView>
           
           {/* Stage 3: Traced Contours */}
           <StageView title="3. Traced Contours">
-            <ContourCanvas stages={result.stages} />
+            {result ? <ContourCanvas stages={result.stages} /> : <LoadingPlaceholder />}
           </StageView>
           
           {/* Stage 4: 3D Extrusion */}
           <StageView title="4. 3D Extrusion">
             <div className="aspect-square bg-muted rounded overflow-hidden">
-              <Canvas camera={{ position: [0, 0, 3], fov: 50 }}>
-                <ambientLight intensity={0.5} />
-                <directionalLight position={[5, 5, 5]} intensity={1} />
-                {result.geometry && (
-                  <mesh geometry={result.geometry}>
-                    <meshStandardMaterial color="#6366f1" side={THREE.DoubleSide} />
-                  </mesh>
-                )}
-                <OrbitControls enableZoom={true} enablePan={false} />
-              </Canvas>
+              {result ? (
+                <Canvas camera={{ position: [0, 0, 3], fov: 50 }}>
+                  <ambientLight intensity={0.5} />
+                  <directionalLight position={[5, 5, 5]} intensity={1} />
+                  {result.geometry && (
+                    <mesh geometry={result.geometry}>
+                      <meshStandardMaterial color="#6366f1" side={THREE.DoubleSide} />
+                    </mesh>
+                  )}
+                  <OrbitControls enableZoom={true} enablePan={false} />
+                </Canvas>
+              ) : <LoadingPlaceholder />}
             </div>
           </StageView>
         </div>
         
         {/* Debug Stats */}
-        <DebugStats stats={result.stats} success={success} />
+        {result && <DebugStats stats={result.stats} success={success} />}
       </CardContent>
     </Card>
+  )
+}
+
+function LoadingPlaceholder() {
+  return (
+    <div className="aspect-square bg-muted rounded flex items-center justify-center text-muted-foreground text-sm">
+      Loading...
+    </div>
   )
 }
 
