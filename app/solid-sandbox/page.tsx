@@ -1,36 +1,42 @@
 "use client"
 
-import { useState, useMemo, useRef, useEffect } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Canvas } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { Badge } from "@/components/ui/badge"
-import { buildMaskSolid, generateTestStrokes, type MaskSolidResult, type MaskSolidStats, type Point2D, type TestStroke } from "@/lib/solid-mask"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
+import { buildMaskSolid, generateTestStrokes, type MaskSolidResult, type MaskSolidStats, type Point2D, type TestStroke, type TestCase } from "@/lib/solid-mask"
 
 export default function SolidSandboxPage() {
   const [thickness, setThickness] = useState(0.15)
   const [depth, setDepth] = useState(0.3)
+  const [showRawContour, setShowRawContour] = useState(false)
   
   const testCases = generateTestStrokes()
   
   return (
-    <div className="min-h-screen bg-background p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="min-h-screen bg-background p-4">
+      <div className="max-w-[1600px] mx-auto space-y-4">
         <Card>
-          <CardHeader>
-            <CardTitle>Solid Mode Sandbox - MASK-FIRST Pipeline</CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xl">Solid Mode Sandbox - MASK-FIRST Pipeline</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Pipeline: Canvas2D render → Binary mask → Connected components → Contour tracing → Simplify → Extrude
+            </p>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-6">
               <div>
                 <label className="text-sm font-medium">Thickness: {thickness.toFixed(2)}</label>
                 <Slider
                   value={[thickness]}
                   onValueChange={([v]) => setThickness(v)}
-                  min={0.05}
-                  max={0.4}
+                  min={0.03}
+                  max={0.40}
                   step={0.01}
                   className="mt-2"
                 />
@@ -40,29 +46,28 @@ export default function SolidSandboxPage() {
                 <Slider
                   value={[depth]}
                   onValueChange={([v]) => setDepth(v)}
-                  min={0.1}
+                  min={0.05}
                   max={1.0}
                   step={0.05}
                   className="mt-2"
                 />
               </div>
-            </div>
-            
-            <div className="text-xs text-muted-foreground">
-              Pipeline: Canvas2D render → Binary mask → Connected components → Contour tracing → Simplify → Extrude
+              <div className="flex items-center space-x-2 pt-5">
+                <Switch id="raw-contour" checked={showRawContour} onCheckedChange={setShowRawContour} />
+                <Label htmlFor="raw-contour">Show raw contour (pre-simplification)</Label>
+              </div>
             </div>
           </CardContent>
         </Card>
         
-        <div className="grid gap-6">
+        <div className="grid gap-4">
           {testCases.map((tc) => (
             <TestCaseCard
               key={tc.name}
-              name={tc.name}
-              description={tc.description}
-              stroke={tc.stroke}
+              testCase={tc}
               thickness={thickness}
               depth={depth}
+              showRawContour={showRawContour}
             />
           ))}
         </div>
@@ -72,61 +77,58 @@ export default function SolidSandboxPage() {
 }
 
 interface TestCaseCardProps {
-  name: string
-  description: string
-  stroke: TestStroke
+  testCase: TestCase
   thickness: number
   depth: number
+  showRawContour: boolean
 }
 
-function TestCaseCard({ name, description, stroke, thickness, depth }: TestCaseCardProps) {
+function TestCaseCard({ testCase, thickness, depth, showRawContour }: TestCaseCardProps) {
   const [result, setResult] = useState<ReturnType<typeof buildMaskSolid> | null>(null)
   
-  // Run on client only (canvas requires document)
   useEffect(() => {
     if (typeof document === "undefined") return
-    const r = buildMaskSolid(stroke, thickness, depth, 800, 600)
+    const r = buildMaskSolid(testCase.stroke, thickness, depth, 800, 600)
     setResult(r)
-  }, [stroke, thickness, depth])
+  }, [testCase.stroke, thickness, depth])
   
   const success = result?.geometry !== null
   const isLoading = result === null
   
   return (
-    <Card className={`border-2 ${isLoading ? "border-muted" : success ? "border-green-500/50" : "border-red-500/50"}`}>
-      <CardHeader className="pb-2">
+    <Card className={`border-2 ${isLoading ? "border-muted" : success ? "border-green-500/30" : "border-red-500/30"}`}>
+      <CardHeader className="py-2 px-4">
         <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-lg">{name}</CardTitle>
-            <p className="text-sm text-muted-foreground">{description}</p>
+          <div className="flex-1">
+            <div className="flex items-center gap-3">
+              <CardTitle className="text-base">{testCase.name}</CardTitle>
+              <Badge variant={isLoading ? "secondary" : success ? "default" : "destructive"} className="text-xs">
+                {isLoading ? "..." : success ? "PASS" : "FAIL"}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">{testCase.description}</p>
+            <p className="text-xs text-emerald-600 mt-0.5">Expected: {testCase.expectedBehavior}</p>
           </div>
-          <Badge variant={isLoading ? "secondary" : success ? "default" : "destructive"}>
-            {isLoading ? "Loading..." : success ? "PASS" : "FAIL"}
-          </Badge>
         </div>
       </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-4 gap-4">
-          {/* Stage 1: Centerline */}
-          <StageView title="1. Centerline">
-            <CenterlineCanvas points={stroke.points} />
+      <CardContent className="px-4 pb-3">
+        <div className="grid grid-cols-5 gap-3">
+          <StageView title="Centerline">
+            <CenterlineCanvas points={testCase.stroke.points} />
           </StageView>
           
-          {/* Stage 2: Raster Mask */}
-          <StageView title="2. Raster Mask">
+          <StageView title="Raster Mask">
             {result ? <MaskCanvas stages={result.stages} /> : <LoadingPlaceholder />}
           </StageView>
           
-          {/* Stage 3: Traced Contours */}
-          <StageView title="3. Traced Contours">
-            {result ? <ContourCanvas stages={result.stages} /> : <LoadingPlaceholder />}
+          <StageView title={showRawContour ? "Raw Contour" : "Simplified Contour"}>
+            {result ? <ContourCanvas stages={result.stages} showRaw={showRawContour} /> : <LoadingPlaceholder />}
           </StageView>
           
-          {/* Stage 4: 3D Extrusion */}
-          <StageView title="4. 3D Extrusion">
+          <StageView title="3D Extrusion">
             <div className="aspect-square bg-muted rounded overflow-hidden">
               {result ? (
-                <Canvas camera={{ position: [0, 0, 3], fov: 50 }}>
+                <Canvas camera={{ position: [0, 0, 2.5], fov: 50 }}>
                   <ambientLight intensity={0.5} />
                   <directionalLight position={[5, 5, 5]} intensity={1} />
                   {result.geometry && (
@@ -139,10 +141,11 @@ function TestCaseCard({ name, description, stroke, thickness, depth }: TestCaseC
               ) : <LoadingPlaceholder />}
             </div>
           </StageView>
+          
+          <StageView title="Stats">
+            {result ? <DebugStats stats={result.stats} success={success} /> : <LoadingPlaceholder />}
+          </StageView>
         </div>
-        
-        {/* Debug Stats */}
-        {result && <DebugStats stats={result.stats} success={success} />}
       </CardContent>
     </Card>
   )
@@ -150,7 +153,7 @@ function TestCaseCard({ name, description, stroke, thickness, depth }: TestCaseC
 
 function LoadingPlaceholder() {
   return (
-    <div className="aspect-square bg-muted rounded flex items-center justify-center text-muted-foreground text-sm">
+    <div className="aspect-square bg-muted rounded flex items-center justify-center text-muted-foreground text-xs">
       Loading...
     </div>
   )
@@ -159,7 +162,7 @@ function LoadingPlaceholder() {
 function StageView({ title, children }: { title: string, children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-xs font-medium text-muted-foreground mb-1">{title}</div>
+      <div className="text-[10px] font-medium text-muted-foreground mb-1">{title}</div>
       {children}
     </div>
   )
@@ -171,27 +174,22 @@ function CenterlineCanvas({ points }: { points: Point2D[] }) {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    
     const ctx = canvas.getContext("2d")
     if (!ctx) return
     
     const size = canvas.width
     ctx.clearRect(0, 0, size, size)
-    
-    // Background
     ctx.fillStyle = "#1e1e2e"
     ctx.fillRect(0, 0, size, size)
     
     if (points.length < 2) return
     
-    // Transform: world coords (-1.5, 1.5) to canvas (0, size)
-    const toCanvasX = (x: number) => (x + 1.5) / 3 * size
-    const toCanvasY = (y: number) => (-y + 1.5) / 3 * size
+    const toCanvasX = (x: number) => (x + 1.2) / 2.4 * size
+    const toCanvasY = (y: number) => (-y + 1.2) / 2.4 * size
     
-    // Draw centerline
     ctx.strokeStyle = "#ef4444"
-    ctx.lineWidth = 2
-    ctx.setLineDash([4, 4])
+    ctx.lineWidth = 1.5
+    ctx.setLineDash([3, 3])
     ctx.beginPath()
     ctx.moveTo(toCanvasX(points[0].x), toCanvasY(points[0].y))
     for (let i = 1; i < points.length; i++) {
@@ -199,24 +197,9 @@ function CenterlineCanvas({ points }: { points: Point2D[] }) {
     }
     ctx.stroke()
     ctx.setLineDash([])
-    
-    // Draw points
-    ctx.fillStyle = "#ef4444"
-    for (const p of points) {
-      ctx.beginPath()
-      ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 2, 0, Math.PI * 2)
-      ctx.fill()
-    }
   }, [points])
   
-  return (
-    <canvas
-      ref={canvasRef}
-      width={200}
-      height={200}
-      className="aspect-square bg-muted rounded w-full"
-    />
-  )
+  return <canvas ref={canvasRef} width={150} height={150} className="aspect-square bg-muted rounded w-full" />
 }
 
 function MaskCanvas({ stages }: { stages: MaskSolidResult["stages"] }) {
@@ -225,7 +208,6 @@ function MaskCanvas({ stages }: { stages: MaskSolidResult["stages"] }) {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    
     const ctx = canvas.getContext("2d")
     if (!ctx) return
     
@@ -238,7 +220,6 @@ function MaskCanvas({ stages }: { stages: MaskSolidResult["stages"] }) {
     
     if (maskData.length === 0 || maskWidth === 0) return
     
-    // Draw mask scaled to canvas
     const imageData = ctx.createImageData(size, size)
     const scaleX = maskWidth / size
     const scaleY = maskHeight / size
@@ -251,10 +232,10 @@ function MaskCanvas({ stages }: { stages: MaskSolidResult["stages"] }) {
         const pixelIdx = (y * size + x) * 4
         
         if (maskData[maskIdx]) {
-          imageData.data[pixelIdx] = 99      // R
-          imageData.data[pixelIdx + 1] = 102 // G
-          imageData.data[pixelIdx + 2] = 241 // B (indigo)
-          imageData.data[pixelIdx + 3] = 255 // A
+          imageData.data[pixelIdx] = 99
+          imageData.data[pixelIdx + 1] = 102
+          imageData.data[pixelIdx + 2] = 241
+          imageData.data[pixelIdx + 3] = 255
         } else {
           imageData.data[pixelIdx] = 30
           imageData.data[pixelIdx + 1] = 30
@@ -263,56 +244,46 @@ function MaskCanvas({ stages }: { stages: MaskSolidResult["stages"] }) {
         }
       }
     }
-    
     ctx.putImageData(imageData, 0, 0)
   }, [stages])
   
-  return (
-    <canvas
-      ref={canvasRef}
-      width={200}
-      height={200}
-      className="aspect-square bg-muted rounded w-full"
-    />
-  )
+  return <canvas ref={canvasRef} width={150} height={150} className="aspect-square bg-muted rounded w-full" />
 }
 
-function ContourCanvas({ stages }: { stages: MaskSolidResult["stages"] }) {
+function ContourCanvas({ stages, showRaw }: { stages: MaskSolidResult["stages"], showRaw: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    
     const ctx = canvas.getContext("2d")
     if (!ctx) return
     
-    const { maskWidth, maskHeight, simplifiedOuter, simplifiedHoles } = stages
+    const { maskWidth, maskHeight, outerContour, simplifiedOuter, holes, simplifiedHoles } = stages
     const size = canvas.width
     
     ctx.clearRect(0, 0, size, size)
     ctx.fillStyle = "#1e1e2e"
     ctx.fillRect(0, 0, size, size)
     
-    if (maskWidth === 0 || simplifiedOuter.length < 3) return
+    const contour = showRaw ? outerContour : simplifiedOuter
+    const holeList = showRaw ? holes : simplifiedHoles
     
-    // Transform: mask coords to canvas
-    const scaleX = size / maskWidth
-    const scaleY = size / maskHeight
-    const scale = Math.min(scaleX, scaleY)
+    if (maskWidth === 0 || contour.length < 3) return
     
-    const toCanvasX = (x: number) => x * scale
-    const toCanvasY = (y: number) => y * scale
+    const scale = size / Math.max(maskWidth, maskHeight)
+    const toX = (x: number) => x * scale
+    const toY = (y: number) => y * scale
     
-    // Draw outer contour filled
-    ctx.fillStyle = "rgba(99, 102, 241, 0.3)"
+    // Draw outer filled
+    ctx.fillStyle = "rgba(99, 102, 241, 0.4)"
     ctx.strokeStyle = "#22c55e"
-    ctx.lineWidth = 2
+    ctx.lineWidth = 1.5
     
     ctx.beginPath()
-    ctx.moveTo(toCanvasX(simplifiedOuter[0].x), toCanvasY(simplifiedOuter[0].y))
-    for (let i = 1; i < simplifiedOuter.length; i++) {
-      ctx.lineTo(toCanvasX(simplifiedOuter[i].x), toCanvasY(simplifiedOuter[i].y))
+    ctx.moveTo(toX(contour[0].x), toY(contour[0].y))
+    for (let i = 1; i < contour.length; i++) {
+      ctx.lineTo(toX(contour[i].x), toY(contour[i].y))
     }
     ctx.closePath()
     ctx.fill()
@@ -320,65 +291,40 @@ function ContourCanvas({ stages }: { stages: MaskSolidResult["stages"] }) {
     
     // Draw holes
     ctx.strokeStyle = "#3b82f6"
-    ctx.fillStyle = "rgba(59, 130, 246, 0.3)"
-    for (const hole of simplifiedHoles) {
+    ctx.fillStyle = "#1e1e2e"
+    for (const hole of holeList) {
       if (hole.length < 3) continue
       ctx.beginPath()
-      ctx.moveTo(toCanvasX(hole[0].x), toCanvasY(hole[0].y))
+      ctx.moveTo(toX(hole[0].x), toY(hole[0].y))
       for (let i = 1; i < hole.length; i++) {
-        ctx.lineTo(toCanvasX(hole[i].x), toCanvasY(hole[i].y))
+        ctx.lineTo(toX(hole[i].x), toY(hole[i].y))
       }
       ctx.closePath()
       ctx.fill()
       ctx.stroke()
     }
     
-    // Draw vertices
-    ctx.fillStyle = "#22c55e"
-    for (const p of simplifiedOuter) {
-      ctx.beginPath()
-      ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 3, 0, Math.PI * 2)
-      ctx.fill()
-    }
-  }, [stages])
+    // Point count label
+    ctx.fillStyle = "#fff"
+    ctx.font = "10px monospace"
+    ctx.fillText(`${contour.length} pts`, 4, size - 4)
+  }, [stages, showRaw])
   
-  return (
-    <canvas
-      ref={canvasRef}
-      width={200}
-      height={200}
-      className="aspect-square bg-muted rounded w-full"
-    />
-  )
+  return <canvas ref={canvasRef} width={150} height={150} className="aspect-square bg-muted rounded w-full" />
 }
 
 function DebugStats({ stats, success }: { stats: MaskSolidStats, success: boolean }) {
   return (
-    <div className="mt-4 grid grid-cols-6 gap-x-4 gap-y-1 text-xs font-mono bg-muted/50 p-3 rounded">
-      <div className="text-muted-foreground">Mask res:</div>
-      <div>{stats.maskResolution}x{stats.maskResolution}</div>
-      
-      <div className="text-muted-foreground">Filled px:</div>
-      <div>{stats.filledPixelCount.toLocaleString()}</div>
-      
-      <div className="text-muted-foreground">Components:</div>
-      <div>{stats.componentCount}</div>
-      
-      <div className="text-muted-foreground">Largest:</div>
-      <div>{stats.largestComponentPixels.toLocaleString()} px</div>
-      
-      <div className="text-muted-foreground">Outer pts:</div>
-      <div>{stats.outerContourPoints} → {stats.simplifiedOuterPoints}</div>
-      
-      <div className="text-muted-foreground">Holes:</div>
-      <div>{stats.holeCount}</div>
-      
-      <div className="text-muted-foreground">Time:</div>
-      <div suppressHydrationWarning>{stats.rebuildTimeMs.toFixed(1)} ms</div>
-      
-      <div className="text-muted-foreground">Status:</div>
-      <div className={success ? "text-green-500" : "text-red-500"}>
-        {success ? "Geometry OK" : "Failed"}
+    <div className="aspect-square bg-muted/50 rounded p-2 text-[9px] font-mono space-y-0.5 overflow-hidden">
+      <div className="flex justify-between"><span className="text-muted-foreground">Mask:</span><span>{stats.maskResolution}x{stats.maskResolution}</span></div>
+      <div className="flex justify-between"><span className="text-muted-foreground">Filled:</span><span>{(stats.filledPixelCount / 1000).toFixed(1)}k px</span></div>
+      <div className="flex justify-between"><span className="text-muted-foreground">Components:</span><span>{stats.componentCount}</span></div>
+      <div className="flex justify-between"><span className="text-muted-foreground">Largest:</span><span>{(stats.largestComponentPixels / 1000).toFixed(1)}k px</span></div>
+      <div className="flex justify-between"><span className="text-muted-foreground">Outer pts:</span><span>{stats.outerContourPoints} → {stats.simplifiedOuterPoints}</span></div>
+      <div className="flex justify-between"><span className="text-muted-foreground">Holes:</span><span>{stats.holeCount}</span></div>
+      <div className="flex justify-between"><span className="text-muted-foreground">Time:</span><span suppressHydrationWarning>{stats.rebuildTimeMs.toFixed(1)} ms</span></div>
+      <div className={`flex justify-between font-semibold ${success ? "text-green-500" : "text-red-500"}`}>
+        <span>Status:</span><span>{success ? "OK" : "FAIL"}</span>
       </div>
     </div>
   )

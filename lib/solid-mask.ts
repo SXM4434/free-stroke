@@ -649,38 +649,74 @@ function computeSignedArea(pts: THREE.Vector2[]): number {
 
 // ============= Test Stroke Generators =============
 
-export function generateTestStrokes(): { name: string, description: string, stroke: TestStroke }[] {
+export interface TestCase {
+  name: string
+  description: string
+  stroke: TestStroke
+  expectedBehavior: string
+}
+
+export function generateTestStrokes(): TestCase[] {
   return [
+    // 1. Open C-shape
     {
-      name: "C-Shape",
-      description: "Open curved stroke - should be one clean blob, no ribbon artifacts",
+      name: "1. Open C-Shape",
+      description: "Open curved stroke",
+      expectedBehavior: "One clean blob, no ribbon/sliver artifacts, no fake inner shell",
       stroke: { points: generateCShape() }
     },
+    // 2. TRUE loopy cursive with multiple tight loops and overlap
     {
-      name: "Loopy Cursive",
-      description: "Single continuous loopy stroke - should be one readable filled silhouette",
-      stroke: { points: generateLoopyCursive() }
+      name: "2. True Loopy Cursive",
+      description: "Multiple tight loops with self-overlap (like 'elle' in cursive)",
+      expectedBehavior: "One readable filled silhouette, only true enclosed holes preserved",
+      stroke: { points: generateTrueLoopyCursive() }
     },
+    // 3. Messy self-overlapping scribble
     {
-      name: "Messy Self-Overlapping",
-      description: "Self-overlapping stroke - should be stable, no shard explosion",
-      stroke: { points: generateMessyOverlapping() }
+      name: "3. Messy Scribble",
+      description: "Chaotic self-overlapping scribble pattern",
+      expectedBehavior: "Stable filled solid, no shard/sliver explosion",
+      stroke: { points: generateMessyScribble() }
     },
+    // 4. Near-touching / figure-eight
     {
-      name: "Tight Loops",
-      description: "Near-touching segments - should merge cleanly",
-      stroke: { points: generateTightLoops() }
+      name: "4. Figure-Eight + Near-Touch",
+      description: "Figure-8 with near-touching segments",
+      expectedBehavior: "Clean figure-8 with proper hole, no gaps at crossings",
+      stroke: { points: generateFigureEight() }
+    },
+    // 5. Signature-like fast scribble
+    {
+      name: "5. Signature Scribble",
+      description: "Fast signature-like scribble (simulates real failing drawings)",
+      expectedBehavior: "Readable signature shape, no explosion",
+      stroke: { points: generateSignatureScribble() }
+    },
+    // 6. Thin thickness extreme
+    {
+      name: "6. Thin Extreme",
+      description: "Thin stroke (test with Thickness=0.05)",
+      expectedBehavior: "Thin but continuous solid, no gaps",
+      stroke: { points: generateThinTestStroke() }
+    },
+    // 7. Thick thickness extreme  
+    {
+      name: "7. Thick Extreme",
+      description: "Test with Thickness=0.35+ (thick blob)",
+      expectedBehavior: "Fat merged blob, overlapping segments merge cleanly",
+      stroke: { points: generateThickTestStroke() }
     }
   ]
 }
 
+// 1. C-Shape - open arc
 function generateCShape(): Point2D[] {
   const points: Point2D[] = []
-  // C-shape arc from ~30° to ~330°
-  for (let i = 0; i <= 40; i++) {
-    const t = i / 40
-    const angle = (Math.PI * 0.2) + t * (Math.PI * 1.6)  // ~36° to ~324°
-    const r = 0.8
+  for (let i = 0; i <= 50; i++) {
+    const t = i / 50
+    const angle = (Math.PI * 0.3) + t * (Math.PI * 1.4)
+    const r = 0.7
     points.push({
       x: Math.cos(angle) * r,
       y: Math.sin(angle) * r
@@ -689,42 +725,141 @@ function generateCShape(): Point2D[] {
   return points
 }
 
-function generateLoopyCursive(): Point2D[] {
+// 2. TRUE Loopy Cursive - actual loops that overlap like handwriting
+function generateTrueLoopyCursive(): Point2D[] {
   const points: Point2D[] = []
-  // Cursive-like wave with loops
-  for (let i = 0; i <= 100; i++) {
-    const t = i / 100
-    const x = -1.2 + t * 2.4
-    const y = Math.sin(t * Math.PI * 4) * 0.5 + Math.sin(t * Math.PI * 2) * 0.3
+  const numLoops = 4
+  const loopRadius = 0.25
+  const spacing = 0.5
+  
+  for (let loop = 0; loop < numLoops; loop++) {
+    const baseX = -0.9 + loop * spacing
+    // Each loop: go up, curve over, come down, cross back
+    for (let i = 0; i <= 30; i++) {
+      const t = i / 30
+      const angle = -Math.PI / 2 + t * Math.PI * 2.2  // Slightly more than full circle
+      const x = baseX + Math.sin(angle) * loopRadius + t * 0.15
+      const y = Math.cos(angle) * loopRadius * 1.2
+      points.push({ x, y })
+    }
+    // Connect to next loop
+    if (loop < numLoops - 1) {
+      const connectX = baseX + loopRadius + 0.1
+      points.push({ x: connectX, y: -loopRadius * 0.5 })
+    }
+  }
+  return points
+}
+
+// 3. Messy Scribble - chaotic overlapping
+function generateMessyScribble(): Point2D[] {
+  const points: Point2D[] = []
+  // Multiple overlapping spirals with noise
+  for (let i = 0; i <= 120; i++) {
+    const t = i / 120
+    const angle = t * Math.PI * 8
+    const r = 0.2 + t * 0.6 + Math.sin(t * Math.PI * 12) * 0.15
+    const noise = Math.sin(i * 0.7) * 0.08
+    points.push({
+      x: Math.cos(angle) * r + noise,
+      y: Math.sin(angle) * r + Math.cos(i * 0.5) * 0.05
+    })
+  }
+  return points
+}
+
+// 4. Figure-Eight with near-touching segments
+function generateFigureEight(): Point2D[] {
+  const points: Point2D[] = []
+  // Lemniscate (figure-8)
+  for (let i = 0; i <= 80; i++) {
+    const t = i / 80
+    const angle = t * Math.PI * 2
+    const scale = 0.7
+    // Lemniscate of Bernoulli parametric form
+    const denom = 1 + Math.sin(angle) ** 2
+    points.push({
+      x: (scale * Math.cos(angle)) / denom,
+      y: (scale * Math.sin(angle) * Math.cos(angle)) / denom
+    })
+  }
+  // Add near-touching spiral at center
+  for (let i = 0; i <= 20; i++) {
+    const t = i / 20
+    const angle = t * Math.PI
+    const r = 0.1 + t * 0.05
+    points.push({
+      x: Math.cos(angle) * r,
+      y: Math.sin(angle) * r - 0.02
+    })
+  }
+  return points
+}
+
+// 5. Signature-like scribble (fast, cursive, overlapping)
+function generateSignatureScribble(): Point2D[] {
+  const points: Point2D[] = []
+  // Simulate a fast signature: big loop, zigzag, small loops
+  // Initial big loop
+  for (let i = 0; i <= 25; i++) {
+    const t = i / 25
+    const angle = -Math.PI / 2 + t * Math.PI * 1.5
+    points.push({
+      x: -0.8 + Math.cos(angle) * 0.3,
+      y: Math.sin(angle) * 0.4
+    })
+  }
+  // Zigzag middle section
+  for (let i = 0; i <= 30; i++) {
+    const t = i / 30
+    const x = -0.5 + t * 1.0
+    const y = Math.sin(t * Math.PI * 6) * 0.25 * (1 - t * 0.5)
+    points.push({ x, y })
+  }
+  // Final flourish loop
+  for (let i = 0; i <= 20; i++) {
+    const t = i / 20
+    const angle = t * Math.PI * 2.5
+    const r = 0.2 * (1 - t * 0.5)
+    points.push({
+      x: 0.6 + Math.cos(angle) * r,
+      y: Math.sin(angle) * r * 0.8 - 0.1
+    })
+  }
+  return points
+}
+
+// 6. Thin test stroke - simple curved path for thin thickness testing
+function generateThinTestStroke(): Point2D[] {
+  const points: Point2D[] = []
+  // S-curve
+  for (let i = 0; i <= 60; i++) {
+    const t = i / 60
+    const x = -0.8 + t * 1.6
+    const y = Math.sin(t * Math.PI * 2) * 0.5
     points.push({ x, y })
   }
   return points
 }
 
-function generateMessyOverlapping(): Point2D[] {
+// 7. Thick test stroke - overlapping loops for thick thickness testing
+function generateThickTestStroke(): Point2D[] {
   const points: Point2D[] = []
-  // Chaotic scribble that overlaps itself
-  for (let i = 0; i <= 80; i++) {
-    const t = i / 80
-    const angle = t * Math.PI * 6
-    const r = 0.3 + t * 0.5 + Math.sin(t * Math.PI * 8) * 0.2
-    points.push({
-      x: Math.cos(angle) * r,
-      y: Math.sin(angle) * r
-    })
-  }
-  return points
-}
-
-function generateTightLoops(): Point2D[] {
-  const points: Point2D[] = []
-  // Figure-8 with tight crossing
-  for (let i = 0; i <= 60; i++) {
-    const t = i / 60
+  // Overlapping circles
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40
     const angle = t * Math.PI * 2
     points.push({
-      x: Math.sin(angle) * 0.8,
-      y: Math.sin(angle * 2) * 0.5
+      x: Math.cos(angle) * 0.4 - 0.2,
+      y: Math.sin(angle) * 0.4
+    })
+  }
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40
+    const angle = t * Math.PI * 2
+    points.push({
+      x: Math.cos(angle) * 0.4 + 0.2,
+      y: Math.sin(angle) * 0.4
     })
   }
   return points
