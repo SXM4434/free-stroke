@@ -9,7 +9,7 @@ import { Slider } from "@/components/ui/slider"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
-import { buildMaskSolid, generateTestStrokes, type MaskSolidResult, type MaskSolidStats, type Point2D, type TestStroke, type TestCase } from "@/lib/solid-mask"
+import { buildMaskSolid, generateTestStrokes, generateRealAppSamples, type MaskSolidResult, type MaskSolidStats, type Point2D, type TestStroke, type TestCase } from "@/lib/solid-mask"
 
 export default function SolidSandboxPage() {
   const [thickness, setThickness] = useState(0.15)
@@ -17,6 +17,7 @@ export default function SolidSandboxPage() {
   const [showRawContour, setShowRawContour] = useState(false)
   
   const testCases = generateTestStrokes()
+  const realSamples = generateRealAppSamples()
   
   return (
     <div className="min-h-screen bg-background p-4">
@@ -25,7 +26,7 @@ export default function SolidSandboxPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-xl">Solid Mode Sandbox - MASK-FIRST Pipeline</CardTitle>
             <p className="text-sm text-muted-foreground">
-              Pipeline: Canvas2D render → Binary mask → Connected components → Contour tracing → Simplify → Extrude
+              Pipeline: Canvas2D render, Binary mask, Connected components, Contour tracing, Simplify, Extrude
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -60,16 +61,37 @@ export default function SolidSandboxPage() {
           </CardContent>
         </Card>
         
-        <div className="grid gap-4">
-          {testCases.map((tc) => (
-            <TestCaseCard
-              key={tc.name}
-              testCase={tc}
-              thickness={thickness}
-              depth={depth}
-              showRawContour={showRawContour}
-            />
-          ))}
+        {/* Stress Test Cases */}
+        <div>
+          <h2 className="text-lg font-semibold mb-2">Stress Test Cases (7)</h2>
+          <div className="grid gap-3">
+            {testCases.map((tc) => (
+              <TestCaseCard
+                key={tc.name}
+                testCase={tc}
+                thickness={thickness}
+                depth={depth}
+                showRawContour={showRawContour}
+              />
+            ))}
+          </div>
+        </div>
+        
+        {/* Real App Samples */}
+        <div>
+          <h2 className="text-lg font-semibold mb-2">Real App Samples (5)</h2>
+          <p className="text-sm text-muted-foreground mb-2">Simulated stroke data from actual failing user drawings</p>
+          <div className="grid gap-3">
+            {realSamples.map((tc) => (
+              <TestCaseCard
+                key={tc.name}
+                testCase={tc}
+                thickness={thickness}
+                depth={depth}
+                showRawContour={showRawContour}
+              />
+            ))}
+          </div>
         </div>
       </div>
     </div>

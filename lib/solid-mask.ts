@@ -725,23 +725,125 @@ function generateCShape(): Point2D[] {
   return points
 }
 
-// 2. TRUE Loopy Cursive - actual loops that overlap like handwriting
-function generateTrueLoopyCursive(): Point2D[] {
-  const points: Point2D[] = []
-  const numLoops = 4
-  const loopRadius = 0.25
-  const spacing = 0.5
-  
-  for (let loop = 0; loop < numLoops; loop++) {
-    const baseX = -0.9 + loop * spacing
-    // Each loop: go up, curve over, come down, cross back
-    for (let i = 0; i <= 30; i++) {
-      const t = i / 30
-      const angle = -Math.PI / 2 + t * Math.PI * 2.2  // Slightly more than full circle
-      const x = baseX + Math.sin(angle) * loopRadius + t * 0.15
-      const y = Math.cos(angle) * loopRadius * 1.2
-      points.push({ x, y })
+// ============= Real App Samples =============
+// These simulate actual failing stroke patterns from user drawings
+
+export function generateRealAppSamples(): TestCase[] {
+  return [
+    {
+      name: "Real Sample 1: Fast Letter 'S'",
+      description: "User drawing a quick S-curve with pressure variation",
+      expectedBehavior: "Clean S shape with no internal artifacts",
+      stroke: { points: generateRealSCurve() }
+    },
+    {
+      name: "Real Sample 2: Sketchy Circle",
+      description: "Multiple overlapping passes making a circle (common sketch pattern)",
+      expectedBehavior: "Filled disk, overlaps merge cleanly",
+      stroke: { points: generateSketchyCircle() }
+    },
+    {
+      name: "Real Sample 3: Angry Scribble",
+      description: "Fast angry scribble pattern (stress test)",
+      expectedBehavior: "Blob shape, no shard explosion",
+      stroke: { points: generateAngryScribble() }
+    },
+    {
+      name: "Real Sample 4: Heart Shape",
+      description: "Drawing a heart in one stroke",
+      expectedBehavior: "Heart silhouette with clean edge",
+      stroke: { points: generateHeartShape() }
+    },
+    {
+      name: "Real Sample 5: Star Outline",
+      description: "Five-point star drawn in one continuous stroke",
+      expectedBehavior: "Star shape with internal pentagon hole",
+      stroke: { points: generateStarShape() }
     }
+  ]
+}
+
+function generateRealSCurve(): Point2D[] {
+  const points: Point2D[] = []
+  // S-curve with slight wobble to simulate hand-drawn
+  for (let i = 0; i <= 50; i++) {
+    const t = i / 50
+    const x = 0.6 * Math.sin(t * Math.PI * 2 - Math.PI / 2) + (Math.random() - 0.5) * 0.02
+    const y = -0.8 + t * 1.6 + (Math.random() - 0.5) * 0.02
+    points.push({ x, y })
+  }
+  return points
+}
+
+function generateSketchyCircle(): Point2D[] {
+  const points: Point2D[] = []
+  // Multiple overlapping circle passes
+  for (let pass = 0; pass < 3; pass++) {
+    const offset = pass * 0.03
+    for (let i = 0; i <= 40; i++) {
+      const t = i / 40
+      const angle = t * Math.PI * 2.1 + pass * 0.2
+      const wobble = Math.sin(t * 20 + pass * 2) * 0.03
+      points.push({
+        x: Math.cos(angle) * (0.6 + wobble + offset),
+        y: Math.sin(angle) * (0.6 + wobble + offset)
+      })
+    }
+  }
+  return points
+}
+
+function generateAngryScribble(): Point2D[] {
+  const points: Point2D[] = []
+  // Chaotic back-and-forth with varying amplitude
+  let x = -0.8
+  let y = 0
+  let vx = 0.05
+  let vy = 0.1
+  for (let i = 0; i < 100; i++) {
+    points.push({ x, y })
+    x += vx + (Math.random() - 0.5) * 0.05
+    y += vy
+    vy = Math.sin(i * 0.3) * 0.15
+    if (x > 0.8) vx = -Math.abs(vx)
+    if (x < -0.8) vx = Math.abs(vx)
+    if (y > 0.6) y = 0.6
+    if (y < -0.6) y = -0.6
+  }
+  return points
+}
+
+function generateHeartShape(): Point2D[] {
+  const points: Point2D[] = []
+  // Parametric heart curve
+  for (let i = 0; i <= 60; i++) {
+    const t = i / 60
+    const angle = t * Math.PI * 2
+    const x = 16 * Math.pow(Math.sin(angle), 3) / 20
+    const y = -(13 * Math.cos(angle) - 5 * Math.cos(2 * angle) - 2 * Math.cos(3 * angle) - Math.cos(4 * angle)) / 20
+    points.push({ x, y: y - 0.2 })
+  }
+  return points
+}
+
+function generateStarShape(): Point2D[] {
+  const points: Point2D[] = []
+  // 5-point star drawn continuously
+  const outerR = 0.7
+  const innerR = 0.3
+  for (let i = 0; i <= 10; i++) {
+    const angle = (i * Math.PI * 2) / 5 - Math.PI / 2
+    const r = i % 2 === 0 ? outerR : innerR
+    points.push({
+      x: Math.cos(angle) * r,
+      y: Math.sin(angle) * r
+    })
+  }
+  // Close back to start
+  points.push({ ...points[0] })
+  return points
+}
+
     // Connect to next loop
     if (loop < numLoops - 1) {
       const connectX = baseX + loopRadius + 0.1
