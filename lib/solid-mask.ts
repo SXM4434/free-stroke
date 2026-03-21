@@ -1,0 +1,866 @@
+/**
+ * MASK-FIRST Solid Mode Pipeline
+ * 
+ * This approach renders the stroke to a high-resolution offscreen canvas,
+ * then extracts boundaries from the FILLED REGION, not from edge transitions.
+ * 
+ * Pipeline:
+ * 1. Render stroke to offscreen Canvas2D with round caps/joins
+ * 2. Read pixel data to create binary mask
+ * 3. Label connected components (flood fill)
+ * 4. For each component, trace its boundary using contour following
+ * 5. Detect true holes (enclosed background regions)
+ * 6. Simplify contours with Douglas-Peucker
+ * 7. Build THREE.Shape and extrude
+ */
+
+import * as THREE from "three"
+
+// ============= Types =============
+
+export interface Point2D {
+  x: number
+  y: number
+}
+
+export interface TestStroke {
+  points: Point2D[]
+  color?: string
+}
+
+export interface MaskSolidResult {
+  geometry: THREE.BufferGeometry | null
+  stats: MaskSolidStats
+  stages: MaskSolidStages
+}
+
+export interface MaskSolidStats {
+  maskResolution: number
+  filledPixelCount: number
+  componentCount: number
+  largestComponentPixels: number
+  outerContourPoints: number
+  simplifiedOuterPoints: number
+  holeCount: number
+  rebuildTimeMs: number
+}
+
+export interface MaskSolidStages {
+  centerline: Point2D[]
+  maskData: boolean[]  // Flattened mask array
+  maskWidth: number
+  maskHeight: number
+  outerContour: Point2D[]
+  simplifiedOuter: Point2D[]
+  holes: Point2D[][]
+  simplifiedHoles: Point2D[][]
+}
+
+// ============= Constants =============
+
+const MASK_RESOLUTION = 512  // High-res mask for quality
+const DP_TOLERANCE = 1.5     // Douglas-Peucker simplification tolerance in pixels
+
+// ============= Main Entry Point =============
+
+export function buildMaskSolid(
+  stroke: TestStroke,
+  thickness: number,
+  depth: number,
+  canvasWidth: number = 800,
+  canvasHeight: number = 600
+): MaskSolidResult {
+  const startTime = performance.now()
+  
+  // Initialize empty result
+  const emptyStages: MaskSolidStages = {
+    centerline: stroke.points,
+    maskData: [],
+    maskWidth: 0,
+    maskHeight: 0,
+    outerContour: [],
+    simplifiedOuter: [],
+    holes: [],
+    simplifiedHoles: []
+  }
+  
+  const emptyStats: MaskSolidStats = {
+    maskResolution: MASK_RESOLUTION,
+    filledPixelCount: 0,
+    componentCount: 0,
+    largestComponentPixels: 0,
+    outerContourPoints: 0,
+    simplifiedOuterPoints: 0,
+    holeCount: 0,
+    rebuildTimeMs: 0
+  }
+  
+  if (stroke.points.length < 2) {
+    return { geometry: null, stats: { ...emptyStats, rebuildTimeMs: performance.now() - startTime }, stages: emptyStages }
+  }
+  
+  // 1. Render stroke to offscreen canvas and get binary mask
+  const { mask, width, height, filledCount } = renderStrokeToMask(stroke.points, thickness, canvasWidth, canvasHeight)
+  
+  emptyStages.maskData = mask
+  emptyStages.maskWidth = width
+  emptyStages.maskHeight = height
+  
+  if (filledCount === 0) {
+    return { geometry: null, stats: { ...emptyStats, rebuildTimeMs: performance.now() - startTime }, stages: emptyStages }
+  }
+  
+  // 2. Label connected components
+  const { labels, componentCount, componentSizes } = labelConnectedComponents(mask, width, height)
+  
+  if (componentCount === 0) {
+    return { geometry: null, stats: { ...emptyStats, filledPixelCount: filledCount, rebuildTimeMs: performance.now() - startTime }, stages: emptyStages }
+  }
+  
+  // 3. Find largest component
+  let largestLabel = 1
+  let largestSize = 0
+  for (let i = 1; i <= componentCount; i++) {
+    if (componentSizes[i] > largestSize) {
+      largestSize = componentSizes[i]
+      largestLabel = i
+    }
+  }
+  
+  // 4. Create binary mask for largest component only
+  const componentMask = new Array(width * height).fill(false)
+  for (let i = 0; i < mask.length; i++) {
+    componentMask[i] = labels[i] === largestLabel
+  }
+  
+  // 5. Trace outer boundary using contour following algorithm
+  const outerContour = traceOuterContour(componentMask, width, height)
+  emptyStages.outerContour = outerContour
+  
+  if (outerContour.length < 3) {
+    return { 
+      geometry: null, 
+      stats: { 
+        ...emptyStats, 
+        filledPixelCount: filledCount, 
+        componentCount,
+        largestComponentPixels: largestSize,
+        outerContourPoints: outerContour.length,
+        rebuildTimeMs: performance.now() - startTime 
+      }, 
+      stages: emptyStages 
+    }
+  }
+  
+  // 6. Simplify outer contour
+  const simplifiedOuter = douglasPeucker(outerContour, DP_TOLERANCE)
+  emptyStages.simplifiedOuter = simplifiedOuter
+  
+  // 7. Find holes (enclosed background regions)
+  const { holes, simplifiedHoles } = findAndTraceHoles(componentMask, width, height, outerContour)
+  emptyStages.holes = holes
+  emptyStages.simplifiedHoles = simplifiedHoles
+  
+  // 8. Transform to world coordinates and build THREE.Shape
+  const geometry = buildExtrudedGeometry(simplifiedOuter, simplifiedHoles, width, height, canvasWidth, canvasHeight, depth)
+  
+  const stats: MaskSolidStats = {
+    maskResolution: MASK_RESOLUTION,
+    filledPixelCount: filledCount,
+    componentCount,
+    largestComponentPixels: largestSize,
+    outerContourPoints: outerContour.length,
+    simplifiedOuterPoints: simplifiedOuter.length,
+    holeCount: simplifiedHoles.length,
+    rebuildTimeMs: performance.now() - startTime
+  }
+  
+  return { geometry, stats, stages: emptyStages }
+}
+
+// ============= Stage 1: Render to Mask =============
+
+function renderStrokeToMask(
+  points: Point2D[],
+  thickness: number,
+  canvasWidth: number,
+  canvasHeight: number
+): { mask: boolean[], width: number, height: number, filledCount: number } {
+  const width = MASK_RESOLUTION
+  const height = MASK_RESOLUTION
+  
+  // Create offscreen canvas
+  const canvas = document.createElement("canvas")
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext("2d")!
+  
+  // Clear to black (background)
+  ctx.fillStyle = "black"
+  ctx.fillRect(0, 0, width, height)
+  
+  // Calculate scale to fit stroke in mask
+  const scaleX = width / canvasWidth
+  const scaleY = height / canvasHeight
+  const scale = Math.min(scaleX, scaleY)
+  
+  // Scale thickness to mask coordinates
+  const scaledThickness = thickness * scale * Math.max(canvasWidth, canvasHeight) / 3  // Match world-to-pixel conversion
+  
+  // Draw stroke with round caps and joins
+  ctx.strokeStyle = "white"
+  ctx.lineWidth = Math.max(1, scaledThickness)
+  ctx.lineCap = "round"
+  ctx.lineJoin = "round"
+  
+  ctx.beginPath()
+  
+  // Transform points to mask coordinates
+  const offsetX = width / 2
+  const offsetY = height / 2
+  
+  for (let i = 0; i < points.length; i++) {
+    // Points are in world coords (-1.5 to 1.5 range typically)
+    // Transform to mask coords (0 to MASK_RESOLUTION)
+    const mx = points[i].x * scale * (canvasWidth / 3) + offsetX
+    const my = -points[i].y * scale * (canvasHeight / 3) + offsetY  // Flip Y
+    
+    if (i === 0) {
+      ctx.moveTo(mx, my)
+    } else {
+      ctx.lineTo(mx, my)
+    }
+  }
+  
+  ctx.stroke()
+  
+  // Read pixel data and create binary mask
+  const imageData = ctx.getImageData(0, 0, width, height)
+  const pixels = imageData.data
+  const mask: boolean[] = new Array(width * height)
+  let filledCount = 0
+  
+  for (let i = 0; i < width * height; i++) {
+    // Check red channel (white = filled)
+    const isFilled = pixels[i * 4] > 127
+    mask[i] = isFilled
+    if (isFilled) filledCount++
+  }
+  
+  return { mask, width, height, filledCount }
+}
+
+// ============= Stage 2: Connected Component Labeling =============
+
+function labelConnectedComponents(
+  mask: boolean[],
+  width: number,
+  height: number
+): { labels: number[], componentCount: number, componentSizes: number[] } {
+  const labels = new Array(width * height).fill(0)
+  const componentSizes: number[] = [0]  // Index 0 unused
+  let componentCount = 0
+  
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x
+      if (mask[idx] && labels[idx] === 0) {
+        componentCount++
+        let size = 0
+        
+        // Flood fill using iterative BFS
+        const queue: number[] = [idx]
+        labels[idx] = componentCount
+        
+        while (queue.length > 0) {
+          const ci = queue.shift()!
+          size++
+          const cx = ci % width
+          const cy = Math.floor(ci / width)
+          
+          // 4-connected neighbors
+          const neighbors = [
+            cy > 0 ? ci - width : -1,
+            cy < height - 1 ? ci + width : -1,
+            cx > 0 ? ci - 1 : -1,
+            cx < width - 1 ? ci + 1 : -1
+          ]
+          
+          for (const ni of neighbors) {
+            if (ni >= 0 && mask[ni] && labels[ni] === 0) {
+              labels[ni] = componentCount
+              queue.push(ni)
+            }
+          }
+        }
+        
+        componentSizes.push(size)
+      }
+    }
+  }
+  
+  return { labels, componentCount, componentSizes }
+}
+
+// ============= Stage 3: Contour Tracing (Theo Pavlidis / Square Tracing) =============
+
+/**
+ * Trace the outer contour of a filled region using the square tracing algorithm.
+ * This traces the BOUNDARY of the filled region, not edge transitions.
+ */
+function traceOuterContour(mask: boolean[], width: number, height: number): Point2D[] {
+  // Find the topmost-leftmost filled pixel (guaranteed to be on outer boundary)
+  let startIdx = -1
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (mask[y * width + x]) {
+        startIdx = y * width + x
+        break
+      }
+    }
+    if (startIdx >= 0) break
+  }
+  
+  if (startIdx < 0) return []
+  
+  const startX = startIdx % width
+  const startY = Math.floor(startIdx / width)
+  
+  // Direction vectors: 0=right, 1=down, 2=left, 3=up
+  const dx = [1, 0, -1, 0]
+  const dy = [0, 1, 0, -1]
+  
+  const contour: Point2D[] = []
+  let x = startX
+  let y = startY
+  let dir = 3  // Start looking up (we came from above since this is topmost)
+  
+  const maxIterations = width * height * 4
+  let iterations = 0
+  
+  do {
+    // Add current pixel center to contour
+    contour.push({ x: x + 0.5, y: y + 0.5 })
+    
+    // Try to turn left first (relative to current direction), then straight, then right, then back
+    let found = false
+    for (let turn = -1; turn <= 2; turn++) {
+      const newDir = (dir + turn + 4) % 4
+      const nx = x + dx[newDir]
+      const ny = y + dy[newDir]
+      
+      if (nx >= 0 && nx < width && ny >= 0 && ny < height && mask[ny * width + nx]) {
+        x = nx
+        y = ny
+        dir = newDir
+        found = true
+        break
+      }
+    }
+    
+    if (!found) break  // Isolated pixel or error
+    
+    iterations++
+  } while ((x !== startX || y !== startY) && iterations < maxIterations)
+  
+  return contour
+}
+
+// ============= Stage 4: Find and Trace Holes =============
+
+function findAndTraceHoles(
+  componentMask: boolean[],
+  width: number,
+  height: number,
+  outerContour: Point2D[]
+): { holes: Point2D[][], simplifiedHoles: Point2D[][] } {
+  // Create a mask of the filled region's bounding box interior
+  // Find holes by looking for enclosed background regions
+  
+  if (outerContour.length < 3) {
+    return { holes: [], simplifiedHoles: [] }
+  }
+  
+  // Get bounding box of outer contour
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const p of outerContour) {
+    minX = Math.min(minX, p.x)
+    minY = Math.min(minY, p.y)
+    maxX = Math.max(maxX, p.x)
+    maxY = Math.max(maxY, p.y)
+  }
+  
+  // Pad bounding box
+  const pad = 2
+  const bx0 = Math.max(0, Math.floor(minX) - pad)
+  const by0 = Math.max(0, Math.floor(minY) - pad)
+  const bx1 = Math.min(width, Math.ceil(maxX) + pad)
+  const by1 = Math.min(height, Math.ceil(maxY) + pad)
+  
+  // Find background regions that are NOT connected to the outer edge
+  // These are true holes
+  const visited = new Array(width * height).fill(false)
+  const holes: Point2D[][] = []
+  const simplifiedHoles: Point2D[][] = []
+  
+  // First, flood fill from edges to mark "exterior" background
+  const exteriorQueue: number[] = []
+  
+  // Add all edge background pixels to queue
+  for (let x = 0; x < width; x++) {
+    if (!componentMask[x]) { visited[x] = true; exteriorQueue.push(x) }
+    const bottomIdx = (height - 1) * width + x
+    if (!componentMask[bottomIdx]) { visited[bottomIdx] = true; exteriorQueue.push(bottomIdx) }
+  }
+  for (let y = 0; y < height; y++) {
+    const leftIdx = y * width
+    if (!componentMask[leftIdx] && !visited[leftIdx]) { visited[leftIdx] = true; exteriorQueue.push(leftIdx) }
+    const rightIdx = y * width + width - 1
+    if (!componentMask[rightIdx] && !visited[rightIdx]) { visited[rightIdx] = true; exteriorQueue.push(rightIdx) }
+  }
+  
+  // Flood fill exterior
+  while (exteriorQueue.length > 0) {
+    const idx = exteriorQueue.shift()!
+    const x = idx % width
+    const y = Math.floor(idx / width)
+    
+    const neighbors = [
+      y > 0 ? idx - width : -1,
+      y < height - 1 ? idx + width : -1,
+      x > 0 ? idx - 1 : -1,
+      x < width - 1 ? idx + 1 : -1
+    ]
+    
+    for (const ni of neighbors) {
+      if (ni >= 0 && !componentMask[ni] && !visited[ni]) {
+        visited[ni] = true
+        exteriorQueue.push(ni)
+      }
+    }
+  }
+  
+  // Now find unvisited background pixels within bounding box - these are holes
+  for (let y = by0; y < by1; y++) {
+    for (let x = bx0; x < bx1; x++) {
+      const idx = y * width + x
+      if (!componentMask[idx] && !visited[idx]) {
+        // Found a hole - trace its boundary
+        const holeContour = traceHoleContour(componentMask, width, height, x, y, visited)
+        if (holeContour.length >= 3) {
+          holes.push(holeContour)
+          simplifiedHoles.push(douglasPeucker(holeContour, DP_TOLERANCE))
+        }
+      }
+    }
+  }
+  
+  return { holes, simplifiedHoles }
+}
+
+/**
+ * Trace a hole's boundary (inner contour of background region)
+ */
+function traceHoleContour(
+  componentMask: boolean[],
+  width: number,
+  height: number,
+  startX: number,
+  startY: number,
+  visited: boolean[]
+): Point2D[] {
+  // Mark all pixels in this hole region as visited
+  const holePixels: number[] = []
+  const queue: number[] = [startY * width + startX]
+  visited[startY * width + startX] = true
+  
+  while (queue.length > 0) {
+    const idx = queue.shift()!
+    holePixels.push(idx)
+    const x = idx % width
+    const y = Math.floor(idx / width)
+    
+    const neighbors = [
+      y > 0 ? idx - width : -1,
+      y < height - 1 ? idx + width : -1,
+      x > 0 ? idx - 1 : -1,
+      x < width - 1 ? idx + 1 : -1
+    ]
+    
+    for (const ni of neighbors) {
+      if (ni >= 0 && !componentMask[ni] && !visited[ni]) {
+        visited[ni] = true
+        queue.push(ni)
+      }
+    }
+  }
+  
+  // Now trace the boundary of this hole region
+  // Find a pixel on the edge of the hole (adjacent to filled region)
+  let edgeX = -1, edgeY = -1
+  for (const idx of holePixels) {
+    const x = idx % width
+    const y = Math.floor(idx / width)
+    
+    // Check if adjacent to filled pixel
+    const neighbors = [
+      y > 0 ? idx - width : -1,
+      y < height - 1 ? idx + width : -1,
+      x > 0 ? idx - 1 : -1,
+      x < width - 1 ? idx + 1 : -1
+    ]
+    
+    for (const ni of neighbors) {
+      if (ni >= 0 && componentMask[ni]) {
+        edgeX = x
+        edgeY = y
+        break
+      }
+    }
+    if (edgeX >= 0) break
+  }
+  
+  if (edgeX < 0) return []
+  
+  // Create a temporary mask for just this hole
+  const holeMask = new Array(width * height).fill(false)
+  for (const idx of holePixels) {
+    holeMask[idx] = true
+  }
+  
+  // Trace boundary
+  return traceOuterContour(holeMask, width, height)
+}
+
+// ============= Stage 5: Douglas-Peucker Simplification =============
+
+function douglasPeucker(points: Point2D[], tolerance: number): Point2D[] {
+  if (points.length <= 2) return points
+  
+  // Find point with maximum distance from line between first and last
+  let maxDist = 0
+  let maxIdx = 0
+  
+  const first = points[0]
+  const last = points[points.length - 1]
+  
+  for (let i = 1; i < points.length - 1; i++) {
+    const dist = perpendicularDistance(points[i], first, last)
+    if (dist > maxDist) {
+      maxDist = dist
+      maxIdx = i
+    }
+  }
+  
+  if (maxDist > tolerance) {
+    // Recursively simplify
+    const left = douglasPeucker(points.slice(0, maxIdx + 1), tolerance)
+    const right = douglasPeucker(points.slice(maxIdx), tolerance)
+    return [...left.slice(0, -1), ...right]
+  } else {
+    return [first, last]
+  }
+}
+
+function perpendicularDistance(point: Point2D, lineStart: Point2D, lineEnd: Point2D): number {
+  const dx = lineEnd.x - lineStart.x
+  const dy = lineEnd.y - lineStart.y
+  const lineLengthSq = dx * dx + dy * dy
+  
+  if (lineLengthSq === 0) {
+    return Math.sqrt((point.x - lineStart.x) ** 2 + (point.y - lineStart.y) ** 2)
+  }
+  
+  const t = Math.max(0, Math.min(1, ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / lineLengthSq))
+  const projX = lineStart.x + t * dx
+  const projY = lineStart.y + t * dy
+  
+  return Math.sqrt((point.x - projX) ** 2 + (point.y - projY) ** 2)
+}
+
+// ============= Stage 6: Build Extruded Geometry =============
+
+function buildExtrudedGeometry(
+  outer: Point2D[],
+  holes: Point2D[][],
+  maskWidth: number,
+  maskHeight: number,
+  canvasWidth: number,
+  canvasHeight: number,
+  depth: number
+): THREE.BufferGeometry | null {
+  if (outer.length < 3) return null
+  
+  // Transform mask coordinates to world coordinates
+  const scaleX = canvasWidth / maskWidth
+  const scaleY = canvasHeight / maskHeight
+  const scale = Math.min(scaleX, scaleY)
+  const normScale = 3 / Math.max(canvasWidth, canvasHeight)
+  
+  const toWorldX = (mx: number) => (mx - maskWidth / 2) * scale * normScale
+  const toWorldY = (my: number) => -(my - maskHeight / 2) * scale * normScale  // Flip Y
+  
+  // Convert outer contour to THREE.Vector2
+  let shapePts = outer.map(p => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+  
+  // Ensure CCW winding for THREE.js outer
+  const outerArea = computeSignedArea(shapePts)
+  if (outerArea < 0) {
+    shapePts = shapePts.slice().reverse()
+  }
+  
+  const shape = new THREE.Shape(shapePts)
+  
+  // Add holes with CW winding
+  for (const hole of holes) {
+    if (hole.length < 3) continue
+    let holePts = hole.map(p => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+    
+    const holeArea = computeSignedArea(holePts)
+    if (holeArea > 0) {
+      holePts = holePts.slice().reverse()
+    }
+    
+    shape.holes.push(new THREE.Path(holePts))
+  }
+  
+  // Extrude
+  try {
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+      depth,
+      bevelEnabled: false,
+      curveSegments: 1
+    })
+    geometry.translate(0, 0, -depth / 2)
+    return geometry
+  } catch (e) {
+    console.error("[v0] Extrude failed:", e)
+    return null
+  }
+}
+
+function computeSignedArea(pts: THREE.Vector2[]): number {
+  let area = 0
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
+  }
+  return area / 2
+}
+
+// ============= Test Stroke Generators =============
+
+export interface TestCase {
+  name: string
+  description: string
+  stroke: TestStroke
+  expectedBehavior: string
+}
+
+export function generateTestStrokes(): TestCase[] {
+  return [
+    // 1. Open C-shape
+    {
+      name: "1. Open C-Shape",
+      description: "Open curved stroke",
+      expectedBehavior: "One clean blob, no ribbon/sliver artifacts, no fake inner shell",
+      stroke: { points: generateCShape() }
+    },
+    // 2. TRUE loopy cursive with multiple tight loops and overlap
+    {
+      name: "2. True Loopy Cursive",
+      description: "Multiple tight loops with self-overlap (like 'elle' in cursive)",
+      expectedBehavior: "One readable filled silhouette, only true enclosed holes preserved",
+      stroke: { points: generateTrueLoopyCursive() }
+    },
+    // 3. Messy self-overlapping scribble
+    {
+      name: "3. Messy Scribble",
+      description: "Chaotic self-overlapping scribble pattern",
+      expectedBehavior: "Stable filled solid, no shard/sliver explosion",
+      stroke: { points: generateMessyScribble() }
+    },
+    // 4. Near-touching / figure-eight
+    {
+      name: "4. Figure-Eight + Near-Touch",
+      description: "Figure-8 with near-touching segments",
+      expectedBehavior: "Clean figure-8 with proper hole, no gaps at crossings",
+      stroke: { points: generateFigureEight() }
+    },
+    // 5. Signature-like fast scribble
+    {
+      name: "5. Signature Scribble",
+      description: "Fast signature-like scribble (simulates real failing drawings)",
+      expectedBehavior: "Readable signature shape, no explosion",
+      stroke: { points: generateSignatureScribble() }
+    },
+    // 6. Thin thickness extreme
+    {
+      name: "6. Thin Extreme",
+      description: "Thin stroke (test with Thickness=0.05)",
+      expectedBehavior: "Thin but continuous solid, no gaps",
+      stroke: { points: generateThinTestStroke() }
+    },
+    // 7. Thick thickness extreme  
+    {
+      name: "7. Thick Extreme",
+      description: "Test with Thickness=0.35+ (thick blob)",
+      expectedBehavior: "Fat merged blob, overlapping segments merge cleanly",
+      stroke: { points: generateThickTestStroke() }
+    }
+  ]
+}
+
+// 1. C-Shape - open arc
+function generateCShape(): Point2D[] {
+  const points: Point2D[] = []
+  for (let i = 0; i <= 50; i++) {
+    const t = i / 50
+    const angle = (Math.PI * 0.3) + t * (Math.PI * 1.4)
+    const r = 0.7
+    points.push({
+      x: Math.cos(angle) * r,
+      y: Math.sin(angle) * r
+    })
+  }
+  return points
+}
+
+// 2. TRUE Loopy Cursive - actual loops that overlap like handwriting
+function generateTrueLoopyCursive(): Point2D[] {
+  const points: Point2D[] = []
+  const numLoops = 4
+  const loopRadius = 0.25
+  const spacing = 0.5
+  
+  for (let loop = 0; loop < numLoops; loop++) {
+    const baseX = -0.9 + loop * spacing
+    // Each loop: go up, curve over, come down, cross back
+    for (let i = 0; i <= 30; i++) {
+      const t = i / 30
+      const angle = -Math.PI / 2 + t * Math.PI * 2.2  // Slightly more than full circle
+      const x = baseX + Math.sin(angle) * loopRadius + t * 0.15
+      const y = Math.cos(angle) * loopRadius * 1.2
+      points.push({ x, y })
+    }
+    // Connect to next loop
+    if (loop < numLoops - 1) {
+      const connectX = baseX + loopRadius + 0.1
+      points.push({ x: connectX, y: -loopRadius * 0.5 })
+    }
+  }
+  return points
+}
+
+// 3. Messy Scribble - chaotic overlapping
+function generateMessyScribble(): Point2D[] {
+  const points: Point2D[] = []
+  // Multiple overlapping spirals with noise
+  for (let i = 0; i <= 120; i++) {
+    const t = i / 120
+    const angle = t * Math.PI * 8
+    const r = 0.2 + t * 0.6 + Math.sin(t * Math.PI * 12) * 0.15
+    const noise = Math.sin(i * 0.7) * 0.08
+    points.push({
+      x: Math.cos(angle) * r + noise,
+      y: Math.sin(angle) * r + Math.cos(i * 0.5) * 0.05
+    })
+  }
+  return points
+}
+
+// 4. Figure-Eight with near-touching segments
+function generateFigureEight(): Point2D[] {
+  const points: Point2D[] = []
+  // Lemniscate (figure-8)
+  for (let i = 0; i <= 80; i++) {
+    const t = i / 80
+    const angle = t * Math.PI * 2
+    const scale = 0.7
+    // Lemniscate of Bernoulli parametric form
+    const denom = 1 + Math.sin(angle) ** 2
+    points.push({
+      x: (scale * Math.cos(angle)) / denom,
+      y: (scale * Math.sin(angle) * Math.cos(angle)) / denom
+    })
+  }
+  // Add near-touching spiral at center
+  for (let i = 0; i <= 20; i++) {
+    const t = i / 20
+    const angle = t * Math.PI
+    const r = 0.1 + t * 0.05
+    points.push({
+      x: Math.cos(angle) * r,
+      y: Math.sin(angle) * r - 0.02
+    })
+  }
+  return points
+}
+
+// 5. Signature-like scribble (fast, cursive, overlapping)
+function generateSignatureScribble(): Point2D[] {
+  const points: Point2D[] = []
+  // Simulate a fast signature: big loop, zigzag, small loops
+  // Initial big loop
+  for (let i = 0; i <= 25; i++) {
+    const t = i / 25
+    const angle = -Math.PI / 2 + t * Math.PI * 1.5
+    points.push({
+      x: -0.8 + Math.cos(angle) * 0.3,
+      y: Math.sin(angle) * 0.4
+    })
+  }
+  // Zigzag middle section
+  for (let i = 0; i <= 30; i++) {
+    const t = i / 30
+    const x = -0.5 + t * 1.0
+    const y = Math.sin(t * Math.PI * 6) * 0.25 * (1 - t * 0.5)
+    points.push({ x, y })
+  }
+  // Final flourish loop
+  for (let i = 0; i <= 20; i++) {
+    const t = i / 20
+    const angle = t * Math.PI * 2.5
+    const r = 0.2 * (1 - t * 0.5)
+    points.push({
+      x: 0.6 + Math.cos(angle) * r,
+      y: Math.sin(angle) * r * 0.8 - 0.1
+    })
+  }
+  return points
+}
+
+// 6. Thin test stroke - simple curved path for thin thickness testing
+function generateThinTestStroke(): Point2D[] {
+  const points: Point2D[] = []
+  // S-curve
+  for (let i = 0; i <= 60; i++) {
+    const t = i / 60
+    const x = -0.8 + t * 1.6
+    const y = Math.sin(t * Math.PI * 2) * 0.5
+    points.push({ x, y })
+  }
+  return points
+}
+
+// 7. Thick test stroke - overlapping loops for thick thickness testing
+function generateThickTestStroke(): Point2D[] {
+  const points: Point2D[] = []
+  // Overlapping circles
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40
+    const angle = t * Math.PI * 2
+    points.push({
+      x: Math.cos(angle) * 0.4 - 0.2,
+      y: Math.sin(angle) * 0.4
+    })
+  }
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40
+    const angle = t * Math.PI * 2
+    points.push({
+      x: Math.cos(angle) * 0.4 + 0.2,
+      y: Math.sin(angle) * 0.4
+    })
+  }
+  return points
+}

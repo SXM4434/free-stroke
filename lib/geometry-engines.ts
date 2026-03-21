@@ -66,12 +66,52 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
   depth: 0.15,
 }
 
-/** Per-stroke build status for debug overlay */
+/** Per-stroke build status for debug overlay (Extrude mode) */
 export type StrokeBuildStatus =
-  | { type: "ok"; usedWidth: number }
-  | { type: "widthReduced"; usedWidth: number }
-  | { type: "bevelOff"; usedWidth: number }
-  | { type: "rodFallback"; reason: string; usedWidth: number }
+  | { type: "ok"; width: number; depth: number; bevelEnabled: boolean }
+  | { type: "bevelOff"; width: number; depth: number }
+  | { type: "bevelOffTinyWidth"; width: number; depth: number }
+  | { type: "rodFallback"; reason: string; fallbackRadius: number }
+
+/** Debug contour data for Solid mode visualization */
+export interface SolidDebugContour {
+  points: { x: number; y: number }[]
+  type: "outer" | "hole" | "rejected"
+  reason?: string
+  area: number
+  signedArea: number
+  isClosed: boolean
+  parentIndex?: number  // Index of immediate parent (for containment tree)
+  nestingDepth: number  // 0 = top-level, 1 = inside one contour, 2 = inside two, etc.
+  contourIndex: number  // Original index in the contour list
+}
+
+/** Solid mode build status for debug overlay */
+export interface SolidBuildStatus {
+  success: boolean
+  contourCount: number
+  holesCount: number
+  thickness: number
+  depth: number
+  // Debug stats
+  rawContourCount: number
+  rejectedCount: number
+  validOuterCount: number
+  openContourCount: number
+  selfIntersectCount: number
+  // Mask cleanup metrics
+  pixelsBefore: number
+  pixelsAfter: number
+  holesKept: number
+  holesFilled: number
+  // Debug contour data for visualization (only populated in debug builds)
+  debugContours?: SolidDebugContour[]
+  // Raster size for 2D overlay rendering
+  rasterSize: number
+}
+
+/** Below this width, auto-disable bevel to avoid degenerate extrusions */
+const TINY_WIDTH_THRESHOLD = 0.03
 
 /** Per-stroke mesh data used by the viewport for rendering + animation */
 export interface StrokeMeshData {
@@ -81,6 +121,8 @@ export interface StrokeMeshData {
   curve?: THREE.CatmullRomCurve3
   /** Cap positions for rod-mode caps (undefined for extrude) */
   capPositions?: THREE.Vector3[]
+  /** Radius for cap/joint spheres (defaults to TUBE_RADIUS if not set) */
+  capRadius?: number
   /** Joint positions for rod-mode joints (undefined for extrude) */
   jointPositions?: THREE.Vector3[]
   jointFractions?: number[]
@@ -90,28 +132,8 @@ export interface StrokeMeshData {
   mode: GeometryMode
   /** Build status for debug overlay (extrude mode only) */
   buildStatus?: StrokeBuildStatus
-  /**
-   * Per-filtered-point timestamps (ms, relative to stroke start = 0).
-   * Used for continuous reveal interpolation so the animation follows
-   * the actual pen speed rather than advancing at a uniform rate.
-   */
-  pointTimestamps?: number[]
-  /**
-   * Cumulative arc-length at each filtered point (world units, starting at 0).
-   * Used with pointTimestamps for arc-length-based progress mapping
-   * so curves reveal at constant spatial speed instead of per-index stepping.
-   */
-  pointArcLengths?: number[]
-  /**
-   * Normalized time fractions [0..1] at each filtered point.
-   * timeFracs[i] = pointTimestamps[i] / pointTimestamps[last]
-   */
-  timeFracs?: number[]
-  /**
-   * Normalized distance fractions [0..1] at each filtered point.
-   * distFracs[i] = pointArcLengths[i] / pointArcLengths[last]
-   */
-  distFracs?: number[]
+  /** Build status for debug overlay (solid mode only) */
+  solidStatus?: SolidBuildStatus
 }
 
 export interface PreviewParams {
@@ -639,13 +661,24 @@ function deduplicateContour(pts: THREE.Vector2[], minDist = 1e-6): THREE.Vector2
 
 /**
  * Validate a shape's flattened contour: no self-intersections, non-degenerate area,
- * enough unique vertices. Returns the deduplicated contour or null if invalid.
+ * enough unique vertices, reasonable edge lengths. Returns the deduplicated contour or null if invalid.
  */
 function validateShapeContour(shape: THREE.Shape): THREE.Vector2[] | null {
   const raw = shape.getPoints(EXTRUDE_CURVE_SEGMENTS)
   const pts = deduplicateContour(raw)
   if (pts.length < 3) return null
-  if (Math.abs(contourSignedArea(pts)) < 1e-8) return null
+
+  // Reject near-zero area shapes
+  const area = Math.abs(contourSignedArea(pts))
+  if (area < 1e-6) return null
+
+  // Reject shapes where any edge is extremely short (causes triangulation issues)
+  const minEdge = 1e-5
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length
+    if (pts[i].distanceTo(pts[j]) < minEdge) return null
+  }
+
   if (contourSelfIntersects(pts)) return null
   return pts
 }
@@ -720,16 +753,13 @@ function safeExtrude(
   }
 }
 
-/** Width multipliers for recovery attempts */
-const WIDTH_RETRY_MULTIPLIERS = [1.0, 0.85, 0.70, 0.55, 0.40]
-const WIDTH_FLOOR = 0.005
 
 /**
- * Try to build a valid ExtrudeGeometry for a stroke with recovery:
- *   A) Try userWidth with current bevel setting.
- *   B) If "bad contour", retry with reduced width multipliers.
- *   C) If still fails and bevel is ON, retry width sequence with bevel OFF.
- *   D) If all fail, return rodFallback.
+ * Try to build a valid ExtrudeGeometry for a stroke.
+ * 1) If width < TINY_WIDTH_THRESHOLD, force bevel OFF to avoid degenerate extrusions.
+ * 2) Try with bevel ON (if enabled and width not tiny).
+ * 3) If fails and bevel was ON, retry with bevel OFF.
+ * 4) If still fails, return rodFallback.
  */
 function tryBuildExtrudeGeometry(
   filtered: THREE.Vector3[],
@@ -737,71 +767,142 @@ function tryBuildExtrudeGeometry(
   userWidth: number,
   _si: number
 ): { geometry: THREE.BufferGeometry | null; status: StrokeBuildStatus } {
-  console.log("[v0] tryBuildExtrudeGeometry", { si: _si, userWidth })
   const halfDepth = extrudeParams.depth / 2
   const bevel = clampBevel(extrudeParams)
+  const fbRadius = fallbackRodRadius(userWidth)
 
-  // Helper: attempt extrude at a specific width and bevel setting
-  function attemptExtrude(width: number, bevelOn: boolean): THREE.BufferGeometry | null {
-    const shape = buildRibbonShape(filtered, width)
-    if (!shape) return null
-    const contour = validateShapeContour(shape)
-    if (!contour) return null
-    const opts: THREE.ExtrudeGeometryOptions = {
+  // Build shape once (same for all attempts)
+  const shape = buildRibbonShape(filtered, userWidth)
+  if (!shape) {
+    console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "no shape" })
+    return { geometry: null, status: { type: "rodFallback", reason: "no shape", fallbackRadius: fbRadius } }
+  }
+
+  const contour = validateShapeContour(shape)
+  if (!contour) {
+    console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "bad contour" })
+    return { geometry: null, status: { type: "rodFallback", reason: "bad contour", fallbackRadius: fbRadius } }
+  }
+
+  // For tiny widths, skip bevel entirely to avoid degenerate geometry
+  const isTinyWidth = userWidth < TINY_WIDTH_THRESHOLD
+  const useBevel = extrudeParams.bevelEnabled && !isTinyWidth
+
+  // Attempt 1: with bevel (if enabled and not tiny)
+  if (useBevel) {
+    const geo1 = safeExtrude(shape, {
       depth: extrudeParams.depth,
-      bevelEnabled: bevelOn,
-      bevelSize: bevelOn ? bevel.bevelSize : 0,
-      bevelThickness: bevelOn ? bevel.bevelThickness : 0,
-      bevelSegments: bevelOn ? bevel.bevelSegments : 0,
+      bevelEnabled: true,
+      bevelSize: bevel.bevelSize,
+      bevelThickness: bevel.bevelThickness,
+      bevelSegments: bevel.bevelSegments,
       curveSegments: EXTRUDE_CURVE_SEGMENTS,
-    }
-    const geo = safeExtrude(shape, opts, filtered, extrudeParams.depth)
-    if (!geo) return null
-    geo.translate(0, 0, -halfDepth)
-    return geo
-  }
+    }, filtered, extrudeParams.depth)
 
-  // Phase 1: Try with bevel ON (if enabled)
-  for (const mult of WIDTH_RETRY_MULTIPLIERS) {
-    const tryWidth = Math.max(userWidth * mult, WIDTH_FLOOR)
-    const geo = attemptExtrude(tryWidth, extrudeParams.bevelEnabled)
-    if (geo) {
-      const isReduced = mult < 1.0 - 1e-6
-      console.log("[v0] tryBuildExtrudeGeometry OK", { si: _si, usedWidth: tryWidth, reduced: isReduced })
-      return {
-        geometry: geo,
-        status: isReduced
-          ? { type: "widthReduced", usedWidth: tryWidth }
-          : { type: "ok", usedWidth: tryWidth },
-      }
+    if (geo1) {
+      geo1.translate(0, 0, -halfDepth)
+      console.log(`[v0] stroke ${_si} final: extrude`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: true })
+      return { geometry: geo1, status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: true } }
     }
   }
 
-  // Phase 2: If bevel was ON, retry sequence with bevel OFF
-  if (extrudeParams.bevelEnabled) {
-    for (const mult of WIDTH_RETRY_MULTIPLIERS) {
-      const tryWidth = Math.max(userWidth * mult, WIDTH_FLOOR)
-      const geo = attemptExtrude(tryWidth, false)
-      if (geo) {
-        console.log("[v0] tryBuildExtrudeGeometry OK (bevelOff)", { si: _si, usedWidth: tryWidth })
-        return { geometry: geo, status: { type: "bevelOff", usedWidth: tryWidth } }
-      }
+  // Attempt 2: bevel OFF (either because tiny width, or bevel attempt failed)
+  const geo2 = safeExtrude(shape, {
+    depth: extrudeParams.depth,
+    bevelEnabled: false,
+    curveSegments: EXTRUDE_CURVE_SEGMENTS,
+  }, filtered, extrudeParams.depth)
+
+  if (geo2) {
+    geo2.translate(0, 0, -halfDepth)
+    // Distinguish why bevel was off
+    if (isTinyWidth && extrudeParams.bevelEnabled) {
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOffTinyWidth)`, { width: userWidth, depth: extrudeParams.depth })
+      return { geometry: geo2, status: { type: "bevelOffTinyWidth", width: userWidth, depth: extrudeParams.depth } }
     }
+    if (useBevel) {
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOff)`, { width: userWidth, depth: extrudeParams.depth })
+      return { geometry: geo2, status: { type: "bevelOff", width: userWidth, depth: extrudeParams.depth } }
+    }
+    console.log(`[v0] stroke ${_si} final: extrude`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: false })
+    return { geometry: geo2, status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: false } }
   }
 
-  // All attempts failed
-  console.log("[v0] tryBuildExtrudeGeometry FAIL: rodFallback", { si: _si })
-  return { geometry: null, status: { type: "rodFallback", reason: "all attempts failed", usedWidth: userWidth } }
+  console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "extrude failed" })
+  return { geometry: null, status: { type: "rodFallback", reason: "extrude failed", fallbackRadius: fbRadius } }
 }
 
-/** Build a rod tube fallback geometry for a single stroke's filtered points. */
-function buildRodFallback(filtered: THREE.Vector3[]): THREE.BufferGeometry {
+/** Derive fallback rod radius from extrude width so Width slider affects fallback strokes too */
+function fallbackRodRadius(width: number): number {
+  return Math.max(0.003, Math.min(width * 0.5, 0.08))
+}
+
+interface RodGeometryData {
+  tubeGeometry: THREE.BufferGeometry
+  curve: THREE.CatmullRomCurve3
+  capPositions: THREE.Vector3[]
+  jointPositions: THREE.Vector3[]
+  jointFractions: number[]
+}
+
+/** Build full rod geometry data (tube + cap positions + joint positions) for a stroke */
+function buildRodGeometryData(filtered: THREE.Vector3[], radius: number = TUBE_RADIUS): RodGeometryData {
   const curve = new THREE.CatmullRomCurve3(filtered, false, "centripetal")
   const tubularSegments = Math.min(
     Math.max(curve.points.length * TUBE_SEGMENTS_MULTIPLIER, 8),
     MAX_TUBULAR_SEGMENTS
   )
-  return new THREE.TubeGeometry(curve, tubularSegments, TUBE_RADIUS, RADIAL_SEGMENTS, false)
+  const tubeGeometry = new THREE.TubeGeometry(curve, tubularSegments, radius, RADIAL_SEGMENTS, false)
+
+  // Inset cap spheres slightly along tangent so they sit inside the tube ends
+  const inset = radius * 0.35
+  const startTangent = curve.getTangentAt(0)
+  const endTangent = curve.getTangentAt(1)
+  const startCapPos = filtered[0].clone().addScaledVector(startTangent, inset)
+  const endCapPos = filtered[filtered.length - 1].clone().addScaledVector(endTangent, -inset)
+  const capPositions = [startCapPos, endCapPos]
+
+  const { positions: jointPositions, fractions: jointFractions } = detectJoints3D(
+    filtered, filtered[0], filtered[filtered.length - 1]
+  )
+
+  return { tubeGeometry, curve, capPositions, jointPositions, jointFractions }
+}
+
+/** Build merged capped rod geometry (tube + cap spheres + joint spheres) for export */
+function buildCappedRodGeometry(filtered: THREE.Vector3[], radius: number = TUBE_RADIUS): THREE.BufferGeometry {
+  const { tubeGeometry, capPositions, jointPositions } = buildRodGeometryData(filtered, radius)
+  
+  const capSphere = new THREE.SphereGeometry(radius, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+  
+  const startCapGeo = capSphere.clone().translate(capPositions[0].x, capPositions[0].y, capPositions[0].z)
+  const endCapGeo = capSphere.clone().translate(capPositions[1].x, capPositions[1].y, capPositions[1].z)
+  
+  const jointGeos: THREE.BufferGeometry[] = []
+  for (const pos of jointPositions) {
+    jointGeos.push(capSphere.clone().translate(pos.x, pos.y, pos.z))
+  }
+  
+  const parts = [tubeGeometry, startCapGeo, endCapGeo, ...jointGeos]
+  const merged = mergeGeometriesSafe(parts, false)
+  
+  // Dispose cap/joint geometries (but NOT tubeGeometry if merge failed)
+  capSphere.dispose()
+  
+  if (merged) {
+    // Merge succeeded - dispose all parts
+    tubeGeometry.dispose()
+    startCapGeo.dispose()
+    endCapGeo.dispose()
+    jointGeos.forEach((g) => g.dispose())
+    return merged
+  }
+  
+  // Merge failed - dispose only the extra parts, return tube as fallback
+  startCapGeo.dispose()
+  endCapGeo.dispose()
+  jointGeos.forEach((g) => g.dispose())
+  return tubeGeometry
 }
 
 export const ExtrudeEngine: GeometryEngine = {
@@ -822,7 +923,6 @@ export const ExtrudeEngine: GeometryEngine = {
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
-      console.log("[v0] computeEffectiveWidth", { si, userWidth: extrudeParams.width, effectiveWidth })
       const { geometry, status } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
       if (geometry) {
@@ -834,9 +934,16 @@ export const ExtrudeEngine: GeometryEngine = {
           buildStatus: status,
         })
       } else {
-        // Fallback to rod tube for this stroke
+        // Fallback to rod - same builder as Rod mode but with radius derived from Width slider
+        const fbRadius = fallbackRodRadius(extrudeParams.width)
+        const rodData = buildRodGeometryData(filtered, fbRadius)
         result.push({
-          tubeGeometry: buildRodFallback(filtered),
+          tubeGeometry: rodData.tubeGeometry,
+          curve: rodData.curve,
+          capPositions: rodData.capPositions,
+          capRadius: fbRadius,
+          jointPositions: rodData.jointPositions,
+          jointFractions: rodData.jointFractions,
           filteredCount: filtered.length,
           key: `stroke-${si}-${stroke.points.length}-rod-fallback`,
           mode: "rod",
@@ -867,10 +974,12 @@ export const ExtrudeEngine: GeometryEngine = {
       if (computeArcLength(filtered) < MIN_STROKE_LENGTH) continue
 
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
-      const { geometry } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
+      const { geometry, status } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
       const strokeName = `stroke_${String(si).padStart(3, "0")}`
-      const finalGeo = geometry ?? buildRodFallback(filtered)
+      // Use capped rod geometry for fallback with radius derived from Width slider
+      const fbRadius = fallbackRodRadius(extrudeParams.width)
+      const finalGeo = geometry ?? buildCappedRodGeometry(filtered, fbRadius)
       const mesh = new THREE.Mesh(finalGeo, inkMaterial)
       mesh.name = strokeName
       exportObjects.push(mesh)
@@ -930,6 +1039,107 @@ export const ExtrudeEngine: GeometryEngine = {
 /* ------------------------------------------------------------------ */
 
 const SOLID_RASTER_SIZE = 512
+/** Minimum contour area (in raster pixels squared) to keep — filters tiny noise islands */
+const MIN_CONTOUR_AREA = 50  // Increased from 25 for stricter filtering
+/** Minimum distance between consecutive points to consider distinct */
+const MIN_POINT_DIST = 0.5
+/** Douglas-Peucker tolerance for contour simplification */
+const DP_TOLERANCE = 1.0  // Re-enabled: reduces point count for cleaner shapes
+
+/** Remove near-duplicate consecutive points from a contour */
+function deduplicateContourStrict(pts: { x: number; y: number }[]): { x: number; y: number }[] {
+  if (pts.length < 2) return pts
+  const result: { x: number; y: number }[] = [pts[0]]
+  for (let i = 1; i < pts.length; i++) {
+    const prev = result[result.length - 1]
+    const dx = pts[i].x - prev.x
+    const dy = pts[i].y - prev.y
+    if (Math.sqrt(dx * dx + dy * dy) >= MIN_POINT_DIST) {
+      result.push(pts[i])
+    }
+  }
+  // Also check if last point is too close to first (for closed contours)
+  if (result.length > 2) {
+    const first = result[0]
+    const last = result[result.length - 1]
+    const dx = last.x - first.x
+    const dy = last.y - first.y
+    if (Math.sqrt(dx * dx + dy * dy) < MIN_POINT_DIST) {
+      result.pop()
+    }
+  }
+  return result
+}
+
+/** Check if a contour is closed (first point near last point) */
+function isContourClosed(pts: { x: number; y: number }[], threshold: number = 2.0): boolean {
+  if (pts.length < 3) return false
+  const first = pts[0]
+  const last = pts[pts.length - 1]
+  const dx = last.x - first.x
+  const dy = last.y - first.y
+  return Math.sqrt(dx * dx + dy * dy) < threshold
+}
+
+/** Ensure contour has CCW winding (positive area). Returns reversed if needed. */
+function ensureWindingCCW(pts: { x: number; y: number }[]): { x: number; y: number }[] {
+  const area = signedAreaRaw(pts)
+  return area >= 0 ? pts : pts.slice().reverse()
+}
+
+/** Ensure contour has CW winding (negative area). Returns reversed if needed. */
+function ensureWindingCW(pts: { x: number; y: number }[]): { x: number; y: number }[] {
+  const area = signedAreaRaw(pts)
+  return area <= 0 ? pts : pts.slice().reverse()
+}
+
+/** Signed area without abs - positive = CCW, negative = CW */
+function signedAreaRaw(pts: { x: number; y: number }[]): number {
+  let area = 0
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
+  }
+  return area / 2
+}
+
+/** Check if two line segments intersect (excluding shared endpoints) - object-based version */
+function segmentsIntersect2D(
+  a1: { x: number; y: number }, a2: { x: number; y: number },
+  b1: { x: number; y: number }, b2: { x: number; y: number }
+): boolean {
+  const d1x = a2.x - a1.x, d1y = a2.y - a1.y
+  const d2x = b2.x - b1.x, d2y = b2.y - b1.y
+  const cross = d1x * d2y - d1y * d2x
+  if (Math.abs(cross) < 1e-10) return false // parallel
+  
+  const dx = b1.x - a1.x, dy = b1.y - a1.y
+  const t = (dx * d2y - dy * d2x) / cross
+  const u = (dx * d1y - dy * d1x) / cross
+  
+  // Exclude endpoints (t and u strictly between 0 and 1)
+  const eps = 1e-6
+  return t > eps && t < 1 - eps && u > eps && u < 1 - eps
+}
+
+/** Check if a contour self-intersects (any non-adjacent edges cross) */
+function contourSelfIntersects2D(pts: { x: number; y: number }[]): boolean {
+  const n = pts.length
+  if (n < 4) return false
+  
+  for (let i = 0; i < n; i++) {
+    const a1 = pts[i]
+    const a2 = pts[(i + 1) % n]
+    // Check against non-adjacent edges
+    for (let j = i + 2; j < n; j++) {
+      // Skip if j+1 wraps to i (adjacent edge)
+      if (j === n - 1 && i === 0) continue
+      const b1 = pts[j]
+      const b2 = pts[(j + 1) % n]
+      if (segmentsIntersect2D(a1, a2, b1, b2)) return true
+    }
+  }
+  return false
+}
 
 /**
  * Rasterize processedStrokes into a binary mask on an offscreen 2D canvas.
@@ -1201,62 +1411,282 @@ function pointInPolygon(px: number, py: number, poly: { x: number; y: number }[]
   return inside
 }
 
+interface ContourMeta {
+  contour: { x: number; y: number }[]
+  index: number
+  absArea: number
+  signedArea: number
+  nestingDepth: number
+  parentIndex: number  // -1 if top-level
+}
+
 interface ClassifiedContours {
   outer: { x: number; y: number }[]
+  outerIndex: number
   holes: { x: number; y: number }[][]
+  holeIndices: number[]
 }
 
 /**
- * Classify contours into outer boundary + holes.
- * - Sort by absolute area descending.
- * - Largest = outer shape.
- * - Remaining contours that have a sample point inside the outer = holes.
- * - Remaining contours that are outside the outer = separate outer shapes
- *   (we merge them all into one Shape with multiple sub-paths).
+ * Classify contours for SOLID mode: single largest outer + interior holes only.
+ * 
+ * KEY INSIGHT: Marching squares extracts BOUNDARY contours (edges of filled regions).
+ * For a thick stroke that doesn't self-overlap, we get TWO parallel contours (inner and outer edges).
+ * These are NOT nested - neither contains the other - so nesting-depth classification fails.
+ * 
+ * SOLUTION: Use the LARGEST contour as the single filled body. Any smaller contours
+ * that are GEOMETRICALLY INSIDE the largest become holes. All others are discarded.
+ * This produces a clean filled solid instead of ribbon artifacts.
  */
 function classifyContours(contours: { x: number; y: number }[][]): ClassifiedContours[] {
   if (contours.length === 0) return []
 
-  // Compute areas and sort by absolute area descending
-  const withArea = contours.map((c) => ({ contour: c, area: signedArea(c) }))
-  withArea.sort((a, b) => Math.abs(b.area) - Math.abs(a.area))
+  // Sort by area descending - largest first
+  const sorted = contours
+    .map((c, idx) => ({ contour: c, index: idx, area: contourArea(c) }))
+    .sort((a, b) => b.area - a.area)
 
-  const used = new Set<number>()
-  const results: ClassifiedContours[] = []
+  // The LARGEST contour is the outer boundary of the filled solid
+  const largest = sorted[0]
+  
+  // Find holes: smaller contours whose CENTROID is inside the largest
+  const holes: { x: number; y: number }[][] = []
+  const holeIndices: number[] = []
 
-  for (let i = 0; i < withArea.length; i++) {
-    if (used.has(i)) continue
-    used.add(i)
-
-    const outer = withArea[i].contour
-    const holes: { x: number; y: number }[][] = []
-
-    // Find holes: smaller contours whose first point is inside this outer
-    for (let j = i + 1; j < withArea.length; j++) {
-      if (used.has(j)) continue
-      const candidate = withArea[j].contour
-      if (candidate.length > 0 && pointInPolygon(candidate[0].x, candidate[0].y, outer)) {
-        holes.push(candidate)
-        used.add(j)
-      }
+  for (let i = 1; i < sorted.length; i++) {
+    const candidate = sorted[i]
+    // Use centroid for more robust inside test
+    const centroid = contourCentroid(candidate.contour)
+    if (pointInPolygon(centroid.x, centroid.y, largest.contour)) {
+      holes.push(candidate.contour)
+      holeIndices.push(candidate.index)
     }
-
-    results.push({ outer, holes })
+    // Contours NOT inside the largest are discarded (they're parallel boundary artifacts)
   }
 
-  return results
+  return [{
+    outer: largest.contour,
+    outerIndex: largest.index,
+    holes,
+    holeIndices
+  }]
+}
+
+/** Compute centroid of a contour */
+function contourCentroid(pts: { x: number; y: number }[]): { x: number; y: number } {
+  if (pts.length === 0) return { x: 0, y: 0 }
+  let cx = 0, cy = 0
+  for (const p of pts) {
+    cx += p.x
+    cy += p.y
+  }
+  return { x: cx / pts.length, y: cy / pts.length }
+}
+
+/** Compute signed area of a THREE.Vector2 polygon (for winding check) */
+function computeShapeArea(pts: THREE.Vector2[]): number {
+  let area = 0
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
+  }
+  return area / 2  // Positive = CCW, Negative = CW
+}
+
+/** Return metadata for all contours for debug visualization (simplified: largest is outer, inside = hole) */
+function buildContourHierarchy(contours: { x: number; y: number }[][]): ContourMeta[] {
+  if (contours.length === 0) return []
+
+  const metas: ContourMeta[] = contours.map((c, idx) => ({
+    contour: c,
+    index: idx,
+    absArea: contourArea(c),
+    signedArea: signedArea(c),
+    nestingDepth: 0,
+    parentIndex: -1
+  }))
+  metas.sort((a, b) => b.absArea - a.absArea)
+
+  // Largest is the outer (depth 0), everything inside it is a hole (depth 1), rest is discarded (depth -1)
+  if (metas.length > 0) {
+    const largest = metas[0]
+    largest.nestingDepth = 0
+    largest.parentIndex = -1
+
+    for (let i = 1; i < metas.length; i++) {
+      const m = metas[i]
+      const centroid = contourCentroid(m.contour)
+      if (pointInPolygon(centroid.x, centroid.y, largest.contour)) {
+        m.nestingDepth = 1  // Hole inside the largest
+        m.parentIndex = largest.index
+      } else {
+        m.nestingDepth = -1  // Discarded (parallel boundary artifact)
+        m.parentIndex = -1
+      }
+    }
+  }
+
+  return metas
+}
+
+/** Compute absolute area of a 2D contour in raster space */
+function contourArea(pts: { x: number; y: number }[]): number {
+  let area = 0
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
+  }
+  return Math.abs(area / 2)
+}
+
+interface SolidBuildResult {
+  geometry: THREE.BufferGeometry | null
+  contourCount: number
+  holesCount: number
+  rawContourCount: number
+  rejectedCount: number
+  validOuterCount: number
+  openContourCount: number
+  selfIntersectCount: number
+  pixelsBefore: number
+  pixelsAfter: number
+  holesKept: number
+  holesFilled: number
+  debugContours: SolidDebugContour[]
+}
+
+/** Count true pixels in mask */
+function countMaskPixels(mask: boolean[]): number {
+  let count = 0
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i]) count++
+  }
+  return count
 }
 
 /**
- * Build a watertight extruded mesh from raster mask contours.
- * Pipeline: rasterize -> marching squares -> simplify -> classify -> Shape -> ExtrudeGeometry
+ * Morphological dilation - expand true pixels by radius.
+ * For each true pixel, set all pixels within radius to true.
+ */
+function dilateMask(mask: boolean[], S: number, radius: number): boolean[] {
+  if (radius <= 0) return mask.slice()
+  const result = mask.slice()
+  const r = Math.ceil(radius)
+  
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (!mask[y * S + x]) continue
+      // Set all pixels within radius to true
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dy * dy > radius * radius) continue
+          const nx = x + dx, ny = y + dy
+          if (nx < 0 || nx >= S || ny < 0 || ny >= S) continue
+          result[ny * S + nx] = true
+        }
+      }
+    }
+  }
+  return result
+}
+
+/**
+ * Morphological erosion - shrink true pixels by radius.
+ * A pixel remains true only if all pixels within radius are true.
+ */
+function erodeMask(mask: boolean[], S: number, radius: number): boolean[] {
+  if (radius <= 0) return mask.slice()
+  const result: boolean[] = new Array(S * S).fill(false)
+  const r = Math.ceil(radius)
+  
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (!mask[y * S + x]) continue
+      // Check if all pixels within radius are true
+      let allTrue = true
+      outer: for (let dy = -r; dy <= r && allTrue; dy++) {
+        for (let dx = -r; dx <= r && allTrue; dx++) {
+          if (dx * dx + dy * dy > radius * radius) continue
+          const nx = x + dx, ny = y + dy
+          if (nx < 0 || nx >= S || ny < 0 || ny >= S) {
+            allTrue = false
+            break outer
+          }
+          if (!mask[ny * S + nx]) {
+            allTrue = false
+            break outer
+          }
+        }
+      }
+      result[y * S + x] = allTrue
+    }
+  }
+  return result
+}
+
+/**
+ * Morphological close (dilation then erosion) - fills narrow gaps.
+ * Radius should be based on stroke thickness to close internal voids.
+ */
+function morphologicalClose(mask: boolean[], S: number, radius: number): boolean[] {
+  const dilated = dilateMask(mask, S, radius)
+  return erodeMask(dilated, S, radius)
+}
+
+/** Compute bounding box of a contour and return min dimension */
+function contourMinDimension(pts: { x: number; y: number }[]): number {
+  if (pts.length === 0) return 0
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const p of pts) {
+    minX = Math.min(minX, p.x)
+    minY = Math.min(minY, p.y)
+    maxX = Math.max(maxX, p.x)
+    maxY = Math.max(maxY, p.y)
+  }
+  const width = maxX - minX
+  const height = maxY - minY
+  return Math.min(width, height)
+}
+
+/** Check if a hole should be kept based on geometry relative to thickness */
+function shouldKeepHole(
+  hole: { x: number; y: number }[],
+  outerArea: number,
+  thicknessInPixels: number
+): { keep: boolean; reason: string } {
+  const area = contourArea(hole)
+  const minDim = contourMinDimension(hole)
+  
+  // Minimum area threshold: hole must be at least 2x thickness squared
+  const minAreaThreshold = thicknessInPixels * thicknessInPixels * 4
+  if (area < minAreaThreshold) {
+    return { keep: false, reason: `area ${area.toFixed(0)} < ${minAreaThreshold.toFixed(0)} (4*thick^2)` }
+  }
+  
+  // Minimum dimension threshold: hole must be at least 2x thickness wide
+  const minDimThreshold = thicknessInPixels * 2
+  if (minDim < minDimThreshold) {
+    return { keep: false, reason: `minDim ${minDim.toFixed(0)} < ${minDimThreshold.toFixed(0)} (2*thick)` }
+  }
+  
+  // Ratio threshold: hole must be at least 10% of outer area to be meaningful
+  const ratioThreshold = 0.10
+  if (area / outerArea < ratioThreshold) {
+    return { keep: false, reason: `ratio ${(area / outerArea * 100).toFixed(1)}% < ${ratioThreshold * 100}%` }
+  }
+  
+  return { keep: true, reason: "substantial" }
+}
+
+/**
+ * Build a watertight extruded mesh from raster mask using connected-component boundary tracing.
+ * Pipeline: connected components -> largest component -> Moore boundary trace -> simplify -> THREE.Shape -> extrude
  */
 function buildSolidMeshFromMask(
   mask: boolean[],
   canvasWidth: number,
   canvasHeight: number,
-  depth: number
-): THREE.BufferGeometry | null {
+  depth: number,
+  thickness: number
+): SolidBuildResult {
   const S = SOLID_RASTER_SIZE
   const scaleRef = Math.max(canvasWidth, canvasHeight)
   const normScale = 3 / scaleRef
@@ -1265,62 +1695,229 @@ function buildSolidMeshFromMask(
   const toWorldX = (rx: number) => ((rx / S) * canvasWidth - canvasWidth / 2) * normScale
   const toWorldY = (ry: number) => -((ry / S) * canvasHeight - canvasHeight / 2) * normScale
 
-  // 1) Extract contours via marching squares
-  const rawContours = marchingSquaresContours(mask, S)
-  if (rawContours.length === 0) return null
+  // Convert thickness from world units to raster pixels
+  const thicknessInPixels = (thickness / normScale / scaleRef) * S
+  
+  const pixelsBefore = countMaskPixels(mask)
+  const debugContours: SolidDebugContour[] = []
+  const emptyResult: SolidBuildResult = {
+    geometry: null, contourCount: 0, holesCount: 0,
+    rawContourCount: 0, rejectedCount: 0, validOuterCount: 0, openContourCount: 0, selfIntersectCount: 0,
+    pixelsBefore, pixelsAfter: pixelsBefore, holesKept: 0, holesFilled: 0, debugContours
+  }
 
-  // 2) Simplify contours (tolerance in raster pixels)
-  const tolerance = 0.8
-  const simplified = rawContours
-    .map((c) => dpSimplify(c, tolerance))
-    .filter((c) => c.length >= 3)
-  if (simplified.length === 0) return null
+  // ========== NEW ROBUST PIPELINE ==========
+  // 1) Connected component labeling - find all distinct filled regions
+  const { labels, componentCount, componentSizes } = labelConnectedComponents(mask, S)
+  if (componentCount === 0) return emptyResult
 
-  // 3) Classify into outer + holes
-  const classified = classifyContours(simplified)
-  if (classified.length === 0) return null
-
-  // 4) Build THREE.Shape(s) and extrude
-  const geometries: THREE.BufferGeometry[] = []
-  const halfDepth = depth / 2
-
-  for (const group of classified) {
-    // Convert outer contour to world-space THREE.Shape
-    const shapePts = group.outer.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
-    if (shapePts.length < 3) continue
-
-    const shape = new THREE.Shape(shapePts)
-
-    // Add holes
-    for (const hole of group.holes) {
-      const holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
-      if (holePts.length < 3) continue
-      shape.holes.push(new THREE.Path(holePts))
-    }
-
-    try {
-      const geo = new THREE.ExtrudeGeometry(shape, {
-        depth,
-        bevelEnabled: false,
-        curveSegments: 1,
-      })
-      geo.translate(0, 0, -halfDepth)
-      geometries.push(geo)
-    } catch {
-      // Triangulation can fail on degenerate shapes — skip silently
-      continue
+  // 2) Keep only the largest component (MVP: single solid body)
+  let largestLabel = 1, largestSize = 0
+  for (let i = 1; i <= componentCount; i++) {
+    if (componentSizes[i] > largestSize) {
+      largestSize = componentSizes[i]
+      largestLabel = i
     }
   }
 
-  if (geometries.length === 0) return null
+  // 3) Create binary mask for just the largest component
+  const componentMask: boolean[] = new Array(S * S)
+  for (let i = 0; i < S * S; i++) {
+    componentMask[i] = labels[i] === largestLabel
+  }
 
-  if (geometries.length === 1) return geometries[0]
+  // 4) Trace outer boundary using Moore neighborhood tracing
+  const outerBoundary = traceOuterBoundaryMoore(componentMask, S)
+  if (outerBoundary.length < 4) return emptyResult
 
-  // Merge multiple shapes into one geometry
-  const merged = mergeGeometriesSafe(geometries, false)
-  for (const g of geometries) g.dispose()
-  return merged || null
+  // 5) Simplify the boundary
+  const simplifiedOuter = dpSimplify(outerBoundary, DP_TOLERANCE)
+  if (simplifiedOuter.length < 3) return emptyResult
+
+  // 6) Find holes (enclosed FALSE regions within the component's bounding box)
+  const holes = findEnclosedHoles(componentMask, S, simplifiedOuter)
+
+  // Debug info
+  debugContours.push({
+    points: simplifiedOuter,
+    type: "outer",
+    area: contourArea(simplifiedOuter),
+    signedArea: signedArea(simplifiedOuter),
+    isClosed: true,
+    nestingDepth: 0,
+    contourIndex: 0
+  })
+  for (let i = 0; i < holes.length; i++) {
+    debugContours.push({
+      points: holes[i],
+      type: "hole",
+      area: contourArea(holes[i]),
+      signedArea: signedArea(holes[i]),
+      isClosed: true,
+      nestingDepth: 1,
+      parentIndex: 0,
+      contourIndex: i + 1
+    })
+  }
+
+  // 7) Transform to world coords and build THREE.Shape
+  let shapePts = simplifiedOuter.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+
+  // Ensure CCW winding for THREE.js outer
+  const outerWindingArea = computeShapeArea(shapePts)
+  if (outerWindingArea < 0) {
+    shapePts = shapePts.slice().reverse()
+  }
+
+  const shape = new THREE.Shape(shapePts)
+  let holesKept = 0
+
+  // Add holes with correct winding (CW for THREE.js)
+  for (const hole of holes) {
+    if (hole.length < 3) continue
+    let holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+    const holeWindingArea = computeShapeArea(holePts)
+    if (holeWindingArea > 0) {
+      holePts = holePts.slice().reverse()
+    }
+    shape.holes.push(new THREE.Path(holePts))
+    holesKept++
+  }
+
+  // 8) Extrude
+  const halfDepth = depth / 2
+  let geometry: THREE.BufferGeometry | null = null
+  try {
+    geometry = new THREE.ExtrudeGeometry(shape, {
+      depth,
+      bevelEnabled: false,
+      curveSegments: 1,
+    })
+    geometry.translate(0, 0, -halfDepth)
+  } catch {
+    // Triangulation failed
+    return emptyResult
+  }
+
+  return {
+    geometry,
+    contourCount: 1,
+    holesCount: holesKept,
+    rawContourCount: 1,
+    rejectedCount: 0,
+    validOuterCount: 1,
+    openContourCount: 0,
+    selfIntersectCount: 0,
+    pixelsBefore,
+    pixelsAfter: largestSize,
+    holesKept,
+    holesFilled: holes.length - holesKept,
+    debugContours
+  }
 }
+
+/** Connected component labeling using flood fill */
+function labelConnectedComponents(mask: boolean[], S: number): { labels: number[], componentCount: number, componentSizes: number[] } {
+  const labels = new Array(S * S).fill(0)
+  const componentSizes: number[] = [0]  // Index 0 unused
+  let componentCount = 0
+
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const idx = y * S + x
+      if (mask[idx] && labels[idx] === 0) {
+        componentCount++
+        let size = 0
+        // Flood fill using a queue (BFS to avoid stack overflow)
+        const queue: number[] = [idx]
+        labels[idx] = componentCount
+        while (queue.length > 0) {
+          const ci = queue.shift()!
+          size++
+          const cx = ci % S, cy = Math.floor(ci / S)
+          // 4-connected neighbors
+          const neighbors = [
+            cy > 0 ? ci - S : -1,      // up
+            cy < S - 1 ? ci + S : -1,  // down
+            cx > 0 ? ci - 1 : -1,      // left
+            cx < S - 1 ? ci + 1 : -1   // right
+          ]
+          for (const ni of neighbors) {
+            if (ni >= 0 && mask[ni] && labels[ni] === 0) {
+              labels[ni] = componentCount
+              queue.push(ni)
+            }
+          }
+        }
+        componentSizes.push(size)
+      }
+    }
+  }
+
+  return { labels, componentCount, componentSizes }
+}
+
+/** Moore neighborhood boundary tracing - traces the outer edge of a binary region */
+function traceOuterBoundaryMoore(mask: boolean[], S: number): { x: number, y: number }[] {
+  // Find starting point: topmost-leftmost TRUE pixel
+  let startIdx = -1
+  for (let i = 0; i < S * S; i++) {
+    if (mask[i]) { startIdx = i; break }
+  }
+  if (startIdx < 0) return []
+
+  const startX = startIdx % S, startY = Math.floor(startIdx / S)
+  
+  // Moore neighborhood: 8 directions starting from left, going clockwise
+  // 0=left, 1=up-left, 2=up, 3=up-right, 4=right, 5=down-right, 6=down, 7=down-left
+  const dx = [-1, -1, 0, 1, 1, 1, 0, -1]
+  const dy = [0, -1, -1, -1, 0, 1, 1, 1]
+
+  const boundary: { x: number, y: number }[] = []
+  let x = startX, y = startY
+  let dir = 0  // Start looking left (we entered from the left since this is topmost-leftmost)
+
+  const maxIterations = S * S * 2  // Safety limit
+  let iterations = 0
+
+  do {
+    boundary.push({ x: x + 0.5, y: y + 0.5 })  // Use pixel center
+    
+    // Look for next boundary pixel by rotating clockwise from (dir + 5) % 8
+    // This is the Moore neighbor tracing algorithm
+    let found = false
+    const startDir = (dir + 5) % 8  // Start from the direction we came from + 1 (backtrack)
+    
+    for (let i = 0; i < 8; i++) {
+      const checkDir = (startDir + i) % 8
+      const nx = x + dx[checkDir]
+      const ny = y + dy[checkDir]
+      
+      if (nx >= 0 && nx < S && ny >= 0 && ny < S && mask[ny * S + nx]) {
+        x = nx
+        y = ny
+        dir = checkDir
+        found = true
+        break
+      }
+    }
+
+    if (!found) break  // Isolated pixel
+    iterations++
+  } while ((x !== startX || y !== startY) && iterations < maxIterations)
+
+  return boundary
+}
+
+/** Find enclosed holes within a component */
+function findEnclosedHoles(componentMask: boolean[], S: number, outerBoundary: { x: number, y: number }[]): { x: number, y: number }[][] {
+  // For MVP: skip hole detection to ensure clean solid
+  // True holes would require finding FALSE regions completely surrounded by TRUE
+  // This is complex and error-prone; returning empty for now
+  return []
+}
+
+
 
 export const SolidEngine: GeometryEngine = {
   buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
@@ -1329,15 +1926,35 @@ export const SolidEngine: GeometryEngine = {
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) return []
 
     const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
-    const geometry = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth)
+    const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth, solidParams.thickness)
 
-    if (!geometry) return []
+    const solidStatus: SolidBuildStatus = {
+      success: result.geometry !== null,
+      contourCount: result.contourCount,
+      holesCount: result.holesCount,
+      thickness: solidParams.thickness,
+      depth: solidParams.depth,
+      rawContourCount: result.rawContourCount,
+      rejectedCount: result.rejectedCount,
+      validOuterCount: result.validOuterCount,
+      openContourCount: result.openContourCount,
+      selfIntersectCount: result.selfIntersectCount,
+      pixelsBefore: result.pixelsBefore,
+      pixelsAfter: result.pixelsAfter,
+      holesKept: result.holesKept,
+      holesFilled: result.holesFilled,
+      debugContours: result.debugContours,
+      rasterSize: SOLID_RASTER_SIZE,
+    }
+
+    if (!result.geometry) return []
 
     return [{
-      tubeGeometry: geometry,
+      tubeGeometry: result.geometry,
       filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
       key: `solid-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
       mode: "solid",
+      solidStatus,
     }]
   },
 
@@ -1349,7 +1966,8 @@ export const SolidEngine: GeometryEngine = {
     const disposables: THREE.BufferGeometry[] = []
 
     const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
-    const geometry = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth)
+    const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth, solidParams.thickness)
+    const geometry = result.geometry
 
     const rootGroup = new THREE.Group()
     rootGroup.name = "FreeStroke"

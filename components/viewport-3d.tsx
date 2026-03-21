@@ -12,6 +12,7 @@ import {
   type GeometryMode,
   type StrokeMeshData,
   type StrokeBuildStatus,
+  type SolidBuildStatus,
   type ExtrudeParams,
   type SolidParams,
   getEngine,
@@ -41,11 +42,17 @@ function useStrokeMeshes(
   extrudeParams?: ExtrudeParams,
   solidParams?: SolidParams
 ): StrokeMeshData[] {
+  // Extract individual values to prevent object reference changes from triggering rebuilds
+  const extrudeWidth = extrudeParams?.width
+  const extrudeBevel = extrudeParams?.bevel
+  const solidThickness = solidParams?.thickness
+  const solidDepth = solidParams?.depth
+  
   return useMemo(() => {
-    console.log("[v0] useStrokeMeshes rebuild", { mode, width: extrudeParams?.width, strokeCount: strokes.length })
     const engine = getEngine(mode)
     return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
-  }, [strokes, canvasWidth, canvasHeight, mode, extrudeParams, solidParams])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeBevel, solidThickness, solidDepth])
 }
 
 /* ---- Shared geometries ---- */
@@ -376,35 +383,43 @@ function AnimatedStrokes({
               geometry={data.tubeGeometry}
               material={strokeMaterial}
             />
-            {/* Rod-mode only: caps + joints */}
-            {data.mode === "rod" && data.capPositions && (
-              <>
-                <mesh
-                  ref={(el) => { startCapRefs.current[si] = el }}
-                  geometry={sphereGeometry}
-                  material={strokeMaterial}
-                  position={data.capPositions[0]}
-                />
-                <mesh
-                  ref={(el) => { endCapRefs.current[si] = el }}
-                  geometry={sphereGeometry}
-                  material={strokeMaterial}
-                  position={data.capPositions[1]}
-                />
-              </>
-            )}
-            {data.mode === "rod" && data.jointPositions && (
-              <group ref={(el) => { jointGroupRefs.current[si] = el }}>
-                {data.jointPositions.map((pos, ji) => (
+            {/* Rod-mode only: caps + joints (fallback may use custom radius from Width slider) */}
+            {data.mode === "rod" && data.capPositions && (() => {
+              const r = data.capRadius ?? TUBE_RADIUS
+              const capGeo = r === TUBE_RADIUS ? sphereGeometry : new THREE.SphereGeometry(r, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+              return (
+                <>
                   <mesh
-                    key={`${data.key}-joint-${ji}`}
-                    geometry={sphereGeometry}
+                    ref={(el) => { startCapRefs.current[si] = el }}
+                    geometry={capGeo}
                     material={strokeMaterial}
-                    position={pos}
+                    position={data.capPositions[0]}
                   />
-                ))}
-              </group>
-            )}
+                  <mesh
+                    ref={(el) => { endCapRefs.current[si] = el }}
+                    geometry={capGeo}
+                    material={strokeMaterial}
+                    position={data.capPositions[1]}
+                  />
+                </>
+              )
+            })()}
+            {data.mode === "rod" && data.jointPositions && (() => {
+              const r = data.capRadius ?? TUBE_RADIUS
+              const jointGeo = r === TUBE_RADIUS ? sphereGeometry : new THREE.SphereGeometry(r, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+              return (
+                <group ref={(el) => { jointGroupRefs.current[si] = el }}>
+                  {data.jointPositions.map((pos, ji) => (
+                    <mesh
+                      key={`${data.key}-joint-${ji}`}
+                      geometry={jointGeo}
+                      material={strokeMaterial}
+                      position={pos}
+                    />
+                  ))}
+                </group>
+              )
+            })()}
           </group>
         ))}
       </group>
@@ -479,6 +494,7 @@ function Scene({
   orbitEnabled = true,
   masterControlsRef,
   meshStatusRef,
+  solidStatusRef,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
@@ -500,16 +516,26 @@ function Scene({
   orbitEnabled?: boolean
   masterControlsRef?: React.RefObject<OrbitControlsImpl | null>
   meshStatusRef?: React.MutableRefObject<StrokeBuildStatus[]>
+  solidStatusRef?: React.MutableRefObject<SolidBuildStatus | null>
 }) {
   const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode, extrudeParams, solidParams)
   const bounds = useStrokeBounds(meshes)
 
-  // Populate meshStatusRef for debug overlay
+  // Populate meshStatusRef for debug overlay (extrude mode)
   useEffect(() => {
     if (meshStatusRef) {
       meshStatusRef.current = meshes.map((m) => m.buildStatus ?? { type: "ok" })
     }
   }, [meshes, meshStatusRef])
+
+  // Populate solidStatusRef for debug overlay (solid mode)
+  useEffect(() => {
+    if (solidStatusRef) {
+      // Find the first mesh with solidStatus (Solid mode produces a single mesh)
+      const solidMesh = meshes.find((m) => m.solidStatus)
+      solidStatusRef.current = solidMesh?.solidStatus ?? null
+    }
+  }, [meshes, solidStatusRef])
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
   useEffect(() => {
@@ -633,6 +659,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const [compare3Up, setCompare3Up] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
   const meshStatusRef = useRef<StrokeBuildStatus[]>([])
+  const solidStatusRef = useRef<SolidBuildStatus | null>(null)
 
   const { totalDuration } = useTimeline(rawStrokes)
 
@@ -943,6 +970,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                       orbitEnabled={isMaster}
                       masterControlsRef={isMaster ? undefined : controlsRef}
                       meshStatusRef={meshStatusRef}
+                      solidStatusRef={solidStatusRef}
                     />
                   </Canvas>
                 </ViewportErrorBoundary>
@@ -993,6 +1021,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 totalDuration={totalDuration}
                 onProgressUpdate={onProgressUpdate}
                 meshStatusRef={meshStatusRef}
+                solidStatusRef={solidStatusRef}
               />
             </Canvas>
           </ViewportErrorBoundary>
@@ -1013,26 +1042,71 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
           {/* Per-stroke extrude build status (extrude mode only) */}
           {geometryMode === "extrude" && (meshStatusRef.current?.length ?? 0) > 0 && (
             <div className="mt-1 border-t border-border/50 pt-1">
-              <div className="font-semibold text-foreground">
-                Build (ui={extrudeParams?.width?.toFixed(3) ?? "?"})
-              </div>
+              <div className="font-semibold text-foreground">Build status:</div>
               {(meshStatusRef.current ?? []).map((s, i) => (
                 <div key={i} className={
-                  s.type === "ok" ? "text-muted-foreground"
-                    : s.type === "widthReduced" ? "text-yellow-600"
-                    : s.type === "bevelOff" ? "text-orange-500"
+                  s.type === "ok" ? "text-green-600"
+                    : s.type === "bevelOff" ? "text-yellow-600"
+                    : s.type === "bevelOffTinyWidth" ? "text-orange-500"
                     : "text-red-500"
                 }>
-                  {i}: {s.type === "ok" ? `OK w=${s.usedWidth.toFixed(3)}`
-                    : s.type === "widthReduced" ? `wReduced w=${s.usedWidth.toFixed(3)}`
-                    : s.type === "bevelOff" ? `bevelOff w=${s.usedWidth.toFixed(3)}`
-                    : `rod (${s.reason})`}
+                  {i}: {s.type === "ok"
+                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=${s.bevelEnabled}`
+                    : s.type === "bevelOff"
+                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(retry)`
+                    : s.type === "bevelOffTinyWidth"
+                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(tiny)`
+                    : `rod r=${s.fallbackRadius.toFixed(3)} (${s.reason}) depth=n/a bevel=n/a`}
                 </div>
               ))}
             </div>
           )}
+          {/* Solid mode build status */}
+          {geometryMode === "solid" && solidStatusRef.current && (
+            <div className="mt-1 border-t border-border/50 pt-1">
+              <div className="font-semibold text-foreground">Solid build:</div>
+              <div className={solidStatusRef.current.success ? "text-green-600" : "text-red-500"}>
+                {solidStatusRef.current.success ? "success" : "failed"}
+              </div>
+              <div className="text-muted-foreground">
+                mask: {solidStatusRef.current.pixelsBefore} → {solidStatusRef.current.pixelsAfter} px
+              </div>
+              <div>raw contours: {solidStatusRef.current.rawContourCount}</div>
+              <div className={solidStatusRef.current.rejectedCount > 0 ? "text-yellow-600" : ""}>
+                rejected: {solidStatusRef.current.rejectedCount} (open: {solidStatusRef.current.openContourCount}, self-x: {solidStatusRef.current.selfIntersectCount})
+              </div>
+              <div>valid outers: {solidStatusRef.current.validOuterCount}</div>
+              <div className={solidStatusRef.current.holesFilled > 0 ? "text-cyan-600" : ""}>
+                holes: kept={solidStatusRef.current.holesKept} filled={solidStatusRef.current.holesFilled}
+              </div>
+              <div>thickness: {solidStatusRef.current.thickness.toFixed(3)}</div>
+              <div>depth: {solidStatusRef.current.depth.toFixed(3)}</div>
+              {/* Debug contour breakdown with hierarchy info */}
+              {solidStatusRef.current.debugContours && solidStatusRef.current.debugContours.length > 0 && (
+                <div className="mt-1 border-t border-border/30 pt-1 text-xs">
+                  <div className="font-semibold">Contours (depth: 0=outer, 1=hole, 2+=nested):</div>
+                  {solidStatusRef.current.debugContours.slice(0, 12).map((c, i) => (
+                    <div key={i} className={
+                      c.type === "outer" ? "text-green-600"
+                        : c.type === "hole" ? "text-blue-500"
+                        : "text-red-400"
+                    }>
+                      #{c.contourIndex}: {c.type} d={c.nestingDepth ?? "?"} area={c.area?.toFixed(0) ?? "?"} 
+                      {c.parentIndex !== undefined && ` parent=#${c.parentIndex}`}
+                      {c.reason ? ` (${c.reason})` : ""}
+                    </div>
+                  ))}
+                  {solidStatusRef.current.debugContours.length > 12 && (
+                    <div className="text-muted-foreground">...and {solidStatusRef.current.debugContours.length - 12} more</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
+
+
 
       {/* Animation controls */}
       {strokeCount > 0 && (
