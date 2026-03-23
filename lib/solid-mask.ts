@@ -844,15 +844,6 @@ function generateStarShape(): Point2D[] {
   return points
 }
 
-    // Connect to next loop
-    if (loop < numLoops - 1) {
-      const connectX = baseX + loopRadius + 0.1
-      points.push({ x: connectX, y: -loopRadius * 0.5 })
-    }
-  }
-  return points
-}
-
 // 3. Messy Scribble - chaotic overlapping
 function generateMessyScribble(): Point2D[] {
   const points: Point2D[] = []
