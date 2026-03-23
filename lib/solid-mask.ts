@@ -725,6 +725,134 @@ function generateCShape(): Point2D[] {
   return points
 }
 
+// 2. TRUE Loopy Cursive - actual loops that overlap like handwriting
+function generateTrueLoopyCursive(): Point2D[] {
+  const points: Point2D[] = []
+  const numLoops = 4
+  const loopRadius = 0.25
+  const spacing = 0.5
+  
+  for (let loop = 0; loop < numLoops; loop++) {
+    const baseX = -0.9 + loop * spacing
+    for (let i = 0; i <= 30; i++) {
+      const t = i / 30
+      const angle = -Math.PI / 2 + t * Math.PI * 2.2
+      const x = baseX + Math.sin(angle) * loopRadius + t * 0.15
+      const y = Math.cos(angle) * loopRadius * 1.2
+      points.push({ x, y })
+    }
+    if (loop < numLoops - 1) {
+      const connectX = baseX + loopRadius + 0.1
+      points.push({ x: connectX, y: -loopRadius * 0.5 })
+    }
+  }
+  return points
+}
+
+// 3. Messy Scribble - chaotic overlapping
+function generateMessyScribble(): Point2D[] {
+  const points: Point2D[] = []
+  for (let i = 0; i <= 120; i++) {
+    const t = i / 120
+    const angle = t * Math.PI * 8
+    const r = 0.2 + t * 0.6 + Math.sin(t * Math.PI * 12) * 0.15
+    const noise = Math.sin(i * 0.7) * 0.08
+    points.push({
+      x: Math.cos(angle) * r + noise,
+      y: Math.sin(angle) * r + Math.cos(i * 0.5) * 0.05
+    })
+  }
+  return points
+}
+
+// 4. Figure-Eight with near-touching segments
+function generateFigureEight(): Point2D[] {
+  const points: Point2D[] = []
+  for (let i = 0; i <= 80; i++) {
+    const t = i / 80
+    const angle = t * Math.PI * 2
+    const scale = 0.7
+    const denom = 1 + Math.sin(angle) ** 2
+    points.push({
+      x: (scale * Math.cos(angle)) / denom,
+      y: (scale * Math.sin(angle) * Math.cos(angle)) / denom
+    })
+  }
+  for (let i = 0; i <= 20; i++) {
+    const t = i / 20
+    const angle = t * Math.PI
+    const r = 0.1 + t * 0.05
+    points.push({
+      x: Math.cos(angle) * r,
+      y: Math.sin(angle) * r - 0.02
+    })
+  }
+  return points
+}
+
+// 5. Signature-like scribble
+function generateSignatureScribble(): Point2D[] {
+  const points: Point2D[] = []
+  for (let i = 0; i <= 25; i++) {
+    const t = i / 25
+    const angle = -Math.PI / 2 + t * Math.PI * 1.5
+    points.push({
+      x: -0.8 + Math.cos(angle) * 0.3,
+      y: Math.sin(angle) * 0.4
+    })
+  }
+  for (let i = 0; i <= 30; i++) {
+    const t = i / 30
+    const x = -0.5 + t * 1.0
+    const y = Math.sin(t * Math.PI * 6) * 0.25 * (1 - t * 0.5)
+    points.push({ x, y })
+  }
+  for (let i = 0; i <= 20; i++) {
+    const t = i / 20
+    const angle = t * Math.PI * 2.5
+    const r = 0.2 * (1 - t * 0.5)
+    points.push({
+      x: 0.6 + Math.cos(angle) * r,
+      y: Math.sin(angle) * r * 0.8 - 0.1
+    })
+  }
+  return points
+}
+
+// 6. Thin test stroke - S-curve
+function generateThinTestStroke(): Point2D[] {
+  const points: Point2D[] = []
+  for (let i = 0; i <= 60; i++) {
+    const t = i / 60
+    const x = -0.8 + t * 1.6
+    const y = Math.sin(t * Math.PI * 2) * 0.5
+    points.push({ x, y })
+  }
+  return points
+}
+
+// 7. Thick test stroke - overlapping circles
+function generateThickTestStroke(): Point2D[] {
+  const points: Point2D[] = []
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40
+    const angle = t * Math.PI * 2
+    points.push({
+      x: Math.cos(angle) * 0.4 - 0.2,
+      y: Math.sin(angle) * 0.4
+    })
+  }
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40
+    const angle = t * Math.PI * 2
+    points.push({
+      x: Math.cos(angle) * 0.4 + 0.2,
+      y: Math.sin(angle) * 0.4
+    })
+  }
+  return points
+}
+
 // ============= Real App Samples =============
 // These simulate actual failing stroke patterns from user drawings
 
