@@ -50,7 +50,10 @@ function useStrokeMeshes(
   
   return useMemo(() => {
     const engine = getEngine(mode)
-    return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
+    const result = engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
+    // TEMP: Debug mesh building
+    console.log("[v0] useStrokeMeshes: mode=" + mode + ", inputStrokes=" + strokes.length + ", outputMeshes=" + result.length)
+    return result
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeBevel, solidThickness, solidDepth])
 }

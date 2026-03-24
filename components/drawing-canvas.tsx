@@ -166,6 +166,11 @@ export default function DrawingCanvas({
 
   /* which strokes to render on 2D canvas */
   const renderStrokes = smoothing ? processedStrokes : rawStrokes
+  
+  // TEMP: Debug stroke state
+  useEffect(() => {
+    console.log("[v0] DrawingCanvas: rawStrokes=" + rawStrokes.length + ", processedStrokes=" + processedStrokes.length + ", renderStrokes=" + renderStrokes.length + ", smoothing=" + smoothing)
+  }, [rawStrokes.length, processedStrokes.length, renderStrokes.length, smoothing])
 
   /* ---- resize canvas to fill container ---- */
   useEffect(() => {
@@ -190,9 +195,15 @@ export default function DrawingCanvas({
   const redraw = useCallback(
     (extraPoints?: Point[]) => {
       const canvas = canvasRef.current
-      if (!canvas) return
+      if (!canvas) {
+        console.log("[v0] redraw: canvas is null")
+        return
+      }
       const ctx = canvas.getContext("2d")
-      if (!ctx) return
+      if (!ctx) {
+        console.log("[v0] redraw: ctx is null")
+        return
+      }
 
       const t0 = performance.now()
 
@@ -203,6 +214,11 @@ export default function DrawingCanvas({
       const allStrokes = extraPoints
         ? [...renderStrokes, { points: extraPoints }]
         : renderStrokes
+      
+      // TEMP: Debug
+      if (allStrokes.length > 0) {
+        console.log("[v0] redraw: drawing " + allStrokes.length + " strokes, canvas=" + canvas.width + "x" + canvas.height)
+      }
 
       for (const stroke of allStrokes) {
         if (stroke.points.length < 2) continue
