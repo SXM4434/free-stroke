@@ -1709,7 +1709,11 @@ function buildSolidMeshFromMask(
   // ========== NEW ROBUST PIPELINE ==========
   // 1) Connected component labeling - find all distinct filled regions
   const { labels, componentCount, componentSizes } = labelConnectedComponents(mask, S)
-  if (componentCount === 0) return emptyResult
+  console.log("[v0] buildSolidMeshFromMask: pixelsBefore=" + pixelsBefore + ", componentCount=" + componentCount)
+  if (componentCount === 0) {
+    console.log("[v0] buildSolidMeshFromMask: No components found, returning empty")
+    return emptyResult
+  }
 
   // 2) Keep only the largest component (MVP: single solid body)
   let largestLabel = 1, largestSize = 0
@@ -1728,7 +1732,11 @@ function buildSolidMeshFromMask(
 
   // 4) Trace outer boundary using Moore neighborhood tracing
   const outerBoundary = traceOuterBoundaryMoore(componentMask, S)
-  if (outerBoundary.length < 4) return emptyResult
+  console.log("[v0] buildSolidMeshFromMask: outerBoundary.length=" + outerBoundary.length + ", largestSize=" + largestSize)
+  if (outerBoundary.length < 4) {
+    console.log("[v0] buildSolidMeshFromMask: Boundary too short, returning empty")
+    return emptyResult
+  }
 
   // 5) Simplify the boundary
   const simplifiedOuter = dpSimplify(outerBoundary, DP_TOLERANCE)
@@ -1923,9 +1931,14 @@ export const SolidEngine: GeometryEngine = {
   buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
     const { canvasWidth, canvasHeight, solidParams: sp } = params
     const solidParams = sp ?? DEFAULT_SOLID_PARAMS
-    if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) return []
+    console.log("[v0] SolidEngine.buildPreview: strokes=" + strokes.length + ", canvas=" + canvasWidth + "x" + canvasHeight + ", thickness=" + solidParams.thickness)
+    if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
+      console.log("[v0] SolidEngine.buildPreview: empty input, returning []")
+      return []
+    }
 
     const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
+    console.log("[v0] SolidEngine.buildPreview: mask created, filled pixels=" + mask.filter(Boolean).length)
     const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth, solidParams.thickness)
 
     const solidStatus: SolidBuildStatus = {
