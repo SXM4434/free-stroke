@@ -1960,14 +1960,25 @@ export const SolidEngine: GeometryEngine = {
       rasterSize: SOLID_RASTER_SIZE,
     }
 
-    if (!result.geometry) return []
-
-    return [{
-      tubeGeometry: result.geometry,
-      filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
-      key: `solid-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
-      mode: "solid",
-      solidStatus,
+  if (!result.geometry) {
+    console.log("[v0] SolidEngine.buildPreview: geometry is null, returning []")
+    return []
+  }
+  
+  // Debug: verify geometry is valid
+  const posAttr = result.geometry.getAttribute("position")
+  const vertexCount = posAttr ? posAttr.count : 0
+  result.geometry.computeBoundingBox()
+  const bbox = result.geometry.boundingBox
+  console.log("[v0] SolidEngine.buildPreview: SUCCESS - vertices=" + vertexCount + 
+    ", bbox=" + (bbox ? `(${bbox.min.x.toFixed(2)},${bbox.min.y.toFixed(2)},${bbox.min.z.toFixed(2)})-(${bbox.max.x.toFixed(2)},${bbox.max.y.toFixed(2)},${bbox.max.z.toFixed(2)})` : "null"))
+  
+  return [{
+    tubeGeometry: result.geometry,
+    filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
+    key: `solid-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
+    mode: "solid",
+    solidStatus,
     }]
   },
 
