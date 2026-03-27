@@ -134,6 +134,10 @@ export interface StrokeMeshData {
   buildStatus?: StrokeBuildStatus
   /** Build status for debug overlay (solid mode only) */
   solidStatus?: SolidBuildStatus
+  /** Debug material override for Solid mode: "red" = fail, "magenta" = valid, "yellow" = suspect */
+  solidDebugMaterial?: "red" | "magenta" | "yellow"
+  /** Bbox center for debug marker */
+  solidBboxCenter?: THREE.Vector3
 }
 
 export interface PreviewParams {
@@ -1960,36 +1964,87 @@ export const SolidEngine: GeometryEngine = {
       rasterSize: SOLID_RASTER_SIZE,
     }
 
-  // TEMP DEBUG: If no geometry, return a RED CUBE as visible proof the path was hit
-  if (!result.geometry) {
-    console.log("[v0] SolidEngine.buildPreview: geometry is null, returning DEBUG RED CUBE")
-    const debugCube = new THREE.BoxGeometry(0.5, 0.5, 0.5)
+  // DEBUG: Validate and log geometry details
+  const posAttr = result.geometry?.getAttribute("position")
+  const indexAttr = result.geometry?.getIndex()
+  const vertexCount = posAttr ? posAttr.count : 0
+  const indexCount = indexAttr ? indexAttr.count : 0
+  
+  // Compute bounding box and sphere
+  if (result.geometry) {
+    result.geometry.computeBoundingBox()
+    result.geometry.computeBoundingSphere()
+  }
+  const bbox = result.geometry?.boundingBox
+  const bsphere = result.geometry?.boundingSphere
+  
+  // Check for invalid positions (NaN/Infinity)
+  let hasInvalidPositions = false
+  if (posAttr) {
+    const arr = posAttr.array
+    for (let i = 0; i < arr.length; i++) {
+      if (!Number.isFinite(arr[i])) {
+        hasInvalidPositions = true
+        break
+      }
+    }
+  }
+  
+  // Compute bbox size and center
+  const bboxSize = bbox ? new THREE.Vector3().subVectors(bbox.max, bbox.min) : null
+  const bboxCenter = bbox ? new THREE.Vector3().addVectors(bbox.min, bbox.max).multiplyScalar(0.5) : null
+  const bboxSizeNearZero = bboxSize ? (bboxSize.x < 0.001 && bboxSize.y < 0.001 && bboxSize.z < 0.001) : true
+  const bsphereRadius = bsphere?.radius ?? 0
+  const bsphereInvalid = bsphereRadius > 1000 || bsphereRadius <= 0
+  
+  // Determine validity
+  const geometryNull = !result.geometry
+  const vertexCountZero = vertexCount === 0
+  const geometryInvalid = geometryNull || vertexCountZero || bboxSizeNearZero || hasInvalidPositions || bsphereInvalid
+  
+  // Extended solidStatus with debug info
+  const debugInfo = {
+    vertexCount,
+    indexCount,
+    bboxMin: bbox ? [bbox.min.x, bbox.min.y, bbox.min.z] : null,
+    bboxMax: bbox ? [bbox.max.x, bbox.max.y, bbox.max.z] : null,
+    bboxSize: bboxSize ? [bboxSize.x, bboxSize.y, bboxSize.z] : null,
+    bboxCenter: bboxCenter ? [bboxCenter.x, bboxCenter.y, bboxCenter.z] : null,
+    bsphereRadius,
+    hasInvalidPositions,
+    geometryNull,
+    vertexCountZero,
+    bboxSizeNearZero,
+    bsphereInvalid,
+    geometryInvalid,
+  }
+  
+  console.log("[v0] SolidEngine.buildPreview DEBUG:", JSON.stringify(debugInfo, null, 2))
+  
+  // If geometry is null/invalid, return RED debug cube
+  if (geometryNull) {
+    console.log("[v0] SolidEngine: FAILURE - geometry is null, returning RED cube")
+    const debugCube = new THREE.BoxGeometry(0.3, 0.3, 0.3)
     return [{
       tubeGeometry: debugCube,
       filteredCount: 0,
-      key: `solid-debug-cube`,
+      key: `solid-debug-fail`,
       mode: "solid",
-      solidStatus: { ...solidStatus, success: false },
+      solidStatus: { ...solidStatus, success: false, debugInfo },
+      solidDebugMaterial: "red",
     }]
   }
   
-  // Debug: verify geometry is valid
-  const posAttr = result.geometry.getAttribute("position")
-  const vertexCount = posAttr ? posAttr.count : 0
-  result.geometry.computeBoundingBox()
-  const bbox = result.geometry.boundingBox
-  console.log("[v0] SolidEngine.buildPreview: SUCCESS - vertices=" + vertexCount + 
-    ", bbox=" + (bbox ? `(${bbox.min.x.toFixed(2)},${bbox.min.y.toFixed(2)},${bbox.min.z.toFixed(2)})-(${bbox.max.x.toFixed(2)},${bbox.max.y.toFixed(2)},${bbox.max.z.toFixed(2)})` : "null"))
-  
-  // TEMP DEBUG: Return GREEN CUBE instead of actual geometry to prove path works
-  const debugCubeSuccess = new THREE.BoxGeometry(0.5, 0.5, 0.5)
+  // Return ACTUAL geometry with debug marker
   return [{
-    tubeGeometry: debugCubeSuccess, // result.geometry,  // TEMP: using debug cube
+    tubeGeometry: result.geometry,
     filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
     key: `solid-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
     mode: "solid",
-    solidStatus,
-    }]
+    solidStatus: { ...solidStatus, debugInfo },
+    solidDebugMaterial: geometryInvalid ? "yellow" : "magenta",  // magenta = valid, yellow = suspect
+    solidBboxCenter: bboxCenter,
+  }]
   },
 
   buildExport(strokes: ProcessedStroke[], params: ExportParams): ExportResult {
