@@ -378,14 +378,32 @@ function AnimatedStrokes({
     <>
       {/* Export group: tubes/extrude meshes + caps + joints */}
       <group ref={exportGroupRef}>
-        {meshes.map((data, si) => (
+        {meshes.map((data, si) => {
+          // Debug material for Solid mode
+          const debugMat = data.solidDebugMaterial === "red" 
+            ? new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true })
+            : data.solidDebugMaterial === "yellow"
+            ? new THREE.MeshBasicMaterial({ color: 0xffff00, wireframe: true })
+            : data.solidDebugMaterial === "magenta"
+            ? new THREE.MeshStandardMaterial({ color: 0xff00ff, side: THREE.DoubleSide })
+            : null
+          const useMaterial = data.mode === "solid" && debugMat ? debugMat : strokeMaterial
+          
+          return (
           <group key={data.key}>
             {/* Main geometry (tube or extrude) */}
             <mesh
               ref={(el) => { tubeMeshRefs.current[si] = el }}
               geometry={data.tubeGeometry}
-              material={strokeMaterial}
+              material={useMaterial}
             />
+            {/* DEBUG: Marker cube at bbox center for Solid mode */}
+            {data.mode === "solid" && data.solidBboxCenter && (
+              <mesh position={data.solidBboxCenter}>
+                <boxGeometry args={[0.05, 0.05, 0.05]} />
+                <meshBasicMaterial color={0x00ff00} />
+              </mesh>
+            )}
             {/* Rod-mode only: caps + joints (fallback may use custom radius from Width slider) */}
             {data.mode === "rod" && data.capPositions && (() => {
               const r = data.capRadius ?? TUBE_RADIUS
@@ -424,7 +442,7 @@ function AnimatedStrokes({
               )
             })()}
           </group>
-        ))}
+        )})}
       </group>
     </>
   )
@@ -1084,6 +1102,24 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               </div>
               <div>thickness: {solidStatusRef.current.thickness.toFixed(3)}</div>
               <div>depth: {solidStatusRef.current.depth.toFixed(3)}</div>
+              {/* NEW: Geometry debug info */}
+              {solidStatusRef.current.debugInfo && (
+                <div className="mt-1 border-t border-amber-500/50 pt-1 text-amber-400">
+                  <div className="font-semibold">Geometry Debug:</div>
+                  <div>vertices: {solidStatusRef.current.debugInfo.vertexCount}</div>
+                  <div>indices: {solidStatusRef.current.debugInfo.indexCount}</div>
+                  <div>bsphere.r: {solidStatusRef.current.debugInfo.bsphereRadius?.toFixed(4) ?? "null"}</div>
+                  <div className={solidStatusRef.current.debugInfo.geometryInvalid ? "text-red-500 font-bold" : "text-green-500"}>
+                    valid: {solidStatusRef.current.debugInfo.geometryInvalid ? "NO" : "YES"}
+                  </div>
+                  {solidStatusRef.current.debugInfo.bboxSize && (
+                    <div>bbox size: [{solidStatusRef.current.debugInfo.bboxSize.map((v: number) => v.toFixed(3)).join(", ")}]</div>
+                  )}
+                  {solidStatusRef.current.debugInfo.bboxCenter && (
+                    <div>bbox center: [{solidStatusRef.current.debugInfo.bboxCenter.map((v: number) => v.toFixed(3)).join(", ")}]</div>
+                  )}
+                </div>
+              )}
               {/* Debug contour breakdown with hierarchy info */}
               {solidStatusRef.current.debugContours && solidStatusRef.current.debugContours.length > 0 && (
                 <div className="mt-1 border-t border-border/30 pt-1 text-xs">

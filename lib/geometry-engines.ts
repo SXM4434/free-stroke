@@ -108,6 +108,22 @@ export interface SolidBuildStatus {
   debugContours?: SolidDebugContour[]
   // Raster size for 2D overlay rendering
   rasterSize: number
+  // Geometry validation debug info
+  debugInfo?: {
+    vertexCount: number
+    indexCount: number
+    bboxMin: number[] | null
+    bboxMax: number[] | null
+    bboxSize: number[] | null
+    bboxCenter: number[] | null
+    bsphereRadius: number
+    hasInvalidPositions: boolean
+    geometryNull: boolean
+    vertexCountZero: boolean
+    bboxSizeNearZero: boolean
+    bsphereInvalid: boolean
+    geometryInvalid: boolean
+  }
 }
 
 /** Below this width, auto-disable bevel to avoid degenerate extrusions */
