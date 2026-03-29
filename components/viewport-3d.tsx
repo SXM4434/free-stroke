@@ -442,7 +442,7 @@ function AnimatedStrokes({
               )
             })()}
           </group>
-        )
+          )
         })}
       </group>
     </>
