@@ -86,14 +86,41 @@ export interface SolidDebugContour {
   contourIndex: number  // Original index in the contour list
 }
 
+/** Strict failure reason enum for Solid mode */
+export type SolidFailureReason = 
+  | "success"
+  | "mask_empty"
+  | "no_components"
+  | "component_too_small"
+  | "boundary_trace_failed"
+  | "simplified_contour_too_small"
+  | "shape_creation_failed"
+  | "extrude_failed"
+  | "geometry_null"
+  | "geometry_zero_vertices"
+  | "geometry_non_finite"
+  | "geometry_bad_bbox"
+
 /** Solid mode build status for debug overlay */
 export interface SolidBuildStatus {
   success: boolean
+  failureReason: SolidFailureReason
   contourCount: number
   holesCount: number
   thickness: number
   depth: number
-  // Debug stats
+  // Linear trace values
+  filledPixelCount: number
+  componentCount: number
+  selectedComponentArea: number
+  tracedBoundaryPoints: number
+  simplifiedPoints: number
+  vertexCount: number
+  indexCount: number
+  bboxSize: [number, number, number] | null
+  bboxCenter: [number, number, number] | null
+  rebuildTimeMs: number
+  // Debug stats (legacy)
   rawContourCount: number
   rejectedCount: number
   validOuterCount: number
@@ -108,22 +135,6 @@ export interface SolidBuildStatus {
   debugContours?: SolidDebugContour[]
   // Raster size for 2D overlay rendering
   rasterSize: number
-  // Geometry validation debug info
-  debugInfo?: {
-    vertexCount: number
-    indexCount: number
-    bboxMin: number[] | null
-    bboxMax: number[] | null
-    bboxSize: number[] | null
-    bboxCenter: number[] | null
-    bsphereRadius: number
-    hasInvalidPositions: boolean
-    geometryNull: boolean
-    vertexCountZero: boolean
-    bboxSizeNearZero: boolean
-    bsphereInvalid: boolean
-    geometryInvalid: boolean
-  }
 }
 
 /** Below this width, auto-disable bevel to avoid degenerate extrusions */
@@ -150,8 +161,8 @@ export interface StrokeMeshData {
   buildStatus?: StrokeBuildStatus
   /** Build status for debug overlay (solid mode only) */
   solidStatus?: SolidBuildStatus
-  /** Debug material override for Solid mode: "red" = fail, "magenta" = valid, "yellow" = suspect */
-  solidDebugMaterial?: "red" | "magenta" | "yellow"
+  /** Debug material override for Solid mode: "red" = fail, "normal" = success (MeshNormalMaterial) */
+  solidDebugMaterial?: "red" | "normal"
   /** Bbox center for debug marker */
   solidBboxCenter?: THREE.Vector3
 }
@@ -1559,6 +1570,7 @@ function contourArea(pts: { x: number; y: number }[]): number {
 
 interface SolidBuildResult {
   geometry: THREE.BufferGeometry | null
+  failureReason: SolidFailureReason
   contourCount: number
   holesCount: number
   rawContourCount: number
@@ -1571,6 +1583,16 @@ interface SolidBuildResult {
   holesKept: number
   holesFilled: number
   debugContours: SolidDebugContour[]
+  // Linear trace values
+  componentCount: number
+  selectedComponentArea: number
+  tracedBoundaryPoints: number
+  simplifiedPoints: number
+  vertexCount: number
+  indexCount: number
+  bboxSize: [number, number, number] | null
+  bboxCenter: [number, number, number] | null
+  rebuildTimeMs: number
 }
 
 /** Count true pixels in mask */
@@ -1707,6 +1729,7 @@ function buildSolidMeshFromMask(
   depth: number,
   thickness: number
 ): SolidBuildResult {
+  const t0 = performance.now()
   const S = SOLID_RASTER_SIZE
   const scaleRef = Math.max(canvasWidth, canvasHeight)
   const normScale = 3 / scaleRef
@@ -1715,27 +1738,62 @@ function buildSolidMeshFromMask(
   const toWorldX = (rx: number) => ((rx / S) * canvasWidth - canvasWidth / 2) * normScale
   const toWorldY = (ry: number) => -((ry / S) * canvasHeight - canvasHeight / 2) * normScale
 
-  // Convert thickness from world units to raster pixels
-  const thicknessInPixels = (thickness / normScale / scaleRef) * S
-  
   const pixelsBefore = countMaskPixels(mask)
   const debugContours: SolidDebugContour[] = []
-  const emptyResult: SolidBuildResult = {
-    geometry: null, contourCount: 0, holesCount: 0,
-    rawContourCount: 0, rejectedCount: 0, validOuterCount: 0, openContourCount: 0, selfIntersectCount: 0,
-    pixelsBefore, pixelsAfter: pixelsBefore, holesKept: 0, holesFilled: 0, debugContours
+  
+  // Helper to create result with failure reason
+  const makeResult = (
+    failureReason: SolidFailureReason,
+    geometry: THREE.BufferGeometry | null = null,
+    extras: Partial<SolidBuildResult> = {}
+  ): SolidBuildResult => {
+    const rebuildTimeMs = performance.now() - t0
+    console.log(`[v0] SOLID TRACE: ${failureReason} | pixels=${pixelsBefore} | time=${rebuildTimeMs.toFixed(1)}ms`)
+    return {
+      geometry,
+      failureReason,
+      contourCount: 0,
+      holesCount: 0,
+      rawContourCount: 0,
+      rejectedCount: 0,
+      validOuterCount: 0,
+      openContourCount: 0,
+      selfIntersectCount: 0,
+      pixelsBefore,
+      pixelsAfter: pixelsBefore,
+      holesKept: 0,
+      holesFilled: 0,
+      debugContours,
+      componentCount: 0,
+      selectedComponentArea: 0,
+      tracedBoundaryPoints: 0,
+      simplifiedPoints: 0,
+      vertexCount: 0,
+      indexCount: 0,
+      bboxSize: null,
+      bboxCenter: null,
+      rebuildTimeMs,
+      ...extras
+    }
   }
 
-  // ========== NEW ROBUST PIPELINE ==========
-  // 1) Connected component labeling - find all distinct filled regions
+  // LINEAR TRACE START
+  console.log("[v0] SOLID TRACE: entered | canvas=" + canvasWidth + "x" + canvasHeight + " | depth=" + depth + " | thickness=" + thickness)
+  
+  // Step 1: Check mask
+  console.log("[v0] SOLID TRACE: mask pixels=" + pixelsBefore)
+  if (pixelsBefore === 0) {
+    return makeResult("mask_empty")
+  }
+
+  // Step 2: Connected component labeling
   const { labels, componentCount, componentSizes } = labelConnectedComponents(mask, S)
-  console.log("[v0] buildSolidMeshFromMask: pixelsBefore=" + pixelsBefore + ", componentCount=" + componentCount)
+  console.log("[v0] SOLID TRACE: components found=" + componentCount)
   if (componentCount === 0) {
-    console.log("[v0] buildSolidMeshFromMask: No components found, returning empty")
-    return emptyResult
+    return makeResult("no_components", null, { componentCount: 0 })
   }
 
-  // 2) Keep only the largest component (MVP: single solid body)
+  // Step 3: Find largest component
   let largestLabel = 1, largestSize = 0
   for (let i = 1; i <= componentCount; i++) {
     if (componentSizes[i] > largestSize) {
@@ -1743,29 +1801,44 @@ function buildSolidMeshFromMask(
       largestLabel = i
     }
   }
+  console.log("[v0] SOLID TRACE: selected component area=" + largestSize)
+  if (largestSize < 4) {
+    return makeResult("component_too_small", null, { componentCount, selectedComponentArea: largestSize })
+  }
 
-  // 3) Create binary mask for just the largest component
+  // Step 4: Create binary mask for largest component
   const componentMask: boolean[] = new Array(S * S)
   for (let i = 0; i < S * S; i++) {
     componentMask[i] = labels[i] === largestLabel
   }
 
-  // 4) Trace outer boundary using Moore neighborhood tracing
+  // Step 5: Trace outer boundary using Moore neighborhood
   const outerBoundary = traceOuterBoundaryMoore(componentMask, S)
-  console.log("[v0] buildSolidMeshFromMask: outerBoundary.length=" + outerBoundary.length + ", largestSize=" + largestSize)
+  console.log("[v0] SOLID TRACE: boundary points=" + outerBoundary.length)
   if (outerBoundary.length < 4) {
-    console.log("[v0] buildSolidMeshFromMask: Boundary too short, returning empty")
-    return emptyResult
+    return makeResult("boundary_trace_failed", null, { 
+      componentCount, 
+      selectedComponentArea: largestSize,
+      tracedBoundaryPoints: outerBoundary.length 
+    })
   }
 
-  // 5) Simplify the boundary
+  // Step 6: Simplify boundary
   const simplifiedOuter = dpSimplify(outerBoundary, DP_TOLERANCE)
-  if (simplifiedOuter.length < 3) return emptyResult
+  console.log("[v0] SOLID TRACE: simplified points=" + simplifiedOuter.length)
+  if (simplifiedOuter.length < 3) {
+    return makeResult("simplified_contour_too_small", null, {
+      componentCount,
+      selectedComponentArea: largestSize,
+      tracedBoundaryPoints: outerBoundary.length,
+      simplifiedPoints: simplifiedOuter.length
+    })
+  }
 
-  // 6) Find holes (enclosed FALSE regions within the component's bounding box)
+  // Step 7: Find holes
   const holes = findEnclosedHoles(componentMask, S, simplifiedOuter)
 
-  // Debug info
+  // Debug contour info
   debugContours.push({
     points: simplifiedOuter,
     type: "outer",
@@ -1788,19 +1861,29 @@ function buildSolidMeshFromMask(
     })
   }
 
-  // 7) Transform to world coords and build THREE.Shape
+  // Step 8: Transform to world coords and build THREE.Shape
   let shapePts = simplifiedOuter.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
-
-  // Ensure CCW winding for THREE.js outer
   const outerWindingArea = computeShapeArea(shapePts)
   if (outerWindingArea < 0) {
     shapePts = shapePts.slice().reverse()
   }
 
-  const shape = new THREE.Shape(shapePts)
-  let holesKept = 0
+  let shape: THREE.Shape
+  try {
+    shape = new THREE.Shape(shapePts)
+  } catch (e) {
+    console.log("[v0] SOLID TRACE: shape creation failed:", e)
+    return makeResult("shape_creation_failed", null, {
+      componentCount,
+      selectedComponentArea: largestSize,
+      tracedBoundaryPoints: outerBoundary.length,
+      simplifiedPoints: simplifiedOuter.length
+    })
+  }
+  console.log("[v0] SOLID TRACE: shape created=YES")
 
   // Add holes with correct winding (CW for THREE.js)
+  let holesKept = 0
   for (const hole of holes) {
     if (hole.length < 3) continue
     let holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
@@ -1812,7 +1895,7 @@ function buildSolidMeshFromMask(
     holesKept++
   }
 
-  // 8) Extrude
+  // Step 9: Extrude
   const halfDepth = depth / 2
   let geometry: THREE.BufferGeometry | null = null
   try {
@@ -1822,13 +1905,101 @@ function buildSolidMeshFromMask(
       curveSegments: 1,
     })
     geometry.translate(0, 0, -halfDepth)
-  } catch {
-    // Triangulation failed
-    return emptyResult
+  } catch (e) {
+    console.log("[v0] SOLID TRACE: extrude failed:", e)
+    return makeResult("extrude_failed", null, {
+      componentCount,
+      selectedComponentArea: largestSize,
+      tracedBoundaryPoints: outerBoundary.length,
+      simplifiedPoints: simplifiedOuter.length,
+      contourCount: 1,
+      holesCount: holesKept
+    })
   }
+  console.log("[v0] SOLID TRACE: extrude created=YES")
+
+  // Step 10: Validate geometry
+  if (!geometry) {
+    return makeResult("geometry_null", null, {
+      componentCount,
+      selectedComponentArea: largestSize,
+      tracedBoundaryPoints: outerBoundary.length,
+      simplifiedPoints: simplifiedOuter.length
+    })
+  }
+
+  const posAttr = geometry.getAttribute("position")
+  const indexAttr = geometry.getIndex()
+  const vertexCount = posAttr ? posAttr.count : 0
+  const indexCount = indexAttr ? indexAttr.count : 0
+  console.log("[v0] SOLID TRACE: vertex count=" + vertexCount + " | index count=" + indexCount)
+
+  if (vertexCount === 0) {
+    return makeResult("geometry_zero_vertices", null, {
+      componentCount,
+      selectedComponentArea: largestSize,
+      tracedBoundaryPoints: outerBoundary.length,
+      simplifiedPoints: simplifiedOuter.length,
+      vertexCount: 0,
+      indexCount
+    })
+  }
+
+  // Check for non-finite positions
+  let hasNonFinite = false
+  if (posAttr) {
+    const arr = posAttr.array
+    for (let i = 0; i < arr.length; i++) {
+      if (!Number.isFinite(arr[i])) {
+        hasNonFinite = true
+        break
+      }
+    }
+  }
+  if (hasNonFinite) {
+    return makeResult("geometry_non_finite", null, {
+      componentCount,
+      selectedComponentArea: largestSize,
+      tracedBoundaryPoints: outerBoundary.length,
+      simplifiedPoints: simplifiedOuter.length,
+      vertexCount,
+      indexCount
+    })
+  }
+
+  // Compute bounding box
+  geometry.computeBoundingBox()
+  const bbox = geometry.boundingBox
+  let bboxSize: [number, number, number] | null = null
+  let bboxCenter: [number, number, number] | null = null
+  
+  if (bbox) {
+    const size = new THREE.Vector3().subVectors(bbox.max, bbox.min)
+    const center = new THREE.Vector3().addVectors(bbox.min, bbox.max).multiplyScalar(0.5)
+    bboxSize = [size.x, size.y, size.z]
+    bboxCenter = [center.x, center.y, center.z]
+    
+    // Check for degenerate bbox
+    if (size.x < 0.0001 && size.y < 0.0001 && size.z < 0.0001) {
+      return makeResult("geometry_bad_bbox", null, {
+        componentCount,
+        selectedComponentArea: largestSize,
+        tracedBoundaryPoints: outerBoundary.length,
+        simplifiedPoints: simplifiedOuter.length,
+        vertexCount,
+        indexCount,
+        bboxSize,
+        bboxCenter
+      })
+    }
+  }
+
+  const rebuildTimeMs = performance.now() - t0
+  console.log("[v0] SOLID TRACE: SUCCESS | vertices=" + vertexCount + " | bbox=" + JSON.stringify(bboxSize) + " | time=" + rebuildTimeMs.toFixed(1) + "ms")
 
   return {
     geometry,
+    failureReason: "success",
     contourCount: 1,
     holesCount: holesKept,
     rawContourCount: 1,
@@ -1840,7 +2011,16 @@ function buildSolidMeshFromMask(
     pixelsAfter: largestSize,
     holesKept,
     holesFilled: holes.length - holesKept,
-    debugContours
+    debugContours,
+    componentCount,
+    selectedComponentArea: largestSize,
+    tracedBoundaryPoints: outerBoundary.length,
+    simplifiedPoints: simplifiedOuter.length,
+    vertexCount,
+    indexCount,
+    bboxSize,
+    bboxCenter,
+    rebuildTimeMs
   }
 }
 
@@ -1951,22 +2131,32 @@ export const SolidEngine: GeometryEngine = {
   buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
     const { canvasWidth, canvasHeight, solidParams: sp } = params
     const solidParams = sp ?? DEFAULT_SOLID_PARAMS
-    console.log("[v0] SolidEngine.buildPreview: strokes=" + strokes.length + ", canvas=" + canvasWidth + "x" + canvasHeight + ", thickness=" + solidParams.thickness)
+    
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
-      console.log("[v0] SolidEngine.buildPreview: empty input, returning []")
       return []
     }
 
     const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
-    console.log("[v0] SolidEngine.buildPreview: mask created, filled pixels=" + mask.filter(Boolean).length)
     const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth, solidParams.thickness)
 
+    // Build solidStatus from result (all trace data is now in result)
     const solidStatus: SolidBuildStatus = {
-      success: result.geometry !== null,
+      success: result.failureReason === "success",
+      failureReason: result.failureReason,
       contourCount: result.contourCount,
       holesCount: result.holesCount,
       thickness: solidParams.thickness,
       depth: solidParams.depth,
+      filledPixelCount: result.pixelsBefore,
+      componentCount: result.componentCount,
+      selectedComponentArea: result.selectedComponentArea,
+      tracedBoundaryPoints: result.tracedBoundaryPoints,
+      simplifiedPoints: result.simplifiedPoints,
+      vertexCount: result.vertexCount,
+      indexCount: result.indexCount,
+      bboxSize: result.bboxSize,
+      bboxCenter: result.bboxCenter,
+      rebuildTimeMs: result.rebuildTimeMs,
       rawContourCount: result.rawContourCount,
       rejectedCount: result.rejectedCount,
       validOuterCount: result.validOuterCount,
@@ -1980,87 +2170,34 @@ export const SolidEngine: GeometryEngine = {
       rasterSize: SOLID_RASTER_SIZE,
     }
 
-  // DEBUG: Validate and log geometry details
-  const posAttr = result.geometry?.getAttribute("position")
-  const indexAttr = result.geometry?.getIndex()
-  const vertexCount = posAttr ? posAttr.count : 0
-  const indexCount = indexAttr ? indexAttr.count : 0
-  
-  // Compute bounding box and sphere
-  if (result.geometry) {
-    result.geometry.computeBoundingBox()
-    result.geometry.computeBoundingSphere()
-  }
-  const bbox = result.geometry?.boundingBox
-  const bsphere = result.geometry?.boundingSphere
-  
-  // Check for invalid positions (NaN/Infinity)
-  let hasInvalidPositions = false
-  if (posAttr) {
-    const arr = posAttr.array
-    for (let i = 0; i < arr.length; i++) {
-      if (!Number.isFinite(arr[i])) {
-        hasInvalidPositions = true
-        break
-      }
+    // Compute bboxCenter as Vector3 for marker
+    const bboxCenterVec = result.bboxCenter 
+      ? new THREE.Vector3(result.bboxCenter[0], result.bboxCenter[1], result.bboxCenter[2])
+      : null
+
+    // If geometry is null/failed, return RED debug cube as backup visual
+    if (!result.geometry || result.failureReason !== "success") {
+      const debugCube = new THREE.BoxGeometry(0.3, 0.3, 0.3)
+      return [{
+        tubeGeometry: debugCube,
+        filteredCount: 0,
+        key: `solid-debug-fail-${result.failureReason}`,
+        mode: "solid",
+        solidStatus,
+        solidDebugMaterial: "red",
+      }]
     }
-  }
-  
-  // Compute bbox size and center
-  const bboxSize = bbox ? new THREE.Vector3().subVectors(bbox.max, bbox.min) : null
-  const bboxCenter = bbox ? new THREE.Vector3().addVectors(bbox.min, bbox.max).multiplyScalar(0.5) : null
-  const bboxSizeNearZero = bboxSize ? (bboxSize.x < 0.001 && bboxSize.y < 0.001 && bboxSize.z < 0.001) : true
-  const bsphereRadius = bsphere?.radius ?? 0
-  const bsphereInvalid = bsphereRadius > 1000 || bsphereRadius <= 0
-  
-  // Determine validity
-  const geometryNull = !result.geometry
-  const vertexCountZero = vertexCount === 0
-  const geometryInvalid = geometryNull || vertexCountZero || bboxSizeNearZero || hasInvalidPositions || bsphereInvalid
-  
-  // Extended solidStatus with debug info
-  const debugInfo = {
-    vertexCount,
-    indexCount,
-    bboxMin: bbox ? [bbox.min.x, bbox.min.y, bbox.min.z] : null,
-    bboxMax: bbox ? [bbox.max.x, bbox.max.y, bbox.max.z] : null,
-    bboxSize: bboxSize ? [bboxSize.x, bboxSize.y, bboxSize.z] : null,
-    bboxCenter: bboxCenter ? [bboxCenter.x, bboxCenter.y, bboxCenter.z] : null,
-    bsphereRadius,
-    hasInvalidPositions,
-    geometryNull,
-    vertexCountZero,
-    bboxSizeNearZero,
-    bsphereInvalid,
-    geometryInvalid,
-  }
-  
-  console.log("[v0] SolidEngine.buildPreview DEBUG:", JSON.stringify(debugInfo, null, 2))
-  
-  // If geometry is null/invalid, return RED debug cube
-  if (geometryNull) {
-    console.log("[v0] SolidEngine: FAILURE - geometry is null, returning RED cube")
-    const debugCube = new THREE.BoxGeometry(0.3, 0.3, 0.3)
+
+    // SUCCESS: Return ACTUAL geometry with MeshNormalMaterial coloring (via "normal" debug mode)
     return [{
-      tubeGeometry: debugCube,
-      filteredCount: 0,
-      key: `solid-debug-fail`,
+      tubeGeometry: result.geometry,
+      filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
+      key: `solid-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
       mode: "solid",
-      solidStatus: { ...solidStatus, success: false, debugInfo },
-      solidDebugMaterial: "red",
+      solidStatus,
+      solidDebugMaterial: "normal",  // Use MeshNormalMaterial for success
+      solidBboxCenter: bboxCenterVec,
     }]
-  }
-  
-  // Return ACTUAL geometry with debug marker
-  return [{
-    tubeGeometry: result.geometry,
-    filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
-    key: `solid-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
-    mode: "solid",
-    solidStatus: { ...solidStatus, debugInfo },
-    solidDebugMaterial: geometryInvalid ? "yellow" : "magenta",  // magenta = valid, yellow = suspect
-    solidBboxCenter: bboxCenter,
-  }]
   },
 
   buildExport(strokes: ProcessedStroke[], params: ExportParams): ExportResult {

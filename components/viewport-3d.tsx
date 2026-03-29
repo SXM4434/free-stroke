@@ -50,10 +50,7 @@ function useStrokeMeshes(
   
   return useMemo(() => {
     const engine = getEngine(mode)
-    const result = engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
-    // TEMP: Debug mesh building
-    console.log("[v0] useStrokeMeshes: mode=" + mode + ", inputStrokes=" + strokes.length + ", outputMeshes=" + result.length)
-    return result
+    return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeBevel, solidThickness, solidDepth])
 }
@@ -379,15 +376,13 @@ function AnimatedStrokes({
       {/* Export group: tubes/extrude meshes + caps + joints */}
       <group ref={exportGroupRef}>
         {meshes.map((data, si) => {
-          // Debug material for Solid mode
-          const debugMat = data.solidDebugMaterial === "red" 
+          // Material for Solid mode: "red" = failure cube, "normal" = success with MeshNormalMaterial
+          const solidMat = data.solidDebugMaterial === "red" 
             ? new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true })
-            : data.solidDebugMaterial === "yellow"
-            ? new THREE.MeshBasicMaterial({ color: 0xffff00, wireframe: true })
-            : data.solidDebugMaterial === "magenta"
-            ? new THREE.MeshStandardMaterial({ color: 0xff00ff, side: THREE.DoubleSide })
+            : data.solidDebugMaterial === "normal"
+            ? new THREE.MeshNormalMaterial({ side: THREE.DoubleSide })
             : null
-          const useMaterial = data.mode === "solid" && debugMat ? debugMat : strokeMaterial
+          const useMaterial = data.mode === "solid" && solidMat ? solidMat : strokeMaterial
           
           return (
           <group key={data.key}>
@@ -1083,64 +1078,54 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               ))}
             </div>
           )}
-          {/* Solid mode build status */}
+          {/* Solid mode build status - ON SCREEN DEBUG BOX */}
           {geometryMode === "solid" && solidStatusRef.current && (
             <div className="mt-1 border-t border-border/50 pt-1">
-              <div className="font-semibold text-foreground">Solid build:</div>
-              <div className={solidStatusRef.current.success ? "text-green-600" : "text-red-500"}>
-                {solidStatusRef.current.success ? "success" : "failed"}
+              <div className="font-semibold text-foreground">Solid Build Debug:</div>
+              
+              {/* FAILURE REASON - prominent display */}
+              <div className={`text-sm font-bold ${solidStatusRef.current.success ? "text-green-500" : "text-red-500"}`}>
+                {solidStatusRef.current.failureReason.toUpperCase()}
               </div>
-              <div className="text-muted-foreground">
-                mask: {solidStatusRef.current.pixelsBefore} → {solidStatusRef.current.pixelsAfter} px
+              
+              {/* Linear trace values */}
+              <div className="mt-1 grid grid-cols-2 gap-x-2 text-[10px]">
+                <div>filled pixels:</div>
+                <div>{solidStatusRef.current.filledPixelCount}</div>
+                
+                <div>components:</div>
+                <div>{solidStatusRef.current.componentCount}</div>
+                
+                <div>selected area:</div>
+                <div>{solidStatusRef.current.selectedComponentArea}</div>
+                
+                <div>traced pts:</div>
+                <div>{solidStatusRef.current.tracedBoundaryPoints}</div>
+                
+                <div>simplified pts:</div>
+                <div>{solidStatusRef.current.simplifiedPoints}</div>
+                
+                <div>vertices:</div>
+                <div>{solidStatusRef.current.vertexCount}</div>
+                
+                <div>indices:</div>
+                <div>{solidStatusRef.current.indexCount}</div>
+                
+                <div>bbox size:</div>
+                <div>{solidStatusRef.current.bboxSize ? solidStatusRef.current.bboxSize.map(v => v.toFixed(2)).join(", ") : "null"}</div>
+                
+                <div>bbox center:</div>
+                <div>{solidStatusRef.current.bboxCenter ? solidStatusRef.current.bboxCenter.map(v => v.toFixed(2)).join(", ") : "null"}</div>
+                
+                <div>rebuild ms:</div>
+                <div suppressHydrationWarning>{solidStatusRef.current.rebuildTimeMs.toFixed(1)}</div>
+                
+                <div>thickness:</div>
+                <div>{solidStatusRef.current.thickness.toFixed(3)}</div>
+                
+                <div>depth:</div>
+                <div>{solidStatusRef.current.depth.toFixed(3)}</div>
               </div>
-              <div>raw contours: {solidStatusRef.current.rawContourCount}</div>
-              <div className={solidStatusRef.current.rejectedCount > 0 ? "text-yellow-600" : ""}>
-                rejected: {solidStatusRef.current.rejectedCount} (open: {solidStatusRef.current.openContourCount}, self-x: {solidStatusRef.current.selfIntersectCount})
-              </div>
-              <div>valid outers: {solidStatusRef.current.validOuterCount}</div>
-              <div className={solidStatusRef.current.holesFilled > 0 ? "text-cyan-600" : ""}>
-                holes: kept={solidStatusRef.current.holesKept} filled={solidStatusRef.current.holesFilled}
-              </div>
-              <div>thickness: {solidStatusRef.current.thickness.toFixed(3)}</div>
-              <div>depth: {solidStatusRef.current.depth.toFixed(3)}</div>
-              {/* NEW: Geometry debug info */}
-              {solidStatusRef.current.debugInfo && (
-                <div className="mt-1 border-t border-amber-500/50 pt-1 text-amber-400">
-                  <div className="font-semibold">Geometry Debug:</div>
-                  <div>vertices: {solidStatusRef.current.debugInfo.vertexCount}</div>
-                  <div>indices: {solidStatusRef.current.debugInfo.indexCount}</div>
-                  <div>bsphere.r: {solidStatusRef.current.debugInfo.bsphereRadius?.toFixed(4) ?? "null"}</div>
-                  <div className={solidStatusRef.current.debugInfo.geometryInvalid ? "text-red-500 font-bold" : "text-green-500"}>
-                    valid: {solidStatusRef.current.debugInfo.geometryInvalid ? "NO" : "YES"}
-                  </div>
-                  {solidStatusRef.current.debugInfo.bboxSize && (
-                    <div>bbox size: [{solidStatusRef.current.debugInfo.bboxSize.map((v: number) => v.toFixed(3)).join(", ")}]</div>
-                  )}
-                  {solidStatusRef.current.debugInfo.bboxCenter && (
-                    <div>bbox center: [{solidStatusRef.current.debugInfo.bboxCenter.map((v: number) => v.toFixed(3)).join(", ")}]</div>
-                  )}
-                </div>
-              )}
-              {/* Debug contour breakdown with hierarchy info */}
-              {solidStatusRef.current.debugContours && solidStatusRef.current.debugContours.length > 0 && (
-                <div className="mt-1 border-t border-border/30 pt-1 text-xs">
-                  <div className="font-semibold">Contours (depth: 0=outer, 1=hole, 2+=nested):</div>
-                  {solidStatusRef.current.debugContours.slice(0, 12).map((c, i) => (
-                    <div key={i} className={
-                      c.type === "outer" ? "text-green-600"
-                        : c.type === "hole" ? "text-blue-500"
-                        : "text-red-400"
-                    }>
-                      #{c.contourIndex}: {c.type} d={c.nestingDepth ?? "?"} area={c.area?.toFixed(0) ?? "?"} 
-                      {c.parentIndex !== undefined && ` parent=#${c.parentIndex}`}
-                      {c.reason ? ` (${c.reason})` : ""}
-                    </div>
-                  ))}
-                  {solidStatusRef.current.debugContours.length > 12 && (
-                    <div className="text-muted-foreground">...and {solidStatusRef.current.debugContours.length - 12} more</div>
-                  )}
-                </div>
-              )}
             </div>
           )}
         </div>
