@@ -117,6 +117,13 @@ export interface SolidBuildStatus {
   simplifiedPoints: number
   contourClosed: boolean
   signedArea: number
+  // Fidelity metrics
+  originalMaskArea: number
+  simplifiedMaskArea: number
+  areaRetentionRatio: number
+  maskIoU: number
+  usedFallbackContour: boolean
+  // Geometry metrics
   vertexCount: number
   indexCount: number
   bboxSize: [number, number, number] | null
@@ -163,10 +170,6 @@ export interface StrokeMeshData {
   buildStatus?: StrokeBuildStatus
   /** Build status for debug overlay (solid mode only) */
   solidStatus?: SolidBuildStatus
-  /** Debug material override for Solid mode: "red" = fail, "normal" = success (MeshNormalMaterial) */
-  solidDebugMaterial?: "red" | "normal"
-  /** Bbox center for debug marker */
-  solidBboxCenter?: THREE.Vector3
 }
 
 export interface PreviewParams {
@@ -1420,6 +1423,157 @@ function dpSimplify(pts: { x: number; y: number }[], tolerance: number): { x: nu
   return [first, last]
 }
 
+/* ---- Fidelity-preserving contour simplification ---- */
+
+/** Rasterize a polygon contour to a binary mask using scanline fill */
+function rasterizeContourToMask(contour: { x: number; y: number }[], S: number): boolean[] {
+  const mask = new Array(S * S).fill(false)
+  if (contour.length < 3) return mask
+  
+  // Find bounding box
+  let minY = Infinity, maxY = -Infinity
+  for (const p of contour) {
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  
+  const yStart = Math.max(0, Math.floor(minY))
+  const yEnd = Math.min(S - 1, Math.ceil(maxY))
+  
+  // Scanline fill
+  for (let y = yStart; y <= yEnd; y++) {
+    const intersections: number[] = []
+    const scanY = y + 0.5
+    
+    for (let i = 0, j = contour.length - 1; i < contour.length; j = i++) {
+      const y1 = contour[j].y, y2 = contour[i].y
+      const x1 = contour[j].x, x2 = contour[i].x
+      
+      if ((y1 <= scanY && y2 > scanY) || (y2 <= scanY && y1 > scanY)) {
+        const t = (scanY - y1) / (y2 - y1)
+        intersections.push(x1 + t * (x2 - x1))
+      }
+    }
+    
+    intersections.sort((a, b) => a - b)
+    
+    for (let i = 0; i < intersections.length - 1; i += 2) {
+      const xStart = Math.max(0, Math.floor(intersections[i]))
+      const xEnd = Math.min(S - 1, Math.floor(intersections[i + 1]))
+      for (let x = xStart; x <= xEnd; x++) {
+        mask[y * S + x] = true
+      }
+    }
+  }
+  
+  return mask
+}
+
+/** Compute IoU (Intersection over Union) between two binary masks */
+function computeMaskIoU(maskA: boolean[], maskB: boolean[]): number {
+  let intersection = 0
+  let union = 0
+  for (let i = 0; i < maskA.length; i++) {
+    if (maskA[i] && maskB[i]) intersection++
+    if (maskA[i] || maskB[i]) union++
+  }
+  return union > 0 ? intersection / union : 0
+}
+
+/** Count pixels where masks overlap */
+function countMaskOverlap(maskA: boolean[], maskB: boolean[]): { intersection: number, areaA: number, areaB: number } {
+  let intersection = 0
+  let areaA = 0
+  let areaB = 0
+  for (let i = 0; i < maskA.length; i++) {
+    if (maskA[i]) areaA++
+    if (maskB[i]) areaB++
+    if (maskA[i] && maskB[i]) intersection++
+  }
+  return { intersection, areaA, areaB }
+}
+
+/**
+ * Fidelity-preserving simplification with validation.
+ * Returns simplified contour only if it preserves shape fidelity.
+ * Falls back to raw contour if simplification destroys the shape.
+ */
+function simplifyWithFidelityCheck(
+  rawContour: { x: number; y: number }[],
+  originalMask: boolean[],
+  S: number,
+  tolerance: number,
+  minIoU: number = 0.85,
+  minAreaRetention: number = 0.80
+): {
+  contour: { x: number; y: number }[]
+  usedFallback: boolean
+  simplifiedMaskArea: number
+  maskIoU: number
+  areaRetention: number
+} {
+  // Calculate minimum vertex count based on contour complexity
+  // More complex shapes need more vertices
+  const perimeter = computeContourPerimeter(rawContour)
+  const minVertices = Math.max(8, Math.min(rawContour.length / 2, Math.ceil(perimeter / 10)))
+  
+  // Try progressive simplification with increasing tolerance
+  const tolerances = [tolerance * 0.1, tolerance * 0.25, tolerance * 0.5, tolerance]
+  
+  for (const tol of tolerances) {
+    const simplified = dpSimplify(rawContour, tol)
+    
+    // Enforce minimum vertex count
+    if (simplified.length < minVertices && simplified.length < rawContour.length) {
+      continue // Too aggressive, try lower tolerance
+    }
+    
+    // Rasterize simplified contour and check fidelity
+    const simplifiedMask = rasterizeContourToMask(simplified, S)
+    const { intersection, areaA, areaB } = countMaskOverlap(originalMask, simplifiedMask)
+    
+    const union = areaA + areaB - intersection
+    const iou = union > 0 ? intersection / union : 0
+    const areaRetention = areaA > 0 ? areaB / areaA : 0
+    
+    // Check if this simplification passes fidelity thresholds
+    if (iou >= minIoU && areaRetention >= minAreaRetention && areaRetention <= 1.2) {
+      return {
+        contour: simplified,
+        usedFallback: false,
+        simplifiedMaskArea: areaB,
+        maskIoU: iou,
+        areaRetention
+      }
+    }
+  }
+  
+  // All simplification levels failed fidelity check - use raw contour
+  const rawMask = rasterizeContourToMask(rawContour, S)
+  const { intersection, areaA, areaB } = countMaskOverlap(originalMask, rawMask)
+  const union = areaA + areaB - intersection
+  
+  return {
+    contour: rawContour,
+    usedFallback: true,
+    simplifiedMaskArea: areaB,
+    maskIoU: union > 0 ? intersection / union : 0,
+    areaRetention: areaA > 0 ? areaB / areaA : 0
+  }
+}
+
+/** Compute perimeter of a contour */
+function computeContourPerimeter(pts: { x: number; y: number }[]): number {
+  let perimeter = 0
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length
+    const dx = pts[j].x - pts[i].x
+    const dy = pts[j].y - pts[i].y
+    perimeter += Math.sqrt(dx * dx + dy * dy)
+  }
+  return perimeter
+}
+
 /* ---- Contour classification (outer vs hole) ---- */
 
 /** Signed area of a 2D polygon. Positive = CCW, negative = CW. */
@@ -1592,6 +1746,13 @@ interface SolidBuildResult {
   simplifiedPoints: number
   contourClosed: boolean
   signedArea: number
+  // Fidelity metrics
+  originalMaskArea: number
+  simplifiedMaskArea: number
+  areaRetentionRatio: number
+  maskIoU: number
+  usedFallbackContour: boolean
+  // Geometry metrics
   vertexCount: number
   indexCount: number
   bboxSize: [number, number, number] | null
@@ -1752,7 +1913,6 @@ function buildSolidMeshFromMask(
     extras: Partial<SolidBuildResult> = {}
   ): SolidBuildResult => {
     const rebuildTimeMs = performance.now() - t0
-    console.log(`[v0] SOLID TRACE: ${failureReason} | pixels=${pixelsBefore} | time=${rebuildTimeMs.toFixed(1)}ms`)
     return {
       geometry,
       failureReason,
@@ -1772,6 +1932,13 @@ function buildSolidMeshFromMask(
       selectedComponentArea: 0,
       tracedBoundaryPoints: 0,
       simplifiedPoints: 0,
+      contourClosed: false,
+      signedArea: 0,
+      originalMaskArea: 0,
+      simplifiedMaskArea: 0,
+      areaRetentionRatio: 0,
+      maskIoU: 0,
+      usedFallbackContour: false,
       vertexCount: 0,
       indexCount: 0,
       bboxSize: null,
@@ -1781,18 +1948,13 @@ function buildSolidMeshFromMask(
     }
   }
 
-  // LINEAR TRACE START
-  console.log("[v0] SOLID TRACE: entered | canvas=" + canvasWidth + "x" + canvasHeight + " | depth=" + depth + " | thickness=" + thickness)
-  
   // Step 1: Check mask
-  console.log("[v0] SOLID TRACE: mask pixels=" + pixelsBefore)
   if (pixelsBefore === 0) {
     return makeResult("mask_empty")
   }
 
   // Step 2: Connected component labeling
   const { labels, componentCount, componentSizes } = labelConnectedComponents(mask, S)
-  console.log("[v0] SOLID TRACE: components found=" + componentCount)
   if (componentCount === 0) {
     return makeResult("no_components", null, { componentCount: 0 })
   }
@@ -1805,7 +1967,6 @@ function buildSolidMeshFromMask(
       largestLabel = i
     }
   }
-  console.log("[v0] SOLID TRACE: selected component area=" + largestSize)
   if (largestSize < 4) {
     return makeResult("component_too_small", null, { componentCount, selectedComponentArea: largestSize })
   }
@@ -1821,7 +1982,6 @@ function buildSolidMeshFromMask(
   const isClosed = outerBoundary.length > 0 && 
     Math.abs(outerBoundary[0].x - outerBoundary[outerBoundary.length - 1].x) < 0.1 &&
     Math.abs(outerBoundary[0].y - outerBoundary[outerBoundary.length - 1].y) < 0.1
-  console.log("[v0] SOLID TRACE: boundary points=" + outerBoundary.length + " | closed=" + isClosed)
   if (outerBoundary.length < 4) {
     return makeResult("boundary_trace_failed", null, { 
       componentCount, 
@@ -1830,10 +1990,22 @@ function buildSolidMeshFromMask(
     })
   }
 
-  // Step 6: Simplify boundary
-  const simplifiedOuter = dpSimplify(outerBoundary, DP_TOLERANCE)
+  // Step 6: Fidelity-preserving simplification with validation
+  const simplifyResult = simplifyWithFidelityCheck(
+    outerBoundary,
+    componentMask,
+    S,
+    DP_TOLERANCE,
+    0.80,  // minIoU - require 80% overlap
+    0.75   // minAreaRetention - require 75% area preserved
+  )
+  const simplifiedOuter = simplifyResult.contour
   const simplifiedArea = signedArea(simplifiedOuter)
-  console.log("[v0] SOLID TRACE: simplified points=" + simplifiedOuter.length + " | signedArea=" + simplifiedArea.toFixed(2))
+  const usedFallbackContour = simplifyResult.usedFallback
+  const simplifiedMaskArea = simplifyResult.simplifiedMaskArea
+  const maskIoU = simplifyResult.maskIoU
+  const areaRetentionRatio = simplifyResult.areaRetention
+  
   if (simplifiedOuter.length < 3) {
     return makeResult("simplified_contour_too_small", null, {
       componentCount,
@@ -1841,7 +2013,12 @@ function buildSolidMeshFromMask(
       tracedBoundaryPoints: outerBoundary.length,
       simplifiedPoints: simplifiedOuter.length,
       contourClosed: isClosed,
-      signedArea: simplifiedArea
+      signedArea: simplifiedArea,
+      originalMaskArea: largestSize,
+      simplifiedMaskArea,
+      areaRetentionRatio,
+      maskIoU,
+      usedFallbackContour
     })
   }
 
@@ -1881,8 +2058,7 @@ function buildSolidMeshFromMask(
   let shape: THREE.Shape
   try {
     shape = new THREE.Shape(shapePts)
-  } catch (e) {
-    console.log("[v0] SOLID TRACE: shape creation failed:", e)
+  } catch {
     return makeResult("shape_creation_failed", null, {
       componentCount,
       selectedComponentArea: largestSize,
@@ -1890,7 +2066,6 @@ function buildSolidMeshFromMask(
       simplifiedPoints: simplifiedOuter.length
     })
   }
-  console.log("[v0] SOLID TRACE: shape created=YES")
 
   // Add holes with correct winding (CW for THREE.js)
   let holesKept = 0
@@ -1915,8 +2090,7 @@ function buildSolidMeshFromMask(
       curveSegments: 1,
     })
     geometry.translate(0, 0, -halfDepth)
-  } catch (e) {
-    console.log("[v0] SOLID TRACE: extrude failed:", e)
+  } catch {
     return makeResult("extrude_failed", null, {
       componentCount,
       selectedComponentArea: largestSize,
@@ -1926,7 +2100,6 @@ function buildSolidMeshFromMask(
       holesCount: holesKept
     })
   }
-  console.log("[v0] SOLID TRACE: extrude created=YES")
 
   // Step 10: Validate geometry
   if (!geometry) {
@@ -1942,7 +2115,6 @@ function buildSolidMeshFromMask(
   const indexAttr = geometry.getIndex()
   const vertexCount = posAttr ? posAttr.count : 0
   const indexCount = indexAttr ? indexAttr.count : 0
-  console.log("[v0] SOLID TRACE: vertex count=" + vertexCount + " | index count=" + indexCount)
 
   if (vertexCount === 0) {
     return makeResult("geometry_zero_vertices", null, {
@@ -2005,7 +2177,6 @@ function buildSolidMeshFromMask(
   }
 
   const rebuildTimeMs = performance.now() - t0
-  console.log("[v0] SOLID TRACE: SUCCESS | vertices=" + vertexCount + " | bbox=" + JSON.stringify(bboxSize) + " | time=" + rebuildTimeMs.toFixed(1) + "ms")
 
   return {
     geometry,
@@ -2028,6 +2199,11 @@ function buildSolidMeshFromMask(
     simplifiedPoints: simplifiedOuter.length,
     contourClosed: isClosed,
     signedArea: simplifiedArea,
+    originalMaskArea: largestSize,
+    simplifiedMaskArea,
+    areaRetentionRatio,
+    maskIoU,
+    usedFallbackContour,
     vertexCount,
     indexCount,
     bboxSize,
@@ -2197,6 +2373,11 @@ export const SolidEngine: GeometryEngine = {
       simplifiedPoints: result.simplifiedPoints,
       contourClosed: result.contourClosed,
       signedArea: result.signedArea,
+      originalMaskArea: result.originalMaskArea,
+      simplifiedMaskArea: result.simplifiedMaskArea,
+      areaRetentionRatio: result.areaRetentionRatio,
+      maskIoU: result.maskIoU,
+      usedFallbackContour: result.usedFallbackContour,
       vertexCount: result.vertexCount,
       indexCount: result.indexCount,
       bboxSize: result.bboxSize,
@@ -2215,33 +2396,18 @@ export const SolidEngine: GeometryEngine = {
       rasterSize: SOLID_RASTER_SIZE,
     }
 
-    // Compute bboxCenter as Vector3 for marker
-    const bboxCenterVec = result.bboxCenter 
-      ? new THREE.Vector3(result.bboxCenter[0], result.bboxCenter[1], result.bboxCenter[2])
-      : null
-
-    // If geometry is null/failed, return RED debug cube as backup visual
+    // If geometry is null/failed, return empty (no mesh to render)
     if (!result.geometry || result.failureReason !== "success") {
-      const debugCube = new THREE.BoxGeometry(0.3, 0.3, 0.3)
-      return [{
-        tubeGeometry: debugCube,
-        filteredCount: 0,
-        key: `solid-debug-fail-${result.failureReason}`,
-        mode: "solid",
-        solidStatus,
-        solidDebugMaterial: "red",
-      }]
+      return []
     }
 
-    // SUCCESS: Return ACTUAL geometry with MeshNormalMaterial coloring (via "normal" debug mode)
+    // SUCCESS: Return actual geometry
     return [{
       tubeGeometry: result.geometry,
       filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
       key: `solid-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
       mode: "solid",
       solidStatus,
-      solidDebugMaterial: "normal",  // Use MeshNormalMaterial for success
-      solidBboxCenter: bboxCenterVec,
     }]
   },
 
