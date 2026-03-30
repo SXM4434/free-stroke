@@ -1105,6 +1105,12 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 <div>simplified pts:</div>
                 <div>{solidStatusRef.current.simplifiedPoints}</div>
                 
+                <div>contour closed:</div>
+                <div>{solidStatusRef.current.contourClosed ? "YES" : "NO"}</div>
+                
+                <div>signed area:</div>
+                <div>{solidStatusRef.current.signedArea.toFixed(2)}</div>
+                
                 <div>vertices:</div>
                 <div>{solidStatusRef.current.vertexCount}</div>
                 

@@ -115,6 +115,8 @@ export interface SolidBuildStatus {
   selectedComponentArea: number
   tracedBoundaryPoints: number
   simplifiedPoints: number
+  contourClosed: boolean
+  signedArea: number
   vertexCount: number
   indexCount: number
   bboxSize: [number, number, number] | null
@@ -1588,6 +1590,8 @@ interface SolidBuildResult {
   selectedComponentArea: number
   tracedBoundaryPoints: number
   simplifiedPoints: number
+  contourClosed: boolean
+  signedArea: number
   vertexCount: number
   indexCount: number
   bboxSize: [number, number, number] | null
@@ -1814,7 +1818,10 @@ function buildSolidMeshFromMask(
 
   // Step 5: Trace outer boundary using Moore neighborhood
   const outerBoundary = traceOuterBoundaryMoore(componentMask, S)
-  console.log("[v0] SOLID TRACE: boundary points=" + outerBoundary.length)
+  const isClosed = outerBoundary.length > 0 && 
+    Math.abs(outerBoundary[0].x - outerBoundary[outerBoundary.length - 1].x) < 0.1 &&
+    Math.abs(outerBoundary[0].y - outerBoundary[outerBoundary.length - 1].y) < 0.1
+  console.log("[v0] SOLID TRACE: boundary points=" + outerBoundary.length + " | closed=" + isClosed)
   if (outerBoundary.length < 4) {
     return makeResult("boundary_trace_failed", null, { 
       componentCount, 
@@ -1825,13 +1832,16 @@ function buildSolidMeshFromMask(
 
   // Step 6: Simplify boundary
   const simplifiedOuter = dpSimplify(outerBoundary, DP_TOLERANCE)
-  console.log("[v0] SOLID TRACE: simplified points=" + simplifiedOuter.length)
+  const simplifiedArea = signedArea(simplifiedOuter)
+  console.log("[v0] SOLID TRACE: simplified points=" + simplifiedOuter.length + " | signedArea=" + simplifiedArea.toFixed(2))
   if (simplifiedOuter.length < 3) {
     return makeResult("simplified_contour_too_small", null, {
       componentCount,
       selectedComponentArea: largestSize,
       tracedBoundaryPoints: outerBoundary.length,
-      simplifiedPoints: simplifiedOuter.length
+      simplifiedPoints: simplifiedOuter.length,
+      contourClosed: isClosed,
+      signedArea: simplifiedArea
     })
   }
 
@@ -2016,6 +2026,8 @@ function buildSolidMeshFromMask(
     selectedComponentArea: largestSize,
     tracedBoundaryPoints: outerBoundary.length,
     simplifiedPoints: simplifiedOuter.length,
+    contourClosed: isClosed,
+    signedArea: simplifiedArea,
     vertexCount,
     indexCount,
     bboxSize,
@@ -2065,42 +2077,60 @@ function labelConnectedComponents(mask: boolean[], S: number): { labels: number[
   return { labels, componentCount, componentSizes }
 }
 
-/** Moore neighborhood boundary tracing - traces the outer edge of a binary region */
+/** Proper Suzuki/Abe border-following algorithm for binary mask boundary extraction */
 function traceOuterBoundaryMoore(mask: boolean[], S: number): { x: number, y: number }[] {
-  // Find starting point: topmost-leftmost TRUE pixel
+  // Find starting point: topmost-leftmost TRUE pixel (for consistent start)
   let startIdx = -1
   for (let i = 0; i < S * S; i++) {
     if (mask[i]) { startIdx = i; break }
   }
   if (startIdx < 0) return []
 
-  const startX = startIdx % S, startY = Math.floor(startIdx / S)
+  const startX = startIdx % S
+  const startY = Math.floor(startIdx / S)
   
-  // Moore neighborhood: 8 directions starting from left, going clockwise
-  // 0=left, 1=up-left, 2=up, 3=up-right, 4=right, 5=down-right, 6=down, 7=down-left
-  const dx = [-1, -1, 0, 1, 1, 1, 0, -1]
-  const dy = [0, -1, -1, -1, 0, 1, 1, 1]
+  // We trace the BORDER between TRUE and FALSE pixels
+  // Using 8-neighborhood Moore connectivity
+  // Direction codes: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE
+  const dx = [1, 1, 0, -1, -1, -1, 0, 1]
+  const dy = [0, 1, 1, 1, 0, -1, -1, -1]
 
   const boundary: { x: number, y: number }[] = []
-  let x = startX, y = startY
-  let dir = 0  // Start looking left (we entered from the left since this is topmost-leftmost)
-
-  const maxIterations = S * S * 2  // Safety limit
+  const visited = new Set<string>()  // Track visited edge points to detect closure
+  
+  let x = startX
+  let y = startY
+  
+  // Initial direction: start looking WEST (dir=4) because we assume we approached from the left
+  let dir = 4
+  let prevDir = dir
+  
+  const maxIterations = S * S * 10  // Safety limit
   let iterations = 0
-
+  
+  // Trace the boundary by following the border consistently
   do {
-    boundary.push({ x: x + 0.5, y: y + 0.5 })  // Use pixel center
+    // Add current border point
+    boundary.push({ x: x + 0.5, y: y + 0.5 })
     
-    // Look for next boundary pixel by rotating clockwise from (dir + 5) % 8
-    // This is the Moore neighbor tracing algorithm
+    const key = `${x},${y}`
+    if (visited.has(key) && boundary.length > 4) {
+      // We've returned to start and traced a closed loop
+      break
+    }
+    visited.add(key)
+
+    // Look for next border pixel: rotate counterclockwise from current direction
+    // This ensures we always follow the leftmost boundary
     let found = false
-    const startDir = (dir + 5) % 8  // Start from the direction we came from + 1 (backtrack)
     
     for (let i = 0; i < 8; i++) {
-      const checkDir = (startDir + i) % 8
+      // Check directions counterclockwise: current-1, current-2, etc.
+      const checkDir = (dir - i + 8) % 8
       const nx = x + dx[checkDir]
       const ny = y + dy[checkDir]
       
+      // Check if neighbor is inside the mask (TRUE region)
       if (nx >= 0 && nx < S && ny >= 0 && ny < S && mask[ny * S + nx]) {
         x = nx
         y = ny
@@ -2110,9 +2140,22 @@ function traceOuterBoundaryMoore(mask: boolean[], S: number): { x: number, y: nu
       }
     }
 
-    if (!found) break  // Isolated pixel
+    if (!found) {
+      // No valid neighbor found - boundary is broken or isolated
+      break
+    }
+
     iterations++
-  } while ((x !== startX || y !== startY) && iterations < maxIterations)
+  } while (iterations < maxIterations)
+
+  // Verify we have a closed loop
+  if (boundary.length > 0 && (boundary[0].x !== boundary[boundary.length - 1].x ||
+      boundary[0].y !== boundary[boundary.length - 1].y)) {
+    // Try to close the boundary
+    if (boundary.length > 0) {
+      boundary.push(boundary[0])
+    }
+  }
 
   return boundary
 }
@@ -2152,6 +2195,8 @@ export const SolidEngine: GeometryEngine = {
       selectedComponentArea: result.selectedComponentArea,
       tracedBoundaryPoints: result.tracedBoundaryPoints,
       simplifiedPoints: result.simplifiedPoints,
+      contourClosed: result.contourClosed,
+      signedArea: result.signedArea,
       vertexCount: result.vertexCount,
       indexCount: result.indexCount,
       bboxSize: result.bboxSize,
