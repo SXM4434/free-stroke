@@ -93,6 +93,7 @@ export type SolidFailureReason =
   | "no_components"
   | "component_too_small"
   | "boundary_trace_failed"
+  | "traced_contour_mismatch"
   | "simplified_contour_too_small"
   | "shape_creation_failed"
   | "extrude_failed"
@@ -1977,8 +1978,8 @@ function buildSolidMeshFromMask(
     componentMask[i] = labels[i] === largestLabel
   }
 
-  // Step 5: Trace outer boundary using Moore neighborhood
-  const outerBoundary = traceOuterBoundaryMoore(componentMask, S)
+  // Step 5: Trace outer boundary using Marching Squares
+  const outerBoundary = traceOuterBoundaryMarchingSquares(componentMask, S)
   const isClosed = outerBoundary.length > 0 && 
     Math.abs(outerBoundary[0].x - outerBoundary[outerBoundary.length - 1].x) < 0.1 &&
     Math.abs(outerBoundary[0].y - outerBoundary[outerBoundary.length - 1].y) < 0.1
@@ -1987,6 +1988,60 @@ function buildSolidMeshFromMask(
       componentCount, 
       selectedComponentArea: largestSize,
       tracedBoundaryPoints: outerBoundary.length 
+    })
+  }
+
+  // Step 5b: Validate traced contour against component - detect TRACED_CONTOUR_MISMATCH
+  // Compute bbox of component mask
+  let maskMinX = S, maskMaxX = 0, maskMinY = S, maskMaxY = 0
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (componentMask[y * S + x]) {
+        if (x < maskMinX) maskMinX = x
+        if (x > maskMaxX) maskMaxX = x
+        if (y < maskMinY) maskMinY = y
+        if (y > maskMaxY) maskMaxY = y
+      }
+    }
+  }
+  const maskBboxW = maskMaxX - maskMinX + 1
+  const maskBboxH = maskMaxY - maskMinY + 1
+  
+  // Compute bbox of traced contour
+  let contourMinX = S, contourMaxX = 0, contourMinY = S, contourMaxY = 0
+  for (const p of outerBoundary) {
+    if (p.x < contourMinX) contourMinX = p.x
+    if (p.x > contourMaxX) contourMaxX = p.x
+    if (p.y < contourMinY) contourMinY = p.y
+    if (p.y > contourMaxY) contourMaxY = p.y
+  }
+  const contourBboxW = contourMaxX - contourMinX
+  const contourBboxH = contourMaxY - contourMinY
+  
+  // Compute polygon area of traced contour (absolute value of signed area)
+  const tracedPolygonArea = Math.abs(signedArea(outerBoundary))
+  
+  // Check for mismatch: if mask is large but contour collapsed to thin strip
+  const bboxWidthRatio = maskBboxW > 0 ? contourBboxW / maskBboxW : 0
+  const bboxHeightRatio = maskBboxH > 0 ? contourBboxH / maskBboxH : 0
+  const areaRatio = largestSize > 0 ? tracedPolygonArea / largestSize : 0
+  
+  // Mismatch conditions:
+  // - bbox dimension ratio < 0.5 (contour is much smaller than mask)
+  // - polygon area ratio < 0.3 (contour encloses much less area)
+  const isMismatch = (bboxWidthRatio < 0.5 || bboxHeightRatio < 0.5) || areaRatio < 0.3
+  
+  if (isMismatch) {
+    console.log("[v0] TRACED_CONTOUR_MISMATCH: maskBbox=" + maskBboxW + "x" + maskBboxH + 
+      ", contourBbox=" + contourBboxW.toFixed(1) + "x" + contourBboxH.toFixed(1) +
+      ", maskArea=" + largestSize + ", tracedArea=" + tracedPolygonArea.toFixed(1) +
+      ", areaRatio=" + areaRatio.toFixed(3))
+    return makeResult("traced_contour_mismatch", null, {
+      componentCount,
+      selectedComponentArea: largestSize,
+      tracedBoundaryPoints: outerBoundary.length,
+      contourClosed: isClosed,
+      signedArea: signedArea(outerBoundary)
     })
   }
 
@@ -2253,86 +2308,151 @@ function labelConnectedComponents(mask: boolean[], S: number): { labels: number[
   return { labels, componentCount, componentSizes }
 }
 
-/** Proper Suzuki/Abe border-following algorithm for binary mask boundary extraction */
-function traceOuterBoundaryMoore(mask: boolean[], S: number): { x: number, y: number }[] {
-  // Find starting point: topmost-leftmost TRUE pixel (for consistent start)
-  let startIdx = -1
-  for (let i = 0; i < S * S; i++) {
-    if (mask[i]) { startIdx = i; break }
+/**
+ * Marching Squares contour tracer - traces the ACTUAL outer boundary of a binary mask.
+ * Unlike pixel-center tracing, this follows the edges between filled and unfilled cells.
+ * Returns a closed polygon in raster coordinates.
+ */
+function traceOuterBoundaryMarchingSquares(mask: boolean[], S: number): { x: number, y: number }[] {
+  // Helper to get cell value (treat out-of-bounds as FALSE)
+  const getCell = (x: number, y: number): boolean => {
+    if (x < 0 || x >= S || y < 0 || y >= S) return false
+    return mask[y * S + x]
   }
-  if (startIdx < 0) return []
-
-  const startX = startIdx % S
-  const startY = Math.floor(startIdx / S)
   
-  // We trace the BORDER between TRUE and FALSE pixels
-  // Using 8-neighborhood Moore connectivity
-  // Direction codes: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE
-  const dx = [1, 1, 0, -1, -1, -1, 0, 1]
-  const dy = [0, 1, 1, 1, 0, -1, -1, -1]
-
-  const boundary: { x: number, y: number }[] = []
-  const visited = new Set<string>()  // Track visited edge points to detect closure
-  
-  let x = startX
-  let y = startY
-  
-  // Initial direction: start looking WEST (dir=4) because we assume we approached from the left
-  let dir = 4
-  let prevDir = dir
-  
-  const maxIterations = S * S * 10  // Safety limit
-  let iterations = 0
-  
-  // Trace the boundary by following the border consistently
-  do {
-    // Add current border point
-    boundary.push({ x: x + 0.5, y: y + 0.5 })
-    
-    const key = `${x},${y}`
-    if (visited.has(key) && boundary.length > 4) {
-      // We've returned to start and traced a closed loop
-      break
-    }
-    visited.add(key)
-
-    // Look for next border pixel: rotate counterclockwise from current direction
-    // This ensures we always follow the leftmost boundary
-    let found = false
-    
-    for (let i = 0; i < 8; i++) {
-      // Check directions counterclockwise: current-1, current-2, etc.
-      const checkDir = (dir - i + 8) % 8
-      const nx = x + dx[checkDir]
-      const ny = y + dy[checkDir]
-      
-      // Check if neighbor is inside the mask (TRUE region)
-      if (nx >= 0 && nx < S && ny >= 0 && ny < S && mask[ny * S + nx]) {
-        x = nx
-        y = ny
-        dir = checkDir
-        found = true
-        break
+  // Find starting edge: scan for first transition from FALSE to TRUE going left-to-right
+  let startX = -1, startY = -1, startEdge = -1
+  outer: for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (getCell(x, y)) {
+        // Found a filled cell - check if it has a border on top or left
+        if (!getCell(x, y - 1)) {
+          // Top edge is a border
+          startX = x
+          startY = y
+          startEdge = 0 // top
+          break outer
+        }
+        if (!getCell(x - 1, y)) {
+          // Left edge is a border
+          startX = x
+          startY = y
+          startEdge = 3 // left
+          break outer
+        }
       }
     }
-
-    if (!found) {
-      // No valid neighbor found - boundary is broken or isolated
-      break
+  }
+  
+  if (startX < 0) return []
+  
+  // Edge codes: 0=top, 1=right, 2=bottom, 3=left
+  // For each edge, define the vertex positions (corners of the cell)
+  // Cell (x,y) has corners at (x,y), (x+1,y), (x+1,y+1), (x,y+1)
+  const edgeToVertex: { [edge: number]: (x: number, y: number) => { x: number, y: number } } = {
+    0: (x, y) => ({ x: x + 0.5, y }),       // top edge midpoint
+    1: (x, y) => ({ x: x + 1, y: y + 0.5 }), // right edge midpoint
+    2: (x, y) => ({ x: x + 0.5, y: y + 1 }), // bottom edge midpoint
+    3: (x, y) => ({ x, y: y + 0.5 }),       // left edge midpoint
+  }
+  
+  // Next cell and edge based on current edge
+  // If we enter a cell from edge E, we check which edges are borders and pick the next one clockwise
+  const boundary: { x: number, y: number }[] = []
+  const visited = new Set<string>()
+  
+  let cx = startX, cy = startY, edge = startEdge
+  const maxIterations = S * S * 4
+  let iterations = 0
+  
+  do {
+    // Add vertex for current edge
+    const v = edgeToVertex[edge](cx, cy)
+    const vkey = `${v.x.toFixed(1)},${v.y.toFixed(1)}`
+    
+    // Skip duplicate consecutive vertices
+    if (boundary.length === 0 || 
+        Math.abs(boundary[boundary.length - 1].x - v.x) > 0.01 || 
+        Math.abs(boundary[boundary.length - 1].y - v.y) > 0.01) {
+      boundary.push(v)
     }
-
+    
+    const cellKey = `${cx},${cy},${edge}`
+    if (visited.has(cellKey) && boundary.length > 3) {
+      break // Closed loop
+    }
+    visited.add(cellKey)
+    
+    // Determine next edge by checking neighbors
+    // We're on edge `edge` of cell (cx, cy). The cell is filled.
+    // We move clockwise around the boundary.
+    
+    // From each edge, check clockwise: same cell next edge, or cross to neighbor
+    let nextCx = cx, nextCy = cy, nextEdge = edge
+    
+    if (edge === 0) { // top edge
+      // Check right neighbor's top, or our right edge
+      if (getCell(cx + 1, cy) && !getCell(cx + 1, cy - 1)) {
+        nextCx = cx + 1
+        nextEdge = 0 // continue on top
+      } else if (!getCell(cx + 1, cy)) {
+        nextEdge = 1 // turn to right edge
+      } else {
+        // Neighbor above-right: go up
+        nextCy = cy - 1
+        nextCx = cx + 1
+        nextEdge = 3 // left edge of cell above-right
+      }
+    } else if (edge === 1) { // right edge
+      if (getCell(cx, cy + 1) && !getCell(cx + 1, cy + 1)) {
+        nextCy = cy + 1
+        nextEdge = 1 // continue on right
+      } else if (!getCell(cx, cy + 1)) {
+        nextEdge = 2 // turn to bottom edge
+      } else {
+        nextCx = cx + 1
+        nextCy = cy + 1
+        nextEdge = 0 // top edge of cell below-right
+      }
+    } else if (edge === 2) { // bottom edge
+      if (getCell(cx - 1, cy) && !getCell(cx - 1, cy + 1)) {
+        nextCx = cx - 1
+        nextEdge = 2 // continue on bottom
+      } else if (!getCell(cx - 1, cy)) {
+        nextEdge = 3 // turn to left edge
+      } else {
+        nextCx = cx - 1
+        nextCy = cy + 1
+        nextEdge = 1 // right edge of cell below-left
+      }
+    } else { // edge === 3, left edge
+      if (getCell(cx, cy - 1) && !getCell(cx - 1, cy - 1)) {
+        nextCy = cy - 1
+        nextEdge = 3 // continue on left
+      } else if (!getCell(cx, cy - 1)) {
+        nextEdge = 0 // turn to top edge
+      } else {
+        nextCx = cx - 1
+        nextCy = cy - 1
+        nextEdge = 2 // bottom edge of cell above-left
+      }
+    }
+    
+    cx = nextCx
+    cy = nextCy
+    edge = nextEdge
     iterations++
-  } while (iterations < maxIterations)
-
-  // Verify we have a closed loop
-  if (boundary.length > 0 && (boundary[0].x !== boundary[boundary.length - 1].x ||
-      boundary[0].y !== boundary[boundary.length - 1].y)) {
-    // Try to close the boundary
-    if (boundary.length > 0) {
-      boundary.push(boundary[0])
+  } while ((cx !== startX || cy !== startY || edge !== startEdge) && iterations < maxIterations)
+  
+  // Ensure closure
+  if (boundary.length > 2) {
+    const first = boundary[0]
+    const last = boundary[boundary.length - 1]
+    if (Math.abs(first.x - last.x) > 0.01 || Math.abs(first.y - last.y) > 0.01) {
+      boundary.push({ x: first.x, y: first.y })
     }
   }
-
+  
   return boundary
 }
 
