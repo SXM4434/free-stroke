@@ -95,12 +95,17 @@ export type SolidFailureReason =
   | "boundary_trace_failed"
   | "traced_contour_mismatch"
   | "simplified_contour_too_small"
+  | "invalid_self_intersection"
+  | "invalid_degenerate_edge"
+  | "invalid_ring_too_small"
+  | "invalid_polygon_cleanup_failed"
   | "shape_creation_failed"
   | "extrude_failed"
   | "geometry_null"
   | "geometry_zero_vertices"
   | "geometry_non_finite"
   | "geometry_bad_bbox"
+  | "low_fidelity_result"
 
 /** Solid mode build status for debug overlay */
 export interface SolidBuildStatus {
@@ -124,6 +129,11 @@ export interface SolidBuildStatus {
   areaRetentionRatio: number
   maskIoU: number
   usedFallbackContour: boolean
+  // Polygon validation metrics
+  selfIntersectionsFound: number
+  duplicatePointsRemoved: number
+  degenerateEdgesRemoved: number
+  polygonValidationPassed: boolean
   // Geometry metrics
   vertexCount: number
   indexCount: number
@@ -1575,6 +1585,245 @@ function computeContourPerimeter(pts: { x: number; y: number }[]): number {
   return perimeter
 }
 
+/* ---- Polygon validity checks and cleanup ---- */
+
+interface PolygonValidationResult {
+  valid: boolean
+  reason: SolidFailureReason | null
+  selfIntersectionCount: number
+  duplicatePointCount: number
+  degenerateEdgeCount: number
+  cleanedContour: { x: number; y: number }[] | null
+}
+
+/** Check if two line segments intersect (not at endpoints) */
+function segmentsIntersect(
+  p1: { x: number; y: number }, p2: { x: number; y: number },
+  p3: { x: number; y: number }, p4: { x: number; y: number }
+): boolean {
+  const d1 = direction(p3, p4, p1)
+  const d2 = direction(p3, p4, p2)
+  const d3 = direction(p1, p2, p3)
+  const d4 = direction(p1, p2, p4)
+  
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    return true
+  }
+  return false
+}
+
+function direction(p1: { x: number; y: number }, p2: { x: number; y: number }, p3: { x: number; y: number }): number {
+  return (p3.x - p1.x) * (p2.y - p1.y) - (p2.x - p1.x) * (p3.y - p1.y)
+}
+
+/** Remove duplicate consecutive points and near-zero edges */
+function removeDuplicatesAndDegenerateEdges(
+  pts: { x: number; y: number }[],
+  minEdgeLength: number = 0.5
+): { cleaned: { x: number; y: number }[], duplicatesRemoved: number, degenerateRemoved: number } {
+  if (pts.length < 3) return { cleaned: pts, duplicatesRemoved: 0, degenerateRemoved: 0 }
+  
+  const cleaned: { x: number; y: number }[] = []
+  let duplicatesRemoved = 0
+  let degenerateRemoved = 0
+  
+  for (let i = 0; i < pts.length; i++) {
+    const curr = pts[i]
+    const prev = cleaned.length > 0 ? cleaned[cleaned.length - 1] : pts[pts.length - 1]
+    
+    const dx = curr.x - prev.x
+    const dy = curr.y - prev.y
+    const dist = Math.sqrt(dx * dx + dy * dy)
+    
+    if (dist < 0.001) {
+      duplicatesRemoved++
+      continue
+    }
+    
+    if (dist < minEdgeLength && cleaned.length > 0) {
+      degenerateRemoved++
+      continue
+    }
+    
+    cleaned.push(curr)
+  }
+  
+  // Check closure - if last point is too close to first, remove it
+  if (cleaned.length > 3) {
+    const first = cleaned[0]
+    const last = cleaned[cleaned.length - 1]
+    const dx = last.x - first.x
+    const dy = last.y - first.y
+    if (Math.sqrt(dx * dx + dy * dy) < 0.001) {
+      cleaned.pop()
+      duplicatesRemoved++
+    }
+  }
+  
+  return { cleaned, duplicatesRemoved, degenerateRemoved }
+}
+
+/** Count self-intersections in a polygon ring */
+function countSelfIntersections(pts: { x: number; y: number }[]): number {
+  if (pts.length < 4) return 0
+  
+  let count = 0
+  const n = pts.length
+  
+  for (let i = 0; i < n; i++) {
+    const i2 = (i + 1) % n
+    for (let j = i + 2; j < n; j++) {
+      // Skip adjacent edges
+      if (j === (i + n - 1) % n) continue
+      const j2 = (j + 1) % n
+      if (j2 === i) continue
+      
+      if (segmentsIntersect(pts[i], pts[i2], pts[j], pts[j2])) {
+        count++
+      }
+    }
+  }
+  
+  return count
+}
+
+/**
+ * Clean a self-intersecting polygon by removing backtracking loops.
+ * Uses a simplified approach: remove segments that cause intersections.
+ */
+function cleanSelfIntersectingPolygon(pts: { x: number; y: number }[]): { x: number; y: number }[] | null {
+  if (pts.length < 4) return pts
+  
+  // First pass: remove immediate backtracks (A-B-A patterns)
+  let cleaned = [...pts]
+  let changed = true
+  let iterations = 0
+  const maxIterations = 10
+  
+  while (changed && iterations < maxIterations) {
+    changed = false
+    iterations++
+    
+    const newCleaned: { x: number; y: number }[] = []
+    for (let i = 0; i < cleaned.length; i++) {
+      const curr = cleaned[i]
+      const prev = newCleaned.length > 0 ? newCleaned[newCleaned.length - 1] : null
+      const prevPrev = newCleaned.length > 1 ? newCleaned[newCleaned.length - 2] : null
+      
+      // Check for A-B-A backtrack pattern
+      if (prevPrev && prev) {
+        const dx1 = prev.x - prevPrev.x
+        const dy1 = prev.y - prevPrev.y
+        const dx2 = curr.x - prev.x
+        const dy2 = curr.y - prev.y
+        
+        // If vectors are roughly opposite, this is a backtrack
+        const dot = dx1 * dx2 + dy1 * dy2
+        const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1)
+        const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2)
+        
+        if (len1 > 0.001 && len2 > 0.001) {
+          const cosAngle = dot / (len1 * len2)
+          if (cosAngle < -0.95) {
+            // Nearly 180 degree turn - remove the spike
+            newCleaned.pop() // Remove prev (the spike tip)
+            changed = true
+            continue
+          }
+        }
+      }
+      
+      newCleaned.push(curr)
+    }
+    
+    cleaned = newCleaned
+  }
+  
+  // Second pass: remove crossing loops by walking the contour and skipping crossed sections
+  const intersections = countSelfIntersections(cleaned)
+  if (intersections > 0 && cleaned.length > 10) {
+    // Try to simplify aggressively to remove self-intersections
+    const simplified = dpSimplify(cleaned, 2.0) // Higher tolerance
+    if (countSelfIntersections(simplified) === 0 && simplified.length >= 3) {
+      return simplified
+    }
+  }
+  
+  return cleaned.length >= 3 ? cleaned : null
+}
+
+/** Full polygon validation and cleanup pipeline */
+function validateAndCleanPolygon(
+  pts: { x: number; y: number }[]
+): PolygonValidationResult {
+  // Step 1: Remove duplicates and degenerate edges
+  const { cleaned, duplicatesRemoved, degenerateRemoved } = removeDuplicatesAndDegenerateEdges(pts)
+  
+  if (cleaned.length < 3) {
+    return {
+      valid: false,
+      reason: "invalid_ring_too_small",
+      selfIntersectionCount: 0,
+      duplicatePointCount: duplicatesRemoved,
+      degenerateEdgeCount: degenerateRemoved,
+      cleanedContour: null
+    }
+  }
+  
+  // Step 2: Check for self-intersections
+  let selfIntersections = countSelfIntersections(cleaned)
+  
+  if (selfIntersections > 0) {
+    // Try to clean the polygon
+    const cleanedPoly = cleanSelfIntersectingPolygon(cleaned)
+    
+    if (!cleanedPoly) {
+      return {
+        valid: false,
+        reason: "invalid_polygon_cleanup_failed",
+        selfIntersectionCount: selfIntersections,
+        duplicatePointCount: duplicatesRemoved,
+        degenerateEdgeCount: degenerateRemoved,
+        cleanedContour: null
+      }
+    }
+    
+    // Re-check after cleanup
+    selfIntersections = countSelfIntersections(cleanedPoly)
+    
+    if (selfIntersections > 0) {
+      return {
+        valid: false,
+        reason: "invalid_self_intersection",
+        selfIntersectionCount: selfIntersections,
+        duplicatePointCount: duplicatesRemoved,
+        degenerateEdgeCount: degenerateRemoved,
+        cleanedContour: cleanedPoly
+      }
+    }
+    
+    return {
+      valid: true,
+      reason: null,
+      selfIntersectionCount: 0,
+      duplicatePointCount: duplicatesRemoved,
+      degenerateEdgeCount: degenerateRemoved,
+      cleanedContour: cleanedPoly
+    }
+  }
+  
+  // No self-intersections, polygon is valid
+  return {
+    valid: true,
+    reason: null,
+    selfIntersectionCount: 0,
+    duplicatePointCount: duplicatesRemoved,
+    degenerateEdgeCount: degenerateRemoved,
+    cleanedContour: cleaned
+  }
+}
+
 /* ---- Contour classification (outer vs hole) ---- */
 
 /** Signed area of a 2D polygon. Positive = CCW, negative = CW. */
@@ -1753,6 +2002,11 @@ interface SolidBuildResult {
   areaRetentionRatio: number
   maskIoU: number
   usedFallbackContour: boolean
+  // Polygon validation metrics
+  selfIntersectionsFound: number
+  duplicatePointsRemoved: number
+  degenerateEdgesRemoved: number
+  polygonValidationPassed: boolean
   // Geometry metrics
   vertexCount: number
   indexCount: number
@@ -1940,6 +2194,10 @@ function buildSolidMeshFromMask(
       areaRetentionRatio: 0,
       maskIoU: 0,
       usedFallbackContour: false,
+      selfIntersectionsFound: 0,
+      duplicatePointsRemoved: 0,
+      degenerateEdgesRemoved: 0,
+      polygonValidationPassed: false,
       vertexCount: 0,
       indexCount: 0,
       bboxSize: null,
@@ -2103,8 +2361,36 @@ function buildSolidMeshFromMask(
     })
   }
 
-  // Step 8: Transform to world coords and build THREE.Shape
-  let shapePts = simplifiedOuter.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+  // Step 8: VALIDATE AND CLEAN POLYGON before extrusion
+  const validationResult = validateAndCleanPolygon(simplifiedOuter)
+  
+  console.log("[v0] POLYGON VALIDATION: valid=" + validationResult.valid + 
+    ", selfIntersections=" + validationResult.selfIntersectionCount +
+    ", duplicates=" + validationResult.duplicatePointCount +
+    ", degenerateEdges=" + validationResult.degenerateEdgeCount +
+    ", reason=" + (validationResult.reason || "none"))
+  
+  if (!validationResult.valid || !validationResult.cleanedContour) {
+    return makeResult(validationResult.reason || "invalid_polygon_cleanup_failed", null, {
+      componentCount,
+      selectedComponentArea: largestSize,
+      tracedBoundaryPoints: outerBoundary.length,
+      simplifiedPoints: simplifiedOuter.length,
+      contourClosed: isClosed,
+      signedArea: simplifiedArea,
+      originalMaskArea: largestSize,
+      simplifiedMaskArea,
+      areaRetentionRatio,
+      maskIoU,
+      usedFallbackContour
+    })
+  }
+  
+  // Use the cleaned contour
+  const validatedContour = validationResult.cleanedContour
+  
+  // Step 9: Transform to world coords and build THREE.Shape
+  let shapePts = validatedContour.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
   const outerWindingArea = computeShapeArea(shapePts)
   if (outerWindingArea < 0) {
     shapePts = shapePts.slice().reverse()
@@ -2229,6 +2515,33 @@ function buildSolidMeshFromMask(
         bboxCenter
       })
     }
+    
+    // Final fidelity check: bbox should have reasonable XY extent relative to depth
+    // A valid filled solid should have significant XY area, not be a thin ribbon
+    const xyArea = size.x * size.y
+    const xyToDepthRatio = xyArea > 0 ? Math.sqrt(xyArea) / size.z : 0
+    
+    // If XY extent is much smaller than depth, this is likely a broken ribbon
+    // For a normal stroke, XY extent should be larger than or comparable to depth
+    if (xyToDepthRatio < 0.1 && xyArea < 0.01) {
+      console.log("[v0] LOW_FIDELITY_RESULT: xyArea=" + xyArea.toFixed(4) + 
+        ", depth=" + size.z.toFixed(4) + ", ratio=" + xyToDepthRatio.toFixed(4))
+      return makeResult("low_fidelity_result", null, {
+        componentCount,
+        selectedComponentArea: largestSize,
+        tracedBoundaryPoints: outerBoundary.length,
+        simplifiedPoints: validatedContour.length,
+        vertexCount,
+        indexCount,
+        bboxSize,
+        bboxCenter,
+        originalMaskArea: largestSize,
+        simplifiedMaskArea,
+        areaRetentionRatio,
+        maskIoU,
+        usedFallbackContour
+      })
+    }
   }
 
   const rebuildTimeMs = performance.now() - t0
@@ -2259,6 +2572,10 @@ function buildSolidMeshFromMask(
     areaRetentionRatio,
     maskIoU,
     usedFallbackContour,
+    selfIntersectionsFound: validationResult.selfIntersectionCount,
+    duplicatePointsRemoved: validationResult.duplicatePointCount,
+    degenerateEdgesRemoved: validationResult.degenerateEdgeCount,
+    polygonValidationPassed: validationResult.valid,
     vertexCount,
     indexCount,
     bboxSize,
@@ -2498,6 +2815,10 @@ export const SolidEngine: GeometryEngine = {
       areaRetentionRatio: result.areaRetentionRatio,
       maskIoU: result.maskIoU,
       usedFallbackContour: result.usedFallbackContour,
+      selfIntersectionsFound: result.selfIntersectionsFound,
+      duplicatePointsRemoved: result.duplicatePointsRemoved,
+      degenerateEdgesRemoved: result.degenerateEdgesRemoved,
+      polygonValidationPassed: result.polygonValidationPassed,
       vertexCount: result.vertexCount,
       indexCount: result.indexCount,
       bboxSize: result.bboxSize,

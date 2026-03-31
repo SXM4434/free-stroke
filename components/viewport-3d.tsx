@@ -1122,6 +1122,26 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                   {solidStatusRef.current.usedFallbackContour ? "YES" : "NO"}
                 </div>
                 
+                <div className="col-span-2 mt-1 border-t border-border/30 pt-1 font-semibold text-cyan-500">Polygon Validation:</div>
+                
+                <div>self-intersect:</div>
+                <div className={solidStatusRef.current.selfIntersectionsFound > 0 ? "text-red-500" : "text-green-500"}>
+                  {solidStatusRef.current.selfIntersectionsFound}
+                </div>
+                
+                <div>duplicates removed:</div>
+                <div>{solidStatusRef.current.duplicatePointsRemoved}</div>
+                
+                <div>degenerate edges:</div>
+                <div className={solidStatusRef.current.degenerateEdgesRemoved > 0 ? "text-yellow-500" : ""}>
+                  {solidStatusRef.current.degenerateEdgesRemoved}
+                </div>
+                
+                <div>validation passed:</div>
+                <div className={solidStatusRef.current.polygonValidationPassed ? "text-green-500" : "text-red-500"}>
+                  {solidStatusRef.current.polygonValidationPassed ? "YES" : "NO"}
+                </div>
+                
                 <div className="col-span-2 mt-1 border-t border-border/30 pt-1 font-semibold">Geometry:</div>
                 
                 <div>vertices:</div>
