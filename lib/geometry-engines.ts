@@ -1596,25 +1596,12 @@ interface PolygonValidationResult {
   cleanedContour: { x: number; y: number }[] | null
 }
 
-/** Check if two line segments intersect (not at endpoints) */
-function segmentsIntersect(
+/** Check if two line segments intersect (wrapper for point objects) */
+function segmentsIntersectPts(
   p1: { x: number; y: number }, p2: { x: number; y: number },
   p3: { x: number; y: number }, p4: { x: number; y: number }
 ): boolean {
-  const d1 = direction(p3, p4, p1)
-  const d2 = direction(p3, p4, p2)
-  const d3 = direction(p1, p2, p3)
-  const d4 = direction(p1, p2, p4)
-  
-  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
-    return true
-  }
-  return false
-}
-
-function direction(p1: { x: number; y: number }, p2: { x: number; y: number }, p3: { x: number; y: number }): number {
-  return (p3.x - p1.x) * (p2.y - p1.y) - (p2.x - p1.x) * (p3.y - p1.y)
+  return segmentsIntersect(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y)
 }
 
 /** Remove duplicate consecutive points and near-zero edges */
@@ -1679,7 +1666,7 @@ function countSelfIntersections(pts: { x: number; y: number }[]): number {
       const j2 = (j + 1) % n
       if (j2 === i) continue
       
-      if (segmentsIntersect(pts[i], pts[i2], pts[j], pts[j2])) {
+      if (segmentsIntersectPts(pts[i], pts[i2], pts[j], pts[j2])) {
         count++
       }
     }
