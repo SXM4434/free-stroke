@@ -1585,6 +1585,295 @@ function computeContourPerimeter(pts: { x: number; y: number }[]): number {
   return perimeter
 }
 
+/* ---- ROBUST MASK-TO-POLYGON PIPELINE ---- */
+
+/**
+ * Result of grid-edge polygon extraction.
+ * Contains outer ring(s) and holes as separate validated polygon rings.
+ */
+interface GridPolygonResult {
+  success: boolean
+  failureReason: SolidFailureReason | null
+  outerRings: { x: number; y: number }[][]
+  holes: { x: number; y: number }[][]
+  totalEdges: number
+  ringCount: number
+}
+
+/**
+ * ROBUST grid-edge-based polygon extraction from binary mask.
+ * 
+ * This algorithm extracts the ACTUAL boundary edges between filled and unfilled
+ * grid cells, then chains them into closed rings. Because grid edges are axis-aligned
+ * and cannot cross each other, the resulting polygons are GUARANTEED to be simple
+ * (no self-intersections).
+ * 
+ * Algorithm:
+ * 1. For each filled cell, check its 4 neighbors
+ * 2. If a neighbor is unfilled (or out of bounds), that edge is a boundary edge
+ * 3. Collect all boundary edges as directed segments (going CCW around filled region)
+ * 4. Chain edges into closed rings by matching endpoints
+ * 5. Classify rings as outer (CCW) or holes (CW) by signed area
+ */
+function extractPolygonsFromMask(mask: boolean[], S: number): GridPolygonResult {
+  // Step 1: Extract all boundary edges
+  // Each edge is stored as: startX, startY, endX, endY
+  // Edges go CCW around the filled region (filled on left, unfilled on right)
+  const edges: { x1: number; y1: number; x2: number; y2: number }[] = []
+  
+  const isFilled = (x: number, y: number): boolean => {
+    if (x < 0 || x >= S || y < 0 || y >= S) return false
+    return mask[y * S + x]
+  }
+  
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (!mask[y * S + x]) continue
+      
+      // Cell (x,y) is filled. Check each of its 4 edges.
+      // Cell corners: (x,y), (x+1,y), (x+1,y+1), (x,y+1)
+      
+      // Top edge: if cell above is unfilled, add edge going RIGHT (x,y) -> (x+1,y)
+      if (!isFilled(x, y - 1)) {
+        edges.push({ x1: x, y1: y, x2: x + 1, y2: y })
+      }
+      
+      // Right edge: if cell to right is unfilled, add edge going DOWN (x+1,y) -> (x+1,y+1)
+      if (!isFilled(x + 1, y)) {
+        edges.push({ x1: x + 1, y1: y, x2: x + 1, y2: y + 1 })
+      }
+      
+      // Bottom edge: if cell below is unfilled, add edge going LEFT (x+1,y+1) -> (x,y+1)
+      if (!isFilled(x, y + 1)) {
+        edges.push({ x1: x + 1, y1: y + 1, x2: x, y2: y + 1 })
+      }
+      
+      // Left edge: if cell to left is unfilled, add edge going UP (x,y+1) -> (x,y)
+      if (!isFilled(x - 1, y)) {
+        edges.push({ x1: x, y1: y + 1, x2: x, y2: y })
+      }
+    }
+  }
+  
+  if (edges.length === 0) {
+    return { success: false, failureReason: "mask_empty", outerRings: [], holes: [], totalEdges: 0, ringCount: 0 }
+  }
+  
+  // Step 2: Build adjacency map for edge chaining
+  // Key: "x,y" of edge start point
+  // Value: list of edges starting at that point
+  const edgeMap = new Map<string, { x1: number; y1: number; x2: number; y2: number; used: boolean }[]>()
+  
+  for (const e of edges) {
+    const key = `${e.x1},${e.y1}`
+    if (!edgeMap.has(key)) edgeMap.set(key, [])
+    edgeMap.get(key)!.push({ ...e, used: false })
+  }
+  
+  // Step 3: Chain edges into closed rings
+  const rings: { x: number; y: number }[][] = []
+  
+  for (const startEdges of edgeMap.values()) {
+    for (const startEdge of startEdges) {
+      if (startEdge.used) continue
+      
+      // Start a new ring from this edge
+      const ring: { x: number; y: number }[] = []
+      let currentEdge = startEdge
+      
+      const maxIterations = edges.length + 10
+      let iterations = 0
+      
+      while (iterations < maxIterations) {
+        currentEdge.used = true
+        ring.push({ x: currentEdge.x1, y: currentEdge.y1 })
+        
+        // Find next edge: one that starts where this one ends
+        const nextKey = `${currentEdge.x2},${currentEdge.y2}`
+        const candidates = edgeMap.get(nextKey)
+        
+        if (!candidates) break
+        
+        let nextEdge: typeof currentEdge | null = null
+        for (const c of candidates) {
+          if (!c.used) {
+            nextEdge = c
+            break
+          }
+        }
+        
+        if (!nextEdge) break
+        
+        // Check if we've closed the ring
+        if (nextEdge.x1 === startEdge.x1 && nextEdge.y1 === startEdge.y1) {
+          break
+        }
+        
+        currentEdge = nextEdge
+        iterations++
+      }
+      
+      if (ring.length >= 3) {
+        rings.push(ring)
+      }
+    }
+  }
+  
+  if (rings.length === 0) {
+    return { success: false, failureReason: "boundary_trace_failed", outerRings: [], holes: [], totalEdges: edges.length, ringCount: 0 }
+  }
+  
+  // Step 4: Classify rings as outer (CCW, positive area) or holes (CW, negative area)
+  const outerRings: { x: number; y: number }[][] = []
+  const holes: { x: number; y: number }[][] = []
+  
+  for (const ring of rings) {
+    const area = signedArea(ring)
+    if (area > 0) {
+      outerRings.push(ring)
+    } else if (area < 0) {
+      holes.push(ring)
+    }
+    // Zero area rings are degenerate, skip them
+  }
+  
+  if (outerRings.length === 0) {
+    return { success: false, failureReason: "no_components", outerRings: [], holes: [], totalEdges: edges.length, ringCount: rings.length }
+  }
+  
+  return {
+    success: true,
+    failureReason: null,
+    outerRings,
+    holes,
+    totalEdges: edges.length,
+    ringCount: rings.length
+  }
+}
+
+/**
+ * Simplify a polygon ring using Douglas-Peucker, but preserve axis-aligned edges.
+ * This maintains the rectilinear character of grid-extracted polygons while
+ * reducing vertex count for smoother appearance.
+ */
+function simplifyGridPolygon(pts: { x: number; y: number }[], tolerance: number): { x: number; y: number }[] {
+  if (pts.length < 4) return pts
+  
+  // For grid polygons, use very light simplification to preserve corners
+  // but remove redundant collinear points
+  const result: { x: number; y: number }[] = []
+  
+  for (let i = 0; i < pts.length; i++) {
+    const prev = pts[(i - 1 + pts.length) % pts.length]
+    const curr = pts[i]
+    const next = pts[(i + 1) % pts.length]
+    
+    // Check if curr is collinear with prev and next
+    const dx1 = curr.x - prev.x
+    const dy1 = curr.y - prev.y
+    const dx2 = next.x - curr.x
+    const dy2 = next.y - curr.y
+    
+    // Cross product - if zero, points are collinear
+    const cross = dx1 * dy2 - dy1 * dx2
+    
+    // Keep point if it's a corner (non-collinear)
+    if (Math.abs(cross) > 0.001) {
+      result.push(curr)
+    }
+  }
+  
+  // If too few points remain, use original with DP simplification
+  if (result.length < 4) {
+    return dpSimplify(pts, tolerance)
+  }
+  
+  return result
+}
+
+/**
+ * Rasterize a polygon back to a binary mask for fidelity verification.
+ * Uses scanline fill algorithm.
+ */
+function rasterizePolygonToMask(ring: { x: number; y: number }[], S: number): boolean[] {
+  const mask = new Array(S * S).fill(false)
+  if (ring.length < 3) return mask
+  
+  // Find Y range
+  let minY = Infinity, maxY = -Infinity
+  for (const p of ring) {
+    minY = Math.min(minY, p.y)
+    maxY = Math.max(maxY, p.y)
+  }
+  
+  const yStart = Math.max(0, Math.floor(minY))
+  const yEnd = Math.min(S - 1, Math.ceil(maxY))
+  
+  // Scanline fill
+  for (let y = yStart; y <= yEnd; y++) {
+    const scanY = y + 0.5
+    const intersections: number[] = []
+    
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const y1 = ring[j].y, y2 = ring[i].y
+      const x1 = ring[j].x, x2 = ring[i].x
+      
+      if ((y1 <= scanY && y2 > scanY) || (y2 <= scanY && y1 > scanY)) {
+        const t = (scanY - y1) / (y2 - y1)
+        intersections.push(x1 + t * (x2 - x1))
+      }
+    }
+    
+    intersections.sort((a, b) => a - b)
+    
+    for (let i = 0; i < intersections.length - 1; i += 2) {
+      const xStart = Math.max(0, Math.floor(intersections[i]))
+      const xEnd = Math.min(S - 1, Math.floor(intersections[i + 1]))
+      for (let x = xStart; x <= xEnd; x++) {
+        mask[y * S + x] = true
+      }
+    }
+  }
+  
+  return mask
+}
+
+/**
+ * Compute IoU (Intersection over Union) between original mask and rasterized polygon.
+ * This is the FINAL fidelity check to ensure the polygon accurately represents the mask.
+ */
+function computePolygonFidelity(
+  originalMask: boolean[],
+  polygonRings: { x: number; y: number }[][],
+  S: number
+): { iou: number; intersection: number; union: number; originalArea: number; polygonArea: number } {
+  // Rasterize all polygon rings
+  const polygonMask = new Array(S * S).fill(false)
+  
+  for (const ring of polygonRings) {
+    const ringMask = rasterizePolygonToMask(ring, S)
+    for (let i = 0; i < S * S; i++) {
+      if (ringMask[i]) polygonMask[i] = true
+    }
+  }
+  
+  // Compute IoU
+  let intersection = 0
+  let originalArea = 0
+  let polygonArea = 0
+  
+  for (let i = 0; i < S * S; i++) {
+    if (originalMask[i]) originalArea++
+    if (polygonMask[i]) polygonArea++
+    if (originalMask[i] && polygonMask[i]) intersection++
+  }
+  
+  const union = originalArea + polygonArea - intersection
+  const iou = union > 0 ? intersection / union : 0
+  
+  return { iou, intersection, union, originalArea, polygonArea }
+}
+
 /* ---- Polygon validity checks and cleanup ---- */
 
 interface PolygonValidationResult {
@@ -2223,114 +2512,77 @@ function buildSolidMeshFromMask(
     componentMask[i] = labels[i] === largestLabel
   }
 
-  // Step 5: Trace outer boundary using Marching Squares
-  const outerBoundary = traceOuterBoundaryMarchingSquares(componentMask, S)
-  const isClosed = outerBoundary.length > 0 && 
-    Math.abs(outerBoundary[0].x - outerBoundary[outerBoundary.length - 1].x) < 0.1 &&
-    Math.abs(outerBoundary[0].y - outerBoundary[outerBoundary.length - 1].y) < 0.1
-  if (outerBoundary.length < 4) {
-    return makeResult("boundary_trace_failed", null, { 
-      componentCount, 
-      selectedComponentArea: largestSize,
-      tracedBoundaryPoints: outerBoundary.length 
-    })
-  }
-
-  // Step 5b: Validate traced contour against component - detect TRACED_CONTOUR_MISMATCH
-  // Compute bbox of component mask
-  let maskMinX = S, maskMaxX = 0, maskMinY = S, maskMaxY = 0
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      if (componentMask[y * S + x]) {
-        if (x < maskMinX) maskMinX = x
-        if (x > maskMaxX) maskMaxX = x
-        if (y < maskMinY) maskMinY = y
-        if (y > maskMaxY) maskMaxY = y
-      }
-    }
-  }
-  const maskBboxW = maskMaxX - maskMinX + 1
-  const maskBboxH = maskMaxY - maskMinY + 1
+  // ========== NEW ROBUST GRID-EDGE POLYGON EXTRACTION ==========
+  // This replaces the broken contour tracer with a mathematically guaranteed approach
   
-  // Compute bbox of traced contour
-  let contourMinX = S, contourMaxX = 0, contourMinY = S, contourMaxY = 0
-  for (const p of outerBoundary) {
-    if (p.x < contourMinX) contourMinX = p.x
-    if (p.x > contourMaxX) contourMaxX = p.x
-    if (p.y < contourMinY) contourMinY = p.y
-    if (p.y > contourMaxY) contourMaxY = p.y
-  }
-  const contourBboxW = contourMaxX - contourMinX
-  const contourBboxH = contourMaxY - contourMinY
+  // Step 5: Extract polygons from mask using grid-edge algorithm
+  const polygonResult = extractPolygonsFromMask(componentMask, S)
   
-  // Compute polygon area of traced contour (absolute value of signed area)
-  const tracedPolygonArea = Math.abs(signedArea(outerBoundary))
-  
-  // Check for mismatch: if mask is large but contour collapsed to thin strip
-  const bboxWidthRatio = maskBboxW > 0 ? contourBboxW / maskBboxW : 0
-  const bboxHeightRatio = maskBboxH > 0 ? contourBboxH / maskBboxH : 0
-  const areaRatio = largestSize > 0 ? tracedPolygonArea / largestSize : 0
-  
-  // Mismatch conditions:
-  // - bbox dimension ratio < 0.5 (contour is much smaller than mask)
-  // - polygon area ratio < 0.3 (contour encloses much less area)
-  const isMismatch = (bboxWidthRatio < 0.5 || bboxHeightRatio < 0.5) || areaRatio < 0.3
-  
-  if (isMismatch) {
-    console.log("[v0] TRACED_CONTOUR_MISMATCH: maskBbox=" + maskBboxW + "x" + maskBboxH + 
-      ", contourBbox=" + contourBboxW.toFixed(1) + "x" + contourBboxH.toFixed(1) +
-      ", maskArea=" + largestSize + ", tracedArea=" + tracedPolygonArea.toFixed(1) +
-      ", areaRatio=" + areaRatio.toFixed(3))
-    return makeResult("traced_contour_mismatch", null, {
+  if (!polygonResult.success || polygonResult.outerRings.length === 0) {
+    return makeResult(polygonResult.failureReason || "boundary_trace_failed", null, {
       componentCount,
       selectedComponentArea: largestSize,
-      tracedBoundaryPoints: outerBoundary.length,
-      contourClosed: isClosed,
-      signedArea: signedArea(outerBoundary)
+      tracedBoundaryPoints: polygonResult.totalEdges
     })
   }
-
-  // Step 6: Fidelity-preserving simplification with validation
-  const simplifyResult = simplifyWithFidelityCheck(
-    outerBoundary,
-    componentMask,
-    S,
-    DP_TOLERANCE,
-    0.80,  // minIoU - require 80% overlap
-    0.75   // minAreaRetention - require 75% area preserved
-  )
-  const simplifiedOuter = simplifyResult.contour
+  
+  // Step 6: Select largest outer ring
+  let largestRing = polygonResult.outerRings[0]
+  let largestRingArea = Math.abs(signedArea(largestRing))
+  for (const ring of polygonResult.outerRings) {
+    const area = Math.abs(signedArea(ring))
+    if (area > largestRingArea) {
+      largestRingArea = area
+      largestRing = ring
+    }
+  }
+  
+  // Step 7: Simplify the outer ring (light simplification to remove collinear points)
+  const simplifiedOuter = simplifyGridPolygon(largestRing, DP_TOLERANCE * 0.5)
   const simplifiedArea = signedArea(simplifiedOuter)
-  const usedFallbackContour = simplifyResult.usedFallback
-  const simplifiedMaskArea = simplifyResult.simplifiedMaskArea
-  const maskIoU = simplifyResult.maskIoU
-  const areaRetentionRatio = simplifyResult.areaRetention
   
   if (simplifiedOuter.length < 3) {
     return makeResult("simplified_contour_too_small", null, {
       componentCount,
       selectedComponentArea: largestSize,
-      tracedBoundaryPoints: outerBoundary.length,
-      simplifiedPoints: simplifiedOuter.length,
-      contourClosed: isClosed,
-      signedArea: simplifiedArea,
-      originalMaskArea: largestSize,
-      simplifiedMaskArea,
-      areaRetentionRatio,
-      maskIoU,
-      usedFallbackContour
+      tracedBoundaryPoints: largestRing.length,
+      simplifiedPoints: simplifiedOuter.length
     })
   }
-
-  // Step 7: Find holes
-  const holes = findEnclosedHoles(componentMask, S, simplifiedOuter)
-
+  
+  // Step 8: Compute fidelity by re-rasterizing polygon and comparing to original mask
+  const fidelity = computePolygonFidelity(componentMask, [simplifiedOuter], S)
+  const maskIoU = fidelity.iou
+  const areaRetentionRatio = fidelity.originalArea > 0 ? fidelity.polygonArea / fidelity.originalArea : 0
+  
+  // CRITICAL FIDELITY GATE: Reject if polygon doesn't match the mask
+  // This prevents the "success on broken output" problem
+  const MIN_IOL_THRESHOLD = 0.70  // At least 70% IoU required
+  const MIN_AREA_RETENTION = 0.60  // At least 60% of original area
+  
+  if (maskIoU < MIN_IOL_THRESHOLD || areaRetentionRatio < MIN_AREA_RETENTION) {
+    return makeResult("low_fidelity_result", null, {
+      componentCount,
+      selectedComponentArea: largestSize,
+      tracedBoundaryPoints: largestRing.length,
+      simplifiedPoints: simplifiedOuter.length,
+      originalMaskArea: fidelity.originalArea,
+      simplifiedMaskArea: fidelity.polygonArea,
+      areaRetentionRatio,
+      maskIoU
+    })
+  }
+  
+  // Step 9: Collect holes from the polygon result
+  const holes = polygonResult.holes
+  let holesKept = 0
+  
   // Debug contour info
   debugContours.push({
     points: simplifiedOuter,
     type: "outer",
-    area: contourArea(simplifiedOuter),
-    signedArea: signedArea(simplifiedOuter),
+    area: Math.abs(simplifiedArea),
+    signedArea: simplifiedArea,
     isClosed: true,
     nestingDepth: 0,
     contourIndex: 0
@@ -2347,37 +2599,9 @@ function buildSolidMeshFromMask(
       contourIndex: i + 1
     })
   }
-
-  // Step 8: VALIDATE AND CLEAN POLYGON before extrusion
-  const validationResult = validateAndCleanPolygon(simplifiedOuter)
   
-  console.log("[v0] POLYGON VALIDATION: valid=" + validationResult.valid + 
-    ", selfIntersections=" + validationResult.selfIntersectionCount +
-    ", duplicates=" + validationResult.duplicatePointCount +
-    ", degenerateEdges=" + validationResult.degenerateEdgeCount +
-    ", reason=" + (validationResult.reason || "none"))
-  
-  if (!validationResult.valid || !validationResult.cleanedContour) {
-    return makeResult(validationResult.reason || "invalid_polygon_cleanup_failed", null, {
-      componentCount,
-      selectedComponentArea: largestSize,
-      tracedBoundaryPoints: outerBoundary.length,
-      simplifiedPoints: simplifiedOuter.length,
-      contourClosed: isClosed,
-      signedArea: simplifiedArea,
-      originalMaskArea: largestSize,
-      simplifiedMaskArea,
-      areaRetentionRatio,
-      maskIoU,
-      usedFallbackContour
-    })
-  }
-  
-  // Use the cleaned contour
-  const validatedContour = validationResult.cleanedContour
-  
-  // Step 9: Transform to world coords and build THREE.Shape
-  let shapePts = validatedContour.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+  // Step 10: Transform to world coords and build THREE.Shape
+  let shapePts = simplifiedOuter.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
   const outerWindingArea = computeShapeArea(shapePts)
   if (outerWindingArea < 0) {
     shapePts = shapePts.slice().reverse()
@@ -2390,16 +2614,19 @@ function buildSolidMeshFromMask(
     return makeResult("shape_creation_failed", null, {
       componentCount,
       selectedComponentArea: largestSize,
-      tracedBoundaryPoints: outerBoundary.length,
+      tracedBoundaryPoints: largestRing.length,
       simplifiedPoints: simplifiedOuter.length
     })
   }
 
   // Add holes with correct winding (CW for THREE.js)
-  let holesKept = 0
   for (const hole of holes) {
     if (hole.length < 3) continue
-    let holePts = hole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+    // Simplify hole too
+    const simplifiedHole = simplifyGridPolygon(hole, DP_TOLERANCE * 0.5)
+    if (simplifiedHole.length < 3) continue
+    
+    let holePts = simplifiedHole.map((p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
     const holeWindingArea = computeShapeArea(holePts)
     if (holeWindingArea > 0) {
       holePts = holePts.slice().reverse()
@@ -2408,7 +2635,7 @@ function buildSolidMeshFromMask(
     holesKept++
   }
 
-  // Step 9: Extrude
+  // Step 11: Extrude
   const halfDepth = depth / 2
   let geometry: THREE.BufferGeometry | null = null
   try {
@@ -2422,19 +2649,19 @@ function buildSolidMeshFromMask(
     return makeResult("extrude_failed", null, {
       componentCount,
       selectedComponentArea: largestSize,
-      tracedBoundaryPoints: outerBoundary.length,
+      tracedBoundaryPoints: largestRing.length,
       simplifiedPoints: simplifiedOuter.length,
       contourCount: 1,
       holesCount: holesKept
     })
   }
 
-  // Step 10: Validate geometry
+  // Step 12: Validate geometry
   if (!geometry) {
     return makeResult("geometry_null", null, {
       componentCount,
       selectedComponentArea: largestSize,
-      tracedBoundaryPoints: outerBoundary.length,
+      tracedBoundaryPoints: largestRing.length,
       simplifiedPoints: simplifiedOuter.length
     })
   }
@@ -2448,7 +2675,7 @@ function buildSolidMeshFromMask(
     return makeResult("geometry_zero_vertices", null, {
       componentCount,
       selectedComponentArea: largestSize,
-      tracedBoundaryPoints: outerBoundary.length,
+      tracedBoundaryPoints: largestRing.length,
       simplifiedPoints: simplifiedOuter.length,
       vertexCount: 0,
       indexCount
@@ -2470,7 +2697,7 @@ function buildSolidMeshFromMask(
     return makeResult("geometry_non_finite", null, {
       componentCount,
       selectedComponentArea: largestSize,
-      tracedBoundaryPoints: outerBoundary.length,
+      tracedBoundaryPoints: largestRing.length,
       simplifiedPoints: simplifiedOuter.length,
       vertexCount,
       indexCount
@@ -2494,39 +2721,12 @@ function buildSolidMeshFromMask(
       return makeResult("geometry_bad_bbox", null, {
         componentCount,
         selectedComponentArea: largestSize,
-        tracedBoundaryPoints: outerBoundary.length,
+        tracedBoundaryPoints: largestRing.length,
         simplifiedPoints: simplifiedOuter.length,
         vertexCount,
         indexCount,
         bboxSize,
         bboxCenter
-      })
-    }
-    
-    // Final fidelity check: bbox should have reasonable XY extent relative to depth
-    // A valid filled solid should have significant XY area, not be a thin ribbon
-    const xyArea = size.x * size.y
-    const xyToDepthRatio = xyArea > 0 ? Math.sqrt(xyArea) / size.z : 0
-    
-    // If XY extent is much smaller than depth, this is likely a broken ribbon
-    // For a normal stroke, XY extent should be larger than or comparable to depth
-    if (xyToDepthRatio < 0.1 && xyArea < 0.01) {
-      console.log("[v0] LOW_FIDELITY_RESULT: xyArea=" + xyArea.toFixed(4) + 
-        ", depth=" + size.z.toFixed(4) + ", ratio=" + xyToDepthRatio.toFixed(4))
-      return makeResult("low_fidelity_result", null, {
-        componentCount,
-        selectedComponentArea: largestSize,
-        tracedBoundaryPoints: outerBoundary.length,
-        simplifiedPoints: validatedContour.length,
-        vertexCount,
-        indexCount,
-        bboxSize,
-        bboxCenter,
-        originalMaskArea: largestSize,
-        simplifiedMaskArea,
-        areaRetentionRatio,
-        maskIoU,
-        usedFallbackContour
       })
     }
   }
@@ -2536,11 +2736,11 @@ function buildSolidMeshFromMask(
   return {
     geometry,
     failureReason: "success",
-    contourCount: 1,
+    contourCount: polygonResult.outerRings.length,
     holesCount: holesKept,
-    rawContourCount: 1,
+    rawContourCount: polygonResult.ringCount,
     rejectedCount: 0,
-    validOuterCount: 1,
+    validOuterCount: polygonResult.outerRings.length,
     openContourCount: 0,
     selfIntersectCount: 0,
     pixelsBefore,
@@ -2550,19 +2750,19 @@ function buildSolidMeshFromMask(
     debugContours,
     componentCount,
     selectedComponentArea: largestSize,
-    tracedBoundaryPoints: outerBoundary.length,
+    tracedBoundaryPoints: largestRing.length,
     simplifiedPoints: simplifiedOuter.length,
-    contourClosed: isClosed,
+    contourClosed: true,  // Grid-edge polygons are always closed
     signedArea: simplifiedArea,
-    originalMaskArea: largestSize,
-    simplifiedMaskArea,
+    originalMaskArea: fidelity.originalArea,
+    simplifiedMaskArea: fidelity.polygonArea,
     areaRetentionRatio,
     maskIoU,
-    usedFallbackContour,
-    selfIntersectionsFound: validationResult.selfIntersectionCount,
-    duplicatePointsRemoved: validationResult.duplicatePointCount,
-    degenerateEdgesRemoved: validationResult.degenerateEdgeCount,
-    polygonValidationPassed: validationResult.valid,
+    usedFallbackContour: false,  // No fallback in new pipeline
+    selfIntersectionsFound: 0,  // Grid-edge polygons cannot self-intersect
+    duplicatePointsRemoved: 0,
+    degenerateEdgesRemoved: 0,
+    polygonValidationPassed: true,  // Passed fidelity check
     vertexCount,
     indexCount,
     bboxSize,

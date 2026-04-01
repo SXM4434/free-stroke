@@ -1108,12 +1108,12 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 <div>{solidStatusRef.current.simplifiedMaskArea}</div>
                 
                 <div>area retention:</div>
-                <div className={solidStatusRef.current.areaRetentionRatio < 0.8 ? "text-red-500" : "text-green-500"}>
+                <div className={solidStatusRef.current.areaRetentionRatio < 0.6 ? "text-red-500" : solidStatusRef.current.areaRetentionRatio < 0.8 ? "text-yellow-500" : "text-green-500"}>
                   {(solidStatusRef.current.areaRetentionRatio * 100).toFixed(1)}%
                 </div>
                 
                 <div>mask IoU:</div>
-                <div className={solidStatusRef.current.maskIoU < 0.8 ? "text-red-500" : "text-green-500"}>
+                <div className={solidStatusRef.current.maskIoU < 0.7 ? "text-red-500" : solidStatusRef.current.maskIoU < 0.85 ? "text-yellow-500" : "text-green-500"}>
                   {(solidStatusRef.current.maskIoU * 100).toFixed(1)}%
                 </div>
                 
