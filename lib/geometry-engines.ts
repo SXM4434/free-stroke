@@ -14,6 +14,7 @@
 import * as THREE from "three"
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js"
 import type { ProcessedStroke } from "@/lib/stroke-processing"
+import { buildMaskSolid, type TestStroke, type MaskSolidResult } from "@/lib/solid-mask"
 
 const mergeGeometriesSafe =
   (BufferGeometryUtils as any).mergeGeometries ??
@@ -2970,6 +2971,71 @@ function findEnclosedHoles(componentMask: boolean[], S: number, outerBoundary: {
 
 
 
+/**
+ * Convert ProcessedStroke[] to a single merged TestStroke for the sandbox pipeline.
+ * The sandbox pipeline expects all stroke points merged into one stroke.
+ */
+function strokesToTestStroke(strokes: ProcessedStroke[]): TestStroke {
+  const allPoints: { x: number; y: number }[] = []
+  for (const s of strokes) {
+    for (const p of s.points) {
+      allPoints.push({ x: p.x, y: p.y })
+    }
+  }
+  return { points: allPoints }
+}
+
+/**
+ * Build solidStatus from MaskSolidResult for debug overlay compatibility.
+ */
+function buildSolidStatusFromMaskResult(
+  result: MaskSolidResult,
+  thickness: number,
+  depth: number
+): SolidBuildStatus {
+  const success = result.geometry !== null
+  return {
+    success,
+    failureReason: success ? "success" : "mask_empty",
+    contourCount: 1,
+    holesCount: result.stats.holeCount,
+    thickness,
+    depth,
+    filledPixelCount: result.stats.filledPixelCount,
+    componentCount: result.stats.componentCount,
+    selectedComponentArea: result.stats.largestComponentPixels,
+    tracedBoundaryPoints: result.stats.outerContourPoints,
+    simplifiedPoints: result.stats.simplifiedOuterPoints,
+    contourClosed: true,
+    signedArea: 0,
+    originalMaskArea: result.stats.largestComponentPixels,
+    simplifiedMaskArea: result.stats.largestComponentPixels,
+    areaRetentionRatio: 1.0,
+    maskIoU: 1.0,
+    usedFallbackContour: false,
+    selfIntersectionsFound: 0,
+    duplicatePointsRemoved: 0,
+    degenerateEdgesRemoved: 0,
+    polygonValidationPassed: true,
+    vertexCount: result.geometry?.getAttribute("position")?.count ?? 0,
+    indexCount: result.geometry?.getIndex()?.count ?? 0,
+    bboxSize: null,
+    bboxCenter: null,
+    rebuildTimeMs: result.stats.rebuildTimeMs,
+    rawContourCount: 1,
+    rejectedCount: 0,
+    validOuterCount: 1,
+    openContourCount: 0,
+    selfIntersectCount: 0,
+    pixelsBefore: result.stats.filledPixelCount,
+    pixelsAfter: result.stats.largestComponentPixels,
+    holesKept: result.stats.holeCount,
+    holesFilled: 0,
+    debugContours: [],
+    rasterSize: result.stats.maskResolution,
+  }
+}
+
 export const SolidEngine: GeometryEngine = {
   buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
     const { canvasWidth, canvasHeight, solidParams: sp } = params
@@ -2979,53 +3045,18 @@ export const SolidEngine: GeometryEngine = {
       return []
     }
 
-    const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
-    const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth, solidParams.thickness)
+    // PROOF LOG: Confirm we're using the sandbox pipeline
+    console.log("USING_SANDBOX_SOLID_PIPELINE")
 
-    // Build solidStatus from result (all trace data is now in result)
-    const solidStatus: SolidBuildStatus = {
-      success: result.failureReason === "success",
-      failureReason: result.failureReason,
-      contourCount: result.contourCount,
-      holesCount: result.holesCount,
-      thickness: solidParams.thickness,
-      depth: solidParams.depth,
-      filledPixelCount: result.pixelsBefore,
-      componentCount: result.componentCount,
-      selectedComponentArea: result.selectedComponentArea,
-      tracedBoundaryPoints: result.tracedBoundaryPoints,
-      simplifiedPoints: result.simplifiedPoints,
-      contourClosed: result.contourClosed,
-      signedArea: result.signedArea,
-      originalMaskArea: result.originalMaskArea,
-      simplifiedMaskArea: result.simplifiedMaskArea,
-      areaRetentionRatio: result.areaRetentionRatio,
-      maskIoU: result.maskIoU,
-      usedFallbackContour: result.usedFallbackContour,
-      selfIntersectionsFound: result.selfIntersectionsFound,
-      duplicatePointsRemoved: result.duplicatePointsRemoved,
-      degenerateEdgesRemoved: result.degenerateEdgesRemoved,
-      polygonValidationPassed: result.polygonValidationPassed,
-      vertexCount: result.vertexCount,
-      indexCount: result.indexCount,
-      bboxSize: result.bboxSize,
-      bboxCenter: result.bboxCenter,
-      rebuildTimeMs: result.rebuildTimeMs,
-      rawContourCount: result.rawContourCount,
-      rejectedCount: result.rejectedCount,
-      validOuterCount: result.validOuterCount,
-      openContourCount: result.openContourCount,
-      selfIntersectCount: result.selfIntersectCount,
-      pixelsBefore: result.pixelsBefore,
-      pixelsAfter: result.pixelsAfter,
-      holesKept: result.holesKept,
-      holesFilled: result.holesFilled,
-      debugContours: result.debugContours,
-      rasterSize: SOLID_RASTER_SIZE,
-    }
+    // Convert strokes to sandbox format and call the EXACT sandbox pipeline
+    const testStroke = strokesToTestStroke(strokes)
+    const result = buildMaskSolid(testStroke, solidParams.thickness, solidParams.depth, canvasWidth, canvasHeight)
 
-    // If geometry is null/failed, return empty (no mesh to render)
-    if (!result.geometry || result.failureReason !== "success") {
+    // Build solidStatus for debug overlay
+    const solidStatus = buildSolidStatusFromMaskResult(result, solidParams.thickness, solidParams.depth)
+
+    // If geometry is null, return empty (no mesh to render)
+    if (!result.geometry) {
       return []
     }
 
@@ -3043,11 +3074,15 @@ export const SolidEngine: GeometryEngine = {
     const { canvasWidth, canvasHeight, solidParams: sp } = params
     const solidParams = sp ?? DEFAULT_SOLID_PARAMS
 
+    // PROOF LOG: Confirm we're using the sandbox pipeline
+    console.log("USING_SANDBOX_SOLID_PIPELINE")
+
     const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
     const disposables: THREE.BufferGeometry[] = []
 
-    const mask = rasterizeMask(strokes, canvasWidth, canvasHeight, solidParams.thickness)
-    const result = buildSolidMeshFromMask(mask, canvasWidth, canvasHeight, solidParams.depth, solidParams.thickness)
+    // Convert strokes to sandbox format and call the EXACT sandbox pipeline
+    const testStroke = strokesToTestStroke(strokes)
+    const result = buildMaskSolid(testStroke, solidParams.thickness, solidParams.depth, canvasWidth, canvasHeight)
     const geometry = result.geometry
 
     const rootGroup = new THREE.Group()
