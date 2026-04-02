@@ -376,29 +376,17 @@ function AnimatedStrokes({
       {/* Export group: tubes/extrude meshes + caps + joints */}
       <group ref={exportGroupRef}>
         {meshes.map((data, si) => {
-          // Material for Solid mode: "red" = failure cube, "normal" = success with MeshNormalMaterial
-          const solidMat = data.solidDebugMaterial === "red" 
-            ? new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true })
-            : data.solidDebugMaterial === "normal"
-            ? new THREE.MeshNormalMaterial({ side: THREE.DoubleSide })
-            : null
-          const useMaterial = data.mode === "solid" && solidMat ? solidMat : strokeMaterial
+          // Use standard material for all modes
+          const useMaterial = strokeMaterial
           
           return (
           <group key={data.key}>
-            {/* Main geometry (tube or extrude) */}
+            {/* Main geometry (tube, extrude, or solid) */}
             <mesh
               ref={(el) => { tubeMeshRefs.current[si] = el }}
               geometry={data.tubeGeometry}
               material={useMaterial}
             />
-            {/* DEBUG: Marker cube at bbox center for Solid mode */}
-            {data.mode === "solid" && data.solidBboxCenter && (
-              <mesh position={data.solidBboxCenter}>
-                <boxGeometry args={[0.05, 0.05, 0.05]} />
-                <meshBasicMaterial color={0x00ff00} />
-              </mesh>
-            )}
             {/* Rod-mode only: caps + joints (fallback may use custom radius from Width slider) */}
             {data.mode === "rod" && data.capPositions && (() => {
               const r = data.capRadius ?? TUBE_RADIUS
@@ -1104,6 +1092,57 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 
                 <div>simplified pts:</div>
                 <div>{solidStatusRef.current.simplifiedPoints}</div>
+                
+                <div>contour closed:</div>
+                <div>{solidStatusRef.current.contourClosed ? "YES" : "NO"}</div>
+                
+                <div>signed area:</div>
+                <div>{solidStatusRef.current.signedArea.toFixed(2)}</div>
+                
+                <div className="col-span-2 mt-1 border-t border-border/30 pt-1 font-semibold text-amber-500">Fidelity:</div>
+                
+                <div>original area:</div>
+                <div>{solidStatusRef.current.originalMaskArea}</div>
+                
+                <div>simplified area:</div>
+                <div>{solidStatusRef.current.simplifiedMaskArea}</div>
+                
+                <div>area retention:</div>
+                <div className={solidStatusRef.current.areaRetentionRatio < 0.6 ? "text-red-500" : solidStatusRef.current.areaRetentionRatio < 0.8 ? "text-yellow-500" : "text-green-500"}>
+                  {(solidStatusRef.current.areaRetentionRatio * 100).toFixed(1)}%
+                </div>
+                
+                <div>mask IoU:</div>
+                <div className={solidStatusRef.current.maskIoU < 0.7 ? "text-red-500" : solidStatusRef.current.maskIoU < 0.85 ? "text-yellow-500" : "text-green-500"}>
+                  {(solidStatusRef.current.maskIoU * 100).toFixed(1)}%
+                </div>
+                
+                <div>used fallback:</div>
+                <div className={solidStatusRef.current.usedFallbackContour ? "text-yellow-500" : ""}>
+                  {solidStatusRef.current.usedFallbackContour ? "YES" : "NO"}
+                </div>
+                
+                <div className="col-span-2 mt-1 border-t border-border/30 pt-1 font-semibold text-cyan-500">Polygon Validation:</div>
+                
+                <div>self-intersect:</div>
+                <div className={solidStatusRef.current.selfIntersectionsFound > 0 ? "text-red-500" : "text-green-500"}>
+                  {solidStatusRef.current.selfIntersectionsFound}
+                </div>
+                
+                <div>duplicates removed:</div>
+                <div>{solidStatusRef.current.duplicatePointsRemoved}</div>
+                
+                <div>degenerate edges:</div>
+                <div className={solidStatusRef.current.degenerateEdgesRemoved > 0 ? "text-yellow-500" : ""}>
+                  {solidStatusRef.current.degenerateEdgesRemoved}
+                </div>
+                
+                <div>validation passed:</div>
+                <div className={solidStatusRef.current.polygonValidationPassed ? "text-green-500" : "text-red-500"}>
+                  {solidStatusRef.current.polygonValidationPassed ? "YES" : "NO"}
+                </div>
+                
+                <div className="col-span-2 mt-1 border-t border-border/30 pt-1 font-semibold">Geometry:</div>
                 
                 <div>vertices:</div>
                 <div>{solidStatusRef.current.vertexCount}</div>
