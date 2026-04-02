@@ -3042,25 +3042,29 @@ export const SolidEngine: GeometryEngine = {
     const solidParams = sp ?? DEFAULT_SOLID_PARAMS
     
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
+      console.log("[v0] SolidEngine.buildPreview early return: strokes=" + strokes.length + " canvasWidth=" + canvasWidth + " canvasHeight=" + canvasHeight)
       return []
     }
 
-    // PROOF LOG: Confirm we're using the sandbox pipeline
-    console.log("USING_SANDBOX_SOLID_PIPELINE")
-
     // Convert strokes to sandbox format and call the EXACT sandbox pipeline
     const testStroke = strokesToTestStroke(strokes)
+    console.log("[v0] SolidEngine calling buildMaskSolid: points=" + testStroke.points.length + " thickness=" + solidParams.thickness + " depth=" + solidParams.depth + " canvas=" + canvasWidth + "x" + canvasHeight)
+    
     const result = buildMaskSolid(testStroke, solidParams.thickness, solidParams.depth, canvasWidth, canvasHeight)
+    
+    console.log("[v0] SolidEngine buildMaskSolid result: geometry=" + (result.geometry ? "YES" : "NULL") + " filledPixels=" + result.stats.filledPixelCount + " vertexCount=" + (result.geometry?.getAttribute("position")?.count ?? 0))
 
     // Build solidStatus for debug overlay
     const solidStatus = buildSolidStatusFromMaskResult(result, solidParams.thickness, solidParams.depth)
 
     // If geometry is null, return empty (no mesh to render)
     if (!result.geometry) {
+      console.log("[v0] SolidEngine returning empty: geometry is null")
       return []
     }
 
     // SUCCESS: Return actual geometry
+    console.log("[v0] SolidEngine returning mesh with geometry")
     return [{
       tubeGeometry: result.geometry,
       filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
