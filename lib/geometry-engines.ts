@@ -16,6 +16,31 @@ import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUti
 import type { ProcessedStroke } from "@/lib/stroke-processing"
 import { buildMaskSolid, type TestStroke, type MaskSolidResult } from "@/lib/solid-mask"
 
+/**
+ * GLOBAL SOLID DEBUG STATE - written by SolidEngine, read by UI overlay
+ * Failure buckets:
+ * A = SolidEngine never called
+ * B = buildMaskSolid never called (early return)
+ * C = buildMaskSolid returned failure/null geometry
+ * D = geometry returned but mesh array empty
+ * E = geometry returned and mesh created (success or camera issue)
+ */
+export const SOLID_DEBUG = {
+  lastUpdate: 0,
+  bucket: "A" as "A" | "B" | "C" | "D" | "E",
+  engineCalled: false,
+  canvasWidth: 0,
+  canvasHeight: 0,
+  strokeCount: 0,
+  pointCount: 0,
+  buildMaskSolidCalled: false,
+  buildMaskSolidSuccess: false,
+  geometryReturned: false,
+  vertexCount: 0,
+  filledPixels: 0,
+  failureReason: "" as string,
+}
+
 const mergeGeometriesSafe =
   (BufferGeometryUtils as any).mergeGeometries ??
   (BufferGeometryUtils as any).mergeBufferGeometries
@@ -3041,30 +3066,51 @@ export const SolidEngine: GeometryEngine = {
     const { canvasWidth, canvasHeight, solidParams: sp } = params
     const solidParams = sp ?? DEFAULT_SOLID_PARAMS
     
+    // Update debug state - engine was called
+    SOLID_DEBUG.lastUpdate = Date.now()
+    SOLID_DEBUG.engineCalled = true
+    SOLID_DEBUG.canvasWidth = canvasWidth
+    SOLID_DEBUG.canvasHeight = canvasHeight
+    SOLID_DEBUG.strokeCount = strokes.length
+    SOLID_DEBUG.buildMaskSolidCalled = false
+    SOLID_DEBUG.buildMaskSolidSuccess = false
+    SOLID_DEBUG.geometryReturned = false
+    SOLID_DEBUG.vertexCount = 0
+    SOLID_DEBUG.filledPixels = 0
+    SOLID_DEBUG.failureReason = ""
+    
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
-      console.log("[v0] SolidEngine.buildPreview early return: strokes=" + strokes.length + " canvasWidth=" + canvasWidth + " canvasHeight=" + canvasHeight)
+      SOLID_DEBUG.bucket = "B"
+      SOLID_DEBUG.failureReason = strokes.length === 0 ? "no strokes" : "canvas 0"
       return []
     }
 
     // Convert strokes to sandbox format and call the EXACT sandbox pipeline
     const testStroke = strokesToTestStroke(strokes)
-    console.log("[v0] SolidEngine calling buildMaskSolid: points=" + testStroke.points.length + " thickness=" + solidParams.thickness + " depth=" + solidParams.depth + " canvas=" + canvasWidth + "x" + canvasHeight)
+    SOLID_DEBUG.pointCount = testStroke.points.length
+    SOLID_DEBUG.buildMaskSolidCalled = true
     
     const result = buildMaskSolid(testStroke, solidParams.thickness, solidParams.depth, canvasWidth, canvasHeight)
     
-    console.log("[v0] SolidEngine buildMaskSolid result: geometry=" + (result.geometry ? "YES" : "NULL") + " filledPixels=" + result.stats.filledPixelCount + " vertexCount=" + (result.geometry?.getAttribute("position")?.count ?? 0))
+    SOLID_DEBUG.filledPixels = result.stats.filledPixelCount
 
     // Build solidStatus for debug overlay
     const solidStatus = buildSolidStatusFromMaskResult(result, solidParams.thickness, solidParams.depth)
 
     // If geometry is null, return empty (no mesh to render)
     if (!result.geometry) {
-      console.log("[v0] SolidEngine returning empty: geometry is null")
+      SOLID_DEBUG.bucket = "C"
+      SOLID_DEBUG.failureReason = "geometry null"
       return []
     }
+    
+    SOLID_DEBUG.buildMaskSolidSuccess = true
+    SOLID_DEBUG.geometryReturned = true
+    SOLID_DEBUG.vertexCount = result.geometry.getAttribute("position")?.count ?? 0
 
     // SUCCESS: Return actual geometry
-    console.log("[v0] SolidEngine returning mesh with geometry")
+    SOLID_DEBUG.bucket = "E"
+    SOLID_DEBUG.failureReason = "success"
     return [{
       tubeGeometry: result.geometry,
       filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),

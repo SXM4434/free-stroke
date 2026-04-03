@@ -19,6 +19,7 @@ import {
   TUBE_RADIUS,
   RADIAL_SEGMENTS,
   SPHERE_SEGMENTS,
+  SOLID_DEBUG,
 } from "@/lib/geometry-engines"
 
 
@@ -1364,6 +1365,73 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         >
           Reset camera
         </button>
+      </div>
+
+      {/* SOLID DEBUG OVERLAY - on-screen debug for Solid mode */}
+      {mode === "solid" && (
+        <SolidDebugOverlay />
+      )}
+    </div>
+  )
+}
+
+/** Minimal on-screen debug overlay for Solid mode failure diagnosis */
+function SolidDebugOverlay() {
+  const [, forceUpdate] = useState(0)
+  
+  // Poll SOLID_DEBUG state every 100ms
+  useEffect(() => {
+    const interval = setInterval(() => forceUpdate(n => n + 1), 100)
+    return () => clearInterval(interval)
+  }, [])
+  
+  const d = SOLID_DEBUG
+  const bucketColors: Record<string, string> = {
+    A: "bg-gray-500",
+    B: "bg-yellow-500", 
+    C: "bg-red-500",
+    D: "bg-orange-500",
+    E: "bg-green-500",
+  }
+  
+  return (
+    <div className="absolute left-3 top-3 z-50 rounded-lg border border-red-500/50 bg-black/90 p-2 font-mono text-[10px] text-white">
+      <div className="mb-1 flex items-center gap-2 border-b border-red-500/30 pb-1">
+        <span className="font-bold text-red-400">SOLID DEBUG</span>
+        <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold text-black ${bucketColors[d.bucket]}`}>
+          BUCKET {d.bucket}
+        </span>
+      </div>
+      <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+        <span className="text-gray-400">engineCalled:</span>
+        <span className={d.engineCalled ? "text-green-400" : "text-red-400"}>{d.engineCalled ? "YES" : "NO"}</span>
+        
+        <span className="text-gray-400">canvas:</span>
+        <span>{d.canvasWidth}x{d.canvasHeight}</span>
+        
+        <span className="text-gray-400">strokes:</span>
+        <span>{d.strokeCount}</span>
+        
+        <span className="text-gray-400">points:</span>
+        <span>{d.pointCount}</span>
+        
+        <span className="text-gray-400">buildMaskSolid:</span>
+        <span className={d.buildMaskSolidCalled ? "text-green-400" : "text-red-400"}>{d.buildMaskSolidCalled ? "CALLED" : "NOT CALLED"}</span>
+        
+        <span className="text-gray-400">filledPixels:</span>
+        <span>{d.filledPixels}</span>
+        
+        <span className="text-gray-400">geometry:</span>
+        <span className={d.geometryReturned ? "text-green-400" : "text-red-400"}>{d.geometryReturned ? "YES" : "NULL"}</span>
+        
+        <span className="text-gray-400">vertexCount:</span>
+        <span className={d.vertexCount > 0 ? "text-green-400" : "text-red-400"}>{d.vertexCount}</span>
+        
+        <span className="text-gray-400">failureReason:</span>
+        <span className={d.failureReason === "success" ? "text-green-400" : "text-yellow-400"}>{d.failureReason || "-"}</span>
+      </div>
+      <div className="mt-1 border-t border-red-500/30 pt-1 text-[8px] text-gray-500">
+        A=never called B=early return C=null geom D=empty mesh E=success
       </div>
     </div>
   )
