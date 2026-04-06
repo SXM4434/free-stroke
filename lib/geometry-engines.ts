@@ -39,6 +39,11 @@ export const SOLID_DEBUG = {
   vertexCount: 0,
   filledPixels: 0,
   failureReason: "" as string,
+  // Coordinate debug
+  worldMinX: 0,
+  worldMaxX: 0,
+  worldMinY: 0,
+  worldMaxY: 0,
 }
 
 const mergeGeometriesSafe =
@@ -2998,13 +3003,30 @@ function findEnclosedHoles(componentMask: boolean[], S: number, outerBoundary: {
 
 /**
  * Convert ProcessedStroke[] to a single merged TestStroke for the sandbox pipeline.
- * The sandbox pipeline expects all stroke points merged into one stroke.
+ * 
+ * CRITICAL: The sandbox pipeline (buildMaskSolid/renderStrokeToMask) expects points
+ * in WORLD COORDINATES (roughly -1.5 to +1.5 range, centered at 0).
+ * 
+ * Real app strokes are in CANVAS PIXEL COORDINATES (0 to canvasWidth/Height).
+ * 
+ * This function converts from canvas pixel space to world space.
  */
-function strokesToTestStroke(strokes: ProcessedStroke[]): TestStroke {
+function strokesToTestStroke(strokes: ProcessedStroke[], canvasWidth: number, canvasHeight: number): TestStroke {
   const allPoints: { x: number; y: number }[] = []
+  
+  // Convert canvas pixel coords to world coords
+  // Canvas: (0,0) top-left, (canvasWidth, canvasHeight) bottom-right
+  // World: (-1.5, -1.5) to (1.5, 1.5), center at (0, 0), Y-up
+  const scale = 3.0 / Math.max(canvasWidth, canvasHeight)
+  const offsetX = canvasWidth / 2
+  const offsetY = canvasHeight / 2
+  
   for (const s of strokes) {
     for (const p of s.points) {
-      allPoints.push({ x: p.x, y: p.y })
+      // Convert: canvas pixel -> centered -> scaled -> flip Y for world coords
+      const worldX = (p.x - offsetX) * scale
+      const worldY = -(p.y - offsetY) * scale  // Flip Y: canvas Y-down, world Y-up
+      allPoints.push({ x: worldX, y: worldY })
     }
   }
   return { points: allPoints }
@@ -3085,10 +3107,25 @@ export const SolidEngine: GeometryEngine = {
       return []
     }
 
-    // Convert strokes to sandbox format and call the EXACT sandbox pipeline
-    const testStroke = strokesToTestStroke(strokes)
+    // Convert strokes to sandbox format (canvas pixels -> world coords) and call sandbox pipeline
+    const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
     SOLID_DEBUG.pointCount = testStroke.points.length
     SOLID_DEBUG.buildMaskSolidCalled = true
+    
+    // Record coordinate ranges for debug
+    if (testStroke.points.length > 0) {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+      for (const p of testStroke.points) {
+        if (p.x < minX) minX = p.x
+        if (p.x > maxX) maxX = p.x
+        if (p.y < minY) minY = p.y
+        if (p.y > maxY) maxY = p.y
+      }
+      SOLID_DEBUG.worldMinX = minX
+      SOLID_DEBUG.worldMaxX = maxX
+      SOLID_DEBUG.worldMinY = minY
+      SOLID_DEBUG.worldMaxY = maxY
+    }
     
     const result = buildMaskSolid(testStroke, solidParams.thickness, solidParams.depth, canvasWidth, canvasHeight)
     
@@ -3130,8 +3167,8 @@ export const SolidEngine: GeometryEngine = {
     const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
     const disposables: THREE.BufferGeometry[] = []
 
-    // Convert strokes to sandbox format and call the EXACT sandbox pipeline
-    const testStroke = strokesToTestStroke(strokes)
+    // Convert strokes to sandbox format (canvas pixels -> world coords) and call sandbox pipeline
+    const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
     const result = buildMaskSolid(testStroke, solidParams.thickness, solidParams.depth, canvasWidth, canvasHeight)
     const geometry = result.geometry
 

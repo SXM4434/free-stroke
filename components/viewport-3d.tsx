@@ -1429,9 +1429,19 @@ function SolidDebugOverlay() {
         
         <span className="text-gray-400">failureReason:</span>
         <span className={d.failureReason === "success" ? "text-green-400" : "text-yellow-400"}>{d.failureReason || "-"}</span>
+        
+        <span className="text-gray-400">worldX:</span>
+        <span className={Math.abs(d.worldMinX) < 2 && Math.abs(d.worldMaxX) < 2 ? "text-green-400" : "text-red-400"}>
+          [{d.worldMinX.toFixed(2)}, {d.worldMaxX.toFixed(2)}]
+        </span>
+        
+        <span className="text-gray-400">worldY:</span>
+        <span className={Math.abs(d.worldMinY) < 2 && Math.abs(d.worldMaxY) < 2 ? "text-green-400" : "text-red-400"}>
+          [{d.worldMinY.toFixed(2)}, {d.worldMaxY.toFixed(2)}]
+        </span>
       </div>
       <div className="mt-1 border-t border-red-500/30 pt-1 text-[8px] text-gray-500">
-        A=never called B=early return C=null geom D=empty mesh E=success
+        A=never called B=early return C=null geom D=empty mesh E=success | worldXY should be ~[-1.5,1.5]
       </div>
     </div>
   )
