@@ -38,12 +38,17 @@ export const SOLID_DEBUG = {
   geometryReturned: false,
   vertexCount: 0,
   filledPixels: 0,
+  maskArea: 0,
+  filledPercent: 0,
   failureReason: "" as string,
   // Coordinate debug
   worldMinX: 0,
   worldMaxX: 0,
   worldMinY: 0,
   worldMaxY: 0,
+  // Thickness debug
+  inputThickness: 0,
+  worldThickness: 0,
 }
 
 const mergeGeometriesSafe =
@@ -3112,6 +3117,13 @@ export const SolidEngine: GeometryEngine = {
     SOLID_DEBUG.pointCount = testStroke.points.length
     SOLID_DEBUG.buildMaskSolidCalled = true
     
+    // CRITICAL: Convert thickness from canvas pixels to world units
+    // Same scale factor as coordinate conversion: 3.0 / max(canvasWidth, canvasHeight)
+    const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
+    const worldThickness = solidParams.thickness * coordScale
+    SOLID_DEBUG.inputThickness = solidParams.thickness
+    SOLID_DEBUG.worldThickness = worldThickness
+    
     // Record coordinate ranges for debug
     if (testStroke.points.length > 0) {
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
@@ -3127,9 +3139,11 @@ export const SolidEngine: GeometryEngine = {
       SOLID_DEBUG.worldMaxY = maxY
     }
     
-    const result = buildMaskSolid(testStroke, solidParams.thickness, solidParams.depth, canvasWidth, canvasHeight)
+    const result = buildMaskSolid(testStroke, worldThickness, solidParams.depth, canvasWidth, canvasHeight)
     
     SOLID_DEBUG.filledPixels = result.stats.filledPixelCount
+    SOLID_DEBUG.maskArea = result.stats.maskResolution * result.stats.maskResolution
+    SOLID_DEBUG.filledPercent = SOLID_DEBUG.maskArea > 0 ? (SOLID_DEBUG.filledPixels / SOLID_DEBUG.maskArea) * 100 : 0
 
     // Build solidStatus for debug overlay
     const solidStatus = buildSolidStatusFromMaskResult(result, solidParams.thickness, solidParams.depth)
@@ -3169,7 +3183,10 @@ export const SolidEngine: GeometryEngine = {
 
     // Convert strokes to sandbox format (canvas pixels -> world coords) and call sandbox pipeline
     const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
-    const result = buildMaskSolid(testStroke, solidParams.thickness, solidParams.depth, canvasWidth, canvasHeight)
+    // Convert thickness from canvas pixels to world units
+    const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
+    const worldThickness = solidParams.thickness * coordScale
+    const result = buildMaskSolid(testStroke, worldThickness, solidParams.depth, canvasWidth, canvasHeight)
     const geometry = result.geometry
 
     const rootGroup = new THREE.Group()

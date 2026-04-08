@@ -1418,8 +1418,16 @@ function SolidDebugOverlay() {
         <span className="text-gray-400">buildMaskSolid:</span>
         <span className={d.buildMaskSolidCalled ? "text-green-400" : "text-red-400"}>{d.buildMaskSolidCalled ? "CALLED" : "NOT CALLED"}</span>
         
+        <span className="text-gray-400">thickness:</span>
+        <span>{d.inputThickness}px -&gt; {d.worldThickness.toFixed(4)}w</span>
+        
         <span className="text-gray-400">filledPixels:</span>
-        <span>{d.filledPixels}</span>
+        <span>{d.filledPixels} / {d.maskArea}</span>
+        
+        <span className="text-gray-400">fill%:</span>
+        <span className={d.filledPercent > 50 ? "text-red-400" : d.filledPercent < 1 ? "text-yellow-400" : "text-green-400"}>
+          {d.filledPercent.toFixed(1)}%
+        </span>
         
         <span className="text-gray-400">geometry:</span>
         <span className={d.geometryReturned ? "text-green-400" : "text-red-400"}>{d.geometryReturned ? "YES" : "NULL"}</span>
