@@ -51,6 +51,21 @@ export const SOLID_DEBUG = {
   worldThickness: 0,
   // Stage isolation debug - populated when stage rendering is active
   lastStages: null as any,
+  // Comprehensive contour diagnostics
+  rawContourPoints: 0,
+  simplifiedContourPoints: 0,
+  outerSignedArea: 0,
+  outerWinding: "" as "CCW" | "CW" | "",
+  outerSelfIntersects: false,
+  holeCount: 0,
+  holeAreas: [] as number[],
+  holeWindings: [] as string[],
+  anyHoleSelfIntersects: false,
+  anyHoleOutsideOuter: false,
+  holesOverlap: false,
+  // Stage D vs E comparison
+  stageDVertexCount: 0,
+  stageEVertexCount: 0,
 }
 
 /**
@@ -3156,10 +3171,23 @@ export const SolidEngine: GeometryEngine = {
     SOLID_DEBUG.maskArea = result.stats.maskResolution * result.stats.maskResolution
     SOLID_DEBUG.filledPercent = SOLID_DEBUG.maskArea > 0 ? (SOLID_DEBUG.filledPixels / SOLID_DEBUG.maskArea) * 100 : 0
     
-    // STAGE ISOLATION DEBUG: Store stages for 2D visualization
-    if (SOLID_STAGE_DEBUG.enabled) {
-      SOLID_DEBUG.lastStages = result.stages
-    }
+    // Populate comprehensive contour diagnostics
+    SOLID_DEBUG.rawContourPoints = result.stats.outerContourPoints
+    SOLID_DEBUG.simplifiedContourPoints = result.stats.simplifiedOuterPoints
+    SOLID_DEBUG.outerSignedArea = result.diagnostics.outerSignedArea
+    SOLID_DEBUG.outerWinding = result.diagnostics.outerWinding
+    SOLID_DEBUG.outerSelfIntersects = result.diagnostics.outerSelfIntersects
+    SOLID_DEBUG.holeCount = result.stats.holeCount
+    SOLID_DEBUG.holeAreas = result.diagnostics.holeAreas
+    SOLID_DEBUG.holeWindings = result.diagnostics.holeWindings
+    SOLID_DEBUG.anyHoleSelfIntersects = result.diagnostics.anyHoleSelfIntersects
+    SOLID_DEBUG.anyHoleOutsideOuter = result.diagnostics.anyHoleOutsideOuter
+    SOLID_DEBUG.holesOverlap = result.diagnostics.holesOverlap
+    SOLID_DEBUG.stageDVertexCount = result.geometryNoHoles?.getAttribute("position")?.count ?? 0
+    SOLID_DEBUG.stageEVertexCount = result.geometry?.getAttribute("position")?.count ?? 0
+    
+    // Store stages for 2D visualization
+    SOLID_DEBUG.lastStages = result.stages
 
     // Build solidStatus for debug overlay
     const solidStatus = buildSolidStatusFromMaskResult(result, solidParams.thickness, solidParams.depth)
@@ -3175,14 +3203,28 @@ export const SolidEngine: GeometryEngine = {
     SOLID_DEBUG.geometryReturned = true
     SOLID_DEBUG.vertexCount = result.geometry.getAttribute("position")?.count ?? 0
 
-    // STAGE ISOLATION: If debug mode is on, return empty to skip 3D rendering
-    if (SOLID_STAGE_DEBUG.enabled && SOLID_STAGE_DEBUG.stage !== "E") {
-      SOLID_DEBUG.bucket = "E"
-      SOLID_DEBUG.failureReason = "stage-debug-active"
-      return []
+    // STAGE ISOLATION: Handle stage-specific rendering
+    if (SOLID_STAGE_DEBUG.enabled) {
+      if (SOLID_STAGE_DEBUG.stage === "D" && result.geometryNoHoles) {
+        // Stage D: Render outer only, no holes
+        SOLID_DEBUG.bucket = "E"
+        SOLID_DEBUG.failureReason = "stage-D-active"
+        return [{
+          tubeGeometry: result.geometryNoHoles,
+          filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
+          key: `solid-D-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
+          mode: "solid",
+          solidStatus,
+        }]
+      } else if (SOLID_STAGE_DEBUG.stage !== "E" && SOLID_STAGE_DEBUG.stage !== "D") {
+        // Stages A/B/C: Skip 3D rendering, show 2D overlay only
+        SOLID_DEBUG.bucket = "E"
+        SOLID_DEBUG.failureReason = "stage-2D-only"
+        return []
+      }
     }
 
-    // SUCCESS: Return actual geometry
+    // Stage E (default): Return full geometry with holes
     SOLID_DEBUG.bucket = "E"
     SOLID_DEBUG.failureReason = "success"
     return [{

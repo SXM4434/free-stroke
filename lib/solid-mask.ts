@@ -30,8 +30,21 @@ export interface TestStroke {
 
 export interface MaskSolidResult {
   geometry: THREE.BufferGeometry | null
+  geometryNoHoles: THREE.BufferGeometry | null  // Stage D: outer only
   stats: MaskSolidStats
   stages: MaskSolidStages
+  diagnostics: MaskSolidDiagnostics
+}
+
+export interface MaskSolidDiagnostics {
+  outerSignedArea: number
+  outerWinding: "CCW" | "CW"
+  outerSelfIntersects: boolean
+  holeAreas: number[]
+  holeWindings: ("CCW" | "CW")[]
+  anyHoleSelfIntersects: boolean
+  anyHoleOutsideOuter: boolean
+  holesOverlap: boolean
 }
 
 export interface MaskSolidStats {
@@ -281,20 +294,41 @@ export function buildMaskSolid(
     }
   }
   
+  // Build diagnostics
+  const outerSelfIntersects = contourSelfIntersects(simplifiedOuter)
+  const diagnostics: MaskSolidDiagnostics = {
+    outerSignedArea: simplifiedSignedArea,
+    outerWinding: simplifiedSignedArea > 0 ? "CCW" : "CW",
+    outerSelfIntersects,
+    holeAreas: holeInfo.map(h => h.signedArea),
+    holeWindings: holeInfo.map(h => h.isCW ? "CW" : "CCW"),
+    anyHoleSelfIntersects: holeInfo.some(h => h.selfIntersects),
+    anyHoleOutsideOuter: holeInfo.some(h => !h.isInsideOuter),
+    holesOverlap,
+  }
+  
   console.log("[v0-solid] STAGE 4 - Hole Detection:", {
     holeCount: simplifiedHoles.length,
     holes: holeInfo,
     allHolesInsideOuter: holeInfo.every(h => h.isInsideOuter),
     holesOverlap,
-    anyHoleSelfIntersects: holeInfo.some(h => h.selfIntersects),
-    outerSelfIntersects: contourSelfIntersects(simplifiedOuter)
+    anyHoleSelfIntersects: diagnostics.anyHoleSelfIntersects,
+    outerSelfIntersects
   })
   
-  // 8. Transform to world coordinates and build THREE.Shape
+  // 8. Build STAGE D geometry (outer only, no holes)
+  const geometryNoHoles = buildExtrudedGeometry(simplifiedOuter, [], width, height, canvasWidth, canvasHeight, depth)
+  
+  console.log("[v0-solid] STAGE D - Outer Only Extrusion:", {
+    geometryCreated: geometryNoHoles !== null,
+    vertexCount: geometryNoHoles ? geometryNoHoles.getAttribute("position")?.count : 0,
+    indexCount: geometryNoHoles ? geometryNoHoles.getIndex()?.count : 0
+  })
+  
+  // 9. Build STAGE E geometry (outer + holes)
   const geometry = buildExtrudedGeometry(simplifiedOuter, simplifiedHoles, width, height, canvasWidth, canvasHeight, depth)
   
-  // STAGE DEBUG: Log THREE.Shape creation
-  console.log("[v0-solid] STAGE 5 - THREE.Shape / Triangulation:", {
+  console.log("[v0-solid] STAGE E - Full Extrusion with Holes:", {
     geometryCreated: geometry !== null,
     vertexCount: geometry ? geometry.getAttribute("position")?.count : 0,
     indexCount: geometry ? geometry.getIndex()?.count : 0
@@ -311,7 +345,7 @@ export function buildMaskSolid(
     rebuildTimeMs: performance.now() - startTime
   }
   
-  return { geometry, stats, stages: emptyStages }
+  return { geometry, geometryNoHoles, stats, stages: emptyStages, diagnostics }
 }
 
 // ============= Stage 1: Render to Mask =============

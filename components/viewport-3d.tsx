@@ -1453,8 +1453,66 @@ function SolidDebugOverlay() {
           [{d.worldMinY.toFixed(2)}, {d.worldMaxY.toFixed(2)}]
         </span>
       </div>
+      
+      {/* Contour Diagnostics Section */}
+      <div className="mt-1 border-t border-blue-500/30 pt-1">
+        <div className="mb-0.5 text-[9px] font-bold text-blue-400">CONTOUR DIAGNOSTICS</div>
+        <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+          <span className="text-gray-400">rawPts:</span>
+          <span>{d.rawContourPoints}</span>
+          
+          <span className="text-gray-400">simpPts:</span>
+          <span>{d.simplifiedContourPoints} ({d.rawContourPoints > 0 ? ((1 - d.simplifiedContourPoints / d.rawContourPoints) * 100).toFixed(0) : 0}% reduced)</span>
+          
+          <span className="text-gray-400">outerArea:</span>
+          <span>{d.outerSignedArea.toFixed(1)}</span>
+          
+          <span className="text-gray-400">outerWind:</span>
+          <span className={d.outerWinding === "CCW" ? "text-green-400" : "text-yellow-400"}>{d.outerWinding}</span>
+          
+          <span className="text-gray-400">outerSelfX:</span>
+          <span className={d.outerSelfIntersects ? "text-red-400 font-bold" : "text-green-400"}>
+            {d.outerSelfIntersects ? "YES - BAD" : "NO"}
+          </span>
+          
+          <span className="text-gray-400">holes:</span>
+          <span>{d.holeCount}</span>
+          
+          {d.holeCount > 0 && (
+            <>
+              <span className="text-gray-400">holeAreas:</span>
+              <span className="text-[8px]">[{d.holeAreas.map((a: number) => a.toFixed(0)).join(", ")}]</span>
+              
+              <span className="text-gray-400">holeWinds:</span>
+              <span className="text-[8px]">[{d.holeWindings.join(", ")}]</span>
+              
+              <span className="text-gray-400">holeSelfX:</span>
+              <span className={d.anyHoleSelfIntersects ? "text-red-400 font-bold" : "text-green-400"}>
+                {d.anyHoleSelfIntersects ? "YES - BAD" : "NO"}
+              </span>
+              
+              <span className="text-gray-400">holeOutside:</span>
+              <span className={d.anyHoleOutsideOuter ? "text-red-400 font-bold" : "text-green-400"}>
+                {d.anyHoleOutsideOuter ? "YES - BAD" : "NO"}
+              </span>
+              
+              <span className="text-gray-400">holesOverlap:</span>
+              <span className={d.holesOverlap ? "text-red-400 font-bold" : "text-green-400"}>
+                {d.holesOverlap ? "YES - BAD" : "NO"}
+              </span>
+            </>
+          )}
+          
+          <span className="text-gray-400">stageD verts:</span>
+          <span className={d.stageDVertexCount > 0 ? "text-green-400" : "text-red-400"}>{d.stageDVertexCount}</span>
+          
+          <span className="text-gray-400">stageE verts:</span>
+          <span className={d.stageEVertexCount > 0 ? "text-green-400" : "text-red-400"}>{d.stageEVertexCount}</span>
+        </div>
+      </div>
+      
       <div className="mt-1 border-t border-red-500/30 pt-1 text-[8px] text-gray-500">
-        A=never called B=early return C=null geom D=empty mesh E=success | worldXY should be ~[-1.5,1.5]
+        B=rawContour C=simplified D=noHoles E=full | Check: outerSelfX, holeSelfX, holeOutside, holesOverlap
       </div>
     </div>
   )
@@ -1582,30 +1640,53 @@ function SolidStageDebugOverlay() {
 
 /** Stage isolation toggle buttons */
 function SolidStageControls() {
+  const [, forceUpdate] = useState(0)
+  const [enabled, setEnabled] = useState(SOLID_STAGE_DEBUG.enabled)
+  const [stage, setStage] = useState(SOLID_STAGE_DEBUG.stage)
+  
   const stages: ("A" | "B" | "C" | "D" | "E")[] = ["A", "B", "C", "D", "E"]
   const stageNames: Record<string, string> = {
-    A: "Mask", B: "Raw", C: "Simp", D: "NoHoles", E: "Full"
+    A: "Mask", B: "RawCtr", C: "SimpCtr", D: "NoHoles", E: "Full"
+  }
+  const stageDescriptions: Record<string, string> = {
+    A: "2D mask only",
+    B: "raw outer contour",
+    C: "simplified contour",
+    D: "extrude outer only",
+    E: "extrude with holes"
+  }
+  
+  const handleEnabledChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    SOLID_STAGE_DEBUG.enabled = e.target.checked
+    setEnabled(e.target.checked)
+  }
+  
+  const handleStageChange = (s: "A" | "B" | "C" | "D" | "E") => {
+    SOLID_STAGE_DEBUG.stage = s
+    setStage(s)
+    // Force a rebuild by triggering state update
+    forceUpdate(n => n + 1)
   }
   
   return (
     <div className="absolute right-3 bottom-20 z-50 flex flex-col gap-1 rounded-lg border border-blue-500/50 bg-black/90 p-2">
-      <div className="text-[10px] font-bold text-blue-400">STAGE DEBUG</div>
-      <label className="flex items-center gap-1 text-[9px]">
+      <div className="text-[10px] font-bold text-blue-400">STAGE ISOLATION DEBUG</div>
+      <label className="flex items-center gap-1 text-[9px] text-white">
         <input
           type="checkbox"
-          checked={SOLID_STAGE_DEBUG.enabled}
-          onChange={(e) => SOLID_STAGE_DEBUG.enabled = e.target.checked}
+          checked={enabled}
+          onChange={handleEnabledChange}
           className="h-3 w-3"
         />
-        Enable
+        Enable Stage Debug
       </label>
       <div className="flex gap-1">
         {stages.map(s => (
           <button
             key={s}
-            onClick={() => SOLID_STAGE_DEBUG.stage = s}
+            onClick={() => handleStageChange(s)}
             className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${
-              SOLID_STAGE_DEBUG.stage === s
+              stage === s
                 ? "bg-blue-500 text-black"
                 : "bg-gray-600 text-white hover:bg-gray-500"
             }`}
@@ -1613,6 +1694,12 @@ function SolidStageControls() {
             {stageNames[s]}
           </button>
         ))}
+      </div>
+      <div className="text-[8px] text-gray-400">
+        Current: {stageDescriptions[stage]}
+      </div>
+      <div className="text-[8px] text-yellow-400">
+        D vs E: If D works but E shards = holes/winding bug
       </div>
     </div>
   )
