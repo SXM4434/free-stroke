@@ -20,6 +20,7 @@ import {
   RADIAL_SEGMENTS,
   SPHERE_SEGMENTS,
   SOLID_DEBUG,
+  SOLID_STAGE_DEBUG,
 } from "@/lib/geometry-engines"
 
 
@@ -1369,7 +1370,11 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
 
       {/* SOLID DEBUG OVERLAY - on-screen debug for Solid mode */}
       {geometryMode === "solid" && (
-        <SolidDebugOverlay />
+        <>
+          <SolidDebugOverlay />
+          {SOLID_STAGE_DEBUG.enabled && <SolidStageDebugOverlay />}
+          {SOLID_STAGE_DEBUG.enabled && <SolidStageControls />}
+        </>
       )}
     </div>
   )
@@ -1450,6 +1455,164 @@ function SolidDebugOverlay() {
       </div>
       <div className="mt-1 border-t border-red-500/30 pt-1 text-[8px] text-gray-500">
         A=never called B=early return C=null geom D=empty mesh E=success | worldXY should be ~[-1.5,1.5]
+      </div>
+    </div>
+  )
+}
+
+/**
+ * TEMPORARY STAGE ISOLATION DEBUG: 2D visualization of pipeline stages
+ * Renders: mask silhouette, raw contours, simplified contours, holes
+ */
+function SolidStageDebugOverlay() {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [, forceUpdate] = useState(0)
+  
+  useEffect(() => {
+    const interval = setInterval(() => forceUpdate(n => n + 1), 100)
+    return () => clearInterval(interval)
+  }, [])
+  
+  useEffect(() => {
+    if (!canvasRef.current || !SOLID_DEBUG.lastStages) return
+    
+    const stages = SOLID_DEBUG.lastStages
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext("2d")!
+    
+    // Setup canvas
+    canvas.width = 400
+    canvas.height = 400
+    ctx.fillStyle = "#000"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    
+    // Get scale to fit mask in canvas
+    const maskW = stages.maskWidth || 1
+    const maskH = stages.maskHeight || 1
+    const scaleX = (canvas.width - 20) / maskW
+    const scaleY = (canvas.height - 20) / maskH
+    const scale = Math.min(scaleX, scaleY)
+    const offsetX = 10 + (canvas.width - 20 - maskW * scale) / 2
+    const offsetY = 10 + (canvas.height - 20 - maskH * scale) / 2
+    
+    // Stage A: Render mask silhouette
+    if (SOLID_STAGE_DEBUG.stage === "A" || SOLID_STAGE_DEBUG.stage === "B" || SOLID_STAGE_DEBUG.stage === "C" || SOLID_STAGE_DEBUG.stage === "D" || SOLID_STAGE_DEBUG.stage === "E") {
+      ctx.fillStyle = "#333"
+      for (let y = 0; y < maskH; y++) {
+        for (let x = 0; x < maskW; x++) {
+          if (stages.maskData[y * maskW + x]) {
+            ctx.fillRect(offsetX + x * scale, offsetY + y * scale, scale, scale)
+          }
+        }
+      }
+    }
+    
+    // Stage B: Render raw outer contour
+    if (SOLID_STAGE_DEBUG.stage === "B" || SOLID_STAGE_DEBUG.stage === "C" || SOLID_STAGE_DEBUG.stage === "D" || SOLID_STAGE_DEBUG.stage === "E") {
+      ctx.strokeStyle = "#0f0"
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      for (let i = 0; i < stages.outerContour.length; i++) {
+        const p = stages.outerContour[i]
+        const sx = offsetX + p.x * scale
+        const sy = offsetY + p.y * scale
+        if (i === 0) ctx.moveTo(sx, sy)
+        else ctx.lineTo(sx, sy)
+      }
+      ctx.closePath()
+      ctx.stroke()
+    }
+    
+    // Stage C: Render simplified outer contour
+    if (SOLID_STAGE_DEBUG.stage === "C" || SOLID_STAGE_DEBUG.stage === "D" || SOLID_STAGE_DEBUG.stage === "E") {
+      ctx.strokeStyle = "#ff0"
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      for (let i = 0; i < stages.simplifiedOuter.length; i++) {
+        const p = stages.simplifiedOuter[i]
+        const sx = offsetX + p.x * scale
+        const sy = offsetY + p.y * scale
+        if (i === 0) ctx.moveTo(sx, sy)
+        else ctx.lineTo(sx, sy)
+      }
+      ctx.closePath()
+      ctx.stroke()
+    }
+    
+    // Stages D/E: Render holes
+    if (SOLID_STAGE_DEBUG.stage === "D" || SOLID_STAGE_DEBUG.stage === "E") {
+      ctx.strokeStyle = "#f00"
+      ctx.lineWidth = 1.5
+      for (const hole of stages.simplifiedHoles) {
+        ctx.beginPath()
+        for (let i = 0; i < hole.length; i++) {
+          const p = hole[i]
+          const sx = offsetX + p.x * scale
+          const sy = offsetY + p.y * scale
+          if (i === 0) ctx.moveTo(sx, sy)
+          else ctx.lineTo(sx, sy)
+        }
+        ctx.closePath()
+        ctx.stroke()
+      }
+    }
+    
+    // Legend
+    ctx.fillStyle = "#fff"
+    ctx.font = "10px monospace"
+    ctx.fillText(`STAGE ${SOLID_STAGE_DEBUG.stage}`, 10, canvas.height - 5)
+  }, [SOLID_DEBUG.lastStages])
+  
+  return (
+    <div className="absolute left-3 bottom-20 z-50 rounded-lg border border-yellow-500/50 bg-black/90 p-2">
+      <div className="mb-1 text-[10px] font-bold text-yellow-400">2D STAGE VIZ</div>
+      <canvas
+        ref={canvasRef}
+        className="border border-yellow-500/30 bg-black"
+        width={400}
+        height={400}
+        style={{ maxWidth: "300px", display: "block" }}
+      />
+      <div className="mt-1 text-[8px] text-gray-400">
+        Grn=raw Yel=simplified Red=holes
+      </div>
+    </div>
+  )
+}
+
+/** Stage isolation toggle buttons */
+function SolidStageControls() {
+  const stages: ("A" | "B" | "C" | "D" | "E")[] = ["A", "B", "C", "D", "E"]
+  const stageNames: Record<string, string> = {
+    A: "Mask", B: "Raw", C: "Simp", D: "NoHoles", E: "Full"
+  }
+  
+  return (
+    <div className="absolute right-3 bottom-20 z-50 flex flex-col gap-1 rounded-lg border border-blue-500/50 bg-black/90 p-2">
+      <div className="text-[10px] font-bold text-blue-400">STAGE DEBUG</div>
+      <label className="flex items-center gap-1 text-[9px]">
+        <input
+          type="checkbox"
+          checked={SOLID_STAGE_DEBUG.enabled}
+          onChange={(e) => SOLID_STAGE_DEBUG.enabled = e.target.checked}
+          className="h-3 w-3"
+        />
+        Enable
+      </label>
+      <div className="flex gap-1">
+        {stages.map(s => (
+          <button
+            key={s}
+            onClick={() => SOLID_STAGE_DEBUG.stage = s}
+            className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${
+              SOLID_STAGE_DEBUG.stage === s
+                ? "bg-blue-500 text-black"
+                : "bg-gray-600 text-white hover:bg-gray-500"
+            }`}
+          >
+            {stageNames[s]}
+          </button>
+        ))}
       </div>
     </div>
   )

@@ -61,6 +61,81 @@ export interface MaskSolidStages {
 const MASK_RESOLUTION = 512  // High-res mask for quality
 const DP_TOLERANCE = 1.5     // Douglas-Peucker simplification tolerance in pixels
 
+// ============= Debug Helpers =============
+
+function computeMaskBbox(mask: boolean[], width: number, height: number) {
+  let minX = width, maxX = 0, minY = height, maxY = 0
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (mask[y * width + x]) {
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+  }
+  return { minX, maxX, minY, maxY, width: maxX - minX + 1, height: maxY - minY + 1, area: (maxX - minX + 1) * (maxY - minY + 1) }
+}
+
+function computeSignedArea(contour: Point2D[]): number {
+  let area = 0
+  for (let i = 0; i < contour.length; i++) {
+    const p1 = contour[i]
+    const p2 = contour[(i + 1) % contour.length]
+    area += p1.x * p2.y - p2.x * p1.y
+  }
+  return area / 2
+}
+
+function contourSelfIntersects(contour: Point2D[]): boolean {
+  for (let i = 0; i < contour.length - 2; i++) {
+    for (let j = i + 2; j < contour.length; j++) {
+      if (j === contour.length - 1 && i === 0) continue  // Skip adjacent edges
+      if (segmentsIntersect(contour[i], contour[i + 1], contour[j], contour[(j + 1) % contour.length])) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function segmentsIntersect(p1: Point2D, p2: Point2D, p3: Point2D, p4: Point2D): boolean {
+  const d1 = (p3.x - p1.x) * (p2.y - p1.y) - (p2.x - p1.x) * (p3.y - p1.y)
+  const d2 = (p4.x - p1.x) * (p2.y - p1.y) - (p2.x - p1.x) * (p4.y - p1.y)
+  const d3 = (p1.x - p3.x) * (p4.y - p3.y) - (p4.x - p3.x) * (p1.y - p3.y)
+  const d4 = (p2.x - p3.x) * (p4.y - p3.y) - (p4.x - p3.x) * (p2.y - p3.y)
+  
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    return true
+  }
+  return false
+}
+
+function pointInPolygon(pt: Point2D, poly: Point2D[]): boolean {
+  let inside = false
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y
+    const xj = poly[j].x, yj = poly[j].y
+    
+    const intersect = ((yi > pt.y) !== (yj > pt.y)) && (pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi)
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
+function holeIsInsideOuter(hole: Point2D[], outer: Point2D[]): boolean {
+  if (hole.length === 0 || outer.length === 0) return false
+  // Check if first point of hole is inside outer
+  return pointInPolygon(hole[0], outer)
+}
+
+function holesIntersect(hole1: Point2D[], hole2: Point2D[]): boolean {
+  // Check if any point of hole1 is inside hole2 or vice versa
+  if (hole1.length === 0 || hole2.length === 0) return false
+  return pointInPolygon(hole1[0], hole2) || pointInPolygon(hole2[0], hole1)
+}
+
 // ============= Main Entry Point =============
 
 export function buildMaskSolid(
@@ -137,6 +212,17 @@ export function buildMaskSolid(
   const outerContour = traceOuterContour(componentMask, width, height)
   emptyStages.outerContour = outerContour
   
+  // STAGE DEBUG: Log contour extraction
+  const componentBbox = computeMaskBbox(componentMask, width, height)
+  const outerSignedArea = computeSignedArea(outerContour)
+  console.log("[v0-solid] STAGE 2 - Contour Extraction:", {
+    componentBbox,
+    componentArea: largestSize,
+    outerContourPoints: outerContour.length,
+    outerSignedArea,
+    outerIsCCW: outerSignedArea > 0
+  })
+  
   if (outerContour.length < 3) {
     return { 
       geometry: null, 
@@ -156,13 +242,63 @@ export function buildMaskSolid(
   const simplifiedOuter = douglasPeucker(outerContour, DP_TOLERANCE)
   emptyStages.simplifiedOuter = simplifiedOuter
   
+  // STAGE DEBUG: Log simplification
+  const simplifiedSignedArea = computeSignedArea(simplifiedOuter)
+  const areaLoss = Math.abs(simplifiedSignedArea - outerSignedArea) / Math.abs(outerSignedArea)
+  console.log("[v0-solid] STAGE 3 - Simplification:", {
+    rawPoints: outerContour.length,
+    simplifiedPoints: simplifiedOuter.length,
+    reductionPercent: ((1 - simplifiedOuter.length / outerContour.length) * 100).toFixed(1),
+    simplifiedSignedArea,
+    areaLossPercent: (areaLoss * 100).toFixed(2),
+    areaLossAcceptable: areaLoss < 0.1
+  })
+  
   // 7. Find holes (enclosed background regions)
   const { holes, simplifiedHoles } = findAndTraceHoles(componentMask, width, height, outerContour)
   emptyStages.holes = holes
   emptyStages.simplifiedHoles = simplifiedHoles
   
+  // STAGE DEBUG: Log hole detection
+  const holeInfo = simplifiedHoles.map((h, i) => ({
+    index: i,
+    rawPoints: holes[i].length,
+    simplifiedPoints: h.length,
+    signedArea: computeSignedArea(h),
+    isCW: computeSignedArea(h) < 0,
+    isInsideOuter: holeIsInsideOuter(h, simplifiedOuter),
+    selfIntersects: contourSelfIntersects(h)
+  }))
+  
+  // Check for hole overlaps
+  let holesOverlap = false
+  for (let i = 0; i < simplifiedHoles.length && !holesOverlap; i++) {
+    for (let j = i + 1; j < simplifiedHoles.length; j++) {
+      if (holesIntersect(simplifiedHoles[i], simplifiedHoles[j])) {
+        holesOverlap = true
+        break
+      }
+    }
+  }
+  
+  console.log("[v0-solid] STAGE 4 - Hole Detection:", {
+    holeCount: simplifiedHoles.length,
+    holes: holeInfo,
+    allHolesInsideOuter: holeInfo.every(h => h.isInsideOuter),
+    holesOverlap,
+    anyHoleSelfIntersects: holeInfo.some(h => h.selfIntersects),
+    outerSelfIntersects: contourSelfIntersects(simplifiedOuter)
+  })
+  
   // 8. Transform to world coordinates and build THREE.Shape
   const geometry = buildExtrudedGeometry(simplifiedOuter, simplifiedHoles, width, height, canvasWidth, canvasHeight, depth)
+  
+  // STAGE DEBUG: Log THREE.Shape creation
+  console.log("[v0-solid] STAGE 5 - THREE.Shape / Triangulation:", {
+    geometryCreated: geometry !== null,
+    vertexCount: geometry ? geometry.getAttribute("position")?.count : 0,
+    indexCount: geometry ? geometry.getIndex()?.count : 0
+  })
   
   const stats: MaskSolidStats = {
     maskResolution: MASK_RESOLUTION,

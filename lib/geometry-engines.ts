@@ -49,6 +49,17 @@ export const SOLID_DEBUG = {
   // Thickness debug
   inputThickness: 0,
   worldThickness: 0,
+  // Stage isolation debug - populated when stage rendering is active
+  lastStages: null as any,
+}
+
+/**
+ * TEMPORARY DEBUG: Stage isolation for diagnosis
+ * Toggle which stage renders: A=mask B=rawContour C=simplifiedContour D=extrudeNoHoles E=full
+ */
+export const SOLID_STAGE_DEBUG = {
+  enabled: false,  // Enable stage isolation debug overlay
+  stage: "E" as "A" | "B" | "C" | "D" | "E",  // Which stage to render
 }
 
 const mergeGeometriesSafe =
@@ -3144,6 +3155,11 @@ export const SolidEngine: GeometryEngine = {
     SOLID_DEBUG.filledPixels = result.stats.filledPixelCount
     SOLID_DEBUG.maskArea = result.stats.maskResolution * result.stats.maskResolution
     SOLID_DEBUG.filledPercent = SOLID_DEBUG.maskArea > 0 ? (SOLID_DEBUG.filledPixels / SOLID_DEBUG.maskArea) * 100 : 0
+    
+    // STAGE ISOLATION DEBUG: Store stages for 2D visualization
+    if (SOLID_STAGE_DEBUG.enabled) {
+      SOLID_DEBUG.lastStages = result.stages
+    }
 
     // Build solidStatus for debug overlay
     const solidStatus = buildSolidStatusFromMaskResult(result, solidParams.thickness, solidParams.depth)
@@ -3158,6 +3174,13 @@ export const SolidEngine: GeometryEngine = {
     SOLID_DEBUG.buildMaskSolidSuccess = true
     SOLID_DEBUG.geometryReturned = true
     SOLID_DEBUG.vertexCount = result.geometry.getAttribute("position")?.count ?? 0
+
+    // STAGE ISOLATION: If debug mode is on, return empty to skip 3D rendering
+    if (SOLID_STAGE_DEBUG.enabled && SOLID_STAGE_DEBUG.stage !== "E") {
+      SOLID_DEBUG.bucket = "E"
+      SOLID_DEBUG.failureReason = "stage-debug-active"
+      return []
+    }
 
     // SUCCESS: Return actual geometry
     SOLID_DEBUG.bucket = "E"
