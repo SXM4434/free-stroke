@@ -78,7 +78,7 @@ function computeMaskBbox(mask: boolean[], width: number, height: number) {
   return { minX, maxX, minY, maxY, width: maxX - minX + 1, height: maxY - minY + 1, area: (maxX - minX + 1) * (maxY - minY + 1) }
 }
 
-function computeSignedArea(contour: Point2D[]): number {
+function computeContourSignedArea(contour: Point2D[]): number {
   let area = 0
   for (let i = 0; i < contour.length; i++) {
     const p1 = contour[i]
@@ -214,7 +214,7 @@ export function buildMaskSolid(
   
   // STAGE DEBUG: Log contour extraction
   const componentBbox = computeMaskBbox(componentMask, width, height)
-  const outerSignedArea = computeSignedArea(outerContour)
+  const outerSignedArea = computeContourSignedArea(outerContour)
   console.log("[v0-solid] STAGE 2 - Contour Extraction:", {
     componentBbox,
     componentArea: largestSize,
@@ -243,7 +243,7 @@ export function buildMaskSolid(
   emptyStages.simplifiedOuter = simplifiedOuter
   
   // STAGE DEBUG: Log simplification
-  const simplifiedSignedArea = computeSignedArea(simplifiedOuter)
+  const simplifiedSignedArea = computeContourSignedArea(simplifiedOuter)
   const areaLoss = Math.abs(simplifiedSignedArea - outerSignedArea) / Math.abs(outerSignedArea)
   console.log("[v0-solid] STAGE 3 - Simplification:", {
     rawPoints: outerContour.length,
@@ -264,8 +264,8 @@ export function buildMaskSolid(
     index: i,
     rawPoints: holes[i].length,
     simplifiedPoints: h.length,
-    signedArea: computeSignedArea(h),
-    isCW: computeSignedArea(h) < 0,
+    signedArea: computeContourSignedArea(h),
+    isCW: computeContourSignedArea(h) < 0,
     isInsideOuter: holeIsInsideOuter(h, simplifiedOuter),
     selfIntersects: contourSelfIntersects(h)
   }))
