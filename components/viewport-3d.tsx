@@ -1068,7 +1068,10 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               ))}
             </div>
           )}
-          {/* Animation controls */}
+        </div>
+      )}
+
+      {/* Animation controls */}
       {strokeCount > 0 && (
         <div className="absolute bottom-12 left-3 right-3 flex items-center gap-2 rounded-lg border border-border bg-background/80 px-3 py-2 backdrop-blur-sm">
           {/* Play/Pause */}
