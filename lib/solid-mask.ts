@@ -72,7 +72,12 @@ export interface MaskSolidStages {
 // ============= Constants =============
 
 const MASK_RESOLUTION = 512  // High-res mask for quality
-const DP_TOLERANCE = 1.5     // Douglas-Peucker simplification tolerance in pixels
+const DP_TOLERANCE = 0.5     // Douglas-Peucker simplification tolerance - REDUCED for topology safety
+
+// Hole filtering thresholds
+const MIN_HOLE_AREA_RATIO = 0.001    // Hole must be at least 0.1% of outer area
+const MIN_HOLE_BBOX_DIM = 3          // Hole bbox must be at least 3 pixels in each dimension
+const MIN_HOLE_POINTS_AFTER_SIMP = 3 // Hole must have at least 3 points after simplification
 
 // ============= Debug Helpers =============
 
@@ -307,21 +312,11 @@ export function buildMaskSolid(
     }
   }
   
-  // Build diagnostics
+  // Build diagnostics (will be updated after filtering)
   const outerSelfIntersects = contourSelfIntersects(simplifiedOuter)
-  const diagnostics: MaskSolidDiagnostics = {
-    outerSignedArea: simplifiedSignedArea,
-    outerWinding: simplifiedSignedArea > 0 ? "CCW" : "CW",
-    outerSelfIntersects,
-    holeAreas: holeInfo.map(h => h.signedArea),
-    holeWindings: holeInfo.map(h => h.isCW ? "CW" : "CCW"),
-    anyHoleSelfIntersects: holeInfo.some(h => h.selfIntersects),
-    anyHoleOutsideOuter: holeInfo.some(h => !h.isInsideOuter),
-    holesOverlap,
-  }
   
-  console.log("[v0-solid] STAGE 4 - Hole Detection:", {
-    holeCount: simplifiedHoles.length,
+  console.log("[v0-solid] STAGE 4 - Hole Detection (raw):", {
+    rawHoleCount: simplifiedHoles.length,
     holes: holeInfo,
     allHolesInsideOuter: holeInfo.every(h => h.isInsideOuter),
     holesOverlap,
@@ -329,8 +324,40 @@ export function buildMaskSolid(
     outerSelfIntersects
   })
   
+  // 7b. FILTER AND NORMALIZE HOLES - reject tiny/unstable, normalize winding
+  const holeFilterResult = filterAndNormalizeHoles(simplifiedHoles, simplifiedOuter, simplifiedSignedArea)
+  const filteredHoles = holeFilterResult.validHoles
+  
+  console.log("[v0-solid] STAGE 4b - Hole Filtering:", {
+    rawHoles: simplifiedHoles.length,
+    validHoles: filteredHoles.length,
+    discarded: holeFilterResult.discardedCount,
+    discardReasons: holeFilterResult.discardReasons,
+    windingReport: holeFilterResult.windingReport
+  })
+  
+  // Normalize outer contour winding to CCW (positive area)
+  let normalizedOuter = simplifiedOuter
+  if (simplifiedSignedArea < 0) {
+    normalizedOuter = simplifiedOuter.slice().reverse()
+    console.log("[v0-solid] STAGE 4b - Outer normalized: CW→CCW")
+  }
+  
+  // Build diagnostics with FILTERED hole info
+  const filteredHoleAreas = filteredHoles.map(h => computeContourSignedArea(h))
+  const diagnostics: MaskSolidDiagnostics = {
+    outerSignedArea: simplifiedSignedArea,
+    outerWinding: simplifiedSignedArea > 0 ? "CCW" : "CW",
+    outerSelfIntersects,
+    holeAreas: filteredHoleAreas,
+    holeWindings: filteredHoleAreas.map(a => a < 0 ? "CW" : "CCW"),
+    anyHoleSelfIntersects: filteredHoles.some(h => contourSelfIntersects(h)),
+    anyHoleOutsideOuter: filteredHoles.some(h => !holeIsInsideOuter(h, normalizedOuter)),
+    holesOverlap: false,  // Already filtered
+  }
+  
   // 8. Build STAGE D geometry (outer only, no holes)
-  const geometryNoHoles = buildExtrudedGeometry(simplifiedOuter, [], width, height, canvasWidth, canvasHeight, depth)
+  const geometryNoHoles = buildExtrudedGeometry(normalizedOuter, [], width, height, canvasWidth, canvasHeight, depth)
   
   console.log("[v0-solid] STAGE D - Outer Only Extrusion:", {
     geometryCreated: geometryNoHoles !== null,
@@ -338,8 +365,8 @@ export function buildMaskSolid(
     indexCount: geometryNoHoles ? geometryNoHoles.getIndex()?.count : 0
   })
   
-  // 9. Build STAGE E geometry (outer + holes)
-  const geometry = buildExtrudedGeometry(simplifiedOuter, simplifiedHoles, width, height, canvasWidth, canvasHeight, depth)
+  // 9. Build STAGE E geometry (outer + FILTERED holes)
+  const geometry = buildExtrudedGeometry(normalizedOuter, filteredHoles, width, height, canvasWidth, canvasHeight, depth)
   
   console.log("[v0-solid] STAGE E - Full Extrusion with Holes:", {
     geometryCreated: geometry !== null,
@@ -354,7 +381,7 @@ export function buildMaskSolid(
     largestComponentPixels: largestSize,
     outerContourPoints: outerContour.length,
     simplifiedOuterPoints: simplifiedOuter.length,
-    holeCount: simplifiedHoles.length,
+    holeCount: filteredHoles.length,  // Use FILTERED count, not raw
     rebuildTimeMs: performance.now() - startTime
   }
   
@@ -713,6 +740,90 @@ function traceHoleContour(
   
   // Trace boundary
   return traceOuterContour(holeMask, width, height)
+}
+
+// ============= Stage 4b: Hole Filtering and Winding Normalization =============
+
+interface HoleFilterResult {
+  validHoles: Point2D[][]
+  discardedCount: number
+  discardReasons: string[]
+  windingReport: string[]
+}
+
+function filterAndNormalizeHoles(
+  holes: Point2D[][],
+  outerContour: Point2D[],
+  outerArea: number
+): HoleFilterResult {
+  const result: HoleFilterResult = {
+    validHoles: [],
+    discardedCount: 0,
+    discardReasons: [],
+    windingReport: []
+  }
+  
+  const absOuterArea = Math.abs(outerArea)
+  
+  for (let i = 0; i < holes.length; i++) {
+    const hole = holes[i]
+    
+    // Check 1: Minimum points
+    if (hole.length < MIN_HOLE_POINTS_AFTER_SIMP) {
+      result.discardedCount++
+      result.discardReasons.push(`hole[${i}]: too few points (${hole.length} < ${MIN_HOLE_POINTS_AFTER_SIMP})`)
+      continue
+    }
+    
+    // Check 2: Bounding box dimensions
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const p of hole) {
+      minX = Math.min(minX, p.x)
+      minY = Math.min(minY, p.y)
+      maxX = Math.max(maxX, p.x)
+      maxY = Math.max(maxY, p.y)
+    }
+    const bboxW = maxX - minX
+    const bboxH = maxY - minY
+    
+    if (bboxW < MIN_HOLE_BBOX_DIM || bboxH < MIN_HOLE_BBOX_DIM) {
+      result.discardedCount++
+      result.discardReasons.push(`hole[${i}]: bbox too small (${bboxW.toFixed(1)}x${bboxH.toFixed(1)} < ${MIN_HOLE_BBOX_DIM})`)
+      continue
+    }
+    
+    // Check 3: Minimum area relative to outer
+    const holeArea = computeContourSignedArea(hole)
+    const absHoleArea = Math.abs(holeArea)
+    const areaRatio = absHoleArea / absOuterArea
+    
+    if (areaRatio < MIN_HOLE_AREA_RATIO) {
+      result.discardedCount++
+      result.discardReasons.push(`hole[${i}]: area too small (${(areaRatio * 100).toFixed(3)}% < ${MIN_HOLE_AREA_RATIO * 100}%)`)
+      continue
+    }
+    
+    // Check 4: Winding stability - if area is near zero, hole is degenerate
+    if (absHoleArea < 1) {
+      result.discardedCount++
+      result.discardReasons.push(`hole[${i}]: degenerate (absArea=${absHoleArea.toFixed(2)} < 1)`)
+      continue
+    }
+    
+    // PASSED ALL CHECKS - normalize winding to CW (negative area)
+    let normalizedHole = hole
+    if (holeArea > 0) {
+      // Currently CCW, needs to be CW - reverse
+      normalizedHole = hole.slice().reverse()
+      result.windingReport.push(`hole[${i}]: reversed CCW→CW`)
+    } else {
+      result.windingReport.push(`hole[${i}]: already CW`)
+    }
+    
+    result.validHoles.push(normalizedHole)
+  }
+  
+  return result
 }
 
 // ============= Stage 5: Douglas-Peucker Simplification =============
