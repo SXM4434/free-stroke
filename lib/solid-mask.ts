@@ -72,12 +72,15 @@ export interface MaskSolidStages {
 // ============= Constants =============
 
 const MASK_RESOLUTION = 512  // High-res mask for quality
-const DP_TOLERANCE = 0.5     // Douglas-Peucker simplification tolerance - REDUCED for topology safety
+const DP_TOLERANCE = 0.5     // Douglas-Peucker simplification tolerance
 
-// Hole filtering thresholds
-const MIN_HOLE_AREA_RATIO = 0.001    // Hole must be at least 0.1% of outer area
-const MIN_HOLE_BBOX_DIM = 3          // Hole bbox must be at least 3 pixels in each dimension
-const MIN_HOLE_POINTS_AFTER_SIMP = 3 // Hole must have at least 3 points after simplification
+// BRUTALLY CONSERVATIVE hole filtering - reject questionable holes
+// A questionable hole is worse than no hole
+const MIN_HOLE_AREA_RATIO = 0.05     // Hole must be at least 5% of outer area (was 0.1%)
+const MIN_HOLE_BBOX_DIM = 20         // Hole bbox must be at least 20px in each dimension (was 3)
+const MIN_HOLE_POINTS_AFTER_SIMP = 6 // Hole must have at least 6 points (was 3)
+const MIN_HOLE_COMPACTNESS = 0.3     // Hole must be reasonably compact (area / bbox_area)
+const MIN_HOLE_ABS_AREA = 200        // Hole must have at least 200 sq px absolute area
 
 // ============= Debug Helpers =============
 
@@ -799,14 +802,30 @@ function filterAndNormalizeHoles(
     
     if (areaRatio < MIN_HOLE_AREA_RATIO) {
       result.discardedCount++
-      result.discardReasons.push(`hole[${i}]: area too small (${(areaRatio * 100).toFixed(3)}% < ${MIN_HOLE_AREA_RATIO * 100}%)`)
+      result.discardReasons.push(`hole[${i}]: area ratio too small (${(areaRatio * 100).toFixed(2)}% < ${MIN_HOLE_AREA_RATIO * 100}%)`)
       continue
     }
     
-    // Check 4: Winding stability - if area is near zero, hole is degenerate
-    if (absHoleArea < 1) {
+    // Check 4: Absolute minimum area
+    if (absHoleArea < MIN_HOLE_ABS_AREA) {
       result.discardedCount++
-      result.discardReasons.push(`hole[${i}]: degenerate (absArea=${absHoleArea.toFixed(2)} < 1)`)
+      result.discardReasons.push(`hole[${i}]: absolute area too small (${absHoleArea.toFixed(0)} < ${MIN_HOLE_ABS_AREA})`)
+      continue
+    }
+    
+    // Check 5: Compactness - reject long thin slivers (artifacts from self-overlap)
+    const bboxArea = bboxW * bboxH
+    const compactness = absHoleArea / bboxArea
+    if (compactness < MIN_HOLE_COMPACTNESS) {
+      result.discardedCount++
+      result.discardReasons.push(`hole[${i}]: not compact enough (${(compactness * 100).toFixed(1)}% < ${MIN_HOLE_COMPACTNESS * 100}%)`)
+      continue
+    }
+    
+    // Check 6: Self-intersection - reject holes that self-intersect
+    if (contourSelfIntersects(hole)) {
+      result.discardedCount++
+      result.discardReasons.push(`hole[${i}]: self-intersects`)
       continue
     }
     
