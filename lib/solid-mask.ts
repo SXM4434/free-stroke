@@ -73,7 +73,7 @@ export interface MaskSolidStages {
 
 // DEBUG SWITCH: "flatCapOnly" = flat ShapeGeometry only (no extrusion)
 //               "full" = current ExtrudeGeometry behavior
-const SOLID_GEOM_MODE: "full" | "flatCapOnly" = "flatCapOnly"
+const SOLID_GEOM_MODE: "full" | "flatCapOnly" = "full"
 
 const MASK_RESOLUTION = 512  // High-res mask for quality
 const DP_TOLERANCE = 0.5     // Douglas-Peucker simplification tolerance
@@ -955,7 +955,176 @@ function perpendicularDistance(point: Point2D, lineStart: Point2D, lineEnd: Poin
   return Math.sqrt((point.x - projX) ** 2 + (point.y - projY) ** 2)
 }
 
-// ============= Stage 6: Build Extruded Geometry =============
+// ============= Stage 6: Prepare Contour for Extrusion =============
+
+/**
+ * Aggressively clean raster stair-stepping from traced contour.
+ * This is the key step that makes sidewalls clean.
+ * 
+ * Operations:
+ * 1. Remove duplicate closing point
+ * 2. Remove consecutive near-duplicate points
+ * 3. Collapse consecutive collinear runs
+ * 4. Collapse tiny staircase zig-zags (axis-aligned micro-steps)
+ * 5. Apply bounded simplification for extrusion readiness
+ */
+function prepareContourForExtrusion(contour: Point2D[]): { prepared: Point2D[], stats: ContourPrepStats } {
+  const stats: ContourPrepStats = {
+    rawPoints: contour.length,
+    preparedPoints: 0,
+    bboxRetention: 0,
+    areaRetention: 0,
+    selfIntersectBefore: false,
+    selfIntersectAfter: false,
+  }
+  
+  if (contour.length < 3) {
+    stats.preparedPoints = contour.length
+    stats.bboxRetention = 100
+    stats.areaRetention = 100
+    return { prepared: contour, stats }
+  }
+  
+  // Compute raw metrics
+  const rawBbox = computeContourBbox(contour)
+  const rawArea = Math.abs(computeContourSignedArea(contour))
+  stats.selfIntersectBefore = contourSelfIntersects(contour)
+  
+  let pts = [...contour]
+  
+  // Step 1: Remove duplicate closing point
+  if (pts.length > 1) {
+    const first = pts[0], last = pts[pts.length - 1]
+    if (Math.abs(first.x - last.x) < 0.5 && Math.abs(first.y - last.y) < 0.5) {
+      pts.pop()
+    }
+  }
+  
+  // Step 2: Remove consecutive near-duplicates (within 1px)
+  let cleaned: Point2D[] = [pts[0]]
+  for (let i = 1; i < pts.length; i++) {
+    const prev = cleaned[cleaned.length - 1]
+    const curr = pts[i]
+    const dist = Math.sqrt((curr.x - prev.x) ** 2 + (curr.y - prev.y) ** 2)
+    if (dist > 0.5) {
+      cleaned.push(curr)
+    }
+  }
+  pts = cleaned
+  
+  // Step 3: Collapse collinear runs (keep only endpoints of straight segments)
+  cleaned = []
+  for (let i = 0; i < pts.length; i++) {
+    const prev = pts[(i - 1 + pts.length) % pts.length]
+    const curr = pts[i]
+    const next = pts[(i + 1) % pts.length]
+    
+    // Direction vectors
+    const d1x = curr.x - prev.x, d1y = curr.y - prev.y
+    const d2x = next.x - curr.x, d2y = next.y - curr.y
+    
+    // Cross product (collinearity check)
+    const cross = Math.abs(d1x * d2y - d1y * d2x)
+    
+    // Keep if not collinear (cross > threshold) or if it's a corner
+    if (cross > 1.0) {
+      cleaned.push(curr)
+    }
+  }
+  if (cleaned.length >= 3) pts = cleaned
+  
+  // Step 4: Collapse tiny staircase zig-zags
+  // Detect axis-aligned micro-steps: patterns like (0,1), (1,0), (0,1), (1,0)
+  cleaned = []
+  let i = 0
+  while (i < pts.length) {
+    cleaned.push(pts[i])
+    
+    // Look ahead for staircase pattern
+    let j = i + 1
+    while (j < pts.length - 1) {
+      const p0 = pts[j - 1]
+      const p1 = pts[j]
+      const p2 = pts[j + 1]
+      
+      const dx1 = Math.abs(p1.x - p0.x), dy1 = Math.abs(p1.y - p0.y)
+      const dx2 = Math.abs(p2.x - p1.x), dy2 = Math.abs(p2.y - p1.y)
+      
+      // Detect axis-aligned micro-step: one axis changes by ~1, other by ~0
+      const isStep1 = (dx1 <= 1.5 && dy1 <= 1.5) && (dx1 < 0.5 || dy1 < 0.5)
+      const isStep2 = (dx2 <= 1.5 && dy2 <= 1.5) && (dx2 < 0.5 || dy2 < 0.5)
+      
+      // If both segments are micro-steps in alternating directions, skip middle point
+      if (isStep1 && isStep2) {
+        j++
+      } else {
+        break
+      }
+    }
+    i = j
+  }
+  if (cleaned.length >= 3) pts = cleaned
+  
+  // Step 5: Apply bounded Douglas-Peucker simplification (tolerance = 2px for extrusion)
+  // This smooths remaining jaggies while preserving overall shape
+  const EXTRUSION_DP_TOLERANCE = 2.0
+  pts = douglasPeucker(pts, EXTRUSION_DP_TOLERANCE)
+  
+  // Validate result
+  if (pts.length < 3) {
+    // Simplification too aggressive, return original
+    stats.preparedPoints = contour.length
+    stats.bboxRetention = 100
+    stats.areaRetention = 100
+    console.log("[v0-solid] prepareContourForExtrusion: ABORTED - would reduce to <3 points")
+    return { prepared: contour, stats }
+  }
+  
+  // Compute prepared metrics
+  const prepBbox = computeContourBbox(pts)
+  const prepArea = Math.abs(computeContourSignedArea(pts))
+  stats.selfIntersectAfter = contourSelfIntersects(pts)
+  
+  stats.preparedPoints = pts.length
+  stats.bboxRetention = Math.min(
+    prepBbox.width / rawBbox.width,
+    prepBbox.height / rawBbox.height
+  ) * 100
+  stats.areaRetention = (prepArea / rawArea) * 100
+  
+  // Safety check: if we lost too much, abort
+  if (stats.bboxRetention < 85 || stats.areaRetention < 80) {
+    console.log("[v0-solid] prepareContourForExtrusion: ABORTED - too much loss", {
+      bboxRetention: stats.bboxRetention.toFixed(1),
+      areaRetention: stats.areaRetention.toFixed(1)
+    })
+    stats.preparedPoints = contour.length
+    stats.bboxRetention = 100
+    stats.areaRetention = 100
+    return { prepared: contour, stats }
+  }
+  
+  // Safety check: if we introduced self-intersection, abort
+  if (!stats.selfIntersectBefore && stats.selfIntersectAfter) {
+    console.log("[v0-solid] prepareContourForExtrusion: ABORTED - introduced self-intersection")
+    stats.preparedPoints = contour.length
+    stats.bboxRetention = 100
+    stats.areaRetention = 100
+    stats.selfIntersectAfter = false
+    return { prepared: contour, stats }
+  }
+  
+  return { prepared: pts, stats }
+}
+
+interface ContourPrepStats {
+  rawPoints: number
+  preparedPoints: number
+  bboxRetention: number
+  areaRetention: number
+  selfIntersectBefore: boolean
+  selfIntersectAfter: boolean
+}
 
 /**
  * Clean contours before triangulation:
@@ -1029,23 +1198,25 @@ function buildExtrudedGeometry(
 ): THREE.BufferGeometry | null {
   if (outer.length < 3) return null
   
-  // Clean contours before triangulation
-  const outerCleaned = cleanContourForTriangulation(outer)
-  const holesCleaned = holes.map(h => cleanContourForTriangulation(h))
+  // STEP 1: Prepare contours for extrusion (aggressive stair-step removal)
+  const outerPrep = prepareContourForExtrusion(outer)
+  const holesPrep = holes.map(h => prepareContourForExtrusion(h))
   
-  // DEBUG: Log cleaning impact
-  const cleaningDiff = {
-    outerBefore: outer.length,
-    outerAfter: outerCleaned.length,
-    outerRemoved: outer.length - outerCleaned.length,
-    holesInfo: holes.map((h, i) => ({
-      index: i,
-      before: h.length,
-      after: holesCleaned[i].length,
-      removed: h.length - holesCleaned[i].length
-    }))
-  }
-  console.log("[v0-solid] Stage D→E Cleaning:", cleaningDiff)
+  // Console evidence as required
+  console.log("[v0-solid] CONTOUR PREP FOR EXTRUSION:", {
+    rawOuterPoints: outerPrep.stats.rawPoints,
+    preparedOuterPoints: outerPrep.stats.preparedPoints,
+    rawHolePoints: holes.map(h => h.length),
+    preparedHolePoints: holesPrep.map(hp => hp.stats.preparedPoints),
+    outerBboxRetention: outerPrep.stats.bboxRetention.toFixed(1) + "%",
+    outerAreaRetention: outerPrep.stats.areaRetention.toFixed(1) + "%",
+    outerSelfIntersectBefore: outerPrep.stats.selfIntersectBefore,
+    outerSelfIntersectAfter: outerPrep.stats.selfIntersectAfter
+  })
+  
+  // STEP 2: Light cleanup for triangulation (near-duplicates, collinear)
+  const outerCleaned = cleanContourForTriangulation(outerPrep.prepared)
+  const holesCleaned = holesPrep.map(hp => cleanContourForTriangulation(hp.prepared))
   
   // Transform mask coordinates to world coordinates
   const scaleX = canvasWidth / maskWidth
