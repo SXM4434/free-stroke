@@ -109,6 +109,17 @@ function computeContourSignedArea(contour: Point2D[]): number {
   return area / 2
 }
 
+function computeContourBbox(contour: Point2D[]): { minX: number, minY: number, maxX: number, maxY: number, width: number, height: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const p of contour) {
+    minX = Math.min(minX, p.x)
+    minY = Math.min(minY, p.y)
+    maxX = Math.max(maxX, p.x)
+    maxY = Math.max(maxY, p.y)
+  }
+  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY }
+}
+
 function contourSelfIntersects(contour: Point2D[]): boolean {
   for (let i = 0; i < contour.length - 2; i++) {
     for (let j = i + 2; j < contour.length; j++) {
@@ -279,13 +290,61 @@ export function buildMaskSolid(
   // STAGE DEBUG: Log simplification
   const simplifiedSignedArea = computeContourSignedArea(simplifiedOuter)
   const areaLoss = Math.abs(simplifiedSignedArea - outerSignedArea) / Math.abs(outerSignedArea)
+  
+  // OUTER CONTOUR DIAGNOSTIC: Compare raw vs simplified
+  const rawBbox = computeContourBbox(outerContour)
+  const simpBbox = computeContourBbox(simplifiedOuter)
+  
+  // Check for degenerate edges (very long jumps that skip important detail)
+  let maxEdgeLen = 0, minEdgeLen = Infinity, totalEdgeLen = 0
+  const edgeLengths: number[] = []
+  for (let i = 0; i < simplifiedOuter.length; i++) {
+    const p1 = simplifiedOuter[i]
+    const p2 = simplifiedOuter[(i + 1) % simplifiedOuter.length]
+    const len = Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2)
+    edgeLengths.push(len)
+    maxEdgeLen = Math.max(maxEdgeLen, len)
+    minEdgeLen = Math.min(minEdgeLen, len)
+    totalEdgeLen += len
+  }
+  const avgEdgeLen = totalEdgeLen / simplifiedOuter.length
+  const edgeRatio = maxEdgeLen / (avgEdgeLen || 1)
+  
+  // Perimeter comparison
+  let rawPerimeter = 0
+  for (let i = 0; i < outerContour.length; i++) {
+    const p1 = outerContour[i]
+    const p2 = outerContour[(i + 1) % outerContour.length]
+    rawPerimeter += Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2)
+  }
+  const perimeterRetention = totalEdgeLen / rawPerimeter
+  
+  console.log("[v0-solid] OUTER CONTOUR DIAGNOSTIC:", {
+    raw: { points: outerContour.length, bbox: rawBbox, area: outerSignedArea, perimeter: rawPerimeter.toFixed(1) },
+    simplified: { points: simplifiedOuter.length, bbox: simpBbox, area: simplifiedSignedArea, perimeter: totalEdgeLen.toFixed(1) },
+    areaRetention: ((1 - areaLoss) * 100).toFixed(1) + "%",
+    perimeterRetention: (perimeterRetention * 100).toFixed(1) + "%",
+    edgeStats: { min: minEdgeLen.toFixed(1), max: maxEdgeLen.toFixed(1), avg: avgEdgeLen.toFixed(1), ratio: edgeRatio.toFixed(1) },
+    WARNING_LONG_EDGES: edgeRatio > 10 ? "YES - simplification may be cutting corners" : "NO",
+    WARNING_AREA_LOSS: areaLoss > 0.1 ? "YES - significant area lost" : "NO",
+    WARNING_BBOX_SHRINK: (simpBbox.width < rawBbox.width * 0.9 || simpBbox.height < rawBbox.height * 0.9) ? "YES" : "NO"
+  })
+  
+  // If simplification is damaging, bypass it
+  const simplificationDamaging = areaLoss > 0.15 || edgeRatio > 15
+  const finalOuter = simplificationDamaging ? outerContour : simplifiedOuter
+  if (simplificationDamaging) {
+    console.log("[v0-solid] BYPASSING SIMPLIFICATION - using raw contour due to damage")
+  }
+  
   console.log("[v0-solid] STAGE 3 - Simplification:", {
     rawPoints: outerContour.length,
     simplifiedPoints: simplifiedOuter.length,
     reductionPercent: ((1 - simplifiedOuter.length / outerContour.length) * 100).toFixed(1),
     simplifiedSignedArea,
     areaLossPercent: (areaLoss * 100).toFixed(2),
-    areaLossAcceptable: areaLoss < 0.1
+    areaLossAcceptable: areaLoss < 0.1,
+    USING: simplificationDamaging ? "RAW" : "SIMPLIFIED"
   })
   
   // 7. Find holes (enclosed background regions)
@@ -300,7 +359,7 @@ export function buildMaskSolid(
     simplifiedPoints: h.length,
     signedArea: computeContourSignedArea(h),
     isCW: computeContourSignedArea(h) < 0,
-    isInsideOuter: holeIsInsideOuter(h, simplifiedOuter),
+    isInsideOuter: holeIsInsideOuter(h, finalOuter),
     selfIntersects: contourSelfIntersects(h)
   }))
   
@@ -316,7 +375,7 @@ export function buildMaskSolid(
   }
   
   // Build diagnostics (will be updated after filtering)
-  const outerSelfIntersects = contourSelfIntersects(simplifiedOuter)
+  const outerSelfIntersects = contourSelfIntersects(finalOuter)
   
   console.log("[v0-solid] STAGE 4 - Hole Detection (raw):", {
     rawHoleCount: simplifiedHoles.length,
@@ -328,7 +387,8 @@ export function buildMaskSolid(
   })
   
   // 7b. FILTER AND NORMALIZE HOLES - reject tiny/unstable, normalize winding
-  const holeFilterResult = filterAndNormalizeHoles(simplifiedHoles, simplifiedOuter, simplifiedSignedArea)
+  const finalOuterArea = computeContourSignedArea(finalOuter)
+  const holeFilterResult = filterAndNormalizeHoles(simplifiedHoles, finalOuter, finalOuterArea)
   const filteredHoles = holeFilterResult.validHoles
   
   console.log("[v0-solid] STAGE 4b - Hole Filtering:", {
@@ -340,17 +400,17 @@ export function buildMaskSolid(
   })
   
   // Normalize outer contour winding to CCW (positive area)
-  let normalizedOuter = simplifiedOuter
-  if (simplifiedSignedArea < 0) {
-    normalizedOuter = simplifiedOuter.slice().reverse()
+  let normalizedOuter = finalOuter
+  if (finalOuterArea < 0) {
+    normalizedOuter = finalOuter.slice().reverse()
     console.log("[v0-solid] STAGE 4b - Outer normalized: CW→CCW")
   }
   
   // Build diagnostics with FILTERED hole info
   const filteredHoleAreas = filteredHoles.map(h => computeContourSignedArea(h))
   const diagnostics: MaskSolidDiagnostics = {
-    outerSignedArea: simplifiedSignedArea,
-    outerWinding: simplifiedSignedArea > 0 ? "CCW" : "CW",
+    outerSignedArea: finalOuterArea,
+    outerWinding: finalOuterArea > 0 ? "CCW" : "CW",
     outerSelfIntersects,
     holeAreas: filteredHoleAreas,
     holeWindings: filteredHoleAreas.map(a => a < 0 ? "CW" : "CCW"),
@@ -383,7 +443,7 @@ export function buildMaskSolid(
     componentCount,
     largestComponentPixels: largestSize,
     outerContourPoints: outerContour.length,
-    simplifiedOuterPoints: simplifiedOuter.length,
+    simplifiedOuterPoints: finalOuter.length,  // Use finalOuter (may be raw if bypass)
     holeCount: filteredHoles.length,  // Use FILTERED count, not raw
     rebuildTimeMs: performance.now() - startTime
   }
