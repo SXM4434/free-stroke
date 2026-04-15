@@ -320,7 +320,7 @@ export function buildMaskSolid(
     holes: holeInfo,
     allHolesInsideOuter: holeInfo.every(h => h.isInsideOuter),
     holesOverlap,
-    anyHoleSelfIntersects: diagnostics.anyHoleSelfIntersects,
+    anyHoleSelfIntersects: holeInfo.some(h => h.selfIntersects),
     outerSelfIntersects
   })
   
