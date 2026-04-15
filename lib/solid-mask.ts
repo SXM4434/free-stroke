@@ -77,7 +77,7 @@ const SOLID_GEOM_MODE: "full" | "flatCapOnly" = "full"
 
 // ISOLATION TEST: true = bypass all simplification/prep, use raw traced outer, flat geometry only
 // This tests whether RAW_CONTOUR_BROKEN or SIMPLIFICATION_PREP_BROKEN
-const RAW_OUTER_FLAT_TEST = true
+const RAW_OUTER_FLAT_TEST = false
 
 const MASK_RESOLUTION = 512  // High-res mask for quality
 const DP_TOLERANCE = 0.5     // Douglas-Peucker simplification tolerance
@@ -1005,19 +1005,19 @@ interface OuterContourPrepResult {
 }
 
 /**
- * Aggressively prepare outer contour for geometry creation.
- * This is THE key function that removes raster stair-stepping.
+ * BRUTALLY CONSERVATIVE outer contour preparation.
+ * Only minimal safe cleanup - do NOT destroy silhouette topology.
  * 
  * Operations:
  * 1. Remove duplicate closing point if present
- * 2. Remove consecutive duplicate / near-duplicate points
- * 3. Collapse long collinear runs (raster horizontal/vertical lines)
- * 4. Collapse tiny staircase zig-zags from raster tracing
- * 5. Merge tiny alternating axis-step noise
- * 6. Apply bounded simplification pass (aggressive but safe)
- * 
- * Target: at least 60% reduction from raw traced points
- * Constraints: bbox >= 95%, area >= 90%, no self-intersection
+ * 2. Remove consecutive duplicate / near-duplicate points (very small epsilon)
+ * 3. Remove only truly tiny collinear jitter (very small epsilon)
+ * 4. OPTIONAL Douglas-Peucker only if ALL constraints pass:
+ *    - area retention >= 98%
+ *    - bbox retention >= 99%
+ *    - point reduction <= 50%
+ *    - no self-intersection introduced
+ * 5. If constraints fail, use lightly cleaned raw contour
  */
 function prepareOuterContourForGeometry(contour: Point2D[]): OuterContourPrepResult {
   const result: OuterContourPrepResult = {
@@ -1045,28 +1045,28 @@ function prepareOuterContourForGeometry(contour: Point2D[]): OuterContourPrepRes
   
   let pts = [...contour]
   
-  // STEP 1: Remove duplicate closing point
+  // STEP 1: Remove duplicate closing point (if first ~= last)
   if (pts.length > 1) {
     const first = pts[0], last = pts[pts.length - 1]
-    if (Math.abs(first.x - last.x) < 1 && Math.abs(first.y - last.y) < 1) {
+    if (Math.abs(first.x - last.x) < 0.5 && Math.abs(first.y - last.y) < 0.5) {
       pts.pop()
     }
   }
   
-  // STEP 2: Remove consecutive near-duplicates (within 2px - more aggressive)
+  // STEP 2: Remove consecutive near-duplicates (very conservative: 0.5px)
   let cleaned: Point2D[] = [pts[0]]
   for (let i = 1; i < pts.length; i++) {
     const prev = cleaned[cleaned.length - 1]
     const curr = pts[i]
     const dist = Math.sqrt((curr.x - prev.x) ** 2 + (curr.y - prev.y) ** 2)
-    if (dist > 1.5) {
+    if (dist > 0.5) {
       cleaned.push(curr)
     }
   }
   pts = cleaned.length >= 3 ? cleaned : pts
+  const afterDedupe = pts.length
   
-  // STEP 3: Collapse collinear runs (aggressive - threshold = 2.0)
-  // This removes all the intermediate points on straight raster edges
+  // STEP 3: Remove only truly tiny collinear jitter (very small epsilon = 0.5)
   cleaned = []
   for (let i = 0; i < pts.length; i++) {
     const prev = pts[(i - 1 + pts.length) % pts.length]
@@ -1076,133 +1076,109 @@ function prepareOuterContourForGeometry(contour: Point2D[]): OuterContourPrepRes
     const d1x = curr.x - prev.x, d1y = curr.y - prev.y
     const d2x = next.x - curr.x, d2y = next.y - curr.y
     
-    // Cross product for collinearity
+    // Cross product for collinearity - very small epsilon
     const cross = Math.abs(d1x * d2y - d1y * d2x)
     
-    // Keep only if cross product is significant (not collinear)
-    if (cross > 2.0) {
+    // Keep unless nearly perfectly collinear
+    if (cross > 0.5) {
       cleaned.push(curr)
     }
   }
-  pts = cleaned.length >= 3 ? cleaned : pts
+  const lightCleaned = cleaned.length >= 3 ? cleaned : pts
+  const afterCollinear = lightCleaned.length
   
-  // STEP 4: Collapse staircase zig-zags (axis-aligned micro-steps)
-  // Pattern: alternating horizontal/vertical moves of 1-3 pixels
-  cleaned = []
-  for (let i = 0; i < pts.length; i++) {
-    const prev = pts[(i - 1 + pts.length) % pts.length]
-    const curr = pts[i]
-    const next = pts[(i + 1) % pts.length]
-    
-    const dx1 = curr.x - prev.x, dy1 = curr.y - prev.y
-    const dx2 = next.x - curr.x, dy2 = next.y - curr.y
-    
-    // Detect axis-aligned micro-step pattern
-    const isHorizThenVert = (Math.abs(dx1) <= 3 && Math.abs(dy1) < 0.5) && 
-                            (Math.abs(dx2) < 0.5 && Math.abs(dy2) <= 3)
-    const isVertThenHoriz = (Math.abs(dx1) < 0.5 && Math.abs(dy1) <= 3) && 
-                            (Math.abs(dx2) <= 3 && Math.abs(dy2) < 0.5)
-    
-    // Skip this point if it's a staircase corner
-    if (!(isHorizThenVert || isVertThenHoriz)) {
-      cleaned.push(curr)
-    }
-  }
-  pts = cleaned.length >= 3 ? cleaned : pts
+  // This is our "lightly cleaned" fallback
+  const lightCleanedContour = lightCleaned
   
-  // STEP 5: Merge tiny alternating axis-step noise
-  // Look for sequences of small orthogonal moves and replace with diagonal
-  cleaned = [pts[0]]
-  let i = 1
-  while (i < pts.length) {
-    const prev = cleaned[cleaned.length - 1]
-    const curr = pts[i]
-    
-    // Check if we can skip ahead through small alternating steps
-    let j = i
-    while (j < pts.length - 1) {
-      const p1 = pts[j]
-      const p2 = pts[j + 1]
-      const dx = Math.abs(p2.x - p1.x)
-      const dy = Math.abs(p2.y - p1.y)
-      
-      // If step is small and axis-aligned, continue
-      if ((dx <= 2 && dy < 0.5) || (dy <= 2 && dx < 0.5)) {
-        j++
-      } else {
-        break
-      }
-    }
-    
-    // If we skipped some points, just add the endpoint
-    if (j > i + 2) {
-      cleaned.push(pts[j])
-      i = j + 1
-    } else {
-      cleaned.push(curr)
-      i++
-    }
-  }
-  pts = cleaned.length >= 3 ? cleaned : pts
+  // STEP 4: OPTIONAL Douglas-Peucker - only if strict constraints pass
+  const CONSERVATIVE_DP_TOLERANCE = 1.0  // Very conservative
+  const dpResult = douglasPeucker(lightCleaned, CONSERVATIVE_DP_TOLERANCE)
   
-  // STEP 6: Apply aggressive Douglas-Peucker simplification
-  // Use higher tolerance (4px) for meaningful reduction
-  const PREP_DP_TOLERANCE = 4.0
-  pts = douglasPeucker(pts, PREP_DP_TOLERANCE)
-  
-  if (pts.length < 3) {
-    result.rejectReason = "simplification reduced to <3 points"
+  if (dpResult.length < 3) {
+    // DP would destroy contour, use light cleaned
+    result.prepared = lightCleanedContour
+    result.preparedPts = lightCleanedContour.length
+    result.reductionPercent = ((result.rawPts - lightCleanedContour.length) / result.rawPts) * 100
+    result.accepted = true
+    result.rejectReason = "DP_SKIPPED: would reduce to <3 points"
+    console.log("[v0-solid] OUTER PREP: DP skipped, using light cleaned", {
+      rawPts: result.rawPts,
+      afterDedupe,
+      afterCollinear,
+      dpWouldProduce: dpResult.length,
+      finalPts: result.preparedPts
+    })
     return result
   }
   
-  // Compute prepared metrics
-  const prepBbox = computeContourBbox(pts)
-  const prepArea = Math.abs(computeContourSignedArea(pts))
-  result.selfIntersectAfter = contourSelfIntersects(pts)
+  // Check DP constraints
+  const dpBbox = computeContourBbox(dpResult)
+  const dpArea = Math.abs(computeContourSignedArea(dpResult))
+  const dpSelfIntersects = contourSelfIntersects(dpResult)
   
-  result.prepared = pts
-  result.preparedPts = pts.length
-  result.reductionPercent = ((result.rawPts - pts.length) / result.rawPts) * 100
-  result.bboxRetention = Math.min(
-    prepBbox.width / rawBbox.width,
-    prepBbox.height / rawBbox.height
+  const dpBboxRetention = Math.min(
+    dpBbox.width / rawBbox.width,
+    dpBbox.height / rawBbox.height
   ) * 100
-  result.areaRetention = (prepArea / rawArea) * 100
+  const dpAreaRetention = (dpArea / rawArea) * 100
+  const dpReduction = ((contour.length - dpResult.length) / contour.length) * 100
   
-  // Validate constraints
-  if (result.bboxRetention < 95) {
-    result.rejectReason = `bbox retention ${result.bboxRetention.toFixed(1)}% < 95%`
-    result.prepared = contour
-    result.preparedPts = contour.length
-    result.reductionPercent = 0
-    result.bboxRetention = 100
-    result.areaRetention = 100
+  const dpAllowed = 
+    dpAreaRetention >= 98 &&
+    dpBboxRetention >= 99 &&
+    dpReduction <= 50 &&
+    !(result.selfIntersectBefore === false && dpSelfIntersects === true)
+  
+  if (dpAllowed) {
+    // DP passed all constraints, use it
+    result.prepared = dpResult
+    result.preparedPts = dpResult.length
+    result.reductionPercent = dpReduction
+    result.bboxRetention = dpBboxRetention
+    result.areaRetention = dpAreaRetention
+    result.selfIntersectAfter = dpSelfIntersects
+    result.accepted = true
+    result.rejectReason = ""
+    console.log("[v0-solid] OUTER PREP: DP accepted", {
+      rawPts: result.rawPts,
+      afterDedupe,
+      afterCollinear,
+      dpPts: dpResult.length,
+      dpAreaRetention: dpAreaRetention.toFixed(1),
+      dpBboxRetention: dpBboxRetention.toFixed(1),
+      dpReduction: dpReduction.toFixed(1)
+    })
     return result
   }
   
-  if (result.areaRetention < 90) {
-    result.rejectReason = `area retention ${result.areaRetention.toFixed(1)}% < 90%`
-    result.prepared = contour
-    result.preparedPts = contour.length
-    result.reductionPercent = 0
-    result.bboxRetention = 100
-    result.areaRetention = 100
-    return result
-  }
+  // DP failed constraints, use light cleaned fallback
+  result.prepared = lightCleanedContour
+  result.preparedPts = lightCleanedContour.length
+  result.reductionPercent = ((result.rawPts - lightCleanedContour.length) / result.rawPts) * 100
   
-  if (!result.selfIntersectBefore && result.selfIntersectAfter) {
-    result.rejectReason = "introduced self-intersection"
-    result.prepared = contour
-    result.preparedPts = contour.length
-    result.reductionPercent = 0
-    result.bboxRetention = 100
-    result.areaRetention = 100
-    result.selfIntersectAfter = false
-    return result
-  }
-  
-  // SUCCESS
+  const lightBbox = computeContourBbox(lightCleanedContour)
+  const lightArea = Math.abs(computeContourSignedArea(lightCleanedContour))
+  result.bboxRetention = Math.min(lightBbox.width / rawBbox.width, lightBbox.height / rawBbox.height) * 100
+  result.areaRetention = (lightArea / rawArea) * 100
+  result.selfIntersectAfter = contourSelfIntersects(lightCleanedContour)
   result.accepted = true
+  
+  const failReasons: string[] = []
+  if (dpAreaRetention < 98) failReasons.push(`area ${dpAreaRetention.toFixed(1)}%<98%`)
+  if (dpBboxRetention < 99) failReasons.push(`bbox ${dpBboxRetention.toFixed(1)}%<99%`)
+  if (dpReduction > 50) failReasons.push(`reduction ${dpReduction.toFixed(1)}%>50%`)
+  if (!result.selfIntersectBefore && dpSelfIntersects) failReasons.push("self-intersect")
+  result.rejectReason = `DP_REJECTED: ${failReasons.join(", ")}`
+  
+  console.log("[v0-solid] OUTER PREP: DP rejected, using light cleaned", {
+    rawPts: result.rawPts,
+    afterDedupe,
+    afterCollinear,
+    dpWouldProduce: dpResult.length,
+    dpFailReasons: failReasons,
+    finalPts: result.preparedPts
+  })
+  
   return result
 }
 
