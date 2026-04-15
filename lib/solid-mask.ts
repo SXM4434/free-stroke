@@ -287,66 +287,31 @@ export function buildMaskSolid(
     }
   }
   
-  // 6. Simplify outer contour
-  const simplifiedOuter = douglasPeucker(outerContour, DP_TOLERANCE)
-  emptyStages.simplifiedOuter = simplifiedOuter
+  // 6. PREPARE OUTER CONTOUR FOR GEOMETRY (aggressive stair-step removal)
+  const outerPrepResult = prepareOuterContourForGeometry(outerContour)
+  const finalOuter = outerPrepResult.accepted ? outerPrepResult.prepared : outerContour
+  emptyStages.simplifiedOuter = finalOuter
   
-  // STAGE DEBUG: Log simplification
-  const simplifiedSignedArea = computeContourSignedArea(simplifiedOuter)
-  const areaLoss = Math.abs(simplifiedSignedArea - outerSignedArea) / Math.abs(outerSignedArea)
-  
-  // OUTER CONTOUR DIAGNOSTIC: Compare raw vs simplified
-  const rawBbox = computeContourBbox(outerContour)
-  const simpBbox = computeContourBbox(simplifiedOuter)
-  
-  // Check for degenerate edges (very long jumps that skip important detail)
-  let maxEdgeLen = 0, minEdgeLen = Infinity, totalEdgeLen = 0
-  const edgeLengths: number[] = []
-  for (let i = 0; i < simplifiedOuter.length; i++) {
-    const p1 = simplifiedOuter[i]
-    const p2 = simplifiedOuter[(i + 1) % simplifiedOuter.length]
-    const len = Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2)
-    edgeLengths.push(len)
-    maxEdgeLen = Math.max(maxEdgeLen, len)
-    minEdgeLen = Math.min(minEdgeLen, len)
-    totalEdgeLen += len
-  }
-  const avgEdgeLen = totalEdgeLen / simplifiedOuter.length
-  const edgeRatio = maxEdgeLen / (avgEdgeLen || 1)
-  
-  // Perimeter comparison
-  let rawPerimeter = 0
-  for (let i = 0; i < outerContour.length; i++) {
-    const p1 = outerContour[i]
-    const p2 = outerContour[(i + 1) % outerContour.length]
-    rawPerimeter += Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2)
-  }
-  const perimeterRetention = totalEdgeLen / rawPerimeter
-  
-  console.log("[v0-solid] OUTER CONTOUR DIAGNOSTIC:", {
-    raw: { points: outerContour.length, bbox: rawBbox, area: outerSignedArea, perimeter: rawPerimeter.toFixed(1) },
-    simplified: { points: simplifiedOuter.length, bbox: simpBbox, area: simplifiedSignedArea, perimeter: totalEdgeLen.toFixed(1) },
-    areaRetention: ((1 - areaLoss) * 100).toFixed(1) + "%",
-    perimeterRetention: (perimeterRetention * 100).toFixed(1) + "%",
-    edgeStats: { min: minEdgeLen.toFixed(1), max: maxEdgeLen.toFixed(1), avg: avgEdgeLen.toFixed(1), ratio: edgeRatio.toFixed(1) },
-    WARNING_LONG_EDGES: edgeRatio > 10 ? "YES - simplification may be cutting corners" : "NO",
-    WARNING_AREA_LOSS: areaLoss > 0.1 ? "YES - significant area lost" : "NO",
-    WARNING_BBOX_SHRINK: (simpBbox.width < rawBbox.width * 0.9 || simpBbox.height < rawBbox.height * 0.9) ? "YES" : "NO"
+  // Required console output for outer contour prep
+  console.log("[v0-solid] OUTER CONTOUR PREP:", {
+    rawPts: outerPrepResult.rawPts,
+    preparedPts: outerPrepResult.preparedPts,
+    reductionPercent: outerPrepResult.reductionPercent.toFixed(1) + "%",
+    bboxRetentionPercent: outerPrepResult.bboxRetention.toFixed(1) + "%",
+    areaRetentionPercent: outerPrepResult.areaRetention.toFixed(1) + "%",
+    selfIntersectBefore: outerPrepResult.selfIntersectBefore,
+    selfIntersectAfter: outerPrepResult.selfIntersectAfter,
+    accepted: outerPrepResult.accepted,
+    rejectReason: outerPrepResult.rejectReason || "none"
   })
   
-  // If simplification is damaging, bypass it
-  const simplificationDamaging = areaLoss > 0.15 || edgeRatio > 15
-  const finalOuter = simplificationDamaging ? outerContour : simplifiedOuter
-  if (simplificationDamaging) {
-    console.log("[v0-solid] BYPASSING SIMPLIFICATION - using raw contour due to damage")
-  }
+  const simplifiedSignedArea = computeContourSignedArea(finalOuter)
   
-  console.log("[v0-solid] STAGE 3 - Simplification:", {
+  console.log("[v0-solid] STAGE 3 - Final Outer:", {
     rawPoints: outerContour.length,
-    simplifiedPoints: simplifiedOuter.length,
-    reductionPercent: ((1 - simplifiedOuter.length / outerContour.length) * 100).toFixed(1),
-    simplifiedSignedArea,
-    areaLossPercent: (areaLoss * 100).toFixed(2),
+    finalPoints: finalOuter.length,
+    reductionPercent: ((1 - finalOuter.length / outerContour.length) * 100).toFixed(1),
+    finalSignedArea: simplifiedSignedArea,
     areaLossAcceptable: areaLoss < 0.1,
     USING: simplificationDamaging ? "RAW" : "SIMPLIFIED"
   })
@@ -955,7 +920,222 @@ function perpendicularDistance(point: Point2D, lineStart: Point2D, lineEnd: Poin
   return Math.sqrt((point.x - projX) ** 2 + (point.y - projY) ** 2)
 }
 
-// ============= Stage 6: Prepare Contour for Extrusion =============
+// ============= Stage 6: Prepare Outer Contour for Geometry =============
+
+interface OuterContourPrepResult {
+  prepared: Point2D[]
+  rawPts: number
+  preparedPts: number
+  reductionPercent: number
+  bboxRetention: number
+  areaRetention: number
+  selfIntersectBefore: boolean
+  selfIntersectAfter: boolean
+  accepted: boolean
+  rejectReason: string
+}
+
+/**
+ * Aggressively prepare outer contour for geometry creation.
+ * This is THE key function that removes raster stair-stepping.
+ * 
+ * Operations:
+ * 1. Remove duplicate closing point if present
+ * 2. Remove consecutive duplicate / near-duplicate points
+ * 3. Collapse long collinear runs (raster horizontal/vertical lines)
+ * 4. Collapse tiny staircase zig-zags from raster tracing
+ * 5. Merge tiny alternating axis-step noise
+ * 6. Apply bounded simplification pass (aggressive but safe)
+ * 
+ * Target: at least 60% reduction from raw traced points
+ * Constraints: bbox >= 95%, area >= 90%, no self-intersection
+ */
+function prepareOuterContourForGeometry(contour: Point2D[]): OuterContourPrepResult {
+  const result: OuterContourPrepResult = {
+    prepared: contour,
+    rawPts: contour.length,
+    preparedPts: contour.length,
+    reductionPercent: 0,
+    bboxRetention: 100,
+    areaRetention: 100,
+    selfIntersectBefore: false,
+    selfIntersectAfter: false,
+    accepted: false,
+    rejectReason: ""
+  }
+  
+  if (contour.length < 4) {
+    result.rejectReason = "too few points"
+    return result
+  }
+  
+  // Compute raw metrics
+  const rawBbox = computeContourBbox(contour)
+  const rawArea = Math.abs(computeContourSignedArea(contour))
+  result.selfIntersectBefore = contourSelfIntersects(contour)
+  
+  let pts = [...contour]
+  
+  // STEP 1: Remove duplicate closing point
+  if (pts.length > 1) {
+    const first = pts[0], last = pts[pts.length - 1]
+    if (Math.abs(first.x - last.x) < 1 && Math.abs(first.y - last.y) < 1) {
+      pts.pop()
+    }
+  }
+  
+  // STEP 2: Remove consecutive near-duplicates (within 2px - more aggressive)
+  let cleaned: Point2D[] = [pts[0]]
+  for (let i = 1; i < pts.length; i++) {
+    const prev = cleaned[cleaned.length - 1]
+    const curr = pts[i]
+    const dist = Math.sqrt((curr.x - prev.x) ** 2 + (curr.y - prev.y) ** 2)
+    if (dist > 1.5) {
+      cleaned.push(curr)
+    }
+  }
+  pts = cleaned.length >= 3 ? cleaned : pts
+  
+  // STEP 3: Collapse collinear runs (aggressive - threshold = 2.0)
+  // This removes all the intermediate points on straight raster edges
+  cleaned = []
+  for (let i = 0; i < pts.length; i++) {
+    const prev = pts[(i - 1 + pts.length) % pts.length]
+    const curr = pts[i]
+    const next = pts[(i + 1) % pts.length]
+    
+    const d1x = curr.x - prev.x, d1y = curr.y - prev.y
+    const d2x = next.x - curr.x, d2y = next.y - curr.y
+    
+    // Cross product for collinearity
+    const cross = Math.abs(d1x * d2y - d1y * d2x)
+    
+    // Keep only if cross product is significant (not collinear)
+    if (cross > 2.0) {
+      cleaned.push(curr)
+    }
+  }
+  pts = cleaned.length >= 3 ? cleaned : pts
+  
+  // STEP 4: Collapse staircase zig-zags (axis-aligned micro-steps)
+  // Pattern: alternating horizontal/vertical moves of 1-3 pixels
+  cleaned = []
+  for (let i = 0; i < pts.length; i++) {
+    const prev = pts[(i - 1 + pts.length) % pts.length]
+    const curr = pts[i]
+    const next = pts[(i + 1) % pts.length]
+    
+    const dx1 = curr.x - prev.x, dy1 = curr.y - prev.y
+    const dx2 = next.x - curr.x, dy2 = next.y - curr.y
+    
+    // Detect axis-aligned micro-step pattern
+    const isHorizThenVert = (Math.abs(dx1) <= 3 && Math.abs(dy1) < 0.5) && 
+                            (Math.abs(dx2) < 0.5 && Math.abs(dy2) <= 3)
+    const isVertThenHoriz = (Math.abs(dx1) < 0.5 && Math.abs(dy1) <= 3) && 
+                            (Math.abs(dx2) <= 3 && Math.abs(dy2) < 0.5)
+    
+    // Skip this point if it's a staircase corner
+    if (!(isHorizThenVert || isVertThenHoriz)) {
+      cleaned.push(curr)
+    }
+  }
+  pts = cleaned.length >= 3 ? cleaned : pts
+  
+  // STEP 5: Merge tiny alternating axis-step noise
+  // Look for sequences of small orthogonal moves and replace with diagonal
+  cleaned = [pts[0]]
+  let i = 1
+  while (i < pts.length) {
+    const prev = cleaned[cleaned.length - 1]
+    const curr = pts[i]
+    
+    // Check if we can skip ahead through small alternating steps
+    let j = i
+    while (j < pts.length - 1) {
+      const p1 = pts[j]
+      const p2 = pts[j + 1]
+      const dx = Math.abs(p2.x - p1.x)
+      const dy = Math.abs(p2.y - p1.y)
+      
+      // If step is small and axis-aligned, continue
+      if ((dx <= 2 && dy < 0.5) || (dy <= 2 && dx < 0.5)) {
+        j++
+      } else {
+        break
+      }
+    }
+    
+    // If we skipped some points, just add the endpoint
+    if (j > i + 2) {
+      cleaned.push(pts[j])
+      i = j + 1
+    } else {
+      cleaned.push(curr)
+      i++
+    }
+  }
+  pts = cleaned.length >= 3 ? cleaned : pts
+  
+  // STEP 6: Apply aggressive Douglas-Peucker simplification
+  // Use higher tolerance (4px) for meaningful reduction
+  const PREP_DP_TOLERANCE = 4.0
+  pts = douglasPeucker(pts, PREP_DP_TOLERANCE)
+  
+  if (pts.length < 3) {
+    result.rejectReason = "simplification reduced to <3 points"
+    return result
+  }
+  
+  // Compute prepared metrics
+  const prepBbox = computeContourBbox(pts)
+  const prepArea = Math.abs(computeContourSignedArea(pts))
+  result.selfIntersectAfter = contourSelfIntersects(pts)
+  
+  result.prepared = pts
+  result.preparedPts = pts.length
+  result.reductionPercent = ((result.rawPts - pts.length) / result.rawPts) * 100
+  result.bboxRetention = Math.min(
+    prepBbox.width / rawBbox.width,
+    prepBbox.height / rawBbox.height
+  ) * 100
+  result.areaRetention = (prepArea / rawArea) * 100
+  
+  // Validate constraints
+  if (result.bboxRetention < 95) {
+    result.rejectReason = `bbox retention ${result.bboxRetention.toFixed(1)}% < 95%`
+    result.prepared = contour
+    result.preparedPts = contour.length
+    result.reductionPercent = 0
+    result.bboxRetention = 100
+    result.areaRetention = 100
+    return result
+  }
+  
+  if (result.areaRetention < 90) {
+    result.rejectReason = `area retention ${result.areaRetention.toFixed(1)}% < 90%`
+    result.prepared = contour
+    result.preparedPts = contour.length
+    result.reductionPercent = 0
+    result.bboxRetention = 100
+    result.areaRetention = 100
+    return result
+  }
+  
+  if (!result.selfIntersectBefore && result.selfIntersectAfter) {
+    result.rejectReason = "introduced self-intersection"
+    result.prepared = contour
+    result.preparedPts = contour.length
+    result.reductionPercent = 0
+    result.bboxRetention = 100
+    result.areaRetention = 100
+    result.selfIntersectAfter = false
+    return result
+  }
+  
+  // SUCCESS
+  result.accepted = true
+  return result
+}
 
 /**
  * Aggressively clean raster stair-stepping from traced contour.
