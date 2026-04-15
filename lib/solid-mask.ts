@@ -183,8 +183,19 @@ export function buildMaskSolid(
     rebuildTimeMs: 0
   }
   
+  const emptyDiagnostics: MaskSolidDiagnostics = {
+    outerSignedArea: 0,
+    outerWinding: "CCW",
+    outerSelfIntersects: false,
+    holeAreas: [],
+    holeWindings: [],
+    anyHoleSelfIntersects: false,
+    anyHoleOutsideOuter: false,
+    holesOverlap: false,
+  }
+  
   if (stroke.points.length < 2) {
-    return { geometry: null, stats: { ...emptyStats, rebuildTimeMs: performance.now() - startTime }, stages: emptyStages }
+    return { geometry: null, geometryNoHoles: null, stats: { ...emptyStats, rebuildTimeMs: performance.now() - startTime }, stages: emptyStages, diagnostics: emptyDiagnostics }
   }
   
   // 1. Render stroke to offscreen canvas and get binary mask
@@ -195,14 +206,14 @@ export function buildMaskSolid(
   emptyStages.maskHeight = height
   
   if (filledCount === 0) {
-    return { geometry: null, stats: { ...emptyStats, rebuildTimeMs: performance.now() - startTime }, stages: emptyStages }
+    return { geometry: null, geometryNoHoles: null, stats: { ...emptyStats, rebuildTimeMs: performance.now() - startTime }, stages: emptyStages, diagnostics: emptyDiagnostics }
   }
   
   // 2. Label connected components
   const { labels, componentCount, componentSizes } = labelConnectedComponents(mask, width, height)
   
   if (componentCount === 0) {
-    return { geometry: null, stats: { ...emptyStats, filledPixelCount: filledCount, rebuildTimeMs: performance.now() - startTime }, stages: emptyStages }
+    return { geometry: null, geometryNoHoles: null, stats: { ...emptyStats, filledPixelCount: filledCount, rebuildTimeMs: performance.now() - startTime }, stages: emptyStages, diagnostics: emptyDiagnostics }
   }
   
   // 3. Find largest component
@@ -238,7 +249,8 @@ export function buildMaskSolid(
   
   if (outerContour.length < 3) {
     return { 
-      geometry: null, 
+      geometry: null,
+      geometryNoHoles: null,
       stats: { 
         ...emptyStats, 
         filledPixelCount: filledCount, 
@@ -247,7 +259,8 @@ export function buildMaskSolid(
         outerContourPoints: outerContour.length,
         rebuildTimeMs: performance.now() - startTime 
       }, 
-      stages: emptyStages 
+      stages: emptyStages,
+      diagnostics: emptyDiagnostics,
     }
   }
   
