@@ -3186,6 +3186,19 @@ export const SolidEngine: GeometryEngine = {
     SOLID_DEBUG.stageDVertexCount = result.geometryNoHoles?.getAttribute("position")?.count ?? 0
     SOLID_DEBUG.stageEVertexCount = result.geometry?.getAttribute("position")?.count ?? 0
     
+    // TARGETED DEBUG: Stage D vs E comparison
+    if (SOLID_DEBUG.stageDVertexCount > 0 && SOLID_DEBUG.stageEVertexCount > 0) {
+      const vertexIncrease = SOLID_DEBUG.stageEVertexCount - SOLID_DEBUG.stageDVertexCount
+      const percentIncrease = (vertexIncrease / SOLID_DEBUG.stageDVertexCount) * 100
+      console.log("[v0-solid] Stage D→E Vertex Comparison:", {
+        stageD: SOLID_DEBUG.stageDVertexCount,
+        stageE: SOLID_DEBUG.stageEVertexCount,
+        increase: vertexIncrease,
+        increasePercent: percentIncrease.toFixed(1),
+        diagnosis: vertexIncrease > SOLID_DEBUG.stageDVertexCount * 0.5 ? "HOLE_TRIANGULATION_EXPLOSION" : "normal"
+      })
+    }
+    
     // Store stages for 2D visualization
     SOLID_DEBUG.lastStages = result.stages
 

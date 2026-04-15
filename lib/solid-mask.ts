@@ -763,6 +763,67 @@ function perpendicularDistance(point: Point2D, lineStart: Point2D, lineEnd: Poin
 
 // ============= Stage 6: Build Extruded Geometry =============
 
+/**
+ * Clean contours before triangulation:
+ * - Remove duplicate closing point (if first == last)
+ * - Remove consecutive near-duplicate points (epsilon)
+ * - Remove nearly-collinear points (epsilon)
+ * Preserves topology and holes.
+ */
+function cleanContourForTriangulation(contour: Point2D[], epsilon: number = 0.001): Point2D[] {
+  if (contour.length < 3) return contour
+  
+  let pts = [...contour]
+  
+  // 1. Remove duplicate closing point if first == last
+  if (pts.length > 1) {
+    const first = pts[0]
+    const last = pts[pts.length - 1]
+    if (Math.abs(first.x - last.x) < epsilon && Math.abs(first.y - last.y) < epsilon) {
+      pts.pop()
+    }
+  }
+  
+  // 2. Remove consecutive near-duplicates
+  let cleaned: Point2D[] = []
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i]
+    const next = pts[(i + 1) % pts.length]
+    const dist = Math.sqrt((p.x - next.x) ** 2 + (p.y - next.y) ** 2)
+    if (dist > epsilon) {
+      cleaned.push(p)
+    }
+  }
+  pts = cleaned
+  
+  if (pts.length < 3) return contour  // Failed to clean, return original
+  
+  // 3. Remove nearly-collinear points
+  cleaned = []
+  for (let i = 0; i < pts.length; i++) {
+    const p0 = pts[(i - 1 + pts.length) % pts.length]
+    const p1 = pts[i]
+    const p2 = pts[(i + 1) % pts.length]
+    
+    // Cross product to detect collinearity
+    const v1x = p1.x - p0.x, v1y = p1.y - p0.y
+    const v2x = p2.x - p1.x, v2y = p2.y - p1.y
+    const cross = Math.abs(v1x * v2y - v1y * v2x)
+    
+    // Also check if point is too close to the line p0-p2
+    const dx = p2.x - p0.x, dy = p2.y - p0.y
+    const len = Math.sqrt(dx * dx + dy * dy)
+    const distToLine = len > epsilon ? Math.abs(dx * (p0.y - p1.y) - dy * (p0.x - p1.x)) / len : Infinity
+    
+    // Keep point if it's not nearly collinear and not too close to line
+    if (cross > epsilon * 0.1 && distToLine > epsilon) {
+      cleaned.push(p1)
+    }
+  }
+  
+  return cleaned.length >= 3 ? cleaned : pts  // Return cleaned if valid, else return deduplicated
+}
+
 function buildExtrudedGeometry(
   outer: Point2D[],
   holes: Point2D[][],
@@ -774,6 +835,24 @@ function buildExtrudedGeometry(
 ): THREE.BufferGeometry | null {
   if (outer.length < 3) return null
   
+  // Clean contours before triangulation
+  const outerCleaned = cleanContourForTriangulation(outer)
+  const holesCleaned = holes.map(h => cleanContourForTriangulation(h))
+  
+  // DEBUG: Log cleaning impact
+  const cleaningDiff = {
+    outerBefore: outer.length,
+    outerAfter: outerCleaned.length,
+    outerRemoved: outer.length - outerCleaned.length,
+    holesInfo: holes.map((h, i) => ({
+      index: i,
+      before: h.length,
+      after: holesCleaned[i].length,
+      removed: h.length - holesCleaned[i].length
+    }))
+  }
+  console.log("[v0-solid] Stage D→E Cleaning:", cleaningDiff)
+  
   // Transform mask coordinates to world coordinates
   const scaleX = canvasWidth / maskWidth
   const scaleY = canvasHeight / maskHeight
@@ -784,7 +863,7 @@ function buildExtrudedGeometry(
   const toWorldY = (my: number) => -(my - maskHeight / 2) * scale * normScale  // Flip Y
   
   // Convert outer contour to THREE.Vector2
-  let shapePts = outer.map(p => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+  let shapePts = outerCleaned.map(p => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
   
   // Ensure CCW winding for THREE.js outer
   const outerArea = computeSignedArea(shapePts)
@@ -794,8 +873,16 @@ function buildExtrudedGeometry(
   
   const shape = new THREE.Shape(shapePts)
   
+  // DEBUG: Log outer shape
+  console.log("[v0-solid] Stage E Outer Shape:", {
+    points: shapePts.length,
+    area: outerArea,
+    isCCW: outerArea > 0
+  })
+  
   // Add holes with CW winding
-  for (const hole of holes) {
+  for (let i = 0; i < holesCleaned.length; i++) {
+    const hole = holesCleaned[i]
     if (hole.length < 3) continue
     let holePts = hole.map(p => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
     
@@ -805,6 +892,13 @@ function buildExtrudedGeometry(
     }
     
     shape.holes.push(new THREE.Path(holePts))
+    
+    // DEBUG: Log each hole
+    console.log(`[v0-solid] Stage E Hole ${i}:`, {
+      points: holePts.length,
+      area: holeArea,
+      isCW: holeArea < 0
+    })
   }
   
   // Extrude
@@ -815,9 +909,25 @@ function buildExtrudedGeometry(
       curveSegments: 1
     })
     geometry.translate(0, 0, -depth / 2)
+    
+    // DEBUG: Log final geometry
+    const vertexCount = geometry.getAttribute("position")?.count ?? 0
+    const indexCount = geometry.getIndex()?.count ?? 0
+    console.log("[v0-solid] Stage E Extrude Result:", {
+      success: true,
+      vertices: vertexCount,
+      indices: indexCount
+    })
+    
     return geometry
   } catch (e) {
-    console.error("[v0] Extrude failed:", e)
+    console.error("[v0-solid] Stage E Extrude FAILED:", e)
+    console.log("[v0-solid] Stage E Extrude Failure Details:", {
+      errorMessage: (e as Error).message,
+      outerPoints: shapePts.length,
+      holeCount: shape.holes.length,
+      shapeBbox: shape.getBounds()
+    })
     return null
   }
 }
