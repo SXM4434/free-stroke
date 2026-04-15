@@ -71,6 +71,10 @@ export interface MaskSolidStages {
 
 // ============= Constants =============
 
+// DEBUG SWITCH: "flatCapOnly" = flat ShapeGeometry only (no extrusion)
+//               "full" = current ExtrudeGeometry behavior
+const SOLID_GEOM_MODE: "full" | "flatCapOnly" = "flatCapOnly"
+
 const MASK_RESOLUTION = 512  // High-res mask for quality
 const DP_TOLERANCE = 0.5     // Douglas-Peucker simplification tolerance
 
@@ -1091,7 +1095,31 @@ function buildExtrudedGeometry(
     })
   }
   
-  // Extrude
+  // FLAT CAP ONLY MODE: Just triangulate the shape, no extrusion
+  if (SOLID_GEOM_MODE === "flatCapOnly") {
+    try {
+      const flatGeom = new THREE.ShapeGeometry(shape)
+      const vertexCount = flatGeom.getAttribute("position")?.count ?? 0
+      const bbox = new THREE.Box3().setFromBufferAttribute(flatGeom.getAttribute("position") as THREE.BufferAttribute)
+      
+      console.log("[v0-solid] FLAT CAP ONLY:", {
+        mode: "flatCapOnly",
+        outerPoints: outer.length,
+        finalOuterPoints: outerCleaned.length,
+        holesPresent: holes.length,
+        flatCapCreated: true,
+        flatCapVertices: vertexCount,
+        flatCapBbox: { min: [bbox.min.x.toFixed(3), bbox.min.y.toFixed(3)], max: [bbox.max.x.toFixed(3), bbox.max.y.toFixed(3)] }
+      })
+      
+      return flatGeom
+    } catch (e) {
+      console.error("[v0-solid] FLAT CAP FAILED:", e)
+      return null
+    }
+  }
+  
+  // FULL MODE: Extrude
   try {
     const geometry = new THREE.ExtrudeGeometry(shape, {
       depth,
@@ -1103,21 +1131,18 @@ function buildExtrudedGeometry(
     // DEBUG: Log final geometry
     const vertexCount = geometry.getAttribute("position")?.count ?? 0
     const indexCount = geometry.getIndex()?.count ?? 0
-    console.log("[v0-solid] Stage E Extrude Result:", {
-      success: true,
-      vertices: vertexCount,
-      indices: indexCount
+    console.log("[v0-solid] FULL EXTRUDE:", {
+      mode: "full",
+      outerPoints: outer.length,
+      finalOuterPoints: outerCleaned.length,
+      holesPresent: holes.length,
+      fullVertices: vertexCount,
+      fullIndices: indexCount
     })
     
     return geometry
   } catch (e) {
-    console.error("[v0-solid] Stage E Extrude FAILED:", e)
-    console.log("[v0-solid] Stage E Extrude Failure Details:", {
-      errorMessage: (e as Error).message,
-      outerPoints: shapePts.length,
-      holeCount: shape.holes.length,
-      shapeBbox: shape.getBounds()
-    })
+    console.error("[v0-solid] FULL EXTRUDE FAILED:", e)
     return null
   }
 }
