@@ -312,8 +312,8 @@ export function buildMaskSolid(
     finalPoints: finalOuter.length,
     reductionPercent: ((1 - finalOuter.length / outerContour.length) * 100).toFixed(1),
     finalSignedArea: simplifiedSignedArea,
-    areaLossAcceptable: areaLoss < 0.1,
-    USING: simplificationDamaging ? "RAW" : "SIMPLIFIED"
+    areaRetentionAcceptable: outerPrepResult.areaRetention >= 90,
+    USING: outerPrepResult.accepted ? "PREPARED" : "RAW"
   })
   
   // 7. Find holes (enclosed background regions)
