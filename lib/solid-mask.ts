@@ -75,6 +75,10 @@ export interface MaskSolidStages {
 //               "full" = current ExtrudeGeometry behavior
 const SOLID_GEOM_MODE: "full" | "flatCapOnly" = "full"
 
+// ISOLATION TEST: true = bypass all simplification/prep, use raw traced outer, flat geometry only
+// This tests whether RAW_CONTOUR_BROKEN or SIMPLIFICATION_PREP_BROKEN
+const RAW_OUTER_FLAT_TEST = true
+
 const MASK_RESOLUTION = 512  // High-res mask for quality
 const DP_TOLERANCE = 0.5     // Douglas-Peucker simplification tolerance
 
@@ -286,6 +290,71 @@ export function buildMaskSolid(
       diagnostics: emptyDiagnostics,
     }
   }
+  
+  // ============= RAW OUTER FLAT TEST ISOLATION =============
+  // Bypasses ALL simplification/prep, uses raw traced outer, flat geometry only
+  if (RAW_OUTER_FLAT_TEST) {
+    console.log("[v0-solid] RAW_OUTER_FLAT_TEST: using raw traced outer directly, no prep, no holes, flat only")
+    
+    // Transform raw outer contour to world coordinates
+    const scaleX = canvasWidth / width
+    const scaleY = canvasHeight / height
+    const scale = Math.min(scaleX, scaleY)
+    const normScale = 3 / Math.max(canvasWidth, canvasHeight)
+    
+    const toWorldX = (mx: number) => (mx - width / 2) * scale * normScale
+    const toWorldY = (my: number) => -(my - height / 2) * scale * normScale
+    
+    // Convert raw outer to THREE.Vector2
+    let rawShapePts = outerContour.map(p => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+    
+    // Ensure CCW winding
+    const rawArea = computeSignedArea(rawShapePts)
+    if (rawArea < 0) {
+      rawShapePts = rawShapePts.slice().reverse()
+    }
+    
+    // Create flat ShapeGeometry from raw outer (no holes, no extrusion)
+    let rawFlatGeom: THREE.BufferGeometry | null = null
+    let rawFlatSuccess = false
+    let rawFlatVertexCount = 0
+    
+    try {
+      const rawShape = new THREE.Shape(rawShapePts)
+      rawFlatGeom = new THREE.ShapeGeometry(rawShape)
+      rawFlatSuccess = true
+      rawFlatVertexCount = rawFlatGeom.getAttribute("position")?.count ?? 0
+    } catch (e) {
+      console.error("[v0-solid] RAW_OUTER_FLAT_TEST: ShapeGeometry failed:", e)
+    }
+    
+    console.log("[v0-solid] RAW_OUTER_FLAT_TEST RESULT:", {
+      rawTracedOuterPointCount: outerContour.length,
+      rawOuterUsedDirectly: true,
+      flatRawContourGeometrySucceeded: rawFlatSuccess,
+      vertexCountFromRawFlat: rawFlatVertexCount
+    })
+    
+    const stats: MaskSolidStats = {
+      maskResolution: MASK_RESOLUTION,
+      filledPixelCount: filledCount,
+      componentCount,
+      largestComponentPixels: largestSize,
+      outerContourPoints: outerContour.length,
+      simplifiedOuterPoints: outerContour.length,
+      holeCount: 0,
+      rebuildTimeMs: performance.now() - startTime
+    }
+    
+    return {
+      geometry: rawFlatGeom,
+      geometryNoHoles: rawFlatGeom,
+      stats,
+      stages: emptyStages,
+      diagnostics: emptyDiagnostics
+    }
+  }
+  // ============= END RAW OUTER FLAT TEST =============
   
   // 6. PREPARE OUTER CONTOUR FOR GEOMETRY (aggressive stair-step removal)
   const outerPrepResult = prepareOuterContourForGeometry(outerContour)
