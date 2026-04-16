@@ -82,8 +82,9 @@ export interface MaskSolidStages {
 const SOLID_GEOM_MODE: "full" | "flatCapOnly" = "full"
 
 // DIAGNOSTIC MODE: "RAW_FLAT_ONLY" = true isolation test (raw traced outer, no holes, no simplification, no prep, flat only)
+//                  "RAW_EXTRUDE_ONLY" = same raw contour as RAW_FLAT_ONLY but with extrusion
 //                  "NORMAL" = standard pipeline
-const SOLID_DIAGNOSTIC_MODE: "RAW_FLAT_ONLY" | "NORMAL" = "RAW_FLAT_ONLY"
+const SOLID_DIAGNOSTIC_MODE: "RAW_FLAT_ONLY" | "RAW_EXTRUDE_ONLY" | "NORMAL" = "RAW_EXTRUDE_ONLY"
 
 const MASK_RESOLUTION = 512  // High-res mask for quality
 const DP_TOLERANCE = 0.5     // Douglas-Peucker simplification tolerance
@@ -226,9 +227,9 @@ export function buildMaskSolid(
     anyHoleOutsideOuter: false,
     holesOverlap: false,
     mode: SOLID_DIAGNOSTIC_MODE,
-    usedSimplification: SOLID_DIAGNOSTIC_MODE === "RAW_FLAT_ONLY" ? "NO" : "YES",
-    usedHoles: SOLID_DIAGNOSTIC_MODE === "RAW_FLAT_ONLY" ? "NO" : "YES",
-    usedPrep: SOLID_DIAGNOSTIC_MODE === "RAW_FLAT_ONLY" ? "NO" : "YES",
+    usedSimplification: SOLID_DIAGNOSTIC_MODE === "NORMAL" ? "YES" : "NO",
+    usedHoles: SOLID_DIAGNOSTIC_MODE === "NORMAL" ? "YES" : "NO",
+    usedPrep: SOLID_DIAGNOSTIC_MODE === "NORMAL" ? "YES" : "NO",
     geometryType: SOLID_DIAGNOSTIC_MODE === "RAW_FLAT_ONLY" ? "FLAT" : "EXTRUDED",
   }
   
@@ -414,6 +415,125 @@ export function buildMaskSolid(
     }
   }
   // ============= END RAW_FLAT_ONLY DIAGNOSTIC MODE =============
+  
+  // ============= RAW_EXTRUDE_ONLY DIAGNOSTIC MODE =============
+  // Same raw contour as RAW_FLAT_ONLY but with EXTRUSION to test if extrusion breaks the silhouette
+  if (SOLID_DIAGNOSTIC_MODE === "RAW_EXTRUDE_ONLY") {
+    const rawPts = outerContour.length
+    
+    // MINIMAL CLEANUP ONLY: same as RAW_FLAT_ONLY
+    let cleanedOuter = [...outerContour]
+    
+    // Remove duplicate closing point if present
+    if (cleanedOuter.length > 1) {
+      const first = cleanedOuter[0]
+      const last = cleanedOuter[cleanedOuter.length - 1]
+      if (Math.abs(first.x - last.x) < 0.5 && Math.abs(first.y - last.y) < 0.5) {
+        cleanedOuter.pop()
+      }
+    }
+    
+    // Remove near-identical consecutive points (< 0.5px apart)
+    const dedupedOuter: Point2D[] = [cleanedOuter[0]]
+    for (let i = 1; i < cleanedOuter.length; i++) {
+      const prev = dedupedOuter[dedupedOuter.length - 1]
+      const curr = cleanedOuter[i]
+      const dist = Math.sqrt((curr.x - prev.x) ** 2 + (curr.y - prev.y) ** 2)
+      if (dist >= 0.5) {
+        dedupedOuter.push(curr)
+      }
+    }
+    cleanedOuter = dedupedOuter
+    
+    const finalPts = cleanedOuter.length
+    
+    // Transform to world coordinates
+    const scaleX = canvasWidth / width
+    const scaleY = canvasHeight / height
+    const scale = Math.min(scaleX, scaleY)
+    const normScale = 3 / Math.max(canvasWidth, canvasHeight)
+    const depth = 0.15
+    
+    const toWorldX = (mx: number) => (mx - width / 2) * scale * normScale
+    const toWorldY = (my: number) => -(my - height / 2) * scale * normScale
+    
+    // Convert to THREE.Vector2
+    let shapePts = cleanedOuter.map(p => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+    
+    // Ensure CCW winding
+    const signedArea = computeSignedArea(shapePts)
+    if (signedArea < 0) {
+      shapePts = shapePts.slice().reverse()
+    }
+    
+    // Create EXTRUDED geometry (NO HOLES)
+    let extrudedGeom: THREE.BufferGeometry | null = null
+    let success = false
+    let vertexCount = 0
+    
+    try {
+      const shape = new THREE.Shape(shapePts)
+      extrudedGeom = new THREE.ExtrudeGeometry(shape, {
+        depth,
+        bevelEnabled: false,
+        curveSegments: 1
+      })
+      extrudedGeom.translate(0, 0, -depth / 2)
+      success = true
+      vertexCount = extrudedGeom.getAttribute("position")?.count ?? 0
+    } catch (e) {
+      console.error("[v0-solid] RAW_EXTRUDE_ONLY: ExtrudeGeometry failed:", e)
+    }
+    
+    // REQUIRED DEBUG OUTPUT - these fields MUST appear in debug panel
+    const diagnosticInfo = {
+      mode: "RAW_EXTRUDE_ONLY",
+      usedSimplification: "NO",
+      usedHoles: "NO",
+      usedPrep: "NO",
+      geometryType: "EXTRUDED",
+      rawPts,
+      finalPts,
+      vertexCount,
+      success
+    }
+    
+    console.log("[v0-solid] RAW_EXTRUDE_ONLY DIAGNOSTIC:", diagnosticInfo)
+    
+    // Store diagnostic info in stages for debug panel access
+    emptyStages.rawOuter = outerContour
+    emptyStages.simplifiedOuter = cleanedOuter
+    ;(emptyStages as unknown as Record<string, unknown>).diagnosticInfo = diagnosticInfo
+    
+    const stats: MaskSolidStats = {
+      maskResolution: MASK_RESOLUTION,
+      filledPixelCount: filledCount,
+      componentCount,
+      largestComponentPixels: largestSize,
+      outerContourPoints: rawPts,
+      simplifiedOuterPoints: finalPts,
+      holeCount: 0,
+      rebuildTimeMs: performance.now() - startTime
+    }
+    
+    return {
+      geometry: extrudedGeom,
+      geometryNoHoles: extrudedGeom,
+      stats,
+      stages: emptyStages,
+      diagnostics: {
+        ...emptyDiagnostics,
+        outerSignedArea: signedArea,
+        outerWinding: signedArea > 0 ? "CCW" : "CW",
+        mode: "RAW_EXTRUDE_ONLY",
+        usedSimplification: "NO",
+        usedHoles: "NO",
+        usedPrep: "NO",
+        geometryType: "EXTRUDED"
+      }
+    }
+  }
+  // ============= END RAW_EXTRUDE_ONLY DIAGNOSTIC MODE =============
   
   // 6. PREPARE OUTER CONTOUR FOR GEOMETRY (aggressive stair-step removal)
   const outerPrepResult = prepareOuterContourForGeometry(outerContour)
