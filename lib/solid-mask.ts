@@ -472,15 +472,57 @@ export function buildMaskSolid(
     let success = false
     let vertexCount = 0
     
+    // Wall segment epsilon - skip edges shorter than this
+    const WALL_EPSILON = 0.0001
+    
     try {
-      const n = shapePts.length
-      if (n < 3) throw new Error("Need at least 3 points")
+      // ========== STEP 0: NORMALIZE BOUNDARY LOOP ==========
+      // Remove duplicated closing point, consecutive duplicates, zero-length edges
+      let boundary = [...shapePts]
       
-      // Step 1: Build flat front cap using ShapeGeometry (already proven to work)
-      const shape = new THREE.Shape(shapePts)
+      // Remove duplicated closing point if first ~= last
+      if (boundary.length > 1) {
+        const first = boundary[0]
+        const last = boundary[boundary.length - 1]
+        const closeDist = Math.sqrt((last.x - first.x) ** 2 + (last.y - first.y) ** 2)
+        if (closeDist < WALL_EPSILON) {
+          boundary.pop()
+        }
+      }
+      
+      // Remove consecutive duplicate / near-duplicate points
+      const cleanBoundary: THREE.Vector2[] = []
+      for (let i = 0; i < boundary.length; i++) {
+        const curr = boundary[i]
+        if (cleanBoundary.length === 0) {
+          cleanBoundary.push(curr)
+        } else {
+          const prev = cleanBoundary[cleanBoundary.length - 1]
+          const dist = Math.sqrt((curr.x - prev.x) ** 2 + (curr.y - prev.y) ** 2)
+          if (dist >= WALL_EPSILON) {
+            cleanBoundary.push(curr)
+          }
+        }
+      }
+      
+      // Final check: ensure loop doesn't close on itself
+      if (cleanBoundary.length > 1) {
+        const first = cleanBoundary[0]
+        const last = cleanBoundary[cleanBoundary.length - 1]
+        const closeDist = Math.sqrt((last.x - first.x) ** 2 + (last.y - first.y) ** 2)
+        if (closeDist < WALL_EPSILON) {
+          cleanBoundary.pop()
+        }
+      }
+      
+      boundary = cleanBoundary
+      const n = boundary.length
+      if (n < 3) throw new Error("Need at least 3 boundary points after cleanup")
+      
+      // ========== STEP 1: BUILD FRONT CAP ==========
+      const shape = new THREE.Shape(boundary)
       const frontCapGeom = new THREE.ShapeGeometry(shape)
       
-      // Get front cap vertices and indices
       const frontPosAttr = frontCapGeom.getAttribute("position")
       const frontIndexAttr = frontCapGeom.getIndex()
       
@@ -489,12 +531,21 @@ export function buildMaskSolid(
       const frontCapVertCount = frontPosAttr.count
       const frontCapIndexCount = frontIndexAttr.count
       
-      // Step 2: Calculate total geometry size
-      // Front cap: frontCapVertCount vertices, frontCapIndexCount indices
-      // Back cap: frontCapVertCount vertices, frontCapIndexCount indices (reversed winding)
-      // Side walls: n quads = n * 4 vertices = n * 6 indices (2 triangles per quad)
-      const sideVertCount = n * 4
-      const sideIndexCount = n * 6
+      // ========== STEP 2: COUNT VALID WALL SEGMENTS ==========
+      // Pre-count valid segments (length >= epsilon) to size arrays correctly
+      let validSegmentCount = 0
+      for (let i = 0; i < n; i++) {
+        const curr = boundary[i]
+        const next = boundary[(i + 1) % n]
+        const edgeLen = Math.sqrt((next.x - curr.x) ** 2 + (next.y - curr.y) ** 2)
+        if (edgeLen >= WALL_EPSILON) {
+          validSegmentCount++
+        }
+      }
+      
+      // ========== STEP 3: ALLOCATE ARRAYS ==========
+      const sideVertCount = validSegmentCount * 4
+      const sideIndexCount = validSegmentCount * 6
       const totalVertCount = frontCapVertCount * 2 + sideVertCount
       const totalIndexCount = frontCapIndexCount * 2 + sideIndexCount
       
@@ -505,7 +556,7 @@ export function buildMaskSolid(
       let vOffset = 0
       let iOffset = 0
       
-      // Step 3: Front cap at z = +depth/2 (facing +Z)
+      // ========== STEP 4: FRONT CAP AT Z = +depth/2 ==========
       for (let i = 0; i < frontCapVertCount; i++) {
         positions[vOffset * 3 + 0] = frontPosAttr.getX(i)
         positions[vOffset * 3 + 1] = frontPosAttr.getY(i)
@@ -520,7 +571,7 @@ export function buildMaskSolid(
         indices[iOffset++] = frontIndexAttr.getX(i) + frontCapStart
       }
       
-      // Step 4: Back cap at z = -depth/2 (facing -Z, reversed winding)
+      // ========== STEP 5: BACK CAP AT Z = -depth/2 ==========
       const backCapStart = vOffset
       for (let i = 0; i < frontCapVertCount; i++) {
         positions[vOffset * 3 + 0] = frontPosAttr.getX(i)
@@ -538,24 +589,32 @@ export function buildMaskSolid(
         indices[iOffset++] = frontIndexAttr.getX(i + 1) + backCapStart
       }
       
-      // Step 5: Side walls - bridge boundary points from front to back
-      // Use the original shapePts as the boundary loop
+      // ========== STEP 6: SIDE WALLS ==========
+      // Iterate each segment exactly once, build one quad per valid segment
       const sideStart = vOffset
+      let quadIndex = 0
+      
       for (let i = 0; i < n; i++) {
-        const curr = shapePts[i]
-        const next = shapePts[(i + 1) % n]
+        const curr = boundary[i]
+        const next = boundary[(i + 1) % n]
         
-        // Compute outward normal for this edge
+        // Compute edge length - skip if below epsilon
         const edgeX = next.x - curr.x
         const edgeY = next.y - curr.y
         const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY)
-        const nx = edgeY / edgeLen  // perpendicular
+        
+        if (edgeLen < WALL_EPSILON) {
+          continue // Skip zero-length or near-zero edges
+        }
+        
+        // Compute outward normal (perpendicular to edge, pointing outward for CCW boundary)
+        const nx = edgeY / edgeLen
         const ny = -edgeX / edgeLen
         
-        // Quad vertices: curr-front, next-front, next-back, curr-back
-        const qi = sideStart + i * 4
+        // Quad vertex indices
+        const qi = sideStart + quadIndex * 4
         
-        // curr-front
+        // Vertex 0: curr-front
         positions[vOffset * 3 + 0] = curr.x
         positions[vOffset * 3 + 1] = curr.y
         positions[vOffset * 3 + 2] = depth / 2
@@ -564,7 +623,7 @@ export function buildMaskSolid(
         normals[vOffset * 3 + 2] = 0
         vOffset++
         
-        // next-front
+        // Vertex 1: next-front
         positions[vOffset * 3 + 0] = next.x
         positions[vOffset * 3 + 1] = next.y
         positions[vOffset * 3 + 2] = depth / 2
@@ -573,7 +632,7 @@ export function buildMaskSolid(
         normals[vOffset * 3 + 2] = 0
         vOffset++
         
-        // next-back
+        // Vertex 2: next-back
         positions[vOffset * 3 + 0] = next.x
         positions[vOffset * 3 + 1] = next.y
         positions[vOffset * 3 + 2] = -depth / 2
@@ -582,7 +641,7 @@ export function buildMaskSolid(
         normals[vOffset * 3 + 2] = 0
         vOffset++
         
-        // curr-back
+        // Vertex 3: curr-back
         positions[vOffset * 3 + 0] = curr.x
         positions[vOffset * 3 + 1] = curr.y
         positions[vOffset * 3 + 2] = -depth / 2
@@ -591,18 +650,20 @@ export function buildMaskSolid(
         normals[vOffset * 3 + 2] = 0
         vOffset++
         
-        // Two triangles per quad (CCW winding when viewed from outside)
-        // Triangle 1: curr-front, next-front, next-back
+        // Two triangles per quad - consistent CCW winding when viewed from outside
+        // Triangle 1: curr-front -> next-front -> next-back
         indices[iOffset++] = qi + 0
         indices[iOffset++] = qi + 1
         indices[iOffset++] = qi + 2
-        // Triangle 2: curr-front, next-back, curr-back
+        // Triangle 2: curr-front -> next-back -> curr-back
         indices[iOffset++] = qi + 0
         indices[iOffset++] = qi + 2
         indices[iOffset++] = qi + 3
+        
+        quadIndex++
       }
       
-      // Step 6: Create BufferGeometry
+      // ========== STEP 7: CREATE BUFFER GEOMETRY ==========
       manualGeom = new THREE.BufferGeometry()
       manualGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3))
       manualGeom.setAttribute("normal", new THREE.BufferAttribute(normals, 3))
@@ -615,7 +676,10 @@ export function buildMaskSolid(
       vertexCount = manualGeom.getAttribute("position")?.count ?? 0
       
       console.log("[v0-solid] MANUAL EXTRUSION built:", {
-        boundaryPoints: n,
+        rawBoundaryPoints: shapePts.length,
+        cleanedBoundaryPoints: n,
+        validWallSegments: validSegmentCount,
+        skippedSegments: n - validSegmentCount,
         frontCapVerts: frontCapVertCount,
         sideVerts: sideVertCount,
         totalVerts: vertexCount,
