@@ -466,23 +466,163 @@ export function buildMaskSolid(
       shapePts = shapePts.slice().reverse()
     }
     
-    // Create EXTRUDED geometry (NO HOLES)
-    let extrudedGeom: THREE.BufferGeometry | null = null
+    // MANUAL EXTRUSION - DO NOT USE THREE.ExtrudeGeometry
+    // Build geometry manually: front cap + back cap + side walls
+    let manualGeom: THREE.BufferGeometry | null = null
     let success = false
     let vertexCount = 0
     
     try {
+      const n = shapePts.length
+      if (n < 3) throw new Error("Need at least 3 points")
+      
+      // Step 1: Build flat front cap using ShapeGeometry (already proven to work)
       const shape = new THREE.Shape(shapePts)
-      extrudedGeom = new THREE.ExtrudeGeometry(shape, {
-        depth,
-        bevelEnabled: false,
-        curveSegments: 1
-      })
-      extrudedGeom.translate(0, 0, -depth / 2)
+      const frontCapGeom = new THREE.ShapeGeometry(shape)
+      
+      // Get front cap vertices and indices
+      const frontPosAttr = frontCapGeom.getAttribute("position")
+      const frontIndexAttr = frontCapGeom.getIndex()
+      
+      if (!frontPosAttr || !frontIndexAttr) throw new Error("Front cap missing attributes")
+      
+      const frontCapVertCount = frontPosAttr.count
+      const frontCapIndexCount = frontIndexAttr.count
+      
+      // Step 2: Calculate total geometry size
+      // Front cap: frontCapVertCount vertices, frontCapIndexCount indices
+      // Back cap: frontCapVertCount vertices, frontCapIndexCount indices (reversed winding)
+      // Side walls: n quads = n * 4 vertices = n * 6 indices (2 triangles per quad)
+      const sideVertCount = n * 4
+      const sideIndexCount = n * 6
+      const totalVertCount = frontCapVertCount * 2 + sideVertCount
+      const totalIndexCount = frontCapIndexCount * 2 + sideIndexCount
+      
+      const positions = new Float32Array(totalVertCount * 3)
+      const normals = new Float32Array(totalVertCount * 3)
+      const indices = new Uint32Array(totalIndexCount)
+      
+      let vOffset = 0
+      let iOffset = 0
+      
+      // Step 3: Front cap at z = +depth/2 (facing +Z)
+      for (let i = 0; i < frontCapVertCount; i++) {
+        positions[vOffset * 3 + 0] = frontPosAttr.getX(i)
+        positions[vOffset * 3 + 1] = frontPosAttr.getY(i)
+        positions[vOffset * 3 + 2] = depth / 2
+        normals[vOffset * 3 + 0] = 0
+        normals[vOffset * 3 + 1] = 0
+        normals[vOffset * 3 + 2] = 1
+        vOffset++
+      }
+      const frontCapStart = 0
+      for (let i = 0; i < frontCapIndexCount; i++) {
+        indices[iOffset++] = frontIndexAttr.getX(i) + frontCapStart
+      }
+      
+      // Step 4: Back cap at z = -depth/2 (facing -Z, reversed winding)
+      const backCapStart = vOffset
+      for (let i = 0; i < frontCapVertCount; i++) {
+        positions[vOffset * 3 + 0] = frontPosAttr.getX(i)
+        positions[vOffset * 3 + 1] = frontPosAttr.getY(i)
+        positions[vOffset * 3 + 2] = -depth / 2
+        normals[vOffset * 3 + 0] = 0
+        normals[vOffset * 3 + 1] = 0
+        normals[vOffset * 3 + 2] = -1
+        vOffset++
+      }
+      // Reverse winding for back cap
+      for (let i = 0; i < frontCapIndexCount; i += 3) {
+        indices[iOffset++] = frontIndexAttr.getX(i + 0) + backCapStart
+        indices[iOffset++] = frontIndexAttr.getX(i + 2) + backCapStart
+        indices[iOffset++] = frontIndexAttr.getX(i + 1) + backCapStart
+      }
+      
+      // Step 5: Side walls - bridge boundary points from front to back
+      // Use the original shapePts as the boundary loop
+      const sideStart = vOffset
+      for (let i = 0; i < n; i++) {
+        const curr = shapePts[i]
+        const next = shapePts[(i + 1) % n]
+        
+        // Compute outward normal for this edge
+        const edgeX = next.x - curr.x
+        const edgeY = next.y - curr.y
+        const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY)
+        const nx = edgeY / edgeLen  // perpendicular
+        const ny = -edgeX / edgeLen
+        
+        // Quad vertices: curr-front, next-front, next-back, curr-back
+        const qi = sideStart + i * 4
+        
+        // curr-front
+        positions[vOffset * 3 + 0] = curr.x
+        positions[vOffset * 3 + 1] = curr.y
+        positions[vOffset * 3 + 2] = depth / 2
+        normals[vOffset * 3 + 0] = nx
+        normals[vOffset * 3 + 1] = ny
+        normals[vOffset * 3 + 2] = 0
+        vOffset++
+        
+        // next-front
+        positions[vOffset * 3 + 0] = next.x
+        positions[vOffset * 3 + 1] = next.y
+        positions[vOffset * 3 + 2] = depth / 2
+        normals[vOffset * 3 + 0] = nx
+        normals[vOffset * 3 + 1] = ny
+        normals[vOffset * 3 + 2] = 0
+        vOffset++
+        
+        // next-back
+        positions[vOffset * 3 + 0] = next.x
+        positions[vOffset * 3 + 1] = next.y
+        positions[vOffset * 3 + 2] = -depth / 2
+        normals[vOffset * 3 + 0] = nx
+        normals[vOffset * 3 + 1] = ny
+        normals[vOffset * 3 + 2] = 0
+        vOffset++
+        
+        // curr-back
+        positions[vOffset * 3 + 0] = curr.x
+        positions[vOffset * 3 + 1] = curr.y
+        positions[vOffset * 3 + 2] = -depth / 2
+        normals[vOffset * 3 + 0] = nx
+        normals[vOffset * 3 + 1] = ny
+        normals[vOffset * 3 + 2] = 0
+        vOffset++
+        
+        // Two triangles per quad (CCW winding when viewed from outside)
+        // Triangle 1: curr-front, next-front, next-back
+        indices[iOffset++] = qi + 0
+        indices[iOffset++] = qi + 1
+        indices[iOffset++] = qi + 2
+        // Triangle 2: curr-front, next-back, curr-back
+        indices[iOffset++] = qi + 0
+        indices[iOffset++] = qi + 2
+        indices[iOffset++] = qi + 3
+      }
+      
+      // Step 6: Create BufferGeometry
+      manualGeom = new THREE.BufferGeometry()
+      manualGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3))
+      manualGeom.setAttribute("normal", new THREE.BufferAttribute(normals, 3))
+      manualGeom.setIndex(new THREE.BufferAttribute(indices, 1))
+      
+      // Cleanup
+      frontCapGeom.dispose()
+      
       success = true
-      vertexCount = extrudedGeom.getAttribute("position")?.count ?? 0
+      vertexCount = manualGeom.getAttribute("position")?.count ?? 0
+      
+      console.log("[v0-solid] MANUAL EXTRUSION built:", {
+        boundaryPoints: n,
+        frontCapVerts: frontCapVertCount,
+        sideVerts: sideVertCount,
+        totalVerts: vertexCount,
+        totalIndices: totalIndexCount
+      })
     } catch (e) {
-      console.error("[v0-solid] RAW_EXTRUDE_ONLY: ExtrudeGeometry failed:", e)
+      console.error("[v0-solid] RAW_EXTRUDE_ONLY: Manual extrusion failed:", e)
     }
     
     // REQUIRED DEBUG OUTPUT - these fields MUST appear in debug panel
@@ -491,7 +631,7 @@ export function buildMaskSolid(
       usedSimplification: "NO",
       usedHoles: "NO",
       usedPrep: "NO",
-      geometryType: "EXTRUDED",
+      geometryType: "MANUAL_EXTRUDED",
       rawPts,
       finalPts,
       vertexCount,
@@ -517,8 +657,8 @@ export function buildMaskSolid(
     }
     
     return {
-      geometry: extrudedGeom,
-      geometryNoHoles: extrudedGeom,
+      geometry: manualGeom,
+      geometryNoHoles: manualGeom,
       stats,
       stages: emptyStages,
       diagnostics: {
@@ -529,7 +669,7 @@ export function buildMaskSolid(
         usedSimplification: "NO",
         usedHoles: "NO",
         usedPrep: "NO",
-        geometryType: "EXTRUDED"
+        geometryType: "MANUAL_EXTRUDED"
       }
     }
   }
