@@ -83,8 +83,9 @@ const SOLID_GEOM_MODE: "full" | "flatCapOnly" = "full"
 
 // DIAGNOSTIC MODE: "RAW_FLAT_ONLY" = true isolation test (raw traced outer, no holes, no simplification, no prep, flat only)
 //                  "RAW_EXTRUDE_ONLY" = same raw contour as RAW_FLAT_ONLY but with extrusion
+//                  "WALLS_ONLY" = ONLY side walls, NO caps at all - isolates wall builder
 //                  "NORMAL" = standard pipeline
-const SOLID_DIAGNOSTIC_MODE: "RAW_FLAT_ONLY" | "RAW_EXTRUDE_ONLY" | "NORMAL" = "RAW_EXTRUDE_ONLY"
+const SOLID_DIAGNOSTIC_MODE: "RAW_FLAT_ONLY" | "RAW_EXTRUDE_ONLY" | "WALLS_ONLY" | "NORMAL" = "WALLS_ONLY"
 
 const MASK_RESOLUTION = 512  // High-res mask for quality
 const DP_TOLERANCE = 0.5     // Douglas-Peucker simplification tolerance
@@ -738,6 +739,210 @@ export function buildMaskSolid(
     }
   }
   // ============= END RAW_EXTRUDE_ONLY DIAGNOSTIC MODE =============
+  
+  // ============= WALLS_ONLY DIAGNOSTIC MODE =============
+  // ONLY side walls, NO caps at all - isolates wall builder
+  if (SOLID_DIAGNOSTIC_MODE === "WALLS_ONLY") {
+    const rawPts = outerContour.length
+    
+    // SAME MINIMAL CLEANUP AS RAW_EXTRUDE_ONLY
+    let cleanedOuter = [...outerContour]
+    
+    // Remove duplicate closing point if present
+    if (cleanedOuter.length > 1) {
+      const first = cleanedOuter[0]
+      const last = cleanedOuter[cleanedOuter.length - 1]
+      if (Math.abs(first.x - last.x) < 0.5 && Math.abs(first.y - last.y) < 0.5) {
+        cleanedOuter.pop()
+      }
+    }
+    
+    // Remove near-identical consecutive points (< 0.5px apart)
+    const dedupedOuter: Point2D[] = [cleanedOuter[0]]
+    for (let i = 1; i < cleanedOuter.length; i++) {
+      const prev = dedupedOuter[dedupedOuter.length - 1]
+      const curr = cleanedOuter[i]
+      const dist = Math.sqrt((curr.x - prev.x) ** 2 + (curr.y - prev.y) ** 2)
+      if (dist >= 0.5) {
+        dedupedOuter.push(curr)
+      }
+    }
+    cleanedOuter = dedupedOuter
+    
+    const finalPts = cleanedOuter.length
+    
+    // Transform to world coordinates
+    const scaleX = canvasWidth / width
+    const scaleY = canvasHeight / height
+    const scale = Math.min(scaleX, scaleY)
+    const normScale = 3 / Math.max(canvasWidth, canvasHeight)
+    const depth = 0.15
+    
+    const toWorldX = (mx: number) => (mx - width / 2) * scale * normScale
+    const toWorldY = (my: number) => -(my - height / 2) * scale * normScale
+    
+    // Convert to world coordinates
+    let boundary = cleanedOuter.map(p => ({ x: toWorldX(p.x), y: toWorldY(p.y) }))
+    
+    // Ensure CCW winding
+    let boundaryArea = 0
+    for (let i = 0; i < boundary.length; i++) {
+      const p1 = boundary[i]
+      const p2 = boundary[(i + 1) % boundary.length]
+      boundaryArea += p1.x * p2.y - p2.x * p1.y
+    }
+    boundaryArea /= 2
+    if (boundaryArea < 0) {
+      boundary = boundary.slice().reverse()
+    }
+    
+    // BUILD WALLS ONLY - NO CAPS
+    let wallsGeom: THREE.BufferGeometry | null = null
+    let success = false
+    let vertexCount = 0
+    
+    const WALL_EPSILON = 0.0001
+    
+    try {
+      const n = boundary.length
+      if (n < 3) throw new Error("Need at least 3 boundary points")
+      
+      // Count valid segments
+      let validSegmentCount = 0
+      for (let i = 0; i < n; i++) {
+        const curr = boundary[i]
+        const next = boundary[(i + 1) % n]
+        const edgeLen = Math.sqrt((next.x - curr.x) ** 2 + (next.y - curr.y) ** 2)
+        if (edgeLen >= WALL_EPSILON) {
+          validSegmentCount++
+        }
+      }
+      
+      // WALLS ONLY: 4 vertices per quad, 6 indices per quad
+      const wallVertCount = validSegmentCount * 4
+      const wallIndexCount = validSegmentCount * 6
+      
+      const positions = new Float32Array(wallVertCount * 3)
+      const normals = new Float32Array(wallVertCount * 3)
+      const indices = new Uint32Array(wallIndexCount)
+      
+      let vOffset = 0
+      let iOffset = 0
+      let quadIndex = 0
+      
+      for (let i = 0; i < n; i++) {
+        const curr = boundary[i]
+        const next = boundary[(i + 1) % n]
+        
+        const edgeX = next.x - curr.x
+        const edgeY = next.y - curr.y
+        const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY)
+        
+        if (edgeLen < WALL_EPSILON) continue
+        
+        // Outward normal for CCW boundary
+        const nx = edgeY / edgeLen
+        const ny = -edgeX / edgeLen
+        
+        const qi = quadIndex * 4
+        
+        // curr-front
+        positions[vOffset * 3 + 0] = curr.x
+        positions[vOffset * 3 + 1] = curr.y
+        positions[vOffset * 3 + 2] = depth / 2
+        normals[vOffset * 3 + 0] = nx
+        normals[vOffset * 3 + 1] = ny
+        normals[vOffset * 3 + 2] = 0
+        vOffset++
+        
+        // next-front
+        positions[vOffset * 3 + 0] = next.x
+        positions[vOffset * 3 + 1] = next.y
+        positions[vOffset * 3 + 2] = depth / 2
+        normals[vOffset * 3 + 0] = nx
+        normals[vOffset * 3 + 1] = ny
+        normals[vOffset * 3 + 2] = 0
+        vOffset++
+        
+        // next-back
+        positions[vOffset * 3 + 0] = next.x
+        positions[vOffset * 3 + 1] = next.y
+        positions[vOffset * 3 + 2] = -depth / 2
+        normals[vOffset * 3 + 0] = nx
+        normals[vOffset * 3 + 1] = ny
+        normals[vOffset * 3 + 2] = 0
+        vOffset++
+        
+        // curr-back
+        positions[vOffset * 3 + 0] = curr.x
+        positions[vOffset * 3 + 1] = curr.y
+        positions[vOffset * 3 + 2] = -depth / 2
+        normals[vOffset * 3 + 0] = nx
+        normals[vOffset * 3 + 1] = ny
+        normals[vOffset * 3 + 2] = 0
+        vOffset++
+        
+        // Two triangles per quad
+        indices[iOffset++] = qi + 0
+        indices[iOffset++] = qi + 1
+        indices[iOffset++] = qi + 2
+        indices[iOffset++] = qi + 0
+        indices[iOffset++] = qi + 2
+        indices[iOffset++] = qi + 3
+        
+        quadIndex++
+      }
+      
+      wallsGeom = new THREE.BufferGeometry()
+      wallsGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3))
+      wallsGeom.setAttribute("normal", new THREE.BufferAttribute(normals, 3))
+      wallsGeom.setIndex(new THREE.BufferAttribute(indices, 1))
+      
+      success = true
+      vertexCount = wallsGeom.getAttribute("position")?.count ?? 0
+      
+      console.log("[v0-solid] WALLS_ONLY built:", {
+        rawPts,
+        finalPts,
+        boundaryPoints: n,
+        validSegments: validSegmentCount,
+        wallVerts: vertexCount,
+        wallIndices: wallIndexCount,
+        CAPS_DISABLED: true
+      })
+    } catch (e) {
+      console.error("[v0-solid] WALLS_ONLY failed:", e)
+    }
+    
+    const stats: MaskSolidStats = {
+      maskResolution: MASK_RESOLUTION,
+      filledPixelCount: filledCount,
+      componentCount,
+      largestComponentPixels: largestSize,
+      outerContourPoints: rawPts,
+      simplifiedOuterPoints: finalPts,
+      holeCount: 0,
+      rebuildTimeMs: performance.now() - startTime
+    }
+    
+    return {
+      geometry: wallsGeom,
+      geometryNoHoles: wallsGeom,
+      stats,
+      stages: emptyStages,
+      diagnostics: {
+        ...emptyDiagnostics,
+        outerSignedArea: boundaryArea,
+        outerWinding: boundaryArea > 0 ? "CCW" : "CW",
+        mode: "WALLS_ONLY",
+        usedSimplification: "NO",
+        usedHoles: "NO",
+        usedPrep: "NO",
+        geometryType: "WALLS_ONLY"
+      }
+    }
+  }
+  // ============= END WALLS_ONLY DIAGNOSTIC MODE =============
   
   // 6. PREPARE OUTER CONTOUR FOR GEOMETRY (aggressive stair-step removal)
   const outerPrepResult = prepareOuterContourForGeometry(outerContour)
