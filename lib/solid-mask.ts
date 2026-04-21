@@ -311,6 +311,91 @@ export function buildMaskSolid(
     }
   }
   
+  // ============= HARD FAIL-FAST GATE FOR INVALID CONTOURS =============
+  // Compute validation metrics
+  const outerAreaAbs = Math.abs(outerSignedArea)
+  
+  // Check if contour is closed (first point near last point)
+  let contourClosed = false
+  if (outerContour.length > 2) {
+    const first = outerContour[0]
+    const last = outerContour[outerContour.length - 1]
+    const closeDist = Math.sqrt((last.x - first.x) ** 2 + (last.y - first.y) ** 2)
+    contourClosed = closeDist < 2.0
+  }
+  
+  // Check if contour is properly ordered (no self-intersection)
+  const contourOrdered = !contourSelfIntersects(outerContour)
+  
+  // Area to fill ratio
+  const areaToFillRatio = filledCount > 0 ? outerAreaAbs / filledCount : 0
+  
+  // Determine fail reason (check in order of priority)
+  let contourRejected = false
+  let contourRejectReason = ""
+  
+  if (!contourClosed) {
+    contourRejected = true
+    contourRejectReason = "contourClosed=NO"
+  } else if (!contourOrdered) {
+    contourRejected = true
+    contourRejectReason = "contourOrdered=NO"
+  } else if (outerAreaAbs <= 1) {
+    contourRejected = true
+    contourRejectReason = `outerAreaAbs=${outerAreaAbs.toFixed(2)}<=1`
+  } else if (areaToFillRatio < 0.25) {
+    contourRejected = true
+    contourRejectReason = `areaToFillRatio=${areaToFillRatio.toFixed(4)}<0.25`
+  }
+  
+  // Log validation results
+  console.log("[v0-solid] CONTOUR VALIDATION GATE:", {
+    mode: SOLID_DIAGNOSTIC_MODE,
+    contourClosed: contourClosed ? "YES" : "NO",
+    contourOrdered: contourOrdered ? "YES" : "NO",
+    outerAreaAbs: outerAreaAbs.toFixed(2),
+    filledPixels: filledCount,
+    areaToFillRatio: areaToFillRatio.toFixed(4),
+    contourRejected: contourRejected ? "YES" : "NO",
+    contourRejectReason: contourRejectReason || "none"
+  })
+  
+  // HARD FAIL: Do NOT build geometry if contour is invalid
+  if (contourRejected) {
+    console.log("[v0-solid] FAIL-FAST: Rejecting invalid contour, NOT building geometry")
+    
+    const failStats: MaskSolidStats = {
+      maskResolution: MASK_RESOLUTION,
+      filledPixelCount: filledCount,
+      componentCount,
+      largestComponentPixels: largestSize,
+      outerContourPoints: outerContour.length,
+      simplifiedOuterPoints: 0,
+      holeCount: 0,
+      rebuildTimeMs: performance.now() - startTime
+    }
+    
+    return {
+      geometry: null,
+      geometryNoHoles: null,
+      stats: failStats,
+      stages: emptyStages,
+      diagnostics: {
+        ...emptyDiagnostics,
+        outerSignedArea,
+        outerWinding: outerSignedArea > 0 ? "CCW" : "CW",
+        mode: SOLID_DIAGNOSTIC_MODE,
+        contourClosed: contourClosed ? "YES" : "NO",
+        contourOrdered: contourOrdered ? "YES" : "NO",
+        outerAreaAbs,
+        areaToFillRatio,
+        contourRejected: "YES",
+        contourRejectReason
+      }
+    }
+  }
+  // ============= END HARD FAIL-FAST GATE =============
+  
   // ============= RAW_FLAT_ONLY DIAGNOSTIC MODE =============
   // TRUE isolation: raw traced outer, no holes, no simplification, no prep, flat only
   if (SOLID_DIAGNOSTIC_MODE === "RAW_FLAT_ONLY") {
