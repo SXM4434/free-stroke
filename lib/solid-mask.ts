@@ -51,6 +51,13 @@ export interface MaskSolidDiagnostics {
   usedHoles?: "YES" | "NO"
   usedPrep?: "YES" | "NO"
   geometryType?: "FLAT" | "EXTRUDED"
+  // Contour validation fields
+  contourClosed?: "YES" | "NO"
+  contourOrdered?: "YES" | "NO"
+  outerAreaAbs?: number
+  areaToFillRatio?: number
+  contourRejected?: "YES" | "NO"
+  contourRejectReason?: string
 }
 
 export interface MaskSolidStats {
@@ -745,31 +752,95 @@ export function buildMaskSolid(
   if (SOLID_DIAGNOSTIC_MODE === "WALLS_ONLY") {
     const rawPts = outerContour.length
     
-    // SAME MINIMAL CLEANUP AS RAW_EXTRUDE_ONLY
-    let cleanedOuter = [...outerContour]
+    // ========== CONTOUR VALIDATION ==========
+    // Compute raw contour signed area in mask space
+    let rawSignedArea = 0
+    for (let i = 0; i < outerContour.length; i++) {
+      const p1 = outerContour[i]
+      const p2 = outerContour[(i + 1) % outerContour.length]
+      rawSignedArea += p1.x * p2.y - p2.x * p1.y
+    }
+    rawSignedArea /= 2
+    const outerAreaAbs = Math.abs(rawSignedArea)
     
-    // Remove duplicate closing point if present
-    if (cleanedOuter.length > 1) {
-      const first = cleanedOuter[0]
-      const last = cleanedOuter[cleanedOuter.length - 1]
-      if (Math.abs(first.x - last.x) < 0.5 && Math.abs(first.y - last.y) < 0.5) {
-        cleanedOuter.pop()
+    // Check if contour is closed (first point near last point)
+    let contourClosed = false
+    if (outerContour.length > 2) {
+      const first = outerContour[0]
+      const last = outerContour[outerContour.length - 1]
+      const closeDist = Math.sqrt((last.x - first.x) ** 2 + (last.y - first.y) ** 2)
+      contourClosed = closeDist < 2.0 // Within 2 pixels
+    }
+    
+    // Check if contour is properly ordered (no self-intersection as proxy)
+    const contourOrdered = !contourSelfIntersects(outerContour)
+    
+    // Area to fill ratio - should be close to 1.0 for valid contour
+    const areaToFillRatio = filledCount > 0 ? outerAreaAbs / filledCount : 0
+    
+    // Validation
+    let contourRejected = false
+    let contourRejectReason = ""
+    
+    if (outerContour.length < 3) {
+      contourRejected = true
+      contourRejectReason = "too few points"
+    } else if (!contourClosed) {
+      contourRejected = true
+      contourRejectReason = "not closed"
+    } else if (areaToFillRatio < 0.5) {
+      contourRejected = true
+      contourRejectReason = `area/fill ratio ${areaToFillRatio.toFixed(3)} < 0.5`
+    }
+    
+    console.log("[v0-solid] CONTOUR VALIDATION:", {
+      rawPts,
+      contourClosed: contourClosed ? "YES" : "NO",
+      contourOrdered: contourOrdered ? "YES" : "NO",
+      outerAreaAbs: outerAreaAbs.toFixed(1),
+      filledPixels: filledCount,
+      areaToFillRatio: areaToFillRatio.toFixed(3),
+      contourRejected: contourRejected ? "YES" : "NO",
+      contourRejectReason: contourRejectReason || "none"
+    })
+    
+    // If contour is invalid, fail fast
+    if (contourRejected) {
+      const stats: MaskSolidStats = {
+        maskResolution: MASK_RESOLUTION,
+        filledPixelCount: filledCount,
+        componentCount,
+        largestComponentPixels: largestSize,
+        outerContourPoints: rawPts,
+        simplifiedOuterPoints: 0,
+        holeCount: 0,
+        rebuildTimeMs: performance.now() - startTime
+      }
+      
+      return {
+        geometry: null,
+        geometryNoHoles: null,
+        stats,
+        stages: emptyStages,
+        diagnostics: {
+          ...emptyDiagnostics,
+          outerSignedArea: rawSignedArea,
+          outerWinding: rawSignedArea > 0 ? "CCW" : "CW",
+          mode: "WALLS_ONLY",
+          contourClosed: contourClosed ? "YES" : "NO",
+          contourOrdered: contourOrdered ? "YES" : "NO",
+          outerAreaAbs,
+          areaToFillRatio,
+          contourRejected: "YES",
+          contourRejectReason
+        }
       }
     }
     
-    // Remove near-identical consecutive points (< 0.5px apart)
-    const dedupedOuter: Point2D[] = [cleanedOuter[0]]
-    for (let i = 1; i < cleanedOuter.length; i++) {
-      const prev = dedupedOuter[dedupedOuter.length - 1]
-      const curr = cleanedOuter[i]
-      const dist = Math.sqrt((curr.x - prev.x) ** 2 + (curr.y - prev.y) ** 2)
-      if (dist >= 0.5) {
-        dedupedOuter.push(curr)
-      }
-    }
-    cleanedOuter = dedupedOuter
+    // ========== END CONTOUR VALIDATION ==========
     
-    const finalPts = cleanedOuter.length
+    // Use raw contour directly (no cleanup needed for boundary-edge traced contour)
+    const finalPts = outerContour.length
     
     // Transform to world coordinates
     const scaleX = canvasWidth / width
@@ -782,7 +853,7 @@ export function buildMaskSolid(
     const toWorldY = (my: number) => -(my - height / 2) * scale * normScale
     
     // Convert to world coordinates
-    let boundary = cleanedOuter.map(p => ({ x: toWorldX(p.x), y: toWorldY(p.y) }))
+    let boundary = outerContour.map(p => ({ x: toWorldX(p.x), y: toWorldY(p.y) }))
     
     // Ensure CCW winding
     let boundaryArea = 0
@@ -794,6 +865,7 @@ export function buildMaskSolid(
     boundaryArea /= 2
     if (boundaryArea < 0) {
       boundary = boundary.slice().reverse()
+      boundaryArea = -boundaryArea
     }
     
     // BUILD WALLS ONLY - NO CAPS
@@ -938,7 +1010,13 @@ export function buildMaskSolid(
         usedSimplification: "NO",
         usedHoles: "NO",
         usedPrep: "NO",
-        geometryType: "WALLS_ONLY"
+        geometryType: "WALLS_ONLY",
+        contourClosed: contourClosed ? "YES" : "NO",
+        contourOrdered: contourOrdered ? "YES" : "NO",
+        outerAreaAbs,
+        areaToFillRatio,
+        contourRejected: "NO",
+        contourRejectReason: ""
       }
     }
   }
@@ -1201,66 +1279,143 @@ function labelConnectedComponents(
   return { labels, componentCount, componentSizes }
 }
 
-// ============= Stage 3: Contour Tracing (Theo Pavlidis / Square Tracing) =============
+// ============= Stage 3: Contour Tracing (Boundary Edge Chaining) =============
+
+interface BoundaryEdge {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
 
 /**
- * Trace the outer contour of a filled region using the square tracing algorithm.
- * This traces the BOUNDARY of the filled region, not edge transitions.
+ * Extract boundary edges between filled and empty cells.
+ * An edge exists where a filled cell is adjacent to an empty cell (or grid boundary).
+ * Returns edges as line segments along cell boundaries (not pixel centers).
  */
-function traceOuterContour(mask: boolean[], width: number, height: number): Point2D[] {
-  // Find the topmost-leftmost filled pixel (guaranteed to be on outer boundary)
-  let startIdx = -1
+function extractBoundaryEdges(mask: boolean[], width: number, height: number): BoundaryEdge[] {
+  const edges: BoundaryEdge[] = []
+  
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (mask[y * width + x]) {
-        startIdx = y * width + x
-        break
+      const idx = y * width + x
+      if (!mask[idx]) continue // Only process filled cells
+      
+      // Check each of the 4 sides of this cell
+      // If neighbor is empty or out of bounds, add a boundary edge
+      
+      // Top edge (y to y, x to x+1)
+      if (y === 0 || !mask[(y - 1) * width + x]) {
+        edges.push({ x1: x, y1: y, x2: x + 1, y2: y })
+      }
+      
+      // Bottom edge (y+1 to y+1, x+1 to x) - reversed for CCW
+      if (y === height - 1 || !mask[(y + 1) * width + x]) {
+        edges.push({ x1: x + 1, y1: y + 1, x2: x, y2: y + 1 })
+      }
+      
+      // Left edge (x to x, y+1 to y) - reversed for CCW
+      if (x === 0 || !mask[y * width + (x - 1)]) {
+        edges.push({ x1: x, y1: y + 1, x2: x, y2: y })
+      }
+      
+      // Right edge (x+1 to x+1, y to y+1)
+      if (x === width - 1 || !mask[y * width + (x + 1)]) {
+        edges.push({ x1: x + 1, y1: y, x2: x + 1, y2: y + 1 })
       }
     }
-    if (startIdx >= 0) break
   }
   
-  if (startIdx < 0) return []
+  return edges
+}
+
+/**
+ * Chain boundary edges into closed loops by matching endpoints.
+ * Returns the longest loop (the outer boundary).
+ */
+function chainBoundaryEdges(edges: BoundaryEdge[]): Point2D[] {
+  if (edges.length === 0) return []
   
-  const startX = startIdx % width
-  const startY = Math.floor(startIdx / width)
+  // Build adjacency map: endpoint -> list of edges starting/ending there
+  const endpointKey = (x: number, y: number) => `${x},${y}`
+  const edgesByStart = new Map<string, BoundaryEdge[]>()
   
-  // Direction vectors: 0=right, 1=down, 2=left, 3=up
-  const dx = [1, 0, -1, 0]
-  const dy = [0, 1, 0, -1]
+  for (const edge of edges) {
+    const key = endpointKey(edge.x1, edge.y1)
+    if (!edgesByStart.has(key)) edgesByStart.set(key, [])
+    edgesByStart.get(key)!.push(edge)
+  }
   
-  const contour: Point2D[] = []
-  let x = startX
-  let y = startY
-  let dir = 3  // Start looking up (we came from above since this is topmost)
+  // Track used edges
+  const used = new Set<BoundaryEdge>()
+  const loops: Point2D[][] = []
   
-  const maxIterations = width * height * 4
-  let iterations = 0
-  
-  do {
-    // Add current pixel center to contour
-    contour.push({ x: x + 0.5, y: y + 0.5 })
+  // Chain edges into loops
+  for (const edge of edges) {
+    if (used.has(edge)) continue
     
-    // Try to turn left first (relative to current direction), then straight, then right, then back
-    let found = false
-    for (let turn = -1; turn <= 2; turn++) {
-      const newDir = (dir + turn + 4) % 4
-      const nx = x + dx[newDir]
-      const ny = y + dy[newDir]
+    // Start a new loop from this edge
+    const loop: Point2D[] = []
+    let current = edge
+    const startKey = endpointKey(edge.x1, edge.y1)
+    
+    while (current && !used.has(current)) {
+      used.add(current)
+      loop.push({ x: current.x1, y: current.y1 })
       
-      if (nx >= 0 && nx < width && ny >= 0 && ny < height && mask[ny * width + nx]) {
-        x = nx
-        y = ny
-        dir = newDir
-        found = true
+      // Find next edge that starts where this one ends
+      const nextKey = endpointKey(current.x2, current.y2)
+      
+      // Check if we've closed the loop
+      if (nextKey === startKey && loop.length > 2) {
         break
       }
+      
+      const candidates = edgesByStart.get(nextKey)
+      if (!candidates) break
+      
+      // Find an unused candidate
+      let next: BoundaryEdge | undefined
+      for (const cand of candidates) {
+        if (!used.has(cand)) {
+          next = cand
+          break
+        }
+      }
+      
+      current = next!
     }
     
-    if (!found) break  // Isolated pixel or error
-    
-    iterations++
-  } while ((x !== startX || y !== startY) && iterations < maxIterations)
+    if (loop.length >= 3) {
+      loops.push(loop)
+    }
+  }
+  
+  // Return the longest loop (should be the outer boundary)
+  if (loops.length === 0) return []
+  
+  let longest = loops[0]
+  for (const loop of loops) {
+    if (loop.length > longest.length) {
+      longest = loop
+    }
+  }
+  
+  return longest
+}
+
+/**
+ * Trace the outer contour using boundary edge extraction and chaining.
+ * This produces a proper closed loop along cell boundaries with meaningful signed area.
+ */
+function traceOuterContour(mask: boolean[], width: number, height: number): Point2D[] {
+  // Step 1: Extract all boundary edges
+  const edges = extractBoundaryEdges(mask, width, height)
+  
+  if (edges.length === 0) return []
+  
+  // Step 2: Chain edges into the longest closed loop
+  const contour = chainBoundaryEdges(edges)
   
   return contour
 }
