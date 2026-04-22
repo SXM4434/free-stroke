@@ -52,6 +52,7 @@ export interface MaskSolidDiagnostics {
   usedPrep?: "YES" | "NO"
   geometryType?: "FLAT" | "EXTRUDED"
   // Contour validation fields
+  gateExecuted?: "YES" | "NO"
   contourClosed?: "YES" | "NO"
   contourOrdered?: "YES" | "NO"
   outerAreaAbs?: number
@@ -837,7 +838,7 @@ export function buildMaskSolid(
   if (SOLID_DIAGNOSTIC_MODE === "WALLS_ONLY") {
     const rawPts = outerContour.length
     
-    // ========== CONTOUR VALIDATION ==========
+    // ========== HARD FAIL-FAST GATE (MANDATORY) ==========
     // Compute raw contour signed area in mask space
     let rawSignedArea = 0
     for (let i = 0; i < outerContour.length; i++) {
@@ -854,44 +855,48 @@ export function buildMaskSolid(
       const first = outerContour[0]
       const last = outerContour[outerContour.length - 1]
       const closeDist = Math.sqrt((last.x - first.x) ** 2 + (last.y - first.y) ** 2)
-      contourClosed = closeDist < 2.0 // Within 2 pixels
+      contourClosed = closeDist < 2.0
     }
     
-    // Check if contour is properly ordered (no self-intersection as proxy)
+    // Check if contour is properly ordered
     const contourOrdered = !contourSelfIntersects(outerContour)
     
-    // Area to fill ratio - should be close to 1.0 for valid contour
+    // Area to fill ratio
     const areaToFillRatio = filledCount > 0 ? outerAreaAbs / filledCount : 0
     
-    // Validation
-    let contourRejected = false
+    // SINGLE BOOLEAN DECISION
+    let shouldRejectContour = false
     let contourRejectReason = ""
     
     if (outerContour.length < 3) {
-      contourRejected = true
+      shouldRejectContour = true
       contourRejectReason = "too few points"
     } else if (!contourClosed) {
-      contourRejected = true
-      contourRejectReason = "not closed"
-    } else if (areaToFillRatio < 0.5) {
-      contourRejected = true
-      contourRejectReason = `area/fill ratio ${areaToFillRatio.toFixed(3)} < 0.5`
+      shouldRejectContour = true
+      contourRejectReason = "contour not closed"
+    } else if (outerAreaAbs < 100) {
+      shouldRejectContour = true
+      contourRejectReason = `outerAreaAbs=${outerAreaAbs.toFixed(1)}<100`
+    } else if (areaToFillRatio < 0.25) {
+      shouldRejectContour = true
+      contourRejectReason = `areaToFillRatio=${areaToFillRatio.toFixed(4)}<0.25`
     }
     
-    console.log("[v0-solid] CONTOUR VALIDATION:", {
-      rawPts,
-      contourClosed: contourClosed ? "YES" : "NO",
-      contourOrdered: contourOrdered ? "YES" : "NO",
+    // MANDATORY CONSOLE LOG
+    console.log("[v0-solid] WALLS_ONLY GATE:", {
+      gateExecuted: "YES",
       outerAreaAbs: outerAreaAbs.toFixed(1),
       filledPixels: filledCount,
-      areaToFillRatio: areaToFillRatio.toFixed(3),
-      contourRejected: contourRejected ? "YES" : "NO",
+      areaToFillRatio: areaToFillRatio.toFixed(4),
+      contourClosed: contourClosed ? "YES" : "NO",
+      contourOrdered: contourOrdered ? "YES" : "NO",
+      contourRejected: shouldRejectContour ? "YES" : "NO",
       contourRejectReason: contourRejectReason || "none"
     })
     
-    // If contour is invalid, fail fast
-    if (contourRejected) {
-      const stats: MaskSolidStats = {
+    // EARLY RETURN IF REJECTED - NO GEOMETRY BUILT
+    if (shouldRejectContour) {
+      const failStats: MaskSolidStats = {
         maskResolution: MASK_RESOLUTION,
         filledPixelCount: filledCount,
         componentCount,
@@ -902,16 +907,18 @@ export function buildMaskSolid(
         rebuildTimeMs: performance.now() - startTime
       }
       
+      // FINAL RETURN - CANNOT BE OVERWRITTEN
       return {
         geometry: null,
         geometryNoHoles: null,
-        stats,
+        stats: failStats,
         stages: emptyStages,
         diagnostics: {
           ...emptyDiagnostics,
           outerSignedArea: rawSignedArea,
           outerWinding: rawSignedArea > 0 ? "CCW" : "CW",
           mode: "WALLS_ONLY",
+          gateExecuted: "YES",
           contourClosed: contourClosed ? "YES" : "NO",
           contourOrdered: contourOrdered ? "YES" : "NO",
           outerAreaAbs,
@@ -922,7 +929,7 @@ export function buildMaskSolid(
       }
     }
     
-    // ========== END CONTOUR VALIDATION ==========
+    // ========== END HARD FAIL-FAST GATE ==========
     
     // Use raw contour directly (no cleanup needed for boundary-edge traced contour)
     const finalPts = outerContour.length
@@ -1092,6 +1099,7 @@ export function buildMaskSolid(
         outerSignedArea: boundaryArea,
         outerWinding: boundaryArea > 0 ? "CCW" : "CW",
         mode: "WALLS_ONLY",
+        gateExecuted: "YES",
         usedSimplification: "NO",
         usedHoles: "NO",
         usedPrep: "NO",
