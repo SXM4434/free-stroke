@@ -86,60 +86,7 @@ export function buildMaskSolid(
 ): MaskSolidResult {
   const startTime = performance.now()
   
-  // ============= FORCED PROOF MARKER - PROVES THIS FILE IS LIVE =============
-  // This MUST be the first thing that runs. If the screenshot does not show
-  // SOLID_MASK_V2_LIVE, then this file is NOT the active runtime path.
-  console.log("[v0-solid] PROOF MARKER EXECUTING: SOLID_MASK_V2_LIVE")
-  
-  const proofDiagnostics: MaskSolidDiagnostics = {
-    geometryType: "NULL",
-    outerSignedArea: 0,
-    outerWinding: "CCW",
-    gateExecuted: "YES",
-    contourClosed: "NO",
-    contourOrdered: "NO",
-    outerAreaAbs: 0,
-    filledPixels: 0,
-    areaToFillRatio: 0,
-    contourRejected: "YES",
-    contourRejectReason: "FORCED_NULL_PROOF",
-    // PROOF FIELDS - must be visible in debug panel
-    ACTIVE_SOLID_PATH_PROOF: "SOLID_MASK_V2_LIVE",
-    proofColor: "lime",
-    proofMode: "FORCED_NULL"
-  } as MaskSolidDiagnostics & { ACTIVE_SOLID_PATH_PROOF: string; proofColor: string; proofMode: string }
-  
-  const proofStats: MaskSolidStats = {
-    maskResolution: MASK_RESOLUTION,
-    filledPixelCount: 0,
-    componentCount: 0,
-    largestComponentPixels: 0,
-    outerContourPoints: 0,
-    simplifiedOuterPoints: 0,
-    holeCount: 0,
-    rebuildTimeMs: performance.now() - startTime
-  }
-  
-  const proofStages: MaskSolidStages = {
-    centerline: stroke.points,
-    maskData: [],
-    maskWidth: 0,
-    maskHeight: 0,
-    outerContour: [],
-    simplifiedOuter: [],
-    holes: [],
-    simplifiedHoles: []
-  }
-  
-  // FORCE RETURN NULL - no geometry will be built
-  return {
-    geometry: null,
-    geometryNoHoles: null,
-    stats: proofStats,
-    stages: proofStages,
-    diagnostics: proofDiagnostics
-  }
-  // ============= END FORCED PROOF MARKER =============
+  console.log("[v0-solid] FLAT_OR_NULL pipeline executing")
   
   // Initialize empty structures
   const emptyStages: MaskSolidStages = {
