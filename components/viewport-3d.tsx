@@ -1351,6 +1351,48 @@ function SolidDebugOverlay() {
         </span>
       </div>
       
+      {/* Raster Stage Diagnostics - read from lastStages.rasterDebug */}
+      {(() => {
+        const r = d.lastStages?.rasterDebug
+        return (
+          <div className="mt-1 border-t border-orange-500/30 pt-1">
+            <div className="mb-0.5 text-[9px] font-bold text-orange-400">RASTER STAGE</div>
+            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+              <span className="text-gray-400">rasterExecuted:</span>
+              <span className={r?.rasterStageExecuted === "YES" ? "text-green-400" : "text-red-400"}>{r?.rasterStageExecuted || "?"}</span>
+              
+              <span className="text-gray-400">inputSpace:</span>
+              <span>{r?.rasterInputSpace || "?"}</span>
+              
+              <span className="text-gray-400">maskSize:</span>
+              <span>{r?.rasterMaskWidth || "?"}x{r?.rasterMaskHeight || "?"}</span>
+              
+              <span className="text-gray-400">thicknessPx:</span>
+              <span>{typeof r?.rasterThicknessPx === "number" ? r.rasterThicknessPx.toFixed(1) : "?"}</span>
+              
+              <span className="text-gray-400">strokeBoundsX:</span>
+              <span className="text-[8px]">{r?.rasterStrokeBoundsX || "?"}</span>
+              
+              <span className="text-gray-400">strokeBoundsY:</span>
+              <span className="text-[8px]">{r?.rasterStrokeBoundsY || "?"}</span>
+              
+              <span className="text-gray-400">filledPixels:</span>
+              <span className={r?.filledPixels && r.filledPixels > 0 ? "text-green-400" : "text-red-400"}>{r?.filledPixels ?? "?"}</span>
+              
+              <span className="text-gray-400">rasterRejected:</span>
+              <span className={r?.rasterRejected === "YES" ? "text-red-400 font-bold" : "text-green-400"}>{r?.rasterRejected || "?"}</span>
+              
+              {r?.rasterRejected === "YES" && (
+                <>
+                  <span className="text-gray-400">rejectReason:</span>
+                  <span className="text-red-400 text-[8px]">{r?.rasterRejectReason || "unknown"}</span>
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+      
       {/* Contour Diagnostics Section */}
       <div className="mt-1 border-t border-blue-500/30 pt-1">
         <div className="mb-0.5 text-[9px] font-bold text-blue-400">CONTOUR DIAGNOSTICS</div>

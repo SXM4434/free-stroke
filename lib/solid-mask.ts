@@ -37,6 +37,18 @@ export interface MaskSolidDiagnostics {
   geometryType: "FLAT" | "NULL"
   outerSignedArea: number
   outerWinding: "CCW" | "CW"
+  // Raster stage fields - MUST be visible in debug panel
+  rasterStageExecuted: "YES" | "NO"
+  rasterInputSpace: string
+  rasterCanvasWidth: number
+  rasterCanvasHeight: number
+  rasterMaskWidth: number
+  rasterMaskHeight: number
+  rasterThicknessPx: number
+  rasterStrokeBoundsX: string
+  rasterStrokeBoundsY: string
+  rasterRejected: "YES" | "NO"
+  rasterRejectReason: string
   // Validation gate fields - MUST be visible in debug panel
   gateExecuted: "YES" | "NO"
   contourClosed: "YES" | "NO"
@@ -69,6 +81,21 @@ export interface MaskSolidStages {
   holes: Point2D[][]
   simplifiedHoles: Point2D[][]
   rawOuter?: Point2D[]
+  // Raster debug info for panel display
+  rasterDebug?: {
+    rasterStageExecuted: "YES" | "NO"
+    rasterInputSpace: string
+    rasterCanvasWidth: number
+    rasterCanvasHeight: number
+    rasterMaskWidth: number
+    rasterMaskHeight: number
+    rasterThicknessPx: number
+    rasterStrokeBoundsX: string
+    rasterStrokeBoundsY: string
+    filledPixels: number
+    rasterRejected: "YES" | "NO"
+    rasterRejectReason: string
+  }
 }
 
 // ============= Constants =============
@@ -115,6 +142,19 @@ export function buildMaskSolid(
     geometryType: "NULL",
     outerSignedArea: 0,
     outerWinding: "CCW",
+    // Raster fields
+    rasterStageExecuted: "NO",
+    rasterInputSpace: "UNKNOWN",
+    rasterCanvasWidth: canvasWidth,
+    rasterCanvasHeight: canvasHeight,
+    rasterMaskWidth: 0,
+    rasterMaskHeight: 0,
+    rasterThicknessPx: 0,
+    rasterStrokeBoundsX: "",
+    rasterStrokeBoundsY: "",
+    rasterRejected: "NO",
+    rasterRejectReason: "",
+    // Validation fields
     gateExecuted: "NO",
     contourClosed: "NO",
     contourOrdered: "NO",
@@ -137,19 +177,37 @@ export function buildMaskSolid(
   }
   
   // ========== STAGE 1: Render stroke to mask ==========
-  const { mask, width, height, filledCount } = renderStrokeToMask(stroke.points, thickness, canvasWidth, canvasHeight)
+  const { mask, width, height, filledCount, rasterDebug } = renderStrokeToMask(stroke.points, thickness, canvasWidth, canvasHeight)
   
   emptyStages.maskData = mask
   emptyStages.maskWidth = width
   emptyStages.maskHeight = height
+  emptyStages.rasterDebug = rasterDebug  // Store for panel access
   
+  // HARD FAIL: If no filled pixels, stop immediately
   if (filledCount === 0) {
     return {
       geometry: null,
       geometryNoHoles: null,
       stats: { ...emptyStats, rebuildTimeMs: performance.now() - startTime },
       stages: emptyStages,
-      diagnostics: { ...nullDiagnostics, filledPixels: 0, contourRejectReason: "no filled pixels" }
+      diagnostics: {
+        ...nullDiagnostics,
+        // Raster debug fields
+        rasterStageExecuted: rasterDebug.rasterStageExecuted,
+        rasterInputSpace: rasterDebug.rasterInputSpace,
+        rasterCanvasWidth: rasterDebug.rasterCanvasWidth,
+        rasterCanvasHeight: rasterDebug.rasterCanvasHeight,
+        rasterMaskWidth: rasterDebug.rasterMaskWidth,
+        rasterMaskHeight: rasterDebug.rasterMaskHeight,
+        rasterThicknessPx: rasterDebug.rasterThicknessPx,
+        rasterStrokeBoundsX: rasterDebug.rasterStrokeBoundsX,
+        rasterStrokeBoundsY: rasterDebug.rasterStrokeBoundsY,
+        rasterRejected: "YES",
+        rasterRejectReason: rasterDebug.rasterRejectReason || "no filled pixels",
+        filledPixels: 0,
+        contourRejectReason: "raster stage failed"
+      }
     }
   }
   
@@ -255,6 +313,19 @@ export function buildMaskSolid(
     geometryType: contourRejected ? "NULL" : "FLAT",
     outerSignedArea,
     outerWinding: outerSignedArea > 0 ? "CCW" : "CW",
+    // Raster fields (from earlier stage)
+    rasterStageExecuted: rasterDebug.rasterStageExecuted,
+    rasterInputSpace: rasterDebug.rasterInputSpace,
+    rasterCanvasWidth: rasterDebug.rasterCanvasWidth,
+    rasterCanvasHeight: rasterDebug.rasterCanvasHeight,
+    rasterMaskWidth: rasterDebug.rasterMaskWidth,
+    rasterMaskHeight: rasterDebug.rasterMaskHeight,
+    rasterThicknessPx: rasterDebug.rasterThicknessPx,
+    rasterStrokeBoundsX: rasterDebug.rasterStrokeBoundsX,
+    rasterStrokeBoundsY: rasterDebug.rasterStrokeBoundsY,
+    rasterRejected: rasterDebug.rasterRejected,
+    rasterRejectReason: rasterDebug.rasterRejectReason,
+    // Validation fields
     gateExecuted: "YES",
     contourClosed: contourClosed ? "YES" : "NO",
     contourOrdered: contourOrdered ? "YES" : "NO",
@@ -373,14 +444,91 @@ export function buildMaskSolid(
 
 // ============= Stage 1: Render Stroke to Mask =============
 
+interface RasterDebugInfo {
+  rasterStageExecuted: "YES" | "NO"
+  rasterInputSpace: string
+  rasterCanvasWidth: number
+  rasterCanvasHeight: number
+  rasterMaskWidth: number
+  rasterMaskHeight: number
+  rasterThicknessPx: number
+  rasterStrokeBoundsX: string
+  rasterStrokeBoundsY: string
+  filledPixels: number
+  rasterRejected: "YES" | "NO"
+  rasterRejectReason: string
+}
+
 function renderStrokeToMask(
   points: Point2D[],
   thickness: number,
   canvasWidth: number,
   canvasHeight: number
-): { mask: boolean[], width: number, height: number, filledCount: number } {
+): { mask: boolean[], width: number, height: number, filledCount: number, rasterDebug: RasterDebugInfo } {
   const width = MASK_RESOLUTION
   const height = Math.round(MASK_RESOLUTION * (canvasHeight / canvasWidth))
+  
+  // Initialize raster debug info
+  const rasterDebug: RasterDebugInfo = {
+    rasterStageExecuted: "YES",
+    rasterInputSpace: "WORLD",
+    rasterCanvasWidth: canvasWidth,
+    rasterCanvasHeight: canvasHeight,
+    rasterMaskWidth: width,
+    rasterMaskHeight: height,
+    rasterThicknessPx: 0,
+    rasterStrokeBoundsX: "",
+    rasterStrokeBoundsY: "",
+    filledPixels: 0,
+    rasterRejected: "NO",
+    rasterRejectReason: ""
+  }
+  
+  // ========== COORDINATE SPACE DETECTION ==========
+  // Input points come from geometry-engines.ts strokesToTestStroke() which converts
+  // canvas pixel coords (0 to canvasWidth) to world coords (roughly -1.5 to +1.5).
+  // The conversion is: worldX = (pixelX - canvasWidth/2) * (3 / max(canvasWidth, canvasHeight))
+  //
+  // We need to reverse this to get mask coordinates:
+  // maskX = (worldX / worldScale + canvasWidth/2) * (maskWidth / canvasWidth)
+  // where worldScale = 3 / max(canvasWidth, canvasHeight)
+  
+  const worldScale = 3.0 / Math.max(canvasWidth, canvasHeight)
+  
+  // Compute stroke bounds in world space
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (const p of points) {
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  
+  rasterDebug.rasterStrokeBoundsX = `${minX.toFixed(3)} to ${maxX.toFixed(3)}`
+  rasterDebug.rasterStrokeBoundsY = `${minY.toFixed(3)} to ${maxY.toFixed(3)}`
+  
+  // Convert world coords to mask coords
+  // World -> Canvas pixel: pixelX = worldX / worldScale + canvasWidth/2
+  // Canvas pixel -> Mask: maskX = pixelX * (maskWidth / canvasWidth)
+  // Combined: maskX = (worldX / worldScale + canvasWidth/2) * (maskWidth / canvasWidth)
+  //         = worldX * (maskWidth / (canvasWidth * worldScale)) + maskWidth/2
+  
+  const toMaskX = (worldX: number) => {
+    const pixelX = worldX / worldScale + canvasWidth / 2
+    return pixelX * (width / canvasWidth)
+  }
+  
+  const toMaskY = (worldY: number) => {
+    // Note: world Y is flipped (negative = down), but canvas Y is normal (positive = down)
+    // World -> Canvas pixel: pixelY = -worldY / worldScale + canvasHeight/2
+    const pixelY = -worldY / worldScale + canvasHeight / 2
+    return pixelY * (height / canvasHeight)
+  }
+  
+  // Convert thickness from world units to mask pixels
+  // thickness in world units * (maskWidth / canvasWidth) / worldScale
+  const thicknessPx = thickness / worldScale * (width / canvasWidth)
+  rasterDebug.rasterThicknessPx = thicknessPx
   
   // Create offscreen canvas
   const canvas = document.createElement("canvas")
@@ -394,14 +542,14 @@ function renderStrokeToMask(
   
   // Draw stroke in white (foreground)
   ctx.strokeStyle = "white"
-  ctx.lineWidth = (thickness / canvasWidth) * width
+  ctx.lineWidth = Math.max(1, thicknessPx) // Ensure at least 1px
   ctx.lineCap = "round"
   ctx.lineJoin = "round"
   
   ctx.beginPath()
   for (let i = 0; i < points.length; i++) {
-    const mx = (points[i].x / canvasWidth) * width
-    const my = (points[i].y / canvasHeight) * height
+    const mx = toMaskX(points[i].x)
+    const my = toMaskY(points[i].y)
     
     if (i === 0) {
       ctx.moveTo(mx, my)
@@ -423,7 +571,16 @@ function renderStrokeToMask(
     if (isFilled) filledCount++
   }
   
-  return { mask, width, height, filledCount }
+  rasterDebug.filledPixels = filledCount
+  
+  if (filledCount === 0) {
+    rasterDebug.rasterRejected = "YES"
+    rasterDebug.rasterRejectReason = `stroke bounds (${rasterDebug.rasterStrokeBoundsX}, ${rasterDebug.rasterStrokeBoundsY}) may be outside mask`
+  }
+  
+  console.log("[v0-solid] RASTER DEBUG:", rasterDebug)
+  
+  return { mask, width, height, filledCount, rasterDebug }
 }
 
 // ============= Stage 2: Connected Component Labeling =============
