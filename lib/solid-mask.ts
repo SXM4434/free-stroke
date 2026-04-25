@@ -121,7 +121,7 @@ const MASK_RESOLUTION = 512
 // EXTRUDE_FROM_FLAT_BASE = same validated flat base, then extruded
 //
 // Default: FLAT_BASE (the validated checkpoint must remain stable)
-const SOLID_GEOMETRY_MODE: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" = "FLAT_BASE"
+const SOLID_GEOMETRY_MODE: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" = "EXTRUDE_FROM_FLAT_BASE"
 
 // Extrusion depth in world units (only used when mode is EXTRUDE_FROM_FLAT_BASE)
 const EXTRUDE_DEPTH = 0.15
