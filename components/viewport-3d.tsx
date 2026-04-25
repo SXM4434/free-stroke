@@ -1431,6 +1431,25 @@ function SolidDebugOverlay() {
                   <span className="text-red-400 text-[8px]">{s.contourRejectReason || "unknown"}</span>
                 </>
               )}
+              
+              {s.extrusionBuilder !== undefined && (
+                <>
+                  <span className="text-gray-400">extrusionBuilder:</span>
+                  <span className="text-cyan-300 font-bold">{s.extrusionBuilder}</span>
+                  
+                  <span className="text-gray-400">frontCapTris:</span>
+                  <span>{s.frontCapTriCount ?? "?"}</span>
+                  
+                  <span className="text-gray-400">backCapTris:</span>
+                  <span>{s.backCapTriCount ?? "?"}</span>
+                  
+                  <span className="text-gray-400">wallSegments:</span>
+                  <span className={s.wallSegmentCount && s.wallSegmentCount > 0 ? "text-green-400" : "text-red-400"}>{s.wallSegmentCount ?? "?"}</span>
+                  
+                  <span className="text-gray-400">skippedWalls:</span>
+                  <span>{s.skippedWallSegments ?? "?"}</span>
+                </>
+              )}
             </div>
           </div>
         )

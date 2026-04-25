@@ -109,6 +109,12 @@ export interface MaskSolidStages {
     areaToFillRatio: number
     contourRejected: "YES" | "NO"
     contourRejectReason: string
+    // Extrusion builder debug fields
+    extrusionBuilder?: string
+    wallSegmentCount?: number
+    skippedWallSegments?: number
+    frontCapTriCount?: number
+    backCapTriCount?: number
   }
 }
 
@@ -532,29 +538,24 @@ export function buildMaskSolid(
     }
   }
   
-  // ----- EXTRUDE_FROM_FLAT_BASE: build extrusion from validated shape -----
-  // Branches from the EXACT same validated shape used by FLAT_BASE.
-  // No alternate contour, no second tracer, no second raster, no holes.
-  let extrudedGeom: THREE.BufferGeometry | null = null
-  try {
-    extrudedGeom = new THREE.ExtrudeGeometry(validatedShape, {
-      depth: EXTRUDE_DEPTH,
-      bevelEnabled: false,
-      curveSegments: 1
-    })
-    // Center extrusion around z=0
-    extrudedGeom.translate(0, 0, -EXTRUDE_DEPTH / 2)
-    
-    console.log("[v0-solid] EXTRUDE_FROM_FLAT_BASE: Built extruded geometry", {
-      inputPoints: shapePts.length,
-      depth: EXTRUDE_DEPTH,
-      vertexCount: extrudedGeom.getAttribute("position")?.count ?? 0
-    })
-  } catch (e) {
-    console.error("[v0-solid] EXTRUDE_FROM_FLAT_BASE: ExtrudeGeometry failed, falling back to flat:", e)
-    
-    // FALLBACK: extrusion failed, return the validated flat base instead.
-    // This preserves the checkpoint as a fallback per the requirements.
+  // ----- EXTRUDE_FROM_FLAT_BASE: minimal deterministic manual extrusion -----
+  // Builds extrusion directly from the validated flat base:
+  //   1. Front cap = exact triangles from flatGeom (already validated by FLAT_BASE)
+  //   2. Back cap = duplicate of front cap, translated by depth on Z, winding reversed
+  //   3. Side walls = one quad (two triangles) per consecutive pair in the validated outer loop
+  // No THREE.ExtrudeGeometry. No experimental modes. No holes. No simplification.
+  
+  const halfDepth = EXTRUDE_DEPTH / 2
+  const WALL_EPSILON = 1e-5
+  
+  // ----- 1. FRONT CAP: pull positions + indices from the validated flatGeom -----
+  // flatGeom is a ShapeGeometry built from validatedShape. It has triangles in
+  // (x, y, 0) form. We use the exact same triangle data, lifted to z = +halfDepth.
+  const flatPosAttr = flatGeom.getAttribute("position") as THREE.BufferAttribute
+  const flatIndexAttr = flatGeom.getIndex()
+  
+  if (!flatPosAttr || !flatIndexAttr) {
+    console.error("[v0-solid] EXTRUDE: flatGeom missing position or index attributes")
     return {
       geometry: flatGeom,
       geometryNoHoles: flatGeom,
@@ -563,9 +564,142 @@ export function buildMaskSolid(
       diagnostics: {
         ...diagnostics,
         geometryType: "FLAT",
-        contourRejectReason: "extrusion failed, fell back to FLAT_BASE"
+        contourRejectReason: "extrusion: flatGeom missing attributes"
       }
     }
+  }
+  
+  const flatPos = flatPosAttr.array as Float32Array
+  const flatIdx = flatIndexAttr.array as ArrayLike<number>
+  const flatVertCount = flatPosAttr.count
+  const flatTriCount = flatIdx.length / 3
+  
+  // ----- 2. WALL SEGMENT COUNT (validated outer loop = shapePts, already CCW) -----
+  let wallSegmentCount = 0
+  let skippedWallSegments = 0
+  const n = shapePts.length
+  for (let i = 0; i < n; i++) {
+    const a = shapePts[i]
+    const b = shapePts[(i + 1) % n]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    if (Math.sqrt(dx * dx + dy * dy) < WALL_EPSILON) {
+      skippedWallSegments++
+    } else {
+      wallSegmentCount++
+    }
+  }
+  
+  // ----- 3. ALLOCATE MERGED BUFFERS -----
+  // Front cap: flatVertCount verts, flatTriCount tris
+  // Back cap:  flatVertCount verts, flatTriCount tris (winding reversed)
+  // Walls:     wallSegmentCount * 4 verts, wallSegmentCount * 2 tris
+  const totalVerts = flatVertCount * 2 + wallSegmentCount * 4
+  const totalTris = flatTriCount * 2 + wallSegmentCount * 2
+  
+  const positions = new Float32Array(totalVerts * 3)
+  const indices = new Uint32Array(totalTris * 3)
+  
+  let vOff = 0      // vertex write offset (in vertex units, multiply by 3 for float offset)
+  let iOff = 0      // index write offset (in index units)
+  
+  // ----- 4. WRITE FRONT CAP -----
+  // Verts: copy flat positions, lift to z = +halfDepth
+  // Indices: copy as-is (CCW viewed from +Z gives outward normal +Z)
+  const frontCapBaseVert = vOff
+  for (let v = 0; v < flatVertCount; v++) {
+    positions[(vOff + v) * 3 + 0] = flatPos[v * 3 + 0]
+    positions[(vOff + v) * 3 + 1] = flatPos[v * 3 + 1]
+    positions[(vOff + v) * 3 + 2] = +halfDepth
+  }
+  vOff += flatVertCount
+  
+  for (let t = 0; t < flatTriCount; t++) {
+    indices[iOff++] = frontCapBaseVert + flatIdx[t * 3 + 0]
+    indices[iOff++] = frontCapBaseVert + flatIdx[t * 3 + 1]
+    indices[iOff++] = frontCapBaseVert + flatIdx[t * 3 + 2]
+  }
+  const frontCapTriCount = flatTriCount
+  
+  // ----- 5. WRITE BACK CAP -----
+  // Verts: same XY, z = -halfDepth
+  // Indices: reverse winding so normals face -Z (outward for back cap)
+  const backCapBaseVert = vOff
+  for (let v = 0; v < flatVertCount; v++) {
+    positions[(vOff + v) * 3 + 0] = flatPos[v * 3 + 0]
+    positions[(vOff + v) * 3 + 1] = flatPos[v * 3 + 1]
+    positions[(vOff + v) * 3 + 2] = -halfDepth
+  }
+  vOff += flatVertCount
+  
+  for (let t = 0; t < flatTriCount; t++) {
+    // Reverse winding: (a, b, c) -> (a, c, b)
+    indices[iOff++] = backCapBaseVert + flatIdx[t * 3 + 0]
+    indices[iOff++] = backCapBaseVert + flatIdx[t * 3 + 2]
+    indices[iOff++] = backCapBaseVert + flatIdx[t * 3 + 1]
+  }
+  const backCapTriCount = flatTriCount
+  
+  // ----- 6. WRITE WALL QUADS -----
+  // For each consecutive pair (a, b) in the validated CCW outer loop, build:
+  //   A = (a.x, a.y, +halfDepth)   front-curr
+  //   B = (b.x, b.y, +halfDepth)   front-next
+  //   C = (b.x, b.y, -halfDepth)   back-next
+  //   D = (a.x, a.y, -halfDepth)   back-curr
+  // Two triangles, consistent CCW winding when viewed from outside:
+  //   (A, D, C) and (A, C, B)
+  for (let i = 0; i < n; i++) {
+    const a = shapePts[i]
+    const b = shapePts[(i + 1) % n]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    if (Math.sqrt(dx * dx + dy * dy) < WALL_EPSILON) continue
+    
+    const A = vOff + 0
+    const B = vOff + 1
+    const C = vOff + 2
+    const D = vOff + 3
+    
+    positions[A * 3 + 0] = a.x; positions[A * 3 + 1] = a.y; positions[A * 3 + 2] = +halfDepth
+    positions[B * 3 + 0] = b.x; positions[B * 3 + 1] = b.y; positions[B * 3 + 2] = +halfDepth
+    positions[C * 3 + 0] = b.x; positions[C * 3 + 1] = b.y; positions[C * 3 + 2] = -halfDepth
+    positions[D * 3 + 0] = a.x; positions[D * 3 + 1] = a.y; positions[D * 3 + 2] = -halfDepth
+    
+    vOff += 4
+    
+    indices[iOff++] = A
+    indices[iOff++] = D
+    indices[iOff++] = C
+    
+    indices[iOff++] = A
+    indices[iOff++] = C
+    indices[iOff++] = B
+  }
+  
+  // ----- 7. ASSEMBLE BUFFER GEOMETRY -----
+  const extrudedGeom = new THREE.BufferGeometry()
+  extrudedGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3))
+  extrudedGeom.setIndex(new THREE.BufferAttribute(indices, 1))
+  extrudedGeom.computeVertexNormals()
+  
+  console.log("[v0-solid] EXTRUDE_FROM_FLAT_BASE (REPLACED_MINIMAL):", {
+    extrusionBuilder: "REPLACED_MINIMAL",
+    frontCapTriCount,
+    backCapTriCount,
+    wallSegmentCount,
+    skippedWallSegments,
+    totalVerts,
+    totalTris,
+    depth: EXTRUDE_DEPTH
+  })
+  
+  // Mirror extrusion debug fields into stages.solidDiagnostics for the panel
+  if (emptyStages.solidDiagnostics) {
+    emptyStages.solidDiagnostics.extrusionBuilder = "REPLACED_MINIMAL"
+    emptyStages.solidDiagnostics.wallSegmentCount = wallSegmentCount
+    emptyStages.solidDiagnostics.skippedWallSegments = skippedWallSegments
+    emptyStages.solidDiagnostics.frontCapTriCount = frontCapTriCount
+    emptyStages.solidDiagnostics.backCapTriCount = backCapTriCount
   }
   
   return {
