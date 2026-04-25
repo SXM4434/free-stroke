@@ -1393,6 +1393,49 @@ function SolidDebugOverlay() {
         )
       })()}
       
+      {/* Solid Mode Diagnostics - read from lastStages.solidDiagnostics */}
+      {(() => {
+        const s = d.lastStages?.solidDiagnostics
+        if (!s) return null
+        return (
+          <div className="mt-1 border-t border-purple-500/30 pt-1">
+            <div className="mb-0.5 text-[9px] font-bold text-purple-400">SOLID MODE</div>
+            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+              <span className="text-gray-400">geometryMode:</span>
+              <span className="text-purple-300 font-bold">{s.geometryMode}</span>
+              
+              <span className="text-gray-400">geometryType:</span>
+              <span className={s.geometryType === "NULL" ? "text-red-400" : "text-green-400"}>{s.geometryType}</span>
+              
+              <span className="text-gray-400">gateExecuted:</span>
+              <span className={s.gateExecuted === "YES" ? "text-green-400" : "text-yellow-400"}>{s.gateExecuted}</span>
+              
+              <span className="text-gray-400">filledPixels:</span>
+              <span className={s.filledPixels > 0 ? "text-green-400" : "text-red-400"}>{s.filledPixels}</span>
+              
+              <span className="text-gray-400">outerAreaAbs:</span>
+              <span>{typeof s.outerAreaAbs === "number" ? s.outerAreaAbs.toFixed(1) : "?"}</span>
+              
+              <span className="text-gray-400">contourClosed:</span>
+              <span className={s.contourClosed === "YES" ? "text-green-400" : "text-red-400"}>{s.contourClosed}</span>
+              
+              <span className="text-gray-400">contourOrdered:</span>
+              <span className={s.contourOrdered === "YES" ? "text-green-400" : "text-red-400"}>{s.contourOrdered}</span>
+              
+              <span className="text-gray-400">contourRejected:</span>
+              <span className={s.contourRejected === "YES" ? "text-red-400 font-bold" : "text-green-400"}>{s.contourRejected}</span>
+              
+              {s.contourRejected === "YES" && (
+                <>
+                  <span className="text-gray-400">rejectReason:</span>
+                  <span className="text-red-400 text-[8px]">{s.contourRejectReason || "unknown"}</span>
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+      
       {/* Contour Diagnostics Section */}
       <div className="mt-1 border-t border-blue-500/30 pt-1">
         <div className="mb-0.5 text-[9px] font-bold text-blue-400">CONTOUR DIAGNOSTICS</div>

@@ -34,7 +34,8 @@ export interface MaskSolidResult {
 
 export interface MaskSolidDiagnostics {
   // Core geometry info
-  geometryType: "FLAT" | "NULL"
+  geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE"
+  geometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" | "NULL"
   outerSignedArea: number
   outerWinding: "CCW" | "CW"
   // Raster stage fields - MUST be visible in debug panel
@@ -96,11 +97,34 @@ export interface MaskSolidStages {
     rasterRejected: "YES" | "NO"
     rasterRejectReason: string
   }
+  // Solid mode diagnostic info for panel display
+  solidDiagnostics?: {
+    geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE"
+    geometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" | "NULL"
+    gateExecuted: "YES" | "NO"
+    contourClosed: "YES" | "NO"
+    contourOrdered: "YES" | "NO"
+    outerAreaAbs: number
+    filledPixels: number
+    areaToFillRatio: number
+    contourRejected: "YES" | "NO"
+    contourRejectReason: string
+  }
 }
 
 // ============= Constants =============
 
 const MASK_RESOLUTION = 512
+
+// ============= GEOMETRY MODE SWITCH =============
+// FLAT_BASE = current known-good checkpoint (valid contour -> FLAT, invalid -> NULL)
+// EXTRUDE_FROM_FLAT_BASE = same validated flat base, then extruded
+//
+// Default: FLAT_BASE (the validated checkpoint must remain stable)
+const SOLID_GEOMETRY_MODE: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" = "FLAT_BASE"
+
+// Extrusion depth in world units (only used when mode is EXTRUDE_FROM_FLAT_BASE)
+const EXTRUDE_DEPTH = 0.15
 
 // ============= Main Entry Point =============
 
@@ -139,6 +163,7 @@ export function buildMaskSolid(
   }
   
   const nullDiagnostics: MaskSolidDiagnostics = {
+    geometryMode: SOLID_GEOMETRY_MODE,
     geometryType: "NULL",
     outerSignedArea: 0,
     outerWinding: "CCW",
@@ -186,6 +211,18 @@ export function buildMaskSolid(
   
   // HARD FAIL: If no filled pixels, stop immediately
   if (filledCount === 0) {
+    emptyStages.solidDiagnostics = {
+      geometryMode: SOLID_GEOMETRY_MODE,
+      geometryType: "NULL",
+      gateExecuted: "NO",
+      contourClosed: "NO",
+      contourOrdered: "NO",
+      outerAreaAbs: 0,
+      filledPixels: 0,
+      areaToFillRatio: 0,
+      contourRejected: "YES",
+      contourRejectReason: "raster stage failed"
+    }
     return {
       geometry: null,
       geometryNoHoles: null,
@@ -309,8 +346,13 @@ export function buildMaskSolid(
   })
   
   // Build diagnostics (will be used for both success and failure)
+  // geometryType depends on SOLID_GEOMETRY_MODE when contour is valid
+  const successGeometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" =
+    SOLID_GEOMETRY_MODE === "EXTRUDE_FROM_FLAT_BASE" ? "EXTRUDE_FROM_FLAT_BASE" : "FLAT"
+  
   const diagnostics: MaskSolidDiagnostics = {
-    geometryType: contourRejected ? "NULL" : "FLAT",
+    geometryMode: SOLID_GEOMETRY_MODE,
+    geometryType: contourRejected ? "NULL" : successGeometryType,
     outerSignedArea,
     outerWinding: outerSignedArea > 0 ? "CCW" : "CW",
     // Raster fields (from earlier stage)
@@ -334,6 +376,21 @@ export function buildMaskSolid(
     areaToFillRatio,
     contourRejected: contourRejected ? "YES" : "NO",
     contourRejectReason
+  }
+  
+  // Mirror solid diagnostics into stages so the debug panel (which reads
+  // SOLID_DEBUG.lastStages) can display them without touching geometry-engines.ts.
+  emptyStages.solidDiagnostics = {
+    geometryMode: diagnostics.geometryMode,
+    geometryType: diagnostics.geometryType,
+    gateExecuted: diagnostics.gateExecuted,
+    contourClosed: diagnostics.contourClosed,
+    contourOrdered: diagnostics.contourOrdered,
+    outerAreaAbs: diagnostics.outerAreaAbs,
+    filledPixels: diagnostics.filledPixels,
+    areaToFillRatio: diagnostics.areaToFillRatio,
+    contourRejected: diagnostics.contourRejected,
+    contourRejectReason: diagnostics.contourRejectReason
   }
   
   // HARD FAIL: Return NULL geometry if validation fails
@@ -384,14 +441,43 @@ export function buildMaskSolid(
     shapePts = shapePts.slice().reverse()
   }
   
-  // Build ShapeGeometry (FLAT only)
-  let flatGeom: THREE.BufferGeometry | null = null
-  
+  // Build the validated THREE.Shape from the validated outer loop.
+  // This shape is shared by both FLAT_BASE and EXTRUDE_FROM_FLAT_BASE.
+  let validatedShape: THREE.Shape
   try {
-    const shape = new THREE.Shape(shapePts)
-    flatGeom = new THREE.ShapeGeometry(shape)
+    validatedShape = new THREE.Shape(shapePts)
+  } catch (e) {
+    console.error("[v0-solid] THREE.Shape construction failed:", e)
+    return {
+      geometry: null,
+      geometryNoHoles: null,
+      stats: {
+        maskResolution: MASK_RESOLUTION,
+        filledPixelCount: filledCount,
+        componentCount,
+        largestComponentPixels: largestSize,
+        outerContourPoints: outerContour.length,
+        simplifiedOuterPoints: shapePts.length,
+        holeCount: 0,
+        rebuildTimeMs: performance.now() - startTime
+      },
+      stages: emptyStages,
+      diagnostics: {
+        ...diagnostics,
+        geometryType: "NULL",
+        contourRejected: "YES",
+        contourRejectReason: "THREE.Shape construction threw exception"
+      }
+    }
+  }
+  
+  // Build flat geometry (this is the FLAT_BASE checkpoint output).
+  // It is ALSO used as the cap source for EXTRUDE_FROM_FLAT_BASE.
+  let flatGeom: THREE.BufferGeometry | null = null
+  try {
+    flatGeom = new THREE.ShapeGeometry(validatedShape)
     
-    console.log("[v0-solid] SUCCESS: Built FLAT geometry", {
+    console.log("[v0-solid] FLAT_BASE: Built FLAT geometry", {
       inputPoints: shapePts.length,
       vertexCount: flatGeom.getAttribute("position")?.count ?? 0
     })
@@ -421,22 +507,71 @@ export function buildMaskSolid(
     }
   }
   
-  // ========== SUCCESS ==========
+  // ========== SUCCESS — Branch on SOLID_GEOMETRY_MODE ==========
   emptyStages.simplifiedOuter = outerContour
   
+  const successStats: MaskSolidStats = {
+    maskResolution: MASK_RESOLUTION,
+    filledPixelCount: filledCount,
+    componentCount,
+    largestComponentPixels: largestSize,
+    outerContourPoints: outerContour.length,
+    simplifiedOuterPoints: shapePts.length,
+    holeCount: 0,
+    rebuildTimeMs: performance.now() - startTime
+  }
+  
+  // ----- FLAT_BASE: known-good checkpoint, return flat geometry -----
+  if (SOLID_GEOMETRY_MODE === "FLAT_BASE") {
+    return {
+      geometry: flatGeom,
+      geometryNoHoles: flatGeom,
+      stats: successStats,
+      stages: emptyStages,
+      diagnostics
+    }
+  }
+  
+  // ----- EXTRUDE_FROM_FLAT_BASE: build extrusion from validated shape -----
+  // Branches from the EXACT same validated shape used by FLAT_BASE.
+  // No alternate contour, no second tracer, no second raster, no holes.
+  let extrudedGeom: THREE.BufferGeometry | null = null
+  try {
+    extrudedGeom = new THREE.ExtrudeGeometry(validatedShape, {
+      depth: EXTRUDE_DEPTH,
+      bevelEnabled: false,
+      curveSegments: 1
+    })
+    // Center extrusion around z=0
+    extrudedGeom.translate(0, 0, -EXTRUDE_DEPTH / 2)
+    
+    console.log("[v0-solid] EXTRUDE_FROM_FLAT_BASE: Built extruded geometry", {
+      inputPoints: shapePts.length,
+      depth: EXTRUDE_DEPTH,
+      vertexCount: extrudedGeom.getAttribute("position")?.count ?? 0
+    })
+  } catch (e) {
+    console.error("[v0-solid] EXTRUDE_FROM_FLAT_BASE: ExtrudeGeometry failed, falling back to flat:", e)
+    
+    // FALLBACK: extrusion failed, return the validated flat base instead.
+    // This preserves the checkpoint as a fallback per the requirements.
+    return {
+      geometry: flatGeom,
+      geometryNoHoles: flatGeom,
+      stats: successStats,
+      stages: emptyStages,
+      diagnostics: {
+        ...diagnostics,
+        geometryType: "FLAT",
+        contourRejectReason: "extrusion failed, fell back to FLAT_BASE"
+      }
+    }
+  }
+  
   return {
-    geometry: flatGeom,
-    geometryNoHoles: flatGeom,
-    stats: {
-      maskResolution: MASK_RESOLUTION,
-      filledPixelCount: filledCount,
-      componentCount,
-      largestComponentPixels: largestSize,
-      outerContourPoints: outerContour.length,
-      simplifiedOuterPoints: shapePts.length,
-      holeCount: 0,
-      rebuildTimeMs: performance.now() - startTime
-    },
+    geometry: extrudedGeom,
+    geometryNoHoles: extrudedGeom,
+    stats: successStats,
     stages: emptyStages,
     diagnostics
   }
