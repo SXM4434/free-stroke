@@ -51,6 +51,22 @@ These are non-negotiable for this checkpoint:
 - **likely requires:** inner contour detection, Shape holes, inner wall generation, and export parity
 - **scope:** this is separate from the current filled-silhouette checkpoint and must not regress it
 
+## Solid preview / export parity
+
+- **status:** CONFIRMED (verified by code inspection, no code changes required)
+- **shared function:** `buildMaskSolid()` in `/lib/solid-mask.ts`
+- **active mode in shared function:** `EXTRUDE_FROM_FLAT_BASE` (module-level constant `SOLID_GEOMETRY_MODE`, so both call sites receive the same mode)
+- **preview call site:** `SolidEngine.buildPreview` in `/lib/geometry-engines.ts` (line 3168)
+- **export call site:** `SolidEngine.buildExport` in `/lib/geometry-engines.ts` (line 3267), invoked from `handleExportGLB` in `/components/viewport-3d.tsx` (line 819) via `engine.buildExport(processedStrokes, ...)`
+- **identical inputs across both paths:**
+  - same `strokesToTestStroke(strokes, canvasWidth, canvasHeight)` conversion
+  - same `coordScale = 3.0 / max(canvasWidth, canvasHeight)`
+  - same `worldThickness = solidParams.thickness * coordScale`
+  - same `solidParams.depth` value
+  - same `canvasWidth`, `canvasHeight` arguments
+- **no legacy paths in use:** neither path uses old `THREE.ExtrudeGeometry`, old contour code, or any disabled Solid branch
+- **export-only post-processing:** `geometry.computeBoundingBox()` + translate-to-origin (centering for clean export); does not alter vertex topology
+
 ## Final saved checkpoint label
 
 `EXTRUDE_FROM_FLAT_BASE_VALIDATED_FOR_FILLED_SILHOUETTES_WITH_HOLE_LIMITATION`
