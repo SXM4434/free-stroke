@@ -479,6 +479,94 @@ function PlaybackController({
   return null
 }
 
+/* ---- Stroke filtering by animation progress (for Solid draw-in animation) ---- */
+function filterStrokesByProgress(strokes: ProcessedStroke[], progress: number): ProcessedStroke[] {
+  if (progress >= 1 || strokes.length === 0) return strokes
+  if (progress <= 0) return []
+  
+  // Total points across all strokes
+  let totalPoints = 0
+  for (const s of strokes) {
+    totalPoints += s.points.length
+  }
+  
+  const targetPoints = Math.ceil(totalPoints * progress)
+  let accum = 0
+  const filtered: ProcessedStroke[] = []
+  
+  for (const stroke of strokes) {
+    const prevAccum = accum
+    accum += stroke.points.length
+    
+    if (prevAccum >= targetPoints) {
+      // This stroke hasn't started yet
+      break
+    }
+    
+    if (accum <= targetPoints) {
+      // This stroke is fully included
+      filtered.push(stroke)
+    } else {
+      // This stroke is partially included
+      const pointsNeeded = targetPoints - prevAccum
+      if (pointsNeeded > 0) {
+        filtered.push({
+          ...stroke,
+          points: stroke.points.slice(0, pointsNeeded),
+        })
+      }
+      break
+    }
+  }
+  
+  return filtered
+}
+
+/* ---- PlaybackController: advances playheadRef when playing ---- */
+function PlaybackController({
+  playheadRef,
+  playing,
+  speed,
+  totalDuration,
+  onProgressUpdate,
+}: {
+  playheadRef: React.MutableRefObject<number>
+  playing: boolean
+  speed: number
+  totalDuration: number
+  onProgressUpdate: (progress: number) => void
+}) {
+  const lastTimeRef = useRef<number | null>(null)
+
+  useFrame(() => {
+    if (!playing || totalDuration <= 0) {
+      lastTimeRef.current = null
+      return
+    }
+
+    const now = performance.now()
+    if (lastTimeRef.current === null) {
+      lastTimeRef.current = now
+      return
+    }
+
+    const deltaMs = (now - lastTimeRef.current) * speed
+    lastTimeRef.current = now
+
+    const deltaFraction = deltaMs / totalDuration
+    const newProgress = Math.min(playheadRef.current + deltaFraction, 1)
+    playheadRef.current = newProgress
+    onProgressUpdate(newProgress)
+
+    // Auto-pause at end
+    if (newProgress >= 1) {
+      lastTimeRef.current = null
+    }
+  })
+
+  return null
+}
+
 /* ---- Scene ---- */
 function Scene({
   controlsRef,
@@ -525,7 +613,25 @@ function Scene({
   meshStatusRef?: React.MutableRefObject<StrokeBuildStatus[]>
   solidStatusRef?: React.MutableRefObject<SolidBuildStatus | null>
 }) {
-  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode, extrudeParams, solidParams)
+  // Get the current animation progress for Solid mode
+  const currentProgress = useRef<number>(playheadRef.current)
+  
+  // For Solid mode, apply animation progress to filter partial strokes
+  const animatedStrokes = useMemo(() => {
+    if (geometryMode !== "solid") return strokes
+    currentProgress.current = playheadRef.current
+    return filterStrokesByProgress(strokes, playheadRef.current)
+  }, [strokes, geometryMode, playheadRef])
+
+  // Build meshes - for Solid mode, use animated strokes instead of full strokes
+  const meshes = useStrokeMeshes(
+    geometryMode === "solid" ? animatedStrokes : strokes,
+    canvasWidth,
+    canvasHeight,
+    geometryMode,
+    extrudeParams,
+    solidParams
+  )
   const bounds = useStrokeBounds(meshes)
 
   // Populate meshStatusRef for debug overlay (extrude mode)
