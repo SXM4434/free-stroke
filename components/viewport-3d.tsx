@@ -1266,7 +1266,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
       </div>
 
       {/* SOLID DEBUG OVERLAY - on-screen debug for Solid mode */}
-      {geometryMode === "solid" && (
+      {showDebug && geometryMode === "solid" && (
         <>
           <SolidDebugOverlay />
           {SOLID_STAGE_DEBUG.enabled && <SolidStageDebugOverlay />}
