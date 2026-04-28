@@ -97,13 +97,88 @@ function useStrokeBounds(meshes: StrokeMeshData[]): StrokeBounds | null {
   }, [meshes])
 }
 
-/* ---- Auto-frame on first draw ---- */
+/* ---- useStableStrokesBounds: bounds derived directly from raw stroke points ----
+ *
+ * Used for camera framing in Solid mode where the visible mesh is rebuilt every
+ * frame from a partial subset of the strokes (draw-in animation). Mesh-derived
+ * bounds shrink during animation, which would cause the camera to zoom in. By
+ * computing bounds from the full unfiltered strokes via the same world-space
+ * transform that `strokesToTestStroke` uses (lib/geometry-engines.ts), the
+ * camera frame stays locked to the FINAL geometry size for the entire playback.
+ *
+ * Cheap: pure O(N) point iteration, no mesh rebuild.
+ */
+function useStableStrokesBounds(
+  strokes: ProcessedStroke[],
+  canvasWidth: number,
+  canvasHeight: number,
+): StrokeBounds | null {
+  return useMemo(() => {
+    if (strokes.length === 0 || canvasWidth <= 0 || canvasHeight <= 0) return null
+
+    // Identical world-space transform used by strokesToTestStroke:
+    //   worldX = (x - W/2) * scale
+    //   worldY = -(y - H/2) * scale
+    //   scale  = 3.0 / max(W, H)
+    const scale = 3.0 / Math.max(canvasWidth, canvasHeight)
+    const offsetX = canvasWidth / 2
+    const offsetY = canvasHeight / 2
+
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    let count = 0
+
+    for (const s of strokes) {
+      for (const p of s.points) {
+        const wx = (p.x - offsetX) * scale
+        const wy = -(p.y - offsetY) * scale
+        if (wx < minX) minX = wx
+        if (wx > maxX) maxX = wx
+        if (wy < minY) minY = wy
+        if (wy > maxY) maxY = wy
+        count++
+      }
+    }
+
+    if (count === 0 || !isFinite(minX)) return null
+
+    // Small padding for stroke thickness and Solid extrusion depth.
+    // Sized in world units; matches typical maxima of thickness/depth.
+    const pad = 0.15
+    minX -= pad
+    minY -= pad
+    maxX += pad
+    maxY += pad
+
+    const center = new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, 0)
+
+    // Bounding sphere radius around the center, also accounting for a small
+    // depth on Z (Solid extrusion is centered at z=0).
+    const dx = (maxX - minX) / 2
+    const dy = (maxY - minY) / 2
+    const dz = pad
+    const radius = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    return { center, radius }
+  }, [strokes, canvasWidth, canvasHeight])
+}
+
+/* ---- Auto-frame on first draw ----
+ *
+ * Frames the camera once when the user goes from "no drawing" to "has drawing".
+ * The gate uses `strokeCount` (the count of user-drawn strokes from the parent
+ * prop), NOT the live mesh count, because in Solid mode the mesh count cycles
+ * 0 -> N -> 0 during draw-in playback, which would otherwise re-trigger framing
+ * and override any manual orbit/zoom the user did before pressing Play.
+ */
 function AutoFrameOnFirstDraw({
-  meshes,
+  strokeCount,
   bounds,
   controlsRef,
 }: {
-  meshes: StrokeMeshData[]
+  strokeCount: number
   bounds: StrokeBounds | null
   controlsRef: React.RefObject<OrbitControlsImpl | null>
 }) {
@@ -112,12 +187,12 @@ function AutoFrameOnFirstDraw({
   const prevCountRef = useRef(0)
 
   useEffect(() => {
-    if (meshes.length === 0) {
+    if (strokeCount === 0) {
       hasFramedRef.current = false
       prevCountRef.current = 0
       return
     }
-    if (prevCountRef.current === 0 && meshes.length > 0 && !hasFramedRef.current && bounds) {
+    if (prevCountRef.current === 0 && strokeCount > 0 && !hasFramedRef.current && bounds) {
       hasFramedRef.current = true
       const controls = controlsRef.current
       if (!controls) return
@@ -127,8 +202,8 @@ function AutoFrameOnFirstDraw({
       controls.target.copy(bounds.center)
       controls.update()
     }
-    prevCountRef.current = meshes.length
-  }, [meshes, bounds, camera, controlsRef])
+    prevCountRef.current = strokeCount
+  }, [strokeCount, bounds, camera, controlsRef])
 
   return null
 }
@@ -648,7 +723,14 @@ function Scene({
     extrudeParams,
     solidParams
   )
-  const bounds = useStrokeBounds(meshes)
+  const meshBounds = useStrokeBounds(meshes)
+
+  // Stable bounds derived from the FULL strokes prop (not the animated subset).
+  // Used in Solid mode so the camera doesn't zoom in as the mesh shrinks/grows
+  // during draw-in animation. For other modes we keep mesh-derived bounds.
+  const stableBounds = useStableStrokesBounds(strokes, canvasWidth, canvasHeight)
+
+  const bounds = geometryMode === "solid" ? stableBounds ?? meshBounds : meshBounds
 
   // Populate meshStatusRef for debug overlay (extrude mode)
   useEffect(() => {
@@ -713,7 +795,7 @@ function Scene({
       />
 
       <AutoFrameOnFirstDraw
-        meshes={meshes}
+        strokeCount={strokes.length}
         bounds={bounds}
         controlsRef={controlsRef}
       />
