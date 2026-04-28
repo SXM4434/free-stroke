@@ -5,7 +5,7 @@ import { Canvas, useThree, useFrame } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
-import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
+import type { Stroke, ProcessedStroke, Point } from "@/lib/stroke-processing"
 import type { ExportSettings } from "@/components/drawing-canvas"
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js"
 import {
@@ -565,11 +565,15 @@ function PlaybackController({
  *
  * Behavior:
  *   - Runs on every frame inside the Canvas (must be a child of <Canvas>).
- *   - Throttles updates so Solid does not rebuild excessively:
- *       * minimum interval: ~80ms (~12 Hz) between state updates
- *       * minimum delta:    0.01 (1% of total progress) between state updates
+ *   - Throttles updates lightly so Solid rebuilds at a smooth cadence without
+ *     spamming raster/contour/extrude work every single frame:
+ *       * minimum interval: ~24ms (~40 Hz) between state updates
+ *       * minimum delta:    0.003 (0.3%) between state updates
+ *     This yields up to ~330 reveal steps over a full playback, vs ~100 in the
+ *     previous 80ms / 1% throttle that produced visibly chunky reveals.
  *   - Always forces an update at the boundaries (progress 0 and progress 1)
- *     so the final frame matches the static preview exactly.
+ *     so the final frame matches the static preview exactly and replay starts
+ *     from empty.
  *   - Active for Solid mode only; other modes early-out and pay zero cost.
  */
 function SolidAnimationTick({
@@ -592,11 +596,14 @@ function SolidAnimationTick({
     const delta = Math.abs(current - last)
 
     // Always sync at boundaries so final frame == full static preview
+    // and replay-from-zero starts at empty geometry.
     const atBoundary = (current >= 1 && last < 1) || (current <= 0 && last > 0)
 
-    // Throttle: require both 80ms AND 0.01 delta unless at a boundary
-    const timeOk = now - lastSyncTimeRef.current >= 80
-    const deltaOk = delta >= 0.01
+    // Throttle: require both ~24ms AND 0.003 progress delta unless at a boundary.
+    // The combination caps update rate at ~40 Hz and gives ~330 max reveal steps,
+    // while preventing rebuild spam when many frames render between progress moves.
+    const timeOk = now - lastSyncTimeRef.current >= 24
+    const deltaOk = delta >= 0.003
 
     if (atBoundary || (timeOk && deltaOk)) {
       lastSyncedRef.current = current
@@ -608,46 +615,142 @@ function SolidAnimationTick({
   return null
 }
 
-/* ---- Stroke filtering by animation progress (for Solid draw-in animation) ---- */
-function filterStrokesByProgress(strokes: ProcessedStroke[], progress: number): ProcessedStroke[] {
+/* ---- Stroke filtering by animation progress (for Solid draw-in animation) ----
+ *
+ * Returns a partial copy of `strokes` representing the portion of the drawing
+ * that has been "drawn in" at the given `progress` (0..1).
+ *
+ * Smoothness strategy: ARC-LENGTH based, with sub-segment interpolation.
+ *
+ *   1. Compute the total arc length across all strokes (sum of segment lengths).
+ *   2. The target reveal length = totalLength * progress.
+ *   3. Walk strokes in order; fully include any stroke whose cumulative length
+ *      stays below the target.
+ *   4. The stroke that contains the target receives:
+ *        - all of its points up to and including the last point before the cut
+ *        - one INTERPOLATED endpoint placed at the exact target length inside
+ *          the current segment (linear x/y/t/pressure interpolation)
+ *      This makes the reveal advance continuously instead of snapping to whole
+ *      points, which removes the visible "popping" and uneven pacing that comes
+ *      from raw point-count progress (corner detection clusters extra points
+ *      around curves, so equal point counts != equal visible length).
+ *   5. Boundaries are clean:
+ *        progress <= 0  -> []                    (replay-from-empty)
+ *        progress >= 1  -> original strokes      (final frame == static preview)
+ *   6. Original stroke data is never mutated; partial strokes are shallow-copied
+ *      and only the new points array is freshly constructed.
+ */
+function filterStrokesByProgress(
+  strokes: ProcessedStroke[],
+  progress: number,
+): ProcessedStroke[] {
   if (progress >= 1 || strokes.length === 0) return strokes
   if (progress <= 0) return []
-  
-  // Total points across all strokes
-  let totalPoints = 0
-  for (const s of strokes) {
-    totalPoints += s.points.length
-  }
-  
-  const targetPoints = Math.ceil(totalPoints * progress)
-  let accum = 0
-  const filtered: ProcessedStroke[] = []
-  
-  for (const stroke of strokes) {
-    const prevAccum = accum
-    accum += stroke.points.length
-    
-    if (prevAccum >= targetPoints) {
-      // This stroke hasn't started yet
-      break
+
+  // ---- Pass 1: total arc length across all strokes ----
+  // Per-stroke length cached to avoid recomputation in pass 2.
+  const strokeLengths: number[] = new Array(strokes.length)
+  let totalLength = 0
+  for (let s = 0; s < strokes.length; s++) {
+    const pts = strokes[s].points
+    let len = 0
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x
+      const dy = pts[i].y - pts[i - 1].y
+      len += Math.sqrt(dx * dx + dy * dy)
     }
-    
-    if (accum <= targetPoints) {
-      // This stroke is fully included
+    strokeLengths[s] = len
+    totalLength += len
+  }
+
+  // Degenerate: zero total length (all points coincident) — fall back to
+  // including everything once progress > 0 to avoid dividing by zero.
+  if (totalLength <= 0) return strokes
+
+  const targetLength = totalLength * progress
+
+  // ---- Pass 2: walk strokes, build the partial output ----
+  const filtered: ProcessedStroke[] = []
+  let consumed = 0
+
+  for (let s = 0; s < strokes.length; s++) {
+    const stroke = strokes[s]
+    const strokeLen = strokeLengths[s]
+
+    // Stroke ends before target -> fully include and continue.
+    if (consumed + strokeLen <= targetLength) {
       filtered.push(stroke)
-    } else {
-      // This stroke is partially included
-      const pointsNeeded = targetPoints - prevAccum
-      if (pointsNeeded > 0) {
-        filtered.push({
-          ...stroke,
-          points: stroke.points.slice(0, pointsNeeded),
-        })
+      consumed += strokeLen
+      continue
+    }
+
+    // Stroke contains the cut. Walk its segments to find the exact cut point.
+    const remaining = targetLength - consumed
+    const pts = stroke.points
+
+    // Edge case: stroke has 0 or 1 points or zero length.
+    if (pts.length <= 1 || strokeLen <= 0) {
+      if (pts.length > 0) {
+        filtered.push({ ...stroke, points: [pts[0]] })
       }
       break
     }
+
+    // Edge case: cut falls before the first segment -> include just the start.
+    if (remaining <= 0) {
+      filtered.push({ ...stroke, points: [pts[0]] })
+      break
+    }
+
+    let segAccum = 0
+    let cutIdx = -1
+    let segStartLen = 0
+
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x
+      const dy = pts[i].y - pts[i - 1].y
+      const segLen = Math.sqrt(dx * dx + dy * dy)
+
+      if (segAccum + segLen >= remaining) {
+        cutIdx = i
+        segStartLen = segAccum
+        break
+      }
+      segAccum += segLen
+    }
+
+    if (cutIdx < 0) {
+      // Numerical edge — include all of stroke.
+      filtered.push(stroke)
+      break
+    }
+
+    // Interpolate inside segment [cutIdx-1, cutIdx].
+    const a = pts[cutIdx - 1]
+    const b = pts[cutIdx]
+    const dxSeg = b.x - a.x
+    const dySeg = b.y - a.y
+    const segLen = Math.sqrt(dxSeg * dxSeg + dySeg * dySeg)
+    const tFrac = segLen > 0 ? Math.max(0, Math.min(1, (remaining - segStartLen) / segLen)) : 0
+
+    const interpolatedPoint: Point = {
+      x: a.x + dxSeg * tFrac,
+      y: a.y + dySeg * tFrac,
+      t: a.t + (b.t - a.t) * tFrac,
+      pressure:
+        a.pressure !== undefined && b.pressure !== undefined
+          ? a.pressure + (b.pressure - a.pressure) * tFrac
+          : a.pressure ?? b.pressure,
+    }
+
+    // Build partial stroke: all complete points up to cutIdx-1, plus interpolated end.
+    const partialPoints: Point[] = pts.slice(0, cutIdx)
+    partialPoints.push(interpolatedPoint)
+
+    filtered.push({ ...stroke, points: partialPoints })
+    break
   }
-  
+
   return filtered
 }
 
