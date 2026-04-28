@@ -479,6 +479,60 @@ function PlaybackController({
   return null
 }
 
+/* ---- SolidAnimationTick: forces React re-render while playheadRef advances ----
+ *
+ * Why this exists:
+ *   The Solid mesh is rebuilt from a `useMemo` that depends on a React state
+ *   value (`solidAnimProgress`). The actual playback source-of-truth is
+ *   `playheadRef.current`, which is a ref and does NOT trigger re-renders when
+ *   mutated by `PlaybackController`. Without this tick, the Solid mesh never
+ *   rebuilds during playback and appears static.
+ *
+ * Behavior:
+ *   - Runs on every frame inside the Canvas (must be a child of <Canvas>).
+ *   - Throttles updates so Solid does not rebuild excessively:
+ *       * minimum interval: ~80ms (~12 Hz) between state updates
+ *       * minimum delta:    0.01 (1% of total progress) between state updates
+ *   - Always forces an update at the boundaries (progress 0 and progress 1)
+ *     so the final frame matches the static preview exactly.
+ *   - Active for Solid mode only; other modes early-out and pay zero cost.
+ */
+function SolidAnimationTick({
+  isSolid,
+  playheadRef,
+  setSolidAnimProgress,
+}: {
+  isSolid: boolean
+  playheadRef: React.MutableRefObject<number>
+  setSolidAnimProgress: React.Dispatch<React.SetStateAction<number>>
+}) {
+  const lastSyncedRef = useRef<number>(playheadRef.current)
+  const lastSyncTimeRef = useRef<number>(0)
+
+  useFrame(() => {
+    if (!isSolid) return
+    const current = playheadRef.current
+    const last = lastSyncedRef.current
+    const now = performance.now()
+    const delta = Math.abs(current - last)
+
+    // Always sync at boundaries so final frame == full static preview
+    const atBoundary = (current >= 1 && last < 1) || (current <= 0 && last > 0)
+
+    // Throttle: require both 80ms AND 0.01 delta unless at a boundary
+    const timeOk = now - lastSyncTimeRef.current >= 80
+    const deltaOk = delta >= 0.01
+
+    if (atBoundary || (timeOk && deltaOk)) {
+      lastSyncedRef.current = current
+      lastSyncTimeRef.current = now
+      setSolidAnimProgress(current)
+    }
+  })
+
+  return null
+}
+
 /* ---- Stroke filtering by animation progress (for Solid draw-in animation) ---- */
 function filterStrokesByProgress(strokes: ProcessedStroke[], progress: number): ProcessedStroke[] {
   if (progress >= 1 || strokes.length === 0) return strokes
@@ -568,15 +622,22 @@ function Scene({
   meshStatusRef?: React.MutableRefObject<StrokeBuildStatus[]>
   solidStatusRef?: React.MutableRefObject<SolidBuildStatus | null>
 }) {
-  // Get the current animation progress for Solid mode
-  const currentProgress = useRef<number>(playheadRef.current)
-  
-  // For Solid mode, apply animation progress to filter partial strokes
+  // ---- Solid draw-in animation state ----
+  // playheadRef.current is the source of truth, but ref mutations don't
+  // trigger React re-renders. SolidAnimationTick (rendered below, inside
+  // Canvas) reads playheadRef.current on every frame and updates this state
+  // (throttled). The state then drives the animatedStrokes useMemo, which
+  // forces the Solid mesh to rebuild as playback progresses.
+  const [solidAnimProgress, setSolidAnimProgress] = useState<number>(
+    playheadRef.current,
+  )
+
+  // For Solid mode, filter strokes by current animation progress.
+  // For other modes, return strokes unchanged (Rod/Extrude animate via drawRange).
   const animatedStrokes = useMemo(() => {
     if (geometryMode !== "solid") return strokes
-    currentProgress.current = playheadRef.current
-    return filterStrokesByProgress(strokes, playheadRef.current)
-  }, [strokes, geometryMode, playheadRef])
+    return filterStrokesByProgress(strokes, solidAnimProgress)
+  }, [strokes, geometryMode, solidAnimProgress])
 
   // Build meshes - for Solid mode, use animated strokes instead of full strokes
   const meshes = useStrokeMeshes(
@@ -641,6 +702,14 @@ function Scene({
         speed={speed}
         totalDuration={totalDuration}
         onProgressUpdate={onProgressUpdate}
+      />
+
+      {/* Solid-only animation tick: forces React re-render of Solid mesh
+          while playheadRef advances. No-op for other modes. */}
+      <SolidAnimationTick
+        isSolid={geometryMode === "solid"}
+        playheadRef={playheadRef}
+        setSolidAnimProgress={setSolidAnimProgress}
       />
 
       <AutoFrameOnFirstDraw
