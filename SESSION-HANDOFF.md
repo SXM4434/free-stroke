@@ -67,6 +67,59 @@ These are non-negotiable for this checkpoint:
 - **no legacy paths in use:** neither path uses old `THREE.ExtrudeGeometry`, old contour code, or any disabled Solid branch
 - **export-only post-processing:** `geometry.computeBoundingBox()` + translate-to-origin (centering for clean export); does not alter vertex topology
 
+## Solid animation checkpoint
+
+- **name:** Solid Basic Draw-In Animation — Smoothed
+- **label:** `SOLID_BASIC_DRAW_IN_ANIMATION_PASS`
+- **status:** frozen / visually acceptable for MVP
+
+### What is working at this checkpoint
+
+- active geometry path: `EXTRUDE_FROM_FLAT_BASE`
+- validated `FLAT_BASE` fallback / base checkpoint still intact
+- filled-silhouette extrusion working
+- preview working
+- GLB export working
+- preview / export parity confirmed by code inspection
+- manual GLB export smoke test passed
+- debug panel gated behind Debug mode
+- Debug OFF no longer blocks playback controls
+- basic Solid draw-in animation working
+- smoothed Solid animation now visually acceptable for MVP
+
+### Animation implementation
+
+- Solid animation uses partial stroke progress to rebuild Solid geometry during playback.
+- The smoothing pass replaced raw point-count reveal with arc-length-based reveal.
+- The current cut point is interpolated inside the active segment, instead of snapping to the next whole point.
+- `progress <= 0` returns empty / near-empty state.
+- `progress >= 1` returns the original full strokes unchanged, so final frame should match static preview.
+- React animation state now updates often enough for a smoother MVP reveal.
+- Rod and Extrude animation paths remain separate / untouched.
+- Export still uses full unfiltered strokes.
+
+### Known limitations at this checkpoint
+
+- Solid reveal is rebuild-based, not shader-based.
+- Long / dense drawings may still cause micro-stalls because Solid rebuilds raster + contour + extrusion during playback.
+- Solid reveal uses uniform arc-length pacing, not authentic pen-speed timing yet.
+- No advanced animation editing yet.
+- No shader / gel-pen reveal yet.
+- No hole preservation yet.
+- No Inflate work yet.
+- Do not reopen Solid raster / contour / validation / extrusion unless a regression appears.
+
+### Next recommended steps
+
+1. Run one quick cross-mode QA pass:
+   - Rod playback / export
+   - Extrude playback / export
+   - Solid playback / export
+2. Then start the Solid holes branch.
+3. Keep Inflate after holes, because Inflate should branch from the stable Solid filled-silhouette base.
+
 ## Final saved checkpoint label
 
-`EXTRUDE_FROM_FLAT_BASE_VALIDATED_FOR_FILLED_SILHOUETTES_WITH_HOLE_LIMITATION`
+`SOLID_BASIC_DRAW_IN_ANIMATION_PASS`
+
+(supersedes `EXTRUDE_FROM_FLAT_BASE_VALIDATED_FOR_FILLED_SILHOUETTES_WITH_HOLE_LIMITATION`, which remains the underlying frozen geometry checkpoint that this animation pass is built on top of)
