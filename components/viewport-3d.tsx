@@ -522,51 +522,6 @@ function filterStrokesByProgress(strokes: ProcessedStroke[], progress: number): 
   return filtered
 }
 
-/* ---- PlaybackController: advances playheadRef when playing ---- */
-function PlaybackController({
-  playheadRef,
-  playing,
-  speed,
-  totalDuration,
-  onProgressUpdate,
-}: {
-  playheadRef: React.MutableRefObject<number>
-  playing: boolean
-  speed: number
-  totalDuration: number
-  onProgressUpdate: (progress: number) => void
-}) {
-  const lastTimeRef = useRef<number | null>(null)
-
-  useFrame(() => {
-    if (!playing || totalDuration <= 0) {
-      lastTimeRef.current = null
-      return
-    }
-
-    const now = performance.now()
-    if (lastTimeRef.current === null) {
-      lastTimeRef.current = now
-      return
-    }
-
-    const deltaMs = (now - lastTimeRef.current) * speed
-    lastTimeRef.current = now
-
-    const deltaFraction = deltaMs / totalDuration
-    const newProgress = Math.min(playheadRef.current + deltaFraction, 1)
-    playheadRef.current = newProgress
-    onProgressUpdate(newProgress)
-
-    // Auto-pause at end
-    if (newProgress >= 1) {
-      lastTimeRef.current = null
-    }
-  })
-
-  return null
-}
-
 /* ---- Scene ---- */
 function Scene({
   controlsRef,
