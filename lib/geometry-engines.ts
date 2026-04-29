@@ -16,6 +16,67 @@ import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUti
 import type { ProcessedStroke } from "@/lib/stroke-processing"
 import { buildMaskSolid, type TestStroke, type MaskSolidResult } from "@/lib/solid-mask"
 
+/**
+ * GLOBAL SOLID DEBUG STATE - written by SolidEngine, read by UI overlay
+ * Failure buckets:
+ * A = SolidEngine never called
+ * B = buildMaskSolid never called (early return)
+ * C = buildMaskSolid returned failure/null geometry
+ * D = geometry returned but mesh array empty
+ * E = geometry returned and mesh created (success or camera issue)
+ */
+export const SOLID_DEBUG = {
+  lastUpdate: 0,
+  bucket: "A" as "A" | "B" | "C" | "D" | "E",
+  engineCalled: false,
+  canvasWidth: 0,
+  canvasHeight: 0,
+  strokeCount: 0,
+  pointCount: 0,
+  buildMaskSolidCalled: false,
+  buildMaskSolidSuccess: false,
+  geometryReturned: false,
+  vertexCount: 0,
+  filledPixels: 0,
+  maskArea: 0,
+  filledPercent: 0,
+  failureReason: "" as string,
+  // Coordinate debug
+  worldMinX: 0,
+  worldMaxX: 0,
+  worldMinY: 0,
+  worldMaxY: 0,
+  // Thickness debug
+  inputThickness: 0,
+  worldThickness: 0,
+  // Stage isolation debug - populated when stage rendering is active
+  lastStages: null as any,
+  // Comprehensive contour diagnostics
+  rawContourPoints: 0,
+  simplifiedContourPoints: 0,
+  outerSignedArea: 0,
+  outerWinding: "" as "CCW" | "CW" | "",
+  outerSelfIntersects: false,
+  holeCount: 0,
+  holeAreas: [] as number[],
+  holeWindings: [] as string[],
+  anyHoleSelfIntersects: false,
+  anyHoleOutsideOuter: false,
+  holesOverlap: false,
+  // Stage D vs E comparison
+  stageDVertexCount: 0,
+  stageEVertexCount: 0,
+}
+
+/**
+ * TEMPORARY DEBUG: Stage isolation for diagnosis
+ * Toggle which stage renders: A=mask B=rawContour C=simplifiedContour D=extrudeNoHoles E=full
+ */
+export const SOLID_STAGE_DEBUG = {
+  enabled: false,  // Enable stage isolation debug overlay
+  stage: "E" as "A" | "B" | "C" | "D" | "E",  // Which stage to render
+}
+
 const mergeGeometriesSafe =
   (BufferGeometryUtils as any).mergeGeometries ??
   (BufferGeometryUtils as any).mergeBufferGeometries
@@ -2973,13 +3034,30 @@ function findEnclosedHoles(componentMask: boolean[], S: number, outerBoundary: {
 
 /**
  * Convert ProcessedStroke[] to a single merged TestStroke for the sandbox pipeline.
- * The sandbox pipeline expects all stroke points merged into one stroke.
+ * 
+ * CRITICAL: The sandbox pipeline (buildMaskSolid/renderStrokeToMask) expects points
+ * in WORLD COORDINATES (roughly -1.5 to +1.5 range, centered at 0).
+ * 
+ * Real app strokes are in CANVAS PIXEL COORDINATES (0 to canvasWidth/Height).
+ * 
+ * This function converts from canvas pixel space to world space.
  */
-function strokesToTestStroke(strokes: ProcessedStroke[]): TestStroke {
+function strokesToTestStroke(strokes: ProcessedStroke[], canvasWidth: number, canvasHeight: number): TestStroke {
   const allPoints: { x: number; y: number }[] = []
+  
+  // Convert canvas pixel coords to world coords
+  // Canvas: (0,0) top-left, (canvasWidth, canvasHeight) bottom-right
+  // World: (-1.5, -1.5) to (1.5, 1.5), center at (0, 0), Y-up
+  const scale = 3.0 / Math.max(canvasWidth, canvasHeight)
+  const offsetX = canvasWidth / 2
+  const offsetY = canvasHeight / 2
+  
   for (const s of strokes) {
     for (const p of s.points) {
-      allPoints.push({ x: p.x, y: p.y })
+      // Convert: canvas pixel -> centered -> scaled -> flip Y for world coords
+      const worldX = (p.x - offsetX) * scale
+      const worldY = -(p.y - offsetY) * scale  // Flip Y: canvas Y-down, world Y-up
+      allPoints.push({ x: worldX, y: worldY })
     }
   }
   return { points: allPoints }
@@ -3041,30 +3119,127 @@ export const SolidEngine: GeometryEngine = {
     const { canvasWidth, canvasHeight, solidParams: sp } = params
     const solidParams = sp ?? DEFAULT_SOLID_PARAMS
     
+    // Update debug state - engine was called
+    SOLID_DEBUG.lastUpdate = Date.now()
+    SOLID_DEBUG.engineCalled = true
+    SOLID_DEBUG.canvasWidth = canvasWidth
+    SOLID_DEBUG.canvasHeight = canvasHeight
+    SOLID_DEBUG.strokeCount = strokes.length
+    SOLID_DEBUG.buildMaskSolidCalled = false
+    SOLID_DEBUG.buildMaskSolidSuccess = false
+    SOLID_DEBUG.geometryReturned = false
+    SOLID_DEBUG.vertexCount = 0
+    SOLID_DEBUG.filledPixels = 0
+    SOLID_DEBUG.failureReason = ""
+    
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
-      console.log("[v0] SolidEngine.buildPreview early return: strokes=" + strokes.length + " canvasWidth=" + canvasWidth + " canvasHeight=" + canvasHeight)
+      SOLID_DEBUG.bucket = "B"
+      SOLID_DEBUG.failureReason = strokes.length === 0 ? "no strokes" : "canvas 0"
       return []
     }
 
-    // Convert strokes to sandbox format and call the EXACT sandbox pipeline
-    const testStroke = strokesToTestStroke(strokes)
-    console.log("[v0] SolidEngine calling buildMaskSolid: points=" + testStroke.points.length + " thickness=" + solidParams.thickness + " depth=" + solidParams.depth + " canvas=" + canvasWidth + "x" + canvasHeight)
+    // Convert strokes to sandbox format (canvas pixels -> world coords) and call sandbox pipeline
+    const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
+    SOLID_DEBUG.pointCount = testStroke.points.length
+    SOLID_DEBUG.buildMaskSolidCalled = true
     
-    const result = buildMaskSolid(testStroke, solidParams.thickness, solidParams.depth, canvasWidth, canvasHeight)
+    // CRITICAL: Convert thickness from canvas pixels to world units
+    // Same scale factor as coordinate conversion: 3.0 / max(canvasWidth, canvasHeight)
+    const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
+    const worldThickness = solidParams.thickness * coordScale
+    SOLID_DEBUG.inputThickness = solidParams.thickness
+    SOLID_DEBUG.worldThickness = worldThickness
     
-    console.log("[v0] SolidEngine buildMaskSolid result: geometry=" + (result.geometry ? "YES" : "NULL") + " filledPixels=" + result.stats.filledPixelCount + " vertexCount=" + (result.geometry?.getAttribute("position")?.count ?? 0))
+    // Record coordinate ranges for debug
+    if (testStroke.points.length > 0) {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+      for (const p of testStroke.points) {
+        if (p.x < minX) minX = p.x
+        if (p.x > maxX) maxX = p.x
+        if (p.y < minY) minY = p.y
+        if (p.y > maxY) maxY = p.y
+      }
+      SOLID_DEBUG.worldMinX = minX
+      SOLID_DEBUG.worldMaxX = maxX
+      SOLID_DEBUG.worldMinY = minY
+      SOLID_DEBUG.worldMaxY = maxY
+    }
+    
+    const result = buildMaskSolid(testStroke, worldThickness, solidParams.depth, canvasWidth, canvasHeight)
+    
+    SOLID_DEBUG.filledPixels = result.stats.filledPixelCount
+    SOLID_DEBUG.maskArea = result.stats.maskResolution * result.stats.maskResolution
+    SOLID_DEBUG.filledPercent = SOLID_DEBUG.maskArea > 0 ? (SOLID_DEBUG.filledPixels / SOLID_DEBUG.maskArea) * 100 : 0
+    
+    // Populate comprehensive contour diagnostics
+    SOLID_DEBUG.rawContourPoints = result.stats.outerContourPoints
+    SOLID_DEBUG.simplifiedContourPoints = result.stats.simplifiedOuterPoints
+    SOLID_DEBUG.outerSignedArea = result.diagnostics.outerSignedArea
+    SOLID_DEBUG.outerWinding = result.diagnostics.outerWinding
+    SOLID_DEBUG.outerSelfIntersects = result.diagnostics.outerSelfIntersects
+    SOLID_DEBUG.holeCount = result.stats.holeCount
+    SOLID_DEBUG.holeAreas = result.diagnostics.holeAreas
+    SOLID_DEBUG.holeWindings = result.diagnostics.holeWindings
+    SOLID_DEBUG.anyHoleSelfIntersects = result.diagnostics.anyHoleSelfIntersects
+    SOLID_DEBUG.anyHoleOutsideOuter = result.diagnostics.anyHoleOutsideOuter
+    SOLID_DEBUG.holesOverlap = result.diagnostics.holesOverlap
+    SOLID_DEBUG.stageDVertexCount = result.geometryNoHoles?.getAttribute("position")?.count ?? 0
+    SOLID_DEBUG.stageEVertexCount = result.geometry?.getAttribute("position")?.count ?? 0
+    
+    // TARGETED DEBUG: Stage D vs E comparison
+    if (SOLID_DEBUG.stageDVertexCount > 0 && SOLID_DEBUG.stageEVertexCount > 0) {
+      const vertexIncrease = SOLID_DEBUG.stageEVertexCount - SOLID_DEBUG.stageDVertexCount
+      const percentIncrease = (vertexIncrease / SOLID_DEBUG.stageDVertexCount) * 100
+      console.log("[v0-solid] Stage D→E Vertex Comparison:", {
+        stageD: SOLID_DEBUG.stageDVertexCount,
+        stageE: SOLID_DEBUG.stageEVertexCount,
+        increase: vertexIncrease,
+        increasePercent: percentIncrease.toFixed(1),
+        diagnosis: vertexIncrease > SOLID_DEBUG.stageDVertexCount * 0.5 ? "HOLE_TRIANGULATION_EXPLOSION" : "normal"
+      })
+    }
+    
+    // Store stages for 2D visualization
+    SOLID_DEBUG.lastStages = result.stages
 
     // Build solidStatus for debug overlay
     const solidStatus = buildSolidStatusFromMaskResult(result, solidParams.thickness, solidParams.depth)
 
     // If geometry is null, return empty (no mesh to render)
     if (!result.geometry) {
-      console.log("[v0] SolidEngine returning empty: geometry is null")
+      SOLID_DEBUG.bucket = "C"
+      SOLID_DEBUG.failureReason = "geometry null"
       return []
     }
+    
+    SOLID_DEBUG.buildMaskSolidSuccess = true
+    SOLID_DEBUG.geometryReturned = true
+    SOLID_DEBUG.vertexCount = result.geometry.getAttribute("position")?.count ?? 0
 
-    // SUCCESS: Return actual geometry
-    console.log("[v0] SolidEngine returning mesh with geometry")
+    // STAGE ISOLATION: Handle stage-specific rendering
+    if (SOLID_STAGE_DEBUG.enabled) {
+      if (SOLID_STAGE_DEBUG.stage === "D" && result.geometryNoHoles) {
+        // Stage D: Render outer only, no holes
+        SOLID_DEBUG.bucket = "E"
+        SOLID_DEBUG.failureReason = "stage-D-active"
+        return [{
+          tubeGeometry: result.geometryNoHoles,
+          filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
+          key: `solid-D-${strokes.length}-${solidParams.thickness}-${solidParams.depth}`,
+          mode: "solid",
+          solidStatus,
+        }]
+      } else if (SOLID_STAGE_DEBUG.stage !== "E" && SOLID_STAGE_DEBUG.stage !== "D") {
+        // Stages A/B/C: Skip 3D rendering, show 2D overlay only
+        SOLID_DEBUG.bucket = "E"
+        SOLID_DEBUG.failureReason = "stage-2D-only"
+        return []
+      }
+    }
+
+    // Stage E (default): Return full geometry with holes
+    SOLID_DEBUG.bucket = "E"
+    SOLID_DEBUG.failureReason = "success"
     return [{
       tubeGeometry: result.geometry,
       filteredCount: strokes.reduce((sum, s) => sum + s.points.length, 0),
@@ -3084,9 +3259,12 @@ export const SolidEngine: GeometryEngine = {
     const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
     const disposables: THREE.BufferGeometry[] = []
 
-    // Convert strokes to sandbox format and call the EXACT sandbox pipeline
-    const testStroke = strokesToTestStroke(strokes)
-    const result = buildMaskSolid(testStroke, solidParams.thickness, solidParams.depth, canvasWidth, canvasHeight)
+    // Convert strokes to sandbox format (canvas pixels -> world coords) and call sandbox pipeline
+    const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
+    // Convert thickness from canvas pixels to world units
+    const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
+    const worldThickness = solidParams.thickness * coordScale
+    const result = buildMaskSolid(testStroke, worldThickness, solidParams.depth, canvasWidth, canvasHeight)
     const geometry = result.geometry
 
     const rootGroup = new THREE.Group()

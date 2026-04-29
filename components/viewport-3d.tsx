@@ -5,7 +5,7 @@ import { Canvas, useThree, useFrame } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
-import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
+import type { Stroke, ProcessedStroke, Point } from "@/lib/stroke-processing"
 import type { ExportSettings } from "@/components/drawing-canvas"
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js"
 import {
@@ -19,6 +19,8 @@ import {
   TUBE_RADIUS,
   RADIAL_SEGMENTS,
   SPHERE_SEGMENTS,
+  SOLID_DEBUG,
+  SOLID_STAGE_DEBUG,
 } from "@/lib/geometry-engines"
 
 
@@ -95,13 +97,88 @@ function useStrokeBounds(meshes: StrokeMeshData[]): StrokeBounds | null {
   }, [meshes])
 }
 
-/* ---- Auto-frame on first draw ---- */
+/* ---- useStableStrokesBounds: bounds derived directly from raw stroke points ----
+ *
+ * Used for camera framing in Solid mode where the visible mesh is rebuilt every
+ * frame from a partial subset of the strokes (draw-in animation). Mesh-derived
+ * bounds shrink during animation, which would cause the camera to zoom in. By
+ * computing bounds from the full unfiltered strokes via the same world-space
+ * transform that `strokesToTestStroke` uses (lib/geometry-engines.ts), the
+ * camera frame stays locked to the FINAL geometry size for the entire playback.
+ *
+ * Cheap: pure O(N) point iteration, no mesh rebuild.
+ */
+function useStableStrokesBounds(
+  strokes: ProcessedStroke[],
+  canvasWidth: number,
+  canvasHeight: number,
+): StrokeBounds | null {
+  return useMemo(() => {
+    if (strokes.length === 0 || canvasWidth <= 0 || canvasHeight <= 0) return null
+
+    // Identical world-space transform used by strokesToTestStroke:
+    //   worldX = (x - W/2) * scale
+    //   worldY = -(y - H/2) * scale
+    //   scale  = 3.0 / max(W, H)
+    const scale = 3.0 / Math.max(canvasWidth, canvasHeight)
+    const offsetX = canvasWidth / 2
+    const offsetY = canvasHeight / 2
+
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    let count = 0
+
+    for (const s of strokes) {
+      for (const p of s.points) {
+        const wx = (p.x - offsetX) * scale
+        const wy = -(p.y - offsetY) * scale
+        if (wx < minX) minX = wx
+        if (wx > maxX) maxX = wx
+        if (wy < minY) minY = wy
+        if (wy > maxY) maxY = wy
+        count++
+      }
+    }
+
+    if (count === 0 || !isFinite(minX)) return null
+
+    // Small padding for stroke thickness and Solid extrusion depth.
+    // Sized in world units; matches typical maxima of thickness/depth.
+    const pad = 0.15
+    minX -= pad
+    minY -= pad
+    maxX += pad
+    maxY += pad
+
+    const center = new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, 0)
+
+    // Bounding sphere radius around the center, also accounting for a small
+    // depth on Z (Solid extrusion is centered at z=0).
+    const dx = (maxX - minX) / 2
+    const dy = (maxY - minY) / 2
+    const dz = pad
+    const radius = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    return { center, radius }
+  }, [strokes, canvasWidth, canvasHeight])
+}
+
+/* ---- Auto-frame on first draw ----
+ *
+ * Frames the camera once when the user goes from "no drawing" to "has drawing".
+ * The gate uses `strokeCount` (the count of user-drawn strokes from the parent
+ * prop), NOT the live mesh count, because in Solid mode the mesh count cycles
+ * 0 -> N -> 0 during draw-in playback, which would otherwise re-trigger framing
+ * and override any manual orbit/zoom the user did before pressing Play.
+ */
 function AutoFrameOnFirstDraw({
-  meshes,
+  strokeCount,
   bounds,
   controlsRef,
 }: {
-  meshes: StrokeMeshData[]
+  strokeCount: number
   bounds: StrokeBounds | null
   controlsRef: React.RefObject<OrbitControlsImpl | null>
 }) {
@@ -110,12 +187,12 @@ function AutoFrameOnFirstDraw({
   const prevCountRef = useRef(0)
 
   useEffect(() => {
-    if (meshes.length === 0) {
+    if (strokeCount === 0) {
       hasFramedRef.current = false
       prevCountRef.current = 0
       return
     }
-    if (prevCountRef.current === 0 && meshes.length > 0 && !hasFramedRef.current && bounds) {
+    if (prevCountRef.current === 0 && strokeCount > 0 && !hasFramedRef.current && bounds) {
       hasFramedRef.current = true
       const controls = controlsRef.current
       if (!controls) return
@@ -125,8 +202,8 @@ function AutoFrameOnFirstDraw({
       controls.target.copy(bounds.center)
       controls.update()
     }
-    prevCountRef.current = meshes.length
-  }, [meshes, bounds, camera, controlsRef])
+    prevCountRef.current = strokeCount
+  }, [strokeCount, bounds, camera, controlsRef])
 
   return null
 }
@@ -477,6 +554,206 @@ function PlaybackController({
   return null
 }
 
+/* ---- SolidAnimationTick: forces React re-render while playheadRef advances ----
+ *
+ * Why this exists:
+ *   The Solid mesh is rebuilt from a `useMemo` that depends on a React state
+ *   value (`solidAnimProgress`). The actual playback source-of-truth is
+ *   `playheadRef.current`, which is a ref and does NOT trigger re-renders when
+ *   mutated by `PlaybackController`. Without this tick, the Solid mesh never
+ *   rebuilds during playback and appears static.
+ *
+ * Behavior:
+ *   - Runs on every frame inside the Canvas (must be a child of <Canvas>).
+ *   - Throttles updates lightly so Solid rebuilds at a smooth cadence without
+ *     spamming raster/contour/extrude work every single frame:
+ *       * minimum interval: ~24ms (~40 Hz) between state updates
+ *       * minimum delta:    0.003 (0.3%) between state updates
+ *     This yields up to ~330 reveal steps over a full playback, vs ~100 in the
+ *     previous 80ms / 1% throttle that produced visibly chunky reveals.
+ *   - Always forces an update at the boundaries (progress 0 and progress 1)
+ *     so the final frame matches the static preview exactly and replay starts
+ *     from empty.
+ *   - Active for Solid mode only; other modes early-out and pay zero cost.
+ */
+function SolidAnimationTick({
+  isSolid,
+  playheadRef,
+  setSolidAnimProgress,
+}: {
+  isSolid: boolean
+  playheadRef: React.MutableRefObject<number>
+  setSolidAnimProgress: React.Dispatch<React.SetStateAction<number>>
+}) {
+  const lastSyncedRef = useRef<number>(playheadRef.current)
+  const lastSyncTimeRef = useRef<number>(0)
+
+  useFrame(() => {
+    if (!isSolid) return
+    const current = playheadRef.current
+    const last = lastSyncedRef.current
+    const now = performance.now()
+    const delta = Math.abs(current - last)
+
+    // Always sync at boundaries so final frame == full static preview
+    // and replay-from-zero starts at empty geometry.
+    const atBoundary = (current >= 1 && last < 1) || (current <= 0 && last > 0)
+
+    // Throttle: require both ~24ms AND 0.003 progress delta unless at a boundary.
+    // The combination caps update rate at ~40 Hz and gives ~330 max reveal steps,
+    // while preventing rebuild spam when many frames render between progress moves.
+    const timeOk = now - lastSyncTimeRef.current >= 24
+    const deltaOk = delta >= 0.003
+
+    if (atBoundary || (timeOk && deltaOk)) {
+      lastSyncedRef.current = current
+      lastSyncTimeRef.current = now
+      setSolidAnimProgress(current)
+    }
+  })
+
+  return null
+}
+
+/* ---- Stroke filtering by animation progress (for Solid draw-in animation) ----
+ *
+ * Returns a partial copy of `strokes` representing the portion of the drawing
+ * that has been "drawn in" at the given `progress` (0..1).
+ *
+ * Smoothness strategy: ARC-LENGTH based, with sub-segment interpolation.
+ *
+ *   1. Compute the total arc length across all strokes (sum of segment lengths).
+ *   2. The target reveal length = totalLength * progress.
+ *   3. Walk strokes in order; fully include any stroke whose cumulative length
+ *      stays below the target.
+ *   4. The stroke that contains the target receives:
+ *        - all of its points up to and including the last point before the cut
+ *        - one INTERPOLATED endpoint placed at the exact target length inside
+ *          the current segment (linear x/y/t/pressure interpolation)
+ *      This makes the reveal advance continuously instead of snapping to whole
+ *      points, which removes the visible "popping" and uneven pacing that comes
+ *      from raw point-count progress (corner detection clusters extra points
+ *      around curves, so equal point counts != equal visible length).
+ *   5. Boundaries are clean:
+ *        progress <= 0  -> []                    (replay-from-empty)
+ *        progress >= 1  -> original strokes      (final frame == static preview)
+ *   6. Original stroke data is never mutated; partial strokes are shallow-copied
+ *      and only the new points array is freshly constructed.
+ */
+function filterStrokesByProgress(
+  strokes: ProcessedStroke[],
+  progress: number,
+): ProcessedStroke[] {
+  if (progress >= 1 || strokes.length === 0) return strokes
+  if (progress <= 0) return []
+
+  // ---- Pass 1: total arc length across all strokes ----
+  // Per-stroke length cached to avoid recomputation in pass 2.
+  const strokeLengths: number[] = new Array(strokes.length)
+  let totalLength = 0
+  for (let s = 0; s < strokes.length; s++) {
+    const pts = strokes[s].points
+    let len = 0
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x
+      const dy = pts[i].y - pts[i - 1].y
+      len += Math.sqrt(dx * dx + dy * dy)
+    }
+    strokeLengths[s] = len
+    totalLength += len
+  }
+
+  // Degenerate: zero total length (all points coincident) — fall back to
+  // including everything once progress > 0 to avoid dividing by zero.
+  if (totalLength <= 0) return strokes
+
+  const targetLength = totalLength * progress
+
+  // ---- Pass 2: walk strokes, build the partial output ----
+  const filtered: ProcessedStroke[] = []
+  let consumed = 0
+
+  for (let s = 0; s < strokes.length; s++) {
+    const stroke = strokes[s]
+    const strokeLen = strokeLengths[s]
+
+    // Stroke ends before target -> fully include and continue.
+    if (consumed + strokeLen <= targetLength) {
+      filtered.push(stroke)
+      consumed += strokeLen
+      continue
+    }
+
+    // Stroke contains the cut. Walk its segments to find the exact cut point.
+    const remaining = targetLength - consumed
+    const pts = stroke.points
+
+    // Edge case: stroke has 0 or 1 points or zero length.
+    if (pts.length <= 1 || strokeLen <= 0) {
+      if (pts.length > 0) {
+        filtered.push({ ...stroke, points: [pts[0]] })
+      }
+      break
+    }
+
+    // Edge case: cut falls before the first segment -> include just the start.
+    if (remaining <= 0) {
+      filtered.push({ ...stroke, points: [pts[0]] })
+      break
+    }
+
+    let segAccum = 0
+    let cutIdx = -1
+    let segStartLen = 0
+
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x
+      const dy = pts[i].y - pts[i - 1].y
+      const segLen = Math.sqrt(dx * dx + dy * dy)
+
+      if (segAccum + segLen >= remaining) {
+        cutIdx = i
+        segStartLen = segAccum
+        break
+      }
+      segAccum += segLen
+    }
+
+    if (cutIdx < 0) {
+      // Numerical edge — include all of stroke.
+      filtered.push(stroke)
+      break
+    }
+
+    // Interpolate inside segment [cutIdx-1, cutIdx].
+    const a = pts[cutIdx - 1]
+    const b = pts[cutIdx]
+    const dxSeg = b.x - a.x
+    const dySeg = b.y - a.y
+    const segLen = Math.sqrt(dxSeg * dxSeg + dySeg * dySeg)
+    const tFrac = segLen > 0 ? Math.max(0, Math.min(1, (remaining - segStartLen) / segLen)) : 0
+
+    const interpolatedPoint: Point = {
+      x: a.x + dxSeg * tFrac,
+      y: a.y + dySeg * tFrac,
+      t: a.t + (b.t - a.t) * tFrac,
+      pressure:
+        a.pressure !== undefined && b.pressure !== undefined
+          ? a.pressure + (b.pressure - a.pressure) * tFrac
+          : a.pressure ?? b.pressure,
+    }
+
+    // Build partial stroke: all complete points up to cutIdx-1, plus interpolated end.
+    const partialPoints: Point[] = pts.slice(0, cutIdx)
+    partialPoints.push(interpolatedPoint)
+
+    filtered.push({ ...stroke, points: partialPoints })
+    break
+  }
+
+  return filtered
+}
+
 /* ---- Scene ---- */
 function Scene({
   controlsRef,
@@ -523,8 +800,40 @@ function Scene({
   meshStatusRef?: React.MutableRefObject<StrokeBuildStatus[]>
   solidStatusRef?: React.MutableRefObject<SolidBuildStatus | null>
 }) {
-  const meshes = useStrokeMeshes(strokes, canvasWidth, canvasHeight, geometryMode, extrudeParams, solidParams)
-  const bounds = useStrokeBounds(meshes)
+  // ---- Solid draw-in animation state ----
+  // playheadRef.current is the source of truth, but ref mutations don't
+  // trigger React re-renders. SolidAnimationTick (rendered below, inside
+  // Canvas) reads playheadRef.current on every frame and updates this state
+  // (throttled). The state then drives the animatedStrokes useMemo, which
+  // forces the Solid mesh to rebuild as playback progresses.
+  const [solidAnimProgress, setSolidAnimProgress] = useState<number>(
+    playheadRef.current,
+  )
+
+  // For Solid mode, filter strokes by current animation progress.
+  // For other modes, return strokes unchanged (Rod/Extrude animate via drawRange).
+  const animatedStrokes = useMemo(() => {
+    if (geometryMode !== "solid") return strokes
+    return filterStrokesByProgress(strokes, solidAnimProgress)
+  }, [strokes, geometryMode, solidAnimProgress])
+
+  // Build meshes - for Solid mode, use animated strokes instead of full strokes
+  const meshes = useStrokeMeshes(
+    geometryMode === "solid" ? animatedStrokes : strokes,
+    canvasWidth,
+    canvasHeight,
+    geometryMode,
+    extrudeParams,
+    solidParams
+  )
+  const meshBounds = useStrokeBounds(meshes)
+
+  // Stable bounds derived from the FULL strokes prop (not the animated subset).
+  // Used in Solid mode so the camera doesn't zoom in as the mesh shrinks/grows
+  // during draw-in animation. For other modes we keep mesh-derived bounds.
+  const stableBounds = useStableStrokesBounds(strokes, canvasWidth, canvasHeight)
+
+  const bounds = geometryMode === "solid" ? stableBounds ?? meshBounds : meshBounds
 
   // Populate meshStatusRef for debug overlay (extrude mode)
   useEffect(() => {
@@ -580,8 +889,16 @@ function Scene({
         onProgressUpdate={onProgressUpdate}
       />
 
+      {/* Solid-only animation tick: forces React re-render of Solid mesh
+          while playheadRef advances. No-op for other modes. */}
+      <SolidAnimationTick
+        isSolid={geometryMode === "solid"}
+        playheadRef={playheadRef}
+        setSolidAnimProgress={setSolidAnimProgress}
+      />
+
       <AutoFrameOnFirstDraw
-        meshes={meshes}
+        strokeCount={strokes.length}
         bounds={bounds}
         controlsRef={controlsRef}
       />
@@ -1066,111 +1383,8 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               ))}
             </div>
           )}
-          {/* Solid mode build status - ON SCREEN DEBUG BOX */}
-          {geometryMode === "solid" && solidStatusRef.current && (
-            <div className="mt-1 border-t border-border/50 pt-1">
-              <div className="font-semibold text-foreground">Solid Build Debug:</div>
-              
-              {/* FAILURE REASON - prominent display */}
-              <div className={`text-sm font-bold ${solidStatusRef.current.success ? "text-green-500" : "text-red-500"}`}>
-                {solidStatusRef.current.failureReason.toUpperCase()}
-              </div>
-              
-              {/* Linear trace values */}
-              <div className="mt-1 grid grid-cols-2 gap-x-2 text-[10px]">
-                <div>filled pixels:</div>
-                <div>{solidStatusRef.current.filledPixelCount}</div>
-                
-                <div>components:</div>
-                <div>{solidStatusRef.current.componentCount}</div>
-                
-                <div>selected area:</div>
-                <div>{solidStatusRef.current.selectedComponentArea}</div>
-                
-                <div>traced pts:</div>
-                <div>{solidStatusRef.current.tracedBoundaryPoints}</div>
-                
-                <div>simplified pts:</div>
-                <div>{solidStatusRef.current.simplifiedPoints}</div>
-                
-                <div>contour closed:</div>
-                <div>{solidStatusRef.current.contourClosed ? "YES" : "NO"}</div>
-                
-                <div>signed area:</div>
-                <div>{solidStatusRef.current.signedArea.toFixed(2)}</div>
-                
-                <div className="col-span-2 mt-1 border-t border-border/30 pt-1 font-semibold text-amber-500">Fidelity:</div>
-                
-                <div>original area:</div>
-                <div>{solidStatusRef.current.originalMaskArea}</div>
-                
-                <div>simplified area:</div>
-                <div>{solidStatusRef.current.simplifiedMaskArea}</div>
-                
-                <div>area retention:</div>
-                <div className={solidStatusRef.current.areaRetentionRatio < 0.6 ? "text-red-500" : solidStatusRef.current.areaRetentionRatio < 0.8 ? "text-yellow-500" : "text-green-500"}>
-                  {(solidStatusRef.current.areaRetentionRatio * 100).toFixed(1)}%
-                </div>
-                
-                <div>mask IoU:</div>
-                <div className={solidStatusRef.current.maskIoU < 0.7 ? "text-red-500" : solidStatusRef.current.maskIoU < 0.85 ? "text-yellow-500" : "text-green-500"}>
-                  {(solidStatusRef.current.maskIoU * 100).toFixed(1)}%
-                </div>
-                
-                <div>used fallback:</div>
-                <div className={solidStatusRef.current.usedFallbackContour ? "text-yellow-500" : ""}>
-                  {solidStatusRef.current.usedFallbackContour ? "YES" : "NO"}
-                </div>
-                
-                <div className="col-span-2 mt-1 border-t border-border/30 pt-1 font-semibold text-cyan-500">Polygon Validation:</div>
-                
-                <div>self-intersect:</div>
-                <div className={solidStatusRef.current.selfIntersectionsFound > 0 ? "text-red-500" : "text-green-500"}>
-                  {solidStatusRef.current.selfIntersectionsFound}
-                </div>
-                
-                <div>duplicates removed:</div>
-                <div>{solidStatusRef.current.duplicatePointsRemoved}</div>
-                
-                <div>degenerate edges:</div>
-                <div className={solidStatusRef.current.degenerateEdgesRemoved > 0 ? "text-yellow-500" : ""}>
-                  {solidStatusRef.current.degenerateEdgesRemoved}
-                </div>
-                
-                <div>validation passed:</div>
-                <div className={solidStatusRef.current.polygonValidationPassed ? "text-green-500" : "text-red-500"}>
-                  {solidStatusRef.current.polygonValidationPassed ? "YES" : "NO"}
-                </div>
-                
-                <div className="col-span-2 mt-1 border-t border-border/30 pt-1 font-semibold">Geometry:</div>
-                
-                <div>vertices:</div>
-                <div>{solidStatusRef.current.vertexCount}</div>
-                
-                <div>indices:</div>
-                <div>{solidStatusRef.current.indexCount}</div>
-                
-                <div>bbox size:</div>
-                <div>{solidStatusRef.current.bboxSize ? solidStatusRef.current.bboxSize.map(v => v.toFixed(2)).join(", ") : "null"}</div>
-                
-                <div>bbox center:</div>
-                <div>{solidStatusRef.current.bboxCenter ? solidStatusRef.current.bboxCenter.map(v => v.toFixed(2)).join(", ") : "null"}</div>
-                
-                <div>rebuild ms:</div>
-                <div suppressHydrationWarning>{solidStatusRef.current.rebuildTimeMs.toFixed(1)}</div>
-                
-                <div>thickness:</div>
-                <div>{solidStatusRef.current.thickness.toFixed(3)}</div>
-                
-                <div>depth:</div>
-                <div>{solidStatusRef.current.depth.toFixed(3)}</div>
-              </div>
-            </div>
-          )}
         </div>
       )}
-
-
 
       {/* Animation controls */}
       {strokeCount > 0 && (
@@ -1364,6 +1578,444 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         >
           Reset camera
         </button>
+      </div>
+
+      {/* SOLID DEBUG OVERLAY - on-screen debug for Solid mode */}
+      {showDebug && geometryMode === "solid" && (
+        <>
+          <SolidDebugOverlay />
+          {SOLID_STAGE_DEBUG.enabled && <SolidStageDebugOverlay />}
+          {SOLID_STAGE_DEBUG.enabled && <SolidStageControls />}
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Minimal on-screen debug overlay for Solid mode failure diagnosis */
+function SolidDebugOverlay() {
+  const [, forceUpdate] = useState(0)
+  
+  // Poll SOLID_DEBUG state every 100ms
+  useEffect(() => {
+    const interval = setInterval(() => forceUpdate(n => n + 1), 100)
+    return () => clearInterval(interval)
+  }, [])
+  
+  const d = SOLID_DEBUG
+  const bucketColors: Record<string, string> = {
+    A: "bg-gray-500",
+    B: "bg-yellow-500", 
+    C: "bg-red-500",
+    D: "bg-orange-500",
+    E: "bg-green-500",
+  }
+  
+  return (
+    <div className="absolute left-3 top-3 z-50 rounded-lg border border-red-500/50 bg-black/90 p-2 font-mono text-[10px] text-white">
+      <div className="mb-1 flex items-center gap-2 border-b border-red-500/30 pb-1">
+        <span className="font-bold text-red-400">SOLID DEBUG</span>
+        <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold text-black ${bucketColors[d.bucket]}`}>
+          BUCKET {d.bucket}
+        </span>
+      </div>
+      <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+        <span className="text-gray-400">engineCalled:</span>
+        <span className={d.engineCalled ? "text-green-400" : "text-red-400"}>{d.engineCalled ? "YES" : "NO"}</span>
+        
+        <span className="text-gray-400">canvas:</span>
+        <span>{d.canvasWidth}x{d.canvasHeight}</span>
+        
+        <span className="text-gray-400">strokes:</span>
+        <span>{d.strokeCount}</span>
+        
+        <span className="text-gray-400">points:</span>
+        <span>{d.pointCount}</span>
+        
+        <span className="text-gray-400">buildMaskSolid:</span>
+        <span className={d.buildMaskSolidCalled ? "text-green-400" : "text-red-400"}>{d.buildMaskSolidCalled ? "CALLED" : "NOT CALLED"}</span>
+        
+        <span className="text-gray-400">thickness:</span>
+        <span>{d.inputThickness}px -&gt; {d.worldThickness.toFixed(4)}w</span>
+        
+        <span className="text-gray-400">filledPixels:</span>
+        <span>{d.filledPixels} / {d.maskArea}</span>
+        
+        <span className="text-gray-400">fill%:</span>
+        <span className={d.filledPercent > 50 ? "text-red-400" : d.filledPercent < 1 ? "text-yellow-400" : "text-green-400"}>
+          {d.filledPercent.toFixed(1)}%
+        </span>
+        
+        <span className="text-gray-400">geometry:</span>
+        <span className={d.geometryReturned ? "text-green-400" : "text-red-400"}>{d.geometryReturned ? "YES" : "NULL"}</span>
+        
+        <span className="text-gray-400">vertexCount:</span>
+        <span className={d.vertexCount > 0 ? "text-green-400" : "text-red-400"}>{d.vertexCount}</span>
+        
+        <span className="text-gray-400">failureReason:</span>
+        <span className={d.failureReason === "success" ? "text-green-400" : "text-yellow-400"}>{d.failureReason || "-"}</span>
+        
+        <span className="text-gray-400">worldX:</span>
+        <span className={Math.abs(d.worldMinX) < 2 && Math.abs(d.worldMaxX) < 2 ? "text-green-400" : "text-red-400"}>
+          [{d.worldMinX.toFixed(2)}, {d.worldMaxX.toFixed(2)}]
+        </span>
+        
+        <span className="text-gray-400">worldY:</span>
+        <span className={Math.abs(d.worldMinY) < 2 && Math.abs(d.worldMaxY) < 2 ? "text-green-400" : "text-red-400"}>
+          [{d.worldMinY.toFixed(2)}, {d.worldMaxY.toFixed(2)}]
+        </span>
+      </div>
+      
+      {/* Raster Stage Diagnostics - read from lastStages.rasterDebug */}
+      {(() => {
+        const r = d.lastStages?.rasterDebug
+        return (
+          <div className="mt-1 border-t border-orange-500/30 pt-1">
+            <div className="mb-0.5 text-[9px] font-bold text-orange-400">RASTER STAGE</div>
+            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+              <span className="text-gray-400">rasterExecuted:</span>
+              <span className={r?.rasterStageExecuted === "YES" ? "text-green-400" : "text-red-400"}>{r?.rasterStageExecuted || "?"}</span>
+              
+              <span className="text-gray-400">inputSpace:</span>
+              <span>{r?.rasterInputSpace || "?"}</span>
+              
+              <span className="text-gray-400">maskSize:</span>
+              <span>{r?.rasterMaskWidth || "?"}x{r?.rasterMaskHeight || "?"}</span>
+              
+              <span className="text-gray-400">thicknessPx:</span>
+              <span>{typeof r?.rasterThicknessPx === "number" ? r.rasterThicknessPx.toFixed(1) : "?"}</span>
+              
+              <span className="text-gray-400">strokeBoundsX:</span>
+              <span className="text-[8px]">{r?.rasterStrokeBoundsX || "?"}</span>
+              
+              <span className="text-gray-400">strokeBoundsY:</span>
+              <span className="text-[8px]">{r?.rasterStrokeBoundsY || "?"}</span>
+              
+              <span className="text-gray-400">filledPixels:</span>
+              <span className={r?.filledPixels && r.filledPixels > 0 ? "text-green-400" : "text-red-400"}>{r?.filledPixels ?? "?"}</span>
+              
+              <span className="text-gray-400">rasterRejected:</span>
+              <span className={r?.rasterRejected === "YES" ? "text-red-400 font-bold" : "text-green-400"}>{r?.rasterRejected || "?"}</span>
+              
+              {r?.rasterRejected === "YES" && (
+                <>
+                  <span className="text-gray-400">rejectReason:</span>
+                  <span className="text-red-400 text-[8px]">{r?.rasterRejectReason || "unknown"}</span>
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+      
+      {/* Solid Mode Diagnostics - read from lastStages.solidDiagnostics */}
+      {(() => {
+        const s = d.lastStages?.solidDiagnostics
+        if (!s) return null
+        return (
+          <div className="mt-1 border-t border-purple-500/30 pt-1">
+            <div className="mb-0.5 text-[9px] font-bold text-purple-400">SOLID MODE</div>
+            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+              <span className="text-gray-400">geometryMode:</span>
+              <span className="text-purple-300 font-bold">{s.geometryMode}</span>
+              
+              <span className="text-gray-400">geometryType:</span>
+              <span className={s.geometryType === "NULL" ? "text-red-400" : "text-green-400"}>{s.geometryType}</span>
+              
+              <span className="text-gray-400">gateExecuted:</span>
+              <span className={s.gateExecuted === "YES" ? "text-green-400" : "text-yellow-400"}>{s.gateExecuted}</span>
+              
+              <span className="text-gray-400">filledPixels:</span>
+              <span className={s.filledPixels > 0 ? "text-green-400" : "text-red-400"}>{s.filledPixels}</span>
+              
+              <span className="text-gray-400">outerAreaAbs:</span>
+              <span>{typeof s.outerAreaAbs === "number" ? s.outerAreaAbs.toFixed(1) : "?"}</span>
+              
+              <span className="text-gray-400">contourClosed:</span>
+              <span className={s.contourClosed === "YES" ? "text-green-400" : "text-red-400"}>{s.contourClosed}</span>
+              
+              <span className="text-gray-400">contourOrdered:</span>
+              <span className={s.contourOrdered === "YES" ? "text-green-400" : "text-red-400"}>{s.contourOrdered}</span>
+              
+              <span className="text-gray-400">contourRejected:</span>
+              <span className={s.contourRejected === "YES" ? "text-red-400 font-bold" : "text-green-400"}>{s.contourRejected}</span>
+              
+              {s.contourRejected === "YES" && (
+                <>
+                  <span className="text-gray-400">rejectReason:</span>
+                  <span className="text-red-400 text-[8px]">{s.contourRejectReason || "unknown"}</span>
+                </>
+              )}
+              
+              {s.extrusionBuilder !== undefined && (
+                <>
+                  <span className="text-gray-400">extrusionBuilder:</span>
+                  <span className="text-cyan-300 font-bold">{s.extrusionBuilder}</span>
+                  
+                  <span className="text-gray-400">frontCapTris:</span>
+                  <span>{s.frontCapTriCount ?? "?"}</span>
+                  
+                  <span className="text-gray-400">backCapTris:</span>
+                  <span>{s.backCapTriCount ?? "?"}</span>
+                  
+                  <span className="text-gray-400">wallSegments:</span>
+                  <span className={s.wallSegmentCount && s.wallSegmentCount > 0 ? "text-green-400" : "text-red-400"}>{s.wallSegmentCount ?? "?"}</span>
+                  
+                  <span className="text-gray-400">skippedWalls:</span>
+                  <span>{s.skippedWallSegments ?? "?"}</span>
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+      
+      {/* Contour Diagnostics Section */}
+      <div className="mt-1 border-t border-blue-500/30 pt-1">
+        <div className="mb-0.5 text-[9px] font-bold text-blue-400">CONTOUR DIAGNOSTICS</div>
+        <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+          <span className="text-gray-400">rawPts:</span>
+          <span>{d.rawContourPoints}</span>
+          
+          <span className="text-gray-400">simpPts:</span>
+          <span>{d.simplifiedContourPoints} ({d.rawContourPoints > 0 ? ((1 - d.simplifiedContourPoints / d.rawContourPoints) * 100).toFixed(0) : 0}% reduced)</span>
+          
+          <span className="text-gray-400">outerArea:</span>
+          <span>{d.outerSignedArea.toFixed(1)}</span>
+          
+          <span className="text-gray-400">outerWind:</span>
+          <span className={d.outerWinding === "CCW" ? "text-green-400" : "text-yellow-400"}>{d.outerWinding}</span>
+          
+          <span className="text-gray-400">outerSelfX:</span>
+          <span className={d.outerSelfIntersects ? "text-red-400 font-bold" : "text-green-400"}>
+            {d.outerSelfIntersects ? "YES - BAD" : "NO"}
+          </span>
+          
+          <span className="text-gray-400">holes:</span>
+          <span>{d.holeCount}</span>
+          
+          {d.holeCount > 0 && (
+            <>
+              <span className="text-gray-400">holeAreas:</span>
+              <span className="text-[8px]">[{d.holeAreas.map((a: number) => a.toFixed(0)).join(", ")}]</span>
+              
+              <span className="text-gray-400">holeWinds:</span>
+              <span className="text-[8px]">[{d.holeWindings.join(", ")}]</span>
+              
+              <span className="text-gray-400">holeSelfX:</span>
+              <span className={d.anyHoleSelfIntersects ? "text-red-400 font-bold" : "text-green-400"}>
+                {d.anyHoleSelfIntersects ? "YES - BAD" : "NO"}
+              </span>
+              
+              <span className="text-gray-400">holeOutside:</span>
+              <span className={d.anyHoleOutsideOuter ? "text-red-400 font-bold" : "text-green-400"}>
+                {d.anyHoleOutsideOuter ? "YES - BAD" : "NO"}
+              </span>
+              
+              <span className="text-gray-400">holesOverlap:</span>
+              <span className={d.holesOverlap ? "text-red-400 font-bold" : "text-green-400"}>
+                {d.holesOverlap ? "YES - BAD" : "NO"}
+              </span>
+            </>
+          )}
+          
+          <span className="text-gray-400">stageD verts:</span>
+          <span className={d.stageDVertexCount > 0 ? "text-green-400" : "text-red-400"}>{d.stageDVertexCount}</span>
+          
+          <span className="text-gray-400">stageE verts:</span>
+          <span className={d.stageEVertexCount > 0 ? "text-green-400" : "text-red-400"}>{d.stageEVertexCount}</span>
+        </div>
+      </div>
+      
+      <div className="mt-1 border-t border-red-500/30 pt-1 text-[8px] text-gray-500">
+        B=rawContour C=simplified D=noHoles E=full | Check: outerSelfX, holeSelfX, holeOutside, holesOverlap
+      </div>
+    </div>
+  )
+}
+
+/**
+ * TEMPORARY STAGE ISOLATION DEBUG: 2D visualization of pipeline stages
+ * Renders: mask silhouette, raw contours, simplified contours, holes
+ */
+function SolidStageDebugOverlay() {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [, forceUpdate] = useState(0)
+  
+  useEffect(() => {
+    const interval = setInterval(() => forceUpdate(n => n + 1), 100)
+    return () => clearInterval(interval)
+  }, [])
+  
+  useEffect(() => {
+    if (!canvasRef.current || !SOLID_DEBUG.lastStages) return
+    
+    const stages = SOLID_DEBUG.lastStages
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext("2d")!
+    
+    // Setup canvas
+    canvas.width = 400
+    canvas.height = 400
+    ctx.fillStyle = "#000"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    
+    // Get scale to fit mask in canvas
+    const maskW = stages.maskWidth || 1
+    const maskH = stages.maskHeight || 1
+    const scaleX = (canvas.width - 20) / maskW
+    const scaleY = (canvas.height - 20) / maskH
+    const scale = Math.min(scaleX, scaleY)
+    const offsetX = 10 + (canvas.width - 20 - maskW * scale) / 2
+    const offsetY = 10 + (canvas.height - 20 - maskH * scale) / 2
+    
+    // Stage A: Render mask silhouette
+    if (SOLID_STAGE_DEBUG.stage === "A" || SOLID_STAGE_DEBUG.stage === "B" || SOLID_STAGE_DEBUG.stage === "C" || SOLID_STAGE_DEBUG.stage === "D" || SOLID_STAGE_DEBUG.stage === "E") {
+      ctx.fillStyle = "#333"
+      for (let y = 0; y < maskH; y++) {
+        for (let x = 0; x < maskW; x++) {
+          if (stages.maskData[y * maskW + x]) {
+            ctx.fillRect(offsetX + x * scale, offsetY + y * scale, scale, scale)
+          }
+        }
+      }
+    }
+    
+    // Stage B: Render raw outer contour
+    if (SOLID_STAGE_DEBUG.stage === "B" || SOLID_STAGE_DEBUG.stage === "C" || SOLID_STAGE_DEBUG.stage === "D" || SOLID_STAGE_DEBUG.stage === "E") {
+      ctx.strokeStyle = "#0f0"
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      for (let i = 0; i < stages.outerContour.length; i++) {
+        const p = stages.outerContour[i]
+        const sx = offsetX + p.x * scale
+        const sy = offsetY + p.y * scale
+        if (i === 0) ctx.moveTo(sx, sy)
+        else ctx.lineTo(sx, sy)
+      }
+      ctx.closePath()
+      ctx.stroke()
+    }
+    
+    // Stage C: Render simplified outer contour
+    if (SOLID_STAGE_DEBUG.stage === "C" || SOLID_STAGE_DEBUG.stage === "D" || SOLID_STAGE_DEBUG.stage === "E") {
+      ctx.strokeStyle = "#ff0"
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      for (let i = 0; i < stages.simplifiedOuter.length; i++) {
+        const p = stages.simplifiedOuter[i]
+        const sx = offsetX + p.x * scale
+        const sy = offsetY + p.y * scale
+        if (i === 0) ctx.moveTo(sx, sy)
+        else ctx.lineTo(sx, sy)
+      }
+      ctx.closePath()
+      ctx.stroke()
+    }
+    
+    // Stages D/E: Render holes
+    if (SOLID_STAGE_DEBUG.stage === "D" || SOLID_STAGE_DEBUG.stage === "E") {
+      ctx.strokeStyle = "#f00"
+      ctx.lineWidth = 1.5
+      for (const hole of stages.simplifiedHoles) {
+        ctx.beginPath()
+        for (let i = 0; i < hole.length; i++) {
+          const p = hole[i]
+          const sx = offsetX + p.x * scale
+          const sy = offsetY + p.y * scale
+          if (i === 0) ctx.moveTo(sx, sy)
+          else ctx.lineTo(sx, sy)
+        }
+        ctx.closePath()
+        ctx.stroke()
+      }
+    }
+    
+    // Legend
+    ctx.fillStyle = "#fff"
+    ctx.font = "10px monospace"
+    ctx.fillText(`STAGE ${SOLID_STAGE_DEBUG.stage}`, 10, canvas.height - 5)
+  }, [SOLID_DEBUG.lastStages])
+  
+  return (
+    <div className="absolute left-3 bottom-20 z-50 rounded-lg border border-yellow-500/50 bg-black/90 p-2">
+      <div className="mb-1 text-[10px] font-bold text-yellow-400">2D STAGE VIZ</div>
+      <canvas
+        ref={canvasRef}
+        className="border border-yellow-500/30 bg-black"
+        width={400}
+        height={400}
+        style={{ maxWidth: "300px", display: "block" }}
+      />
+      <div className="mt-1 text-[8px] text-gray-400">
+        Grn=raw Yel=simplified Red=holes
+      </div>
+    </div>
+  )
+}
+
+/** Stage isolation toggle buttons */
+function SolidStageControls() {
+  const [, forceUpdate] = useState(0)
+  const [enabled, setEnabled] = useState(SOLID_STAGE_DEBUG.enabled)
+  const [stage, setStage] = useState(SOLID_STAGE_DEBUG.stage)
+  
+  const stages: ("A" | "B" | "C" | "D" | "E")[] = ["A", "B", "C", "D", "E"]
+  const stageNames: Record<string, string> = {
+    A: "Mask", B: "RawCtr", C: "SimpCtr", D: "NoHoles", E: "Full"
+  }
+  const stageDescriptions: Record<string, string> = {
+    A: "2D mask only",
+    B: "raw outer contour",
+    C: "simplified contour",
+    D: "extrude outer only",
+    E: "extrude with holes"
+  }
+  
+  const handleEnabledChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    SOLID_STAGE_DEBUG.enabled = e.target.checked
+    setEnabled(e.target.checked)
+  }
+  
+  const handleStageChange = (s: "A" | "B" | "C" | "D" | "E") => {
+    SOLID_STAGE_DEBUG.stage = s
+    setStage(s)
+    // Force a rebuild by triggering state update
+    forceUpdate(n => n + 1)
+  }
+  
+  return (
+    <div className="absolute right-3 bottom-20 z-50 flex flex-col gap-1 rounded-lg border border-blue-500/50 bg-black/90 p-2">
+      <div className="text-[10px] font-bold text-blue-400">STAGE ISOLATION DEBUG</div>
+      <label className="flex items-center gap-1 text-[9px] text-white">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={handleEnabledChange}
+          className="h-3 w-3"
+        />
+        Enable Stage Debug
+      </label>
+      <div className="flex gap-1">
+        {stages.map(s => (
+          <button
+            key={s}
+            onClick={() => handleStageChange(s)}
+            className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${
+              stage === s
+                ? "bg-blue-500 text-black"
+                : "bg-gray-600 text-white hover:bg-gray-500"
+            }`}
+          >
+            {stageNames[s]}
+          </button>
+        ))}
+      </div>
+      <div className="text-[8px] text-gray-400">
+        Current: {stageDescriptions[stage]}
+      </div>
+      <div className="text-[8px] text-yellow-400">
+        D vs E: If D works but E shards = holes/winding bug
       </div>
     </div>
   )
