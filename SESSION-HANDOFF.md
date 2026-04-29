@@ -118,8 +118,55 @@ These are non-negotiable for this checkpoint:
 2. Then start the Solid holes branch.
 3. Keep Inflate after holes, because Inflate should branch from the stable Solid filled-silhouette base.
 
+## Cross-mode QA checkpoint
+
+- **name:** Cross-Mode QA Pass — post Solid animation smoothing
+- **label:** `CROSS_MODE_QA_PASS`
+- **status:** passed / no regressions across modes
+
+### QA results
+
+- Rod playback works
+- Rod GLB export works
+- Extrude playback works
+- Extrude GLB export works
+- Solid playback works
+- Solid pause / replay works
+- Solid GLB export works
+- Debug gating works
+- Debug OFF does not block playback controls
+
+### Current locked Solid status
+
+- active path: `EXTRUDE_FROM_FLAT_BASE`
+- `FLAT_BASE` validated as stable base / fallback
+- filled-silhouette extrusion validated
+- Solid preview works
+- Solid export works
+- preview / export parity confirmed by code inspection
+- manual GLB export smoke test passed
+- debug panel gated behind Debug mode
+- basic smoothed Solid draw-in animation passed
+- Rod / Extrude remained working after Solid animation changes
+
+### Known limitations carried into next phase
+
+- no hole preservation yet
+- Solid reveal is rebuild-based, not shader-based
+- no advanced animation editing yet
+- no Inflate work yet
+
+## Next branch — `SOLID_HOLE_SUPPORT_PHASE_H1`
+
+- **scope:** hole detection only
+- **explicitly out of scope for H1:**
+  - no hole extrusion yet
+  - no cap cutting yet
+  - no geometry behavior change until hole detection is proven
+- **goal of H1:** detect inner contours / interior negative space without modifying the current Solid geometry path, so detection can be validated in isolation before any visible geometry change
+
 ## Final saved checkpoint label
 
-`SOLID_BASIC_DRAW_IN_ANIMATION_PASS`
+`CROSS_MODE_QA_PASS`
 
-(supersedes `EXTRUDE_FROM_FLAT_BASE_VALIDATED_FOR_FILLED_SILHOUETTES_WITH_HOLE_LIMITATION`, which remains the underlying frozen geometry checkpoint that this animation pass is built on top of)
+(supersedes `SOLID_BASIC_DRAW_IN_ANIMATION_PASS` and `EXTRUDE_FROM_FLAT_BASE_VALIDATED_FOR_FILLED_SILHOUETTES_WITH_HOLE_LIMITATION`, which both remain in effect as the underlying frozen animation and geometry checkpoints this QA pass is built on top of)
