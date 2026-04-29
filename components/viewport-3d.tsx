@@ -1766,6 +1766,46 @@ function SolidDebugOverlay() {
                 </>
               )}
             </div>
+
+            {/* H1 Hole Detection (DIAGNOSTIC ONLY - geometry unchanged) */}
+            <div className="mt-1 border-t border-pink-500/30 pt-1">
+              <div className="mb-0.5 text-[9px] font-bold text-pink-400">HOLE DETECTION (H1)</div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                <span className="text-gray-400">holeDetectionEnabled:</span>
+                <span className={s.holeDetectionEnabled === "YES" ? "text-green-400" : "text-yellow-400"}>
+                  {s.holeDetectionEnabled ?? "NO"}
+                </span>
+
+                <span className="text-gray-400">detectedHoleCount:</span>
+                <span>{s.detectedHoleCount ?? 0}</span>
+
+                <span className="text-gray-400">validHoleCount:</span>
+                <span className={(s.validHoleCount ?? 0) > 0 ? "text-green-400" : "text-gray-300"}>
+                  {s.validHoleCount ?? 0}
+                </span>
+
+                <span className="text-gray-400">rejectedHoleCount:</span>
+                <span>{s.rejectedHoleCount ?? 0}</span>
+
+                <span className="text-gray-400">largestHoleArea:</span>
+                <span>{s.largestHoleArea ?? 0}</span>
+
+                <span className="text-gray-400">holeAreas:</span>
+                <span className="text-[8px]">
+                  [{(s.holeAreas ?? []).join(", ")}]
+                </span>
+
+                <span className="text-gray-400">holeRejectReasons:</span>
+                <span className="text-[8px] text-yellow-300">
+                  {(s.holeRejectReasons ?? []).length > 0
+                    ? (s.holeRejectReasons ?? []).join(" | ")
+                    : "-"}
+                </span>
+              </div>
+              <div className="mt-1 text-[8px] text-gray-500">
+                H1 detection only — geometry, caps, walls, export unchanged.
+              </div>
+            </div>
           </div>
         )
       })()}

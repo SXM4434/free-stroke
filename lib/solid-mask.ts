@@ -59,6 +59,14 @@ export interface MaskSolidDiagnostics {
   areaToFillRatio: number
   contourRejected: "YES" | "NO"
   contourRejectReason: string
+  // H1 hole detection fields (DIAGNOSTIC ONLY - geometry unchanged)
+  holeDetectionEnabled: "YES" | "NO"
+  detectedHoleCount: number
+  validHoleCount: number
+  rejectedHoleCount: number
+  largestHoleArea: number
+  holeAreas: number[]
+  holeRejectReasons: string[]
 }
 
 export interface MaskSolidStats {
@@ -115,6 +123,14 @@ export interface MaskSolidStages {
     skippedWallSegments?: number
     frontCapTriCount?: number
     backCapTriCount?: number
+    // H1 hole detection fields (DIAGNOSTIC ONLY - geometry unchanged)
+    holeDetectionEnabled?: "YES" | "NO"
+    detectedHoleCount?: number
+    validHoleCount?: number
+    rejectedHoleCount?: number
+    largestHoleArea?: number
+    holeAreas?: number[]
+    holeRejectReasons?: string[]
   }
 }
 
@@ -193,7 +209,15 @@ export function buildMaskSolid(
     filledPixels: 0,
     areaToFillRatio: 0,
     contourRejected: "YES",
-    contourRejectReason: "not yet executed"
+    contourRejectReason: "not yet executed",
+    // H1 hole detection - default disabled until componentMask is built
+    holeDetectionEnabled: "NO",
+    detectedHoleCount: 0,
+    validHoleCount: 0,
+    rejectedHoleCount: 0,
+    largestHoleArea: 0,
+    holeAreas: [],
+    holeRejectReasons: []
   }
   
   // Early exit for empty stroke
@@ -227,7 +251,15 @@ export function buildMaskSolid(
       filledPixels: 0,
       areaToFillRatio: 0,
       contourRejected: "YES",
-      contourRejectReason: "raster stage failed"
+      contourRejectReason: "raster stage failed",
+      // H1 hole detection - not run (no filled pixels yet)
+      holeDetectionEnabled: "NO",
+      detectedHoleCount: 0,
+      validHoleCount: 0,
+      rejectedHoleCount: 0,
+      largestHoleArea: 0,
+      holeAreas: [],
+      holeRejectReasons: [],
     }
     return {
       geometry: null,
@@ -282,6 +314,21 @@ export function buildMaskSolid(
   for (let i = 0; i < mask.length; i++) {
     componentMask[i] = labels[i] === largestLabel
   }
+  
+  // ========== H1 HOLE DETECTION (DIAGNOSTIC ONLY) ==========
+  // Detects interior empty regions fully enclosed by the selected filled
+  // component. THIS DOES NOT MODIFY GEOMETRY OUTPUT. Results are reported
+  // through solidDiagnostics only. THREE.Shape, caps, walls, and the entire
+  // extrusion path are unchanged regardless of detection results.
+  const holeDetection = detectInteriorHoles(componentMask, width, height)
+  console.log("[v0-solid] H1 HOLE DETECTION:", {
+    detected: holeDetection.detectedHoleCount,
+    valid: holeDetection.validHoleCount,
+    rejected: holeDetection.rejectedHoleCount,
+    largestArea: holeDetection.largestHoleArea,
+    areas: holeDetection.holeAreas,
+    rejectReasons: holeDetection.holeRejectReasons,
+  })
   
   // ========== STAGE 3: Extract boundary edges and chain into ordered loop ==========
   const outerContour = traceOuterContour(componentMask, width, height)
@@ -381,7 +428,15 @@ export function buildMaskSolid(
     filledPixels: largestSize,
     areaToFillRatio,
     contourRejected: contourRejected ? "YES" : "NO",
-    contourRejectReason
+    contourRejectReason,
+    // H1 hole detection (diagnostic only; geometry unchanged)
+    holeDetectionEnabled: "YES",
+    detectedHoleCount: holeDetection.detectedHoleCount,
+    validHoleCount: holeDetection.validHoleCount,
+    rejectedHoleCount: holeDetection.rejectedHoleCount,
+    largestHoleArea: holeDetection.largestHoleArea,
+    holeAreas: holeDetection.holeAreas,
+    holeRejectReasons: holeDetection.holeRejectReasons,
   }
   
   // Mirror solid diagnostics into stages so the debug panel (which reads
@@ -396,7 +451,15 @@ export function buildMaskSolid(
     filledPixels: diagnostics.filledPixels,
     areaToFillRatio: diagnostics.areaToFillRatio,
     contourRejected: diagnostics.contourRejected,
-    contourRejectReason: diagnostics.contourRejectReason
+    contourRejectReason: diagnostics.contourRejectReason,
+    // H1 hole detection (diagnostic only; geometry unchanged)
+    holeDetectionEnabled: "YES",
+    detectedHoleCount: holeDetection.detectedHoleCount,
+    validHoleCount: holeDetection.validHoleCount,
+    rejectedHoleCount: holeDetection.rejectedHoleCount,
+    largestHoleArea: holeDetection.largestHoleArea,
+    holeAreas: holeDetection.holeAreas,
+    holeRejectReasons: holeDetection.holeRejectReasons,
   }
   
   // HARD FAIL: Return NULL geometry if validation fails
@@ -1009,6 +1072,168 @@ function traceOuterContour(mask: boolean[], width: number, height: number): Poin
   const edges = extractBoundaryEdges(mask, width, height)
   if (edges.length === 0) return []
   return chainBoundaryEdges(edges)
+}
+
+// ============= H1: Interior Hole Detection (DIAGNOSTIC ONLY) =============
+//
+// Detects empty regions fully enclosed by the selected filled component.
+// Strategy: flood-fill the *inverted* component mask. Any connected empty
+// region that DOES NOT touch the image border is "interior" and is therefore
+// fully enclosed by the filled component (a hole candidate).
+//
+// IMPORTANT: This function MUST NOT modify geometry. It only returns counts,
+// areas, and reject reasons for the debug panel. The existing extrusion path
+// (caps, walls, THREE.Shape) consumes only the validated outer contour and
+// is unaffected by anything this function returns.
+
+interface HoleDetectionResult {
+  detectedHoleCount: number   // total interior empty components found (pre-filter)
+  validHoleCount: number      // components passing conservative filters
+  rejectedHoleCount: number   // detected - valid
+  largestHoleArea: number     // largest valid hole's area in mask pixels (0 if none)
+  holeAreas: number[]         // valid hole areas, descending
+  holeRejectReasons: string[] // one reason per rejected candidate
+}
+
+// Conservative thresholds. Goal is reliable detection, not final modeling.
+// Tuned against the test cases listed in the H1 spec: open shapes -> 0 holes,
+// big O / donut -> >= 1 hole, no bogus tiny holes from rasterization noise.
+const HOLE_MIN_AREA_PX = 30          // absolute minimum component area in mask pixels
+const HOLE_MIN_BBOX_PX = 4           // minimum bbox width AND height in mask pixels
+const HOLE_MIN_AREA_RATIO = 0.20     // area / (bbox.w * bbox.h) - rejects slivers
+// Outer-frame guard: even though border-touching components are filtered out,
+// require holes to be at least this many pixels inside the mask edge.
+// This adds a thin safety margin against components that touch the border
+// only diagonally (which 4-connectivity would not classify as touching).
+const HOLE_MIN_BORDER_INSET_PX = 1
+
+function detectInteriorHoles(
+  componentMask: boolean[],
+  width: number,
+  height: number,
+): HoleDetectionResult {
+  const emptyLabels = new Int32Array(width * height)
+  
+  interface RawComponent {
+    size: number
+    touchesBorder: boolean
+    minX: number
+    minY: number
+    maxX: number
+    maxY: number
+  }
+  
+  const rawComponents: RawComponent[] = []
+  let labelCounter = 0
+  
+  // Flood-fill (4-connected) over the *empty* pixels.
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x
+      if (componentMask[idx] || emptyLabels[idx] !== 0) continue
+      
+      labelCounter++
+      let size = 0
+      let touchesBorder = false
+      let minX = x
+      let maxX = x
+      let minY = y
+      let maxY = y
+      
+      const queue: number[] = [idx]
+      emptyLabels[idx] = labelCounter
+      
+      while (queue.length > 0) {
+        const ci = queue.shift()!
+        size++
+        const cx = ci % width
+        const cy = (ci - cx) / width
+        
+        if (cx === 0 || cy === 0 || cx === width - 1 || cy === height - 1) {
+          touchesBorder = true
+        }
+        if (cx < minX) minX = cx
+        if (cx > maxX) maxX = cx
+        if (cy < minY) minY = cy
+        if (cy > maxY) maxY = cy
+        
+        // 4-neighbours
+        if (cy > 0) {
+          const ni = ci - width
+          if (!componentMask[ni] && emptyLabels[ni] === 0) {
+            emptyLabels[ni] = labelCounter
+            queue.push(ni)
+          }
+        }
+        if (cy < height - 1) {
+          const ni = ci + width
+          if (!componentMask[ni] && emptyLabels[ni] === 0) {
+            emptyLabels[ni] = labelCounter
+            queue.push(ni)
+          }
+        }
+        if (cx > 0) {
+          const ni = ci - 1
+          if (!componentMask[ni] && emptyLabels[ni] === 0) {
+            emptyLabels[ni] = labelCounter
+            queue.push(ni)
+          }
+        }
+        if (cx < width - 1) {
+          const ni = ci + 1
+          if (!componentMask[ni] && emptyLabels[ni] === 0) {
+            emptyLabels[ni] = labelCounter
+            queue.push(ni)
+          }
+        }
+      }
+      
+      rawComponents.push({ size, touchesBorder, minX, minY, maxX, maxY })
+    }
+  }
+  
+  // Detected = empty components that do NOT touch the image border.
+  // Anything touching the border is "outside background" and is not a hole.
+  const detected = rawComponents.filter((c) => !c.touchesBorder)
+  
+  // Conservative filtering pass.
+  const validAreas: number[] = []
+  const rejectReasons: string[] = []
+  
+  for (const c of detected) {
+    const bw = c.maxX - c.minX + 1
+    const bh = c.maxY - c.minY + 1
+    const bboxArea = bw * bh
+    const ratio = bboxArea > 0 ? c.size / bboxArea : 0
+    const insetOk =
+      c.minX >= HOLE_MIN_BORDER_INSET_PX &&
+      c.minY >= HOLE_MIN_BORDER_INSET_PX &&
+      c.maxX <= width - 1 - HOLE_MIN_BORDER_INSET_PX &&
+      c.maxY <= height - 1 - HOLE_MIN_BORDER_INSET_PX
+    
+    if (c.size < HOLE_MIN_AREA_PX) {
+      rejectReasons.push(`area=${c.size}<${HOLE_MIN_AREA_PX}`)
+    } else if (bw < HOLE_MIN_BBOX_PX || bh < HOLE_MIN_BBOX_PX) {
+      rejectReasons.push(`bbox=${bw}x${bh}<${HOLE_MIN_BBOX_PX}`)
+    } else if (ratio < HOLE_MIN_AREA_RATIO) {
+      rejectReasons.push(`ratio=${ratio.toFixed(2)}<${HOLE_MIN_AREA_RATIO}`)
+    } else if (!insetOk) {
+      rejectReasons.push(`borderInset<${HOLE_MIN_BORDER_INSET_PX}`)
+    } else {
+      validAreas.push(c.size)
+    }
+  }
+  
+  validAreas.sort((a, b) => b - a)
+  
+  return {
+    detectedHoleCount: detected.length,
+    validHoleCount: validAreas.length,
+    rejectedHoleCount: detected.length - validAreas.length,
+    largestHoleArea: validAreas[0] ?? 0,
+    holeAreas: validAreas,
+    holeRejectReasons: rejectReasons,
+  }
 }
 
 // ============= Utility: Self-Intersection Check =============
