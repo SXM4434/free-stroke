@@ -1795,6 +1795,14 @@ function SolidDebugOverlay() {
                   [{(s.holeAreas ?? []).join(", ")}]
                 </span>
 
+                <span className="text-gray-400">rejectedHoleAreas:</span>
+                <span className="text-[8px] text-yellow-300">
+                  [{(s.rejectedHoleAreas ?? []).join(", ")}]
+                </span>
+
+                <span className="text-gray-400">borderTouchingEmpties:</span>
+                <span className="text-[8px]">{s.borderTouchingEmptyCount ?? 0}</span>
+
                 <span className="text-gray-400">holeRejectReasons:</span>
                 <span className="text-[8px] text-yellow-300">
                   {(s.holeRejectReasons ?? []).length > 0
@@ -1826,10 +1834,15 @@ function SolidDebugOverlay() {
                   [{(s.h2HoleContourAreas ?? []).join(", ")}]
                 </span>
 
-                <span className="text-gray-400">h2HoleRejectReasons:</span>
+                <span className="text-gray-400">h2ShapeHoleCount:</span>
+                <span className={(s.h2ShapeHoleCount ?? 0) > 0 ? "text-green-400" : "text-gray-300"}>
+                  {s.h2ShapeHoleCount ?? 0}
+                </span>
+
+                <span className="text-gray-400">h2HoleContourRejectReasons:</span>
                 <span className="text-[8px] text-yellow-300">
-                  {(s.h2HoleRejectReasons ?? []).length > 0
-                    ? (s.h2HoleRejectReasons ?? []).join(" | ")
+                  {(s.h2HoleContourRejectReasons ?? []).length > 0
+                    ? (s.h2HoleContourRejectReasons ?? []).join(" | ")
                     : "-"}
                 </span>
 
