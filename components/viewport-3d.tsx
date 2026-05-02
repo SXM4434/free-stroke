@@ -1806,6 +1806,40 @@ function SolidDebugOverlay() {
                 H1 detection only — geometry, caps, walls, export unchanged.
               </div>
             </div>
+
+            {/* H2 Flat Cap With Holes (DIAGNOSTIC ONLY - flat cap proof) */}
+            <div className="mt-1 border-t border-orange-500/30 pt-1">
+              <div className="mb-0.5 text-[9px] font-bold text-orange-400">FLAT CAP WITH HOLES (H2)</div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                <span className="text-gray-400">h2FlatCapWithHolesBuilt:</span>
+                <span className={s.h2FlatCapWithHolesBuilt === "YES" ? "text-green-400" : "text-yellow-400"}>
+                  {s.h2FlatCapWithHolesBuilt ?? "NO"}
+                </span>
+
+                <span className="text-gray-400">h2HoleContoursUsed:</span>
+                <span className={(s.h2HoleContoursUsed ?? 0) > 0 ? "text-green-400" : "text-gray-300"}>
+                  {s.h2HoleContoursUsed ?? 0}
+                </span>
+
+                <span className="text-gray-400">h2HoleContourAreas:</span>
+                <span className="text-[8px]">
+                  [{(s.h2HoleContourAreas ?? []).join(", ")}]
+                </span>
+
+                <span className="text-gray-400">h2HoleRejectReasons:</span>
+                <span className="text-[8px] text-yellow-300">
+                  {(s.h2HoleRejectReasons ?? []).length > 0
+                    ? (s.h2HoleRejectReasons ?? []).join(" | ")
+                    : "-"}
+                </span>
+
+                <span className="text-gray-400">frontCapTris:</span>
+                <span>{s.h2FrontCapTris ?? s.frontCapTriCount ?? 0}</span>
+              </div>
+              <div className="mt-1 text-[8px] text-gray-500">
+                H2 flat-cap proof — no extrusion, no walls, export untouched.
+              </div>
+            </div>
           </div>
         )
       })()}

@@ -34,8 +34,8 @@ export interface MaskSolidResult {
 
 export interface MaskSolidDiagnostics {
   // Core geometry info
-  geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE"
-  geometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" | "NULL"
+  geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES"
+  geometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" | "NULL"
   outerSignedArea: number
   outerWinding: "CCW" | "CW"
   // Raster stage fields - MUST be visible in debug panel
@@ -67,6 +67,12 @@ export interface MaskSolidDiagnostics {
   largestHoleArea: number
   holeAreas: number[]
   holeRejectReasons: string[]
+  // H2 flat cap with holes (only populated when mode = FLAT_CAP_WITH_HOLES)
+  h2FlatCapWithHolesBuilt: "YES" | "NO"
+  h2HoleContoursUsed: number
+  h2HoleContourAreas: number[]   // mask-space pixel area of each used hole contour
+  h2HoleRejectReasons: string[]   // reasons valid holes failed contour conversion
+  h2FrontCapTris: number          // ShapeGeometry triangles (caps with holes)
 }
 
 export interface MaskSolidStats {
@@ -107,8 +113,8 @@ export interface MaskSolidStages {
   }
   // Solid mode diagnostic info for panel display
   solidDiagnostics?: {
-    geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE"
-    geometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" | "NULL"
+    geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES"
+    geometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" | "NULL"
     gateExecuted: "YES" | "NO"
     contourClosed: "YES" | "NO"
     contourOrdered: "YES" | "NO"
@@ -131,6 +137,12 @@ export interface MaskSolidStages {
     largestHoleArea?: number
     holeAreas?: number[]
     holeRejectReasons?: string[]
+    // H2 flat cap with holes (only populated when mode = FLAT_CAP_WITH_HOLES)
+    h2FlatCapWithHolesBuilt?: "YES" | "NO"
+    h2HoleContoursUsed?: number
+    h2HoleContourAreas?: number[]
+    h2HoleRejectReasons?: string[]
+    h2FrontCapTris?: number
   }
 }
 
@@ -139,11 +151,17 @@ export interface MaskSolidStages {
 const MASK_RESOLUTION = 512
 
 // ============= GEOMETRY MODE SWITCH =============
-// FLAT_BASE = current known-good checkpoint (valid contour -> FLAT, invalid -> NULL)
-// EXTRUDE_FROM_FLAT_BASE = same validated flat base, then extruded
+// FLAT_BASE             = original validated checkpoint (valid contour -> FLAT, invalid -> NULL)
+// EXTRUDE_FROM_FLAT_BASE = same validated flat base, then extruded (LOCKED, do not regress)
+// FLAT_CAP_WITH_HOLES   = H2 diagnostic mode: flat cap built from validated outer
+//                         contour + valid H1 holes traced as inner Path objects.
+//                         Used to prove holes can be visibly cut out of the cap.
+//                         No extrusion, no inner walls.
 //
-// Default: FLAT_BASE (the validated checkpoint must remain stable)
-const SOLID_GEOMETRY_MODE: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" = "EXTRUDE_FROM_FLAT_BASE"
+// EXTRUDE_FROM_FLAT_BASE remains the locked production path. To run the H2
+// flat-cap-with-holes test, set this constant to "FLAT_CAP_WITH_HOLES".
+const SOLID_GEOMETRY_MODE: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" =
+  "FLAT_CAP_WITH_HOLES"
 
 // Extrusion depth in world units (only used when mode is EXTRUDE_FROM_FLAT_BASE)
 const EXTRUDE_DEPTH = 0.15
@@ -217,7 +235,13 @@ export function buildMaskSolid(
     rejectedHoleCount: 0,
     largestHoleArea: 0,
     holeAreas: [],
-    holeRejectReasons: []
+    holeRejectReasons: [],
+    // H2 flat cap with holes - defaults
+    h2FlatCapWithHolesBuilt: "NO",
+    h2HoleContoursUsed: 0,
+    h2HoleContourAreas: [],
+    h2HoleRejectReasons: [],
+    h2FrontCapTris: 0
   }
   
   // Early exit for empty stroke
@@ -260,6 +284,12 @@ export function buildMaskSolid(
       largestHoleArea: 0,
       holeAreas: [],
       holeRejectReasons: [],
+      // H2 - not run
+      h2FlatCapWithHolesBuilt: "NO",
+      h2HoleContoursUsed: 0,
+      h2HoleContourAreas: [],
+      h2HoleRejectReasons: [],
+      h2FrontCapTris: 0,
     }
     return {
       geometry: null,
@@ -400,8 +430,12 @@ export function buildMaskSolid(
   
   // Build diagnostics (will be used for both success and failure)
   // geometryType depends on SOLID_GEOMETRY_MODE when contour is valid
-  const successGeometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" =
-    SOLID_GEOMETRY_MODE === "EXTRUDE_FROM_FLAT_BASE" ? "EXTRUDE_FROM_FLAT_BASE" : "FLAT"
+  const successGeometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" =
+    SOLID_GEOMETRY_MODE === "EXTRUDE_FROM_FLAT_BASE"
+      ? "EXTRUDE_FROM_FLAT_BASE"
+      : SOLID_GEOMETRY_MODE === "FLAT_CAP_WITH_HOLES"
+        ? "FLAT_CAP_WITH_HOLES"
+        : "FLAT"
   
   const diagnostics: MaskSolidDiagnostics = {
     geometryMode: SOLID_GEOMETRY_MODE,
@@ -437,6 +471,12 @@ export function buildMaskSolid(
     largestHoleArea: holeDetection.largestHoleArea,
     holeAreas: holeDetection.holeAreas,
     holeRejectReasons: holeDetection.holeRejectReasons,
+    // H2 (default no — populated only if FLAT_CAP_WITH_HOLES branch runs)
+    h2FlatCapWithHolesBuilt: "NO",
+    h2HoleContoursUsed: 0,
+    h2HoleContourAreas: [],
+    h2HoleRejectReasons: [],
+    h2FrontCapTris: 0,
   }
   
   // Mirror solid diagnostics into stages so the debug panel (which reads
@@ -460,6 +500,12 @@ export function buildMaskSolid(
     largestHoleArea: holeDetection.largestHoleArea,
     holeAreas: holeDetection.holeAreas,
     holeRejectReasons: holeDetection.holeRejectReasons,
+    // H2 defaults — overridden later by FLAT_CAP_WITH_HOLES branch if it runs
+    h2FlatCapWithHolesBuilt: "NO",
+    h2HoleContoursUsed: 0,
+    h2HoleContourAreas: [],
+    h2HoleRejectReasons: [],
+    h2FrontCapTris: 0,
   }
   
   // HARD FAIL: Return NULL geometry if validation fails
@@ -598,6 +644,151 @@ export function buildMaskSolid(
       stats: successStats,
       stages: emptyStages,
       diagnostics
+    }
+  }
+  
+  // ===== H2: FLAT_CAP_WITH_HOLES =====
+  // Diagnostic mode that proves valid H1-detected holes can be cut out of the
+  // flat cap. Same validated outer contour as FLAT_BASE; inner contours come
+  // from tracing each valid hole's pixel mask.
+  //
+  // Hard rules:
+  //   - DOES NOT extrude.
+  //   - DOES NOT add inner side walls.
+  //   - DOES NOT modify export.
+  //   - DOES NOT change EXTRUDE_FROM_FLAT_BASE.
+  if (SOLID_GEOMETRY_MODE === "FLAT_CAP_WITH_HOLES") {
+    const h2HoleContourAreas: number[] = []
+    const h2HoleRejectReasons: string[] = []
+    let h2FlatCapWithHolesBuilt: "YES" | "NO" = "NO"
+    let h2FrontCapTris = 0
+    let geometryWithHoles: THREE.BufferGeometry = flatGeom
+    
+    // Only attempt to add holes if H1 found at least one valid hole.
+    if (
+      holeDetection.validHoleLabelIds.length > 0 &&
+      holeDetection.emptyLabels.length === width * height
+    ) {
+      // Rebuild the shape so we can attach holes (validatedShape is reusable
+      // but it's cleaner to start from the original CCW point list).
+      const shapeWithHoles = new THREE.Shape(shapePts)
+      
+      for (const labelId of holeDetection.validHoleLabelIds) {
+        // Build a per-hole binary mask: TRUE where this hole's empty pixels are.
+        const holeMask = new Array(width * height).fill(false)
+        let pxCount = 0
+        for (let i = 0; i < width * height; i++) {
+          if (holeDetection.emptyLabels[i] === labelId) {
+            holeMask[i] = true
+            pxCount++
+          }
+        }
+        
+        // Trace its outer boundary in mask space using the existing pipeline.
+        const holeContourMask = traceOuterContour(holeMask, width, height)
+        if (holeContourMask.length < 3) {
+          h2HoleRejectReasons.push(`label=${labelId} traced<3pts`)
+          continue
+        }
+        
+        // Convert to world coordinates using the same transform as the outer.
+        let holePts = holeContourMask.map(
+          (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y))
+        )
+        
+        // Holes must wind OPPOSITE to the outer (THREE.Shape convention).
+        // Outer was forced CCW (worldSignedArea > 0); we force holes CW.
+        let holeSignedArea = 0
+        for (let i = 0; i < holePts.length; i++) {
+          const p1 = holePts[i]
+          const p2 = holePts[(i + 1) % holePts.length]
+          holeSignedArea += p1.x * p2.y - p2.x * p1.y
+        }
+        holeSignedArea /= 2
+        if (holeSignedArea > 0) {
+          holePts = holePts.slice().reverse()
+        }
+        
+        // Sanity: degenerate world-area, skip.
+        if (Math.abs(holeSignedArea) < 1e-8) {
+          h2HoleRejectReasons.push(`label=${labelId} world-area~0`)
+          continue
+        }
+        
+        try {
+          const path = new THREE.Path(holePts)
+          shapeWithHoles.holes.push(path)
+          h2HoleContourAreas.push(pxCount)
+        } catch (e) {
+          h2HoleRejectReasons.push(`label=${labelId} Path-throw`)
+        }
+      }
+      
+      // If at least one hole contour was attached, rebuild ShapeGeometry.
+      if (shapeWithHoles.holes.length > 0) {
+        try {
+          const holesGeom = new THREE.ShapeGeometry(shapeWithHoles)
+          const idx = holesGeom.getIndex()
+          h2FrontCapTris = idx ? idx.count / 3 : 0
+          geometryWithHoles = holesGeom
+          h2FlatCapWithHolesBuilt = "YES"
+          // Note: flatGeom is intentionally NOT disposed; it's still returned
+          // as geometryNoHoles for diagnostic / fallback consumers.
+        } catch (e) {
+          console.error("[v0-solid] H2 ShapeGeometry-with-holes failed:", e)
+          h2HoleRejectReasons.push(`ShapeGeometry-throw`)
+          h2FlatCapWithHolesBuilt = "NO"
+          // Fall back to flatGeom (no holes visible — same as FLAT_BASE)
+          geometryWithHoles = flatGeom
+          h2FrontCapTris = 0
+        }
+      } else {
+        // No hole contours attached — fall back to flat (no visible hole).
+        h2FrontCapTris = flatIndexCount(flatGeom)
+        geometryWithHoles = flatGeom
+        h2FlatCapWithHolesBuilt = "NO"
+      }
+    } else {
+      // No valid holes from H1 — pure flat cap (no fake hole).
+      h2FrontCapTris = flatIndexCount(flatGeom)
+      geometryWithHoles = flatGeom
+      h2FlatCapWithHolesBuilt = "NO"
+    }
+    
+    console.log("[v0-solid] FLAT_CAP_WITH_HOLES:", {
+      validHolesFromH1: holeDetection.validHoleCount,
+      h2HoleContoursUsed: h2HoleContourAreas.length,
+      h2HoleContourAreas,
+      h2HoleRejectReasons,
+      h2FlatCapWithHolesBuilt,
+      h2FrontCapTris,
+    })
+    
+    // Mirror H2 fields into stages.solidDiagnostics (panel reads them there)
+    if (emptyStages.solidDiagnostics) {
+      emptyStages.solidDiagnostics.h2FlatCapWithHolesBuilt = h2FlatCapWithHolesBuilt
+      emptyStages.solidDiagnostics.h2HoleContoursUsed = h2HoleContourAreas.length
+      emptyStages.solidDiagnostics.h2HoleContourAreas = h2HoleContourAreas
+      emptyStages.solidDiagnostics.h2HoleRejectReasons = h2HoleRejectReasons
+      emptyStages.solidDiagnostics.h2FrontCapTris = h2FrontCapTris
+    }
+    
+    // Mirror onto the returned diagnostics too
+    const diagnosticsH2: MaskSolidDiagnostics = {
+      ...diagnostics,
+      h2FlatCapWithHolesBuilt,
+      h2HoleContoursUsed: h2HoleContourAreas.length,
+      h2HoleContourAreas,
+      h2HoleRejectReasons,
+      h2FrontCapTris,
+    }
+    
+    return {
+      geometry: geometryWithHoles,
+      geometryNoHoles: flatGeom,
+      stats: { ...successStats, holeCount: h2HoleContourAreas.length },
+      stages: emptyStages,
+      diagnostics: diagnosticsH2,
     }
   }
   
@@ -1074,6 +1265,12 @@ function traceOuterContour(mask: boolean[], width: number, height: number): Poin
   return chainBoundaryEdges(edges)
 }
 
+// H2 helper: triangle count from an indexed BufferGeometry.
+function flatIndexCount(geom: THREE.BufferGeometry): number {
+  const idx = geom.getIndex()
+  return idx ? idx.count / 3 : 0
+}
+
 // ============= H1: Interior Hole Detection (DIAGNOSTIC ONLY) =============
 //
 // Detects empty regions fully enclosed by the selected filled component.
@@ -1093,6 +1290,11 @@ interface HoleDetectionResult {
   largestHoleArea: number     // largest valid hole's area in mask pixels (0 if none)
   holeAreas: number[]         // valid hole areas, descending
   holeRejectReasons: string[] // one reason per rejected candidate
+  // H2 additions: enable per-hole contour tracing on the same component labels.
+  // emptyLabels[i] is the empty-region label of pixel i (0 = unset/filled).
+  // validHoleLabelIds[k] is the labelId for the k-th entry in holeAreas (descending area).
+  emptyLabels: Int32Array
+  validHoleLabelIds: number[]
 }
 
 // Conservative thresholds. Goal is reliable detection, not final modeling.
@@ -1115,6 +1317,7 @@ function detectInteriorHoles(
   const emptyLabels = new Int32Array(width * height)
   
   interface RawComponent {
+    labelId: number
     size: number
     touchesBorder: boolean
     minX: number
@@ -1188,7 +1391,7 @@ function detectInteriorHoles(
         }
       }
       
-      rawComponents.push({ size, touchesBorder, minX, minY, maxX, maxY })
+      rawComponents.push({ labelId: labelCounter, size, touchesBorder, minX, minY, maxX, maxY })
     }
   }
   
@@ -1197,7 +1400,8 @@ function detectInteriorHoles(
   const detected = rawComponents.filter((c) => !c.touchesBorder)
   
   // Conservative filtering pass.
-  const validAreas: number[] = []
+  // Track (area, labelId) pairs so we can sort them together and return labels.
+  const validPairs: Array<{ area: number; labelId: number }> = []
   const rejectReasons: string[] = []
   
   for (const c of detected) {
@@ -1220,11 +1424,13 @@ function detectInteriorHoles(
     } else if (!insetOk) {
       rejectReasons.push(`borderInset<${HOLE_MIN_BORDER_INSET_PX}`)
     } else {
-      validAreas.push(c.size)
+      validPairs.push({ area: c.size, labelId: c.labelId })
     }
   }
   
-  validAreas.sort((a, b) => b - a)
+  validPairs.sort((a, b) => b.area - a.area)
+  const validAreas = validPairs.map((p) => p.area)
+  const validHoleLabelIds = validPairs.map((p) => p.labelId)
   
   return {
     detectedHoleCount: detected.length,
@@ -1233,6 +1439,8 @@ function detectInteriorHoles(
     largestHoleArea: validAreas[0] ?? 0,
     holeAreas: validAreas,
     holeRejectReasons: rejectReasons,
+    emptyLabels,
+    validHoleLabelIds,
   }
 }
 
