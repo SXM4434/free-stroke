@@ -1871,10 +1871,18 @@ function SolidDebugOverlay() {
           {d.holeCount > 0 && (
             <>
               <span className="text-gray-400">holeAreas:</span>
-              <span className="text-[8px]">[{d.holeAreas.map((a: number) => a.toFixed(0)).join(", ")}]</span>
+              <span className="text-[8px]">
+                [
+                {(Array.isArray(d.holeAreas) ? d.holeAreas : [])
+                  .map((a: number) => a.toFixed(0))
+                  .join(", ")}
+                ]
+              </span>
               
               <span className="text-gray-400">holeWinds:</span>
-              <span className="text-[8px]">[{d.holeWindings.join(", ")}]</span>
+              <span className="text-[8px]">
+                [{(Array.isArray(d.holeWindings) ? d.holeWindings : []).join(", ")}]
+              </span>
               
               <span className="text-gray-400">holeSelfX:</span>
               <span className={d.anyHoleSelfIntersects ? "text-red-400 font-bold" : "text-green-400"}>
