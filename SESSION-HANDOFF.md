@@ -156,17 +156,65 @@ These are non-negotiable for this checkpoint:
 - no advanced animation editing yet
 - no Inflate work yet
 
-## Next branch — `SOLID_HOLE_SUPPORT_PHASE_H1`
+## H1 hole detection checkpoint
 
-- **scope:** hole detection only
-- **explicitly out of scope for H1:**
-  - no hole extrusion yet
-  - no cap cutting yet
-  - no geometry behavior change until hole detection is proven
-- **goal of H1:** detect inner contours / interior negative space without modifying the current Solid geometry path, so detection can be validated in isolation before any visible geometry change
+- **name:** Solid Hole Support Phase H1 — Detection Only
+- **label:** `SOLID_HOLE_SUPPORT_H1_DETECTION_PASS`
+- **status:** complete / detection validated
+
+### H1 scope
+
+- detection only
+- no geometry behavior change
+- no cap cutting
+- no inner walls
+- no hole extrusion
+- no export changes
+- no animation changes
+
+### What was added
+
+- `detectInteriorHoles()` in `/lib/solid-mask.ts`
+  - inverted-mask flood-fill hole detection
+  - 4-connectivity with 4 conservative filters (min area, min bbox, min ratio, border inset)
+- Extended `MaskSolidDiagnostics` interface with 7 H1 fields
+- Extended `solidDiagnostics` output to include H1 fields in all code paths
+- Visible debug panel fields:
+  - `holeDetectionEnabled`
+  - `detectedHoleCount`
+  - `validHoleCount`
+  - `rejectedHoleCount`
+  - `largestHoleArea`
+  - `holeAreas`
+  - `holeRejectReasons`
+- New "HOLE DETECTION (H1)" subsection in `SolidDebugOverlay` (viewport-3d.tsx)
+
+### Empirical validation results
+
+- open C-shape: reports zero valid holes ✓
+- simple line: reports zero valid holes ✓
+- big O / donut: reports at least one valid hole ✓
+- near-touch open gap: reports zero valid holes (unless raster thickness bridges the gap) ✓
+- loopy/messy strokes: do not produce bogus valid holes ✓
+
+### Important limitation
+
+- Holes are detected and reported in the debug panel
+- 3D Solid output **still fills the interior** (no visible hole yet)
+- This is expected, not a regression — H2/H3 have not been implemented
+- Geometry output (caps, walls, extrusion) is byte-identical to locked `EXTRUDE_FROM_FLAT_BASE`
+
+## Next branch — `SOLID_HOLE_SUPPORT_PHASE_H2_FLAT_CAP_WITH_HOLES`
+
+- **scope:** use detected valid holes in flat cap only
+- **goal:** prove `FLAT_BASE` can render a donut with a visible hole
+- **explicitly out of scope for H2:**
+  - no extrusion with holes yet
+  - no inner side walls yet
+  - no export/animation changes yet
 
 ## Final saved checkpoint label
 
-`CROSS_MODE_QA_PASS`
+`SOLID_HOLE_SUPPORT_H1_DETECTION_PASS`
 
-(supersedes `SOLID_BASIC_DRAW_IN_ANIMATION_PASS` and `EXTRUDE_FROM_FLAT_BASE_VALIDATED_FOR_FILLED_SILHOUETTES_WITH_HOLE_LIMITATION`, which both remain in effect as the underlying frozen animation and geometry checkpoints this QA pass is built on top of)
+(supersedes all prior checkpoints; they remain in effect as underlying layers)
