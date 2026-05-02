@@ -76,7 +76,9 @@ export interface MaskSolidDiagnostics {
   h2HoleContourAreas: number[]            // mask-space pixel area of each used hole contour
   h2HoleContourRejectReasons: string[]    // reasons valid holes failed contour conversion
   h2ShapeHoleCount: number                // shape.holes.length AFTER assembly
-  h2FrontCapTris: number                  // ShapeGeometry triangles (caps with holes)
+  h2FrontCapTris: number                  // direct triangulateShape triangles (caps with holes)
+  h2FlatCapTrisBaseline: number           // tris of the same outer with NO holes (FLAT_BASE)
+  h2TriDelta: number                      // h2FrontCapTris - h2FlatCapTrisBaseline (>0 means holes changed geometry)
 }
 
 export interface MaskSolidStats {
@@ -150,6 +152,8 @@ export interface MaskSolidStages {
     h2HoleContourRejectReasons?: string[]
     h2ShapeHoleCount?: number
     h2FrontCapTris?: number
+    h2FlatCapTrisBaseline?: number
+    h2TriDelta?: number
   }
 }
 
@@ -251,7 +255,9 @@ export function buildMaskSolid(
     h2HoleContourAreas: [],
     h2HoleContourRejectReasons: [],
     h2ShapeHoleCount: 0,
-    h2FrontCapTris: 0
+    h2FrontCapTris: 0,
+    h2FlatCapTrisBaseline: 0,
+    h2TriDelta: 0
   }
   
   // Early exit for empty stroke
@@ -303,6 +309,8 @@ export function buildMaskSolid(
       h2HoleContourRejectReasons: [],
       h2ShapeHoleCount: 0,
       h2FrontCapTris: 0,
+      h2FlatCapTrisBaseline: 0,
+      h2TriDelta: 0,
     }
     return {
       geometry: null,
@@ -493,6 +501,8 @@ export function buildMaskSolid(
     h2HoleContourRejectReasons: [],
     h2ShapeHoleCount: 0,
     h2FrontCapTris: 0,
+    h2FlatCapTrisBaseline: 0,
+    h2TriDelta: 0,
   }
   
   // Mirror solid diagnostics into stages so the debug panel (which reads
@@ -525,6 +535,8 @@ export function buildMaskSolid(
     h2HoleContourRejectReasons: [],
     h2ShapeHoleCount: 0,
     h2FrontCapTris: 0,
+    h2FlatCapTrisBaseline: 0,
+    h2TriDelta: 0,
   }
   
   // HARD FAIL: Return NULL geometry if validation fails
@@ -684,15 +696,16 @@ export function buildMaskSolid(
     let h2ShapeHoleCount = 0
     let geometryWithHoles: THREE.BufferGeometry = flatGeom
     
+    // Per-hole world-space contours (post simplification, post winding fix).
+    // Used both for the THREE.Path attachment and for the direct
+    // ShapeUtils.triangulateShape fallback.
+    const holeContoursWorld: THREE.Vector2[][] = []
+    
     // Only attempt to add holes if H1 found at least one valid hole.
     if (
       holeDetection.validHoleLabelIds.length > 0 &&
       holeDetection.emptyLabels.length === width * height
     ) {
-      // Rebuild the shape so we can attach holes (validatedShape is reusable
-      // but it's cleaner to start from the original CCW point list).
-      const shapeWithHoles = new THREE.Shape(shapePts)
-      
       // Iterate EVERY valid hole — not just the largest. This is the H2
       // contract: every valid H1 hole gets a chance to become a shape.holes
       // entry. Per-hole failures are recorded individually so the panel
@@ -709,7 +722,11 @@ export function buildMaskSolid(
         }
         
         // Trace its outer boundary in mask space using the existing pipeline.
-        const holeContourMask = traceOuterContour(holeMask, width, height)
+        // chainBoundaryEdges may split at pinch points; if so, we'd previously
+        // get only the LONGEST sub-loop. To avoid silently dropping holes whose
+        // boundaries pinch, we fall back to gathering ALL loops and picking
+        // the one with maximum enclosed (mask-space) area.
+        const holeContourMask = traceLargestAreaContour(holeMask, width, height)
         if (holeContourMask.length < 3) {
           h2HoleContourRejectReasons.push(`label=${labelId} area=${pxCount} traced<3pts`)
           continue
@@ -720,8 +737,19 @@ export function buildMaskSolid(
           (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y))
         )
         
-        // Holes must wind OPPOSITE to the outer (THREE.Shape convention).
-        // Outer was forced CCW (worldSignedArea > 0); we force holes CW.
+        // Simplify: drop consecutive duplicate vertices and collinear runs.
+        // Pixel-edge boundaries are dominated by axis-aligned collinear runs
+        // (e.g., 8 collinear points along a horizontal edge); reducing them
+        // to 2 endpoints removes degenerate/zero-length earcut triangles
+        // and lowers the chance that a triangulator silently drops the hole.
+        holePts = simplifyCollinearAndDuplicates(holePts, 1e-9)
+        
+        if (holePts.length < 3) {
+          h2HoleContourRejectReasons.push(`label=${labelId} area=${pxCount} simplified<3pts`)
+          continue
+        }
+        
+        // Compute world-space signed area for winding decision.
         let holeSignedArea = 0
         for (let i = 0; i < holePts.length; i++) {
           const p1 = holePts[i]
@@ -729,60 +757,148 @@ export function buildMaskSolid(
           holeSignedArea += p1.x * p2.y - p2.x * p1.y
         }
         holeSignedArea /= 2
-        if (holeSignedArea > 0) {
-          holePts = holePts.slice().reverse()
-        }
         
         // Sanity: degenerate world-area, skip.
-        if (Math.abs(holeSignedArea) < 1e-8) {
+        if (Math.abs(holeSignedArea) < 1e-10) {
           h2HoleContourRejectReasons.push(`label=${labelId} area=${pxCount} world-area~0`)
           continue
         }
         
+        // Holes must wind OPPOSITE to the outer.
+        // Outer was forced CCW (worldSignedArea > 0); we force holes CW.
+        if (holeSignedArea > 0) {
+          holePts = holePts.slice().reverse()
+        }
+        
+        // Compute centroid + bbox for diagnostics.
+        let cx = 0, cy = 0, minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        for (const p of holePts) {
+          cx += p.x; cy += p.y
+          if (p.x < minX) minX = p.x
+          if (p.x > maxX) maxX = p.x
+          if (p.y < minY) minY = p.y
+          if (p.y > maxY) maxY = p.y
+        }
+        cx /= holePts.length; cy /= holePts.length
+        
+        console.log(`[v0-solid] H2 hole label=${labelId}`, {
+          maskAreaPx: pxCount,
+          contourPts: holePts.length,
+          worldSignedArea: holeSignedArea.toFixed(6),
+          worldBbox: `[${minX.toFixed(3)},${minY.toFixed(3)} → ${maxX.toFixed(3)},${maxY.toFixed(3)}]`,
+          worldCentroid: `(${cx.toFixed(3)}, ${cy.toFixed(3)})`,
+          worldWidth: (maxX - minX).toFixed(4),
+          worldHeight: (maxY - minY).toFixed(4),
+        })
+        
+        holeContoursWorld.push(holePts)
+        h2HoleContourAreas.push(pxCount)
+      }
+      
+      // Sort holes by descending world-space |area|. Some triangulators are
+      // sensitive to hole order (largest first is the safe convention).
+      const orderedIdx = holeContoursWorld
+        .map((_, i) => i)
+        .sort((a, b) => {
+          const aa = signedAreaOf(holeContoursWorld[a])
+          const ab = signedAreaOf(holeContoursWorld[b])
+          return Math.abs(ab) - Math.abs(aa)
+        })
+      const orderedHoles = orderedIdx.map((i) => holeContoursWorld[i])
+      const orderedAreas = orderedIdx.map((i) => h2HoleContourAreas[i])
+      
+      // Build the shape WITH holes by attaching a THREE.Path per hole.
+      const shapeWithHoles = new THREE.Shape(shapePts)
+      for (const holePts of orderedHoles) {
         try {
           const path = new THREE.Path(holePts)
           shapeWithHoles.holes.push(path)
-          h2HoleContourAreas.push(pxCount)
         } catch (e) {
-          h2HoleContourRejectReasons.push(`label=${labelId} area=${pxCount} Path-throw`)
+          h2HoleContourRejectReasons.push(`Path-throw`)
         }
       }
-      
-      // h2ShapeHoleCount is the authoritative number of THREE.Path instances
-      // attached to shapeWithHoles.holes after the loop completes. This will
-      // diverge from h2HoleContoursUsed only if Path constructor itself throws.
       h2ShapeHoleCount = shapeWithHoles.holes.length
       
-      // If at least one hole contour was attached, rebuild ShapeGeometry.
+      // ===== Direct triangulation (bypasses ShapeGeometry's wrapper) =====
+      // We use ShapeUtils.triangulateShape so we can observe the actual
+      // triangle output. ShapeGeometry calls this under the hood; doing it
+      // here makes silent hole drops impossible to hide.
       if (h2ShapeHoleCount > 0) {
         try {
-          const holesGeom = new THREE.ShapeGeometry(shapeWithHoles)
-          const idx = holesGeom.getIndex()
-          h2FrontCapTris = idx ? idx.count / 3 : 0
+          // Build BufferGeometry manually from the same data ShapeGeometry
+          // would consume. This guarantees holes are passed to earcut.
+          const triangulated = (THREE as any).ShapeUtils.triangulateShape(
+            shapePts,
+            orderedHoles
+          ) as Array<[number, number, number]>
+          
+          // Flatten all rings: outer first, then each hole, in the same order
+          // ShapeUtils consumed them. Indices in `triangulated` reference this
+          // flat vertex array.
+          const allRings: THREE.Vector2[][] = [shapePts, ...orderedHoles]
+          const flatVerts: THREE.Vector2[] = []
+          for (const ring of allRings) {
+            for (const p of ring) flatVerts.push(p)
+          }
+          
+          const positions = new Float32Array(flatVerts.length * 3)
+          for (let i = 0; i < flatVerts.length; i++) {
+            positions[i * 3] = flatVerts[i].x
+            positions[i * 3 + 1] = flatVerts[i].y
+            positions[i * 3 + 2] = 0
+          }
+          const indices = new Uint32Array(triangulated.length * 3)
+          for (let i = 0; i < triangulated.length; i++) {
+            indices[i * 3] = triangulated[i][0]
+            indices[i * 3 + 1] = triangulated[i][1]
+            indices[i * 3 + 2] = triangulated[i][2]
+          }
+          
+          const holesGeom = new THREE.BufferGeometry()
+          holesGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3))
+          holesGeom.setIndex(new THREE.BufferAttribute(indices, 1))
+          holesGeom.computeVertexNormals()
+          
+          h2FrontCapTris = triangulated.length
           geometryWithHoles = holesGeom
           h2FlatCapWithHolesBuilt = "YES"
-          // Note: flatGeom is intentionally NOT disposed; it's still returned
-          // as geometryNoHoles for diagnostic / fallback consumers.
         } catch (e) {
-          console.error("[v0-solid] H2 ShapeGeometry-with-holes failed:", e)
-          h2HoleContourRejectReasons.push(`ShapeGeometry-throw`)
-          h2FlatCapWithHolesBuilt = "NO"
-          // Fall back to flatGeom (no holes visible — same as FLAT_BASE)
-          geometryWithHoles = flatGeom
-          h2FrontCapTris = 0
+          console.error("[v0-solid] H2 triangulateShape failed, falling back to ShapeGeometry:", e)
+          // Fallback: ShapeGeometry path
+          try {
+            const holesGeom = new THREE.ShapeGeometry(shapeWithHoles)
+            const idx = holesGeom.getIndex()
+            h2FrontCapTris = idx ? idx.count / 3 : 0
+            geometryWithHoles = holesGeom
+            h2FlatCapWithHolesBuilt = "YES"
+          } catch (e2) {
+            console.error("[v0-solid] H2 ShapeGeometry fallback also failed:", e2)
+            h2HoleContourRejectReasons.push(`triangulateShape-throw`)
+            h2FlatCapWithHolesBuilt = "NO"
+            geometryWithHoles = flatGeom
+            h2FrontCapTris = 0
+          }
         }
       } else {
-        // No hole contours attached — fall back to flat (no visible hole).
         h2FrontCapTris = flatIndexCount(flatGeom)
         geometryWithHoles = flatGeom
         h2FlatCapWithHolesBuilt = "NO"
       }
+      
+      // Replace areas array with the ordered version so the panel matches.
+      h2HoleContourAreas.length = 0
+      for (const a of orderedAreas) h2HoleContourAreas.push(a)
     } else {
       // No valid holes from H1 — pure flat cap (no fake hole).
       h2FrontCapTris = flatIndexCount(flatGeom)
       geometryWithHoles = flatGeom
       h2FlatCapWithHolesBuilt = "NO"
     }
+    
+    // Compare to flat-cap baseline tris so the panel reveals whether
+    // the holes actually contributed extra triangles.
+    const flatCapTris = flatIndexCount(flatGeom)
+    const triDelta = h2FrontCapTris - flatCapTris
     
     console.log("[v0-solid] FLAT_CAP_WITH_HOLES:", {
       // H1 inputs
@@ -800,6 +916,9 @@ export function buildMaskSolid(
       h2ShapeHoleCount,
       h2FlatCapWithHolesBuilt,
       h2FrontCapTris,
+      flatCapTris,
+      triDelta,
+      triDeltaIndicatesHolesCut: triDelta > 0 ? "YES" : "NO",
     })
     
     // Mirror H2 fields into stages.solidDiagnostics (panel reads them there)
@@ -1305,10 +1424,152 @@ function traceOuterContour(mask: boolean[], width: number, height: number): Poin
   return chainBoundaryEdges(edges)
 }
 
+// H2 helper: collect ALL boundary loops, return the one with the largest
+// enclosed (mask-space) area. Defends against pinch-point vertex-sharing
+// bugs in chainBoundaryEdges that could split a single hole's boundary into
+// multiple sub-loops and previously made us pick "longest" (which is not
+// always the same as "the real outer of the empty region").
+function traceLargestAreaContour(
+  mask: boolean[],
+  width: number,
+  height: number
+): Point2D[] {
+  const edges = extractBoundaryEdges(mask, width, height)
+  if (edges.length === 0) return []
+  const loops = chainAllLoops(edges)
+  if (loops.length === 0) return []
+  
+  let bestLoop = loops[0]
+  let bestAbsArea = absShoelace(loops[0])
+  for (let i = 1; i < loops.length; i++) {
+    const a = absShoelace(loops[i])
+    if (a > bestAbsArea) {
+      bestAbsArea = a
+      bestLoop = loops[i]
+    }
+  }
+  return bestLoop
+}
+
+// Variant of chainBoundaryEdges that returns ALL loops, not just the
+// longest one. Used by traceLargestAreaContour to keep small loops alive
+// for subsequent area-based selection.
+function chainAllLoops(edges: BoundaryEdge[]): Point2D[][] {
+  if (edges.length === 0) return []
+  
+  const endpointKey = (x: number, y: number) => `${x},${y}`
+  const edgesByStart = new Map<string, BoundaryEdge[]>()
+  for (const edge of edges) {
+    const key = endpointKey(edge.x1, edge.y1)
+    if (!edgesByStart.has(key)) edgesByStart.set(key, [])
+    edgesByStart.get(key)!.push(edge)
+  }
+  
+  const used = new Set<BoundaryEdge>()
+  const loops: Point2D[][] = []
+  
+  for (const startEdge of edges) {
+    if (used.has(startEdge)) continue
+    
+    const loop: Point2D[] = []
+    let current: BoundaryEdge | undefined = startEdge
+    const startKey = endpointKey(startEdge.x1, startEdge.y1)
+    
+    while (current && !used.has(current)) {
+      used.add(current)
+      loop.push({ x: current.x1, y: current.y1 })
+      
+      const nextKey = endpointKey(current.x2, current.y2)
+      if (nextKey === startKey && loop.length > 2) break
+      
+      const candidates = edgesByStart.get(nextKey)
+      if (!candidates) break
+      
+      current = undefined
+      for (const cand of candidates) {
+        if (!used.has(cand)) {
+          current = cand
+          break
+        }
+      }
+    }
+    
+    if (loop.length >= 3) loops.push(loop)
+  }
+  
+  return loops
+}
+
+function absShoelace(loop: Point2D[]): number {
+  let s = 0
+  for (let i = 0; i < loop.length; i++) {
+    const p1 = loop[i]
+    const p2 = loop[(i + 1) % loop.length]
+    s += p1.x * p2.y - p2.x * p1.y
+  }
+  return Math.abs(s) / 2
+}
+
 // H2 helper: triangle count from an indexed BufferGeometry.
 function flatIndexCount(geom: THREE.BufferGeometry): number {
   const idx = geom.getIndex()
   return idx ? idx.count / 3 : 0
+}
+
+// H2 helper: signed area of a Vector2 polygon (world space).
+function signedAreaOf(pts: THREE.Vector2[]): number {
+  let s = 0
+  for (let i = 0; i < pts.length; i++) {
+    const p1 = pts[i]
+    const p2 = pts[(i + 1) % pts.length]
+    s += p1.x * p2.y - p2.x * p1.y
+  }
+  return s / 2
+}
+
+// H2 helper: drop consecutive-duplicate vertices and collinear-run mid-points.
+// A pixel-edge boundary loop has many collinear "fence-post" vertices along
+// each axis-aligned run; reducing them to corner points yields a cleaner
+// polygon for earcut and avoids it producing zero-area triangles that some
+// triangulators silently skip.
+function simplifyCollinearAndDuplicates(
+  pts: THREE.Vector2[],
+  eps: number
+): THREE.Vector2[] {
+  if (pts.length < 3) return pts.slice()
+  
+  // Pass 1: drop consecutive duplicates (including wrap-around).
+  const dedup: THREE.Vector2[] = []
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i]
+    const prev = dedup[dedup.length - 1]
+    if (!prev || Math.abs(prev.x - p.x) > eps || Math.abs(prev.y - p.y) > eps) {
+      dedup.push(p)
+    }
+  }
+  if (dedup.length > 1) {
+    const first = dedup[0]
+    const last = dedup[dedup.length - 1]
+    if (Math.abs(first.x - last.x) <= eps && Math.abs(first.y - last.y) <= eps) {
+      dedup.pop()
+    }
+  }
+  if (dedup.length < 3) return dedup
+  
+  // Pass 2: drop the middle vertex of any 3 collinear consecutive vertices.
+  // Cross product of (p1->p2) x (p2->p3) being ~0 means collinear.
+  const out: THREE.Vector2[] = []
+  const n = dedup.length
+  for (let i = 0; i < n; i++) {
+    const p1 = dedup[(i - 1 + n) % n]
+    const p2 = dedup[i]
+    const p3 = dedup[(i + 1) % n]
+    const ax = p2.x - p1.x, ay = p2.y - p1.y
+    const bx = p3.x - p2.x, by = p3.y - p2.y
+    const cross = ax * by - ay * bx
+    if (Math.abs(cross) > eps) out.push(p2)
+  }
+  return out.length >= 3 ? out : dedup
 }
 
 // ============= H1: Interior Hole Detection (DIAGNOSTIC ONLY) =============
