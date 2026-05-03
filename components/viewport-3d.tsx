@@ -1848,6 +1848,15 @@ function SolidDebugOverlay() {
 
                 <span className="text-gray-400">frontCapTris:</span>
                 <span>{s.h2FrontCapTris ?? s.frontCapTriCount ?? 0}</span>
+
+                <span className="text-gray-400">flatCapTrisBaseline:</span>
+                <span>{s.h2FlatCapTrisBaseline ?? 0}</span>
+
+                <span className="text-gray-400">triDelta:</span>
+                <span className={(s.h2TriDelta ?? 0) > 0 ? "text-green-400" : "text-yellow-400"}>
+                  {s.h2TriDelta ?? 0}{" "}
+                  {(s.h2TriDelta ?? 0) > 0 ? "(holes cut)" : "(no change)"}
+                </span>
               </div>
               <div className="mt-1 text-[8px] text-gray-500">
                 H2 flat-cap proof — no extrusion, no walls, export untouched.

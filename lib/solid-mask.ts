@@ -929,6 +929,8 @@ export function buildMaskSolid(
       emptyStages.solidDiagnostics.h2HoleContourRejectReasons = h2HoleContourRejectReasons
       emptyStages.solidDiagnostics.h2ShapeHoleCount = h2ShapeHoleCount
       emptyStages.solidDiagnostics.h2FrontCapTris = h2FrontCapTris
+      emptyStages.solidDiagnostics.h2FlatCapTrisBaseline = flatCapTris
+      emptyStages.solidDiagnostics.h2TriDelta = triDelta
     }
     
     // Mirror onto the returned diagnostics too
@@ -940,6 +942,8 @@ export function buildMaskSolid(
       h2HoleContourRejectReasons,
       h2ShapeHoleCount,
       h2FrontCapTris,
+      h2FlatCapTrisBaseline: flatCapTris,
+      h2TriDelta: triDelta,
     }
     
     return {
