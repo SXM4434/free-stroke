@@ -1858,6 +1858,41 @@ function SolidDebugOverlay() {
                   {(s.h2TriDelta ?? 0) > 0 ? "(holes cut)" : "(no change)"}
                 </span>
               </div>
+
+              {/* Compact small-counter viability — pinpoints tight cursive counters */}
+              <div className="mt-1 border-t border-orange-500/20 pt-1 text-[8px]">
+                <div className="mb-0.5 font-bold text-orange-300">
+                  COUNTER VIABILITY (smallest valid hole)
+                </div>
+                <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                  <span className="text-gray-400">area:</span>
+                  <span>{s.smallestValidHoleArea ?? 0} px</span>
+
+                  <span className="text-gray-400">bbox:</span>
+                  <span>
+                    {(s.smallestValidHoleBboxW ?? 0)} × {(s.smallestValidHoleBboxH ?? 0)} px
+                  </span>
+
+                  <span className="text-gray-400">area/bbox:</span>
+                  <span>
+                    {((s.smallestValidHoleAreaToBboxRatio ?? 0) as number).toFixed(3)}
+                  </span>
+
+                  <span className="text-gray-400">usedByH2:</span>
+                  <span
+                    className={
+                      s.smallestValidHoleUsedByH2 === "YES"
+                        ? "text-green-400 font-bold"
+                        : s.smallestValidHoleUsedByH2 === "NO"
+                          ? "text-red-400 font-bold"
+                          : "text-gray-400"
+                    }
+                  >
+                    {s.smallestValidHoleUsedByH2 ?? "N/A"}
+                  </span>
+                </div>
+              </div>
+
               <div className="mt-1 text-[8px] text-gray-500">
                 H2 flat-cap proof — no extrusion, no walls, export untouched.
               </div>

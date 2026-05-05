@@ -79,6 +79,13 @@ export interface MaskSolidDiagnostics {
   h2FrontCapTris: number                  // direct triangulateShape triangles (caps with holes)
   h2FlatCapTrisBaseline: number           // tris of the same outer with NO holes (FLAT_BASE)
   h2TriDelta: number                      // h2FrontCapTris - h2FlatCapTrisBaseline (>0 means holes changed geometry)
+  // Small-counter viability: examines the SMALLEST valid H1 hole.
+  // Reveals whether a tight cursive counter survives all the way through H2.
+  smallestValidHoleArea: number                  // 0 if no valid holes
+  smallestValidHoleBboxW: number                 // mask-space bbox width
+  smallestValidHoleBboxH: number                 // mask-space bbox height
+  smallestValidHoleAreaToBboxRatio: number       // 0 if no valid holes
+  smallestValidHoleUsedByH2: "YES" | "NO" | "N/A"  // N/A when no valid holes
 }
 
 export interface MaskSolidStats {
@@ -154,6 +161,11 @@ export interface MaskSolidStages {
     h2FrontCapTris?: number
     h2FlatCapTrisBaseline?: number
     h2TriDelta?: number
+    smallestValidHoleArea?: number
+    smallestValidHoleBboxW?: number
+    smallestValidHoleBboxH?: number
+    smallestValidHoleAreaToBboxRatio?: number
+    smallestValidHoleUsedByH2?: "YES" | "NO" | "N/A"
   }
 }
 
@@ -257,7 +269,13 @@ export function buildMaskSolid(
     h2ShapeHoleCount: 0,
     h2FrontCapTris: 0,
     h2FlatCapTrisBaseline: 0,
-    h2TriDelta: 0
+    h2TriDelta: 0,
+    // Small-counter viability defaults
+    smallestValidHoleArea: 0,
+    smallestValidHoleBboxW: 0,
+    smallestValidHoleBboxH: 0,
+    smallestValidHoleAreaToBboxRatio: 0,
+    smallestValidHoleUsedByH2: "N/A"
   }
   
   // Early exit for empty stroke
@@ -311,6 +329,12 @@ export function buildMaskSolid(
       h2FrontCapTris: 0,
       h2FlatCapTrisBaseline: 0,
       h2TriDelta: 0,
+      // Small-counter viability - not measured
+      smallestValidHoleArea: 0,
+      smallestValidHoleBboxW: 0,
+      smallestValidHoleBboxH: 0,
+      smallestValidHoleAreaToBboxRatio: 0,
+      smallestValidHoleUsedByH2: "N/A",
     }
     return {
       geometry: null,
@@ -503,6 +527,8 @@ export function buildMaskSolid(
     h2FrontCapTris: 0,
     h2FlatCapTrisBaseline: 0,
     h2TriDelta: 0,
+    // Small-counter viability — H1 side here; H2 side overridden by branch
+    ...computeSmallestValidHoleViability(holeDetection),
   }
   
   // Mirror solid diagnostics into stages so the debug panel (which reads
@@ -537,6 +563,8 @@ export function buildMaskSolid(
     h2FrontCapTris: 0,
     h2FlatCapTrisBaseline: 0,
     h2TriDelta: 0,
+    // Small-counter viability — H1 side here; H2 side overridden by branch
+    ...computeSmallestValidHoleViability(holeDetection),
   }
   
   // HARD FAIL: Return NULL geometry if validation fails
@@ -700,6 +728,9 @@ export function buildMaskSolid(
     // Used both for the THREE.Path attachment and for the direct
     // ShapeUtils.triangulateShape fallback.
     const holeContoursWorld: THREE.Vector2[][] = []
+    // Parallel array of labelIds for each entry pushed into holeContoursWorld.
+    // Powers the small-counter viability "usedByH2" determination.
+    const usedHoleLabelIds: number[] = []
     
     // Only attempt to add holes if H1 found at least one valid hole.
     if (
@@ -793,6 +824,7 @@ export function buildMaskSolid(
         
         holeContoursWorld.push(holePts)
         h2HoleContourAreas.push(pxCount)
+        usedHoleLabelIds.push(labelId)
       }
       
       // Sort holes by descending world-space |area|. Some triangulators are
@@ -921,6 +953,29 @@ export function buildMaskSolid(
       triDeltaIndicatesHolesCut: triDelta > 0 ? "YES" : "NO",
     })
     
+    // Determine whether the SMALLEST valid H1 hole made it all the way through
+    // H2 to shape.holes. The smallest valid hole's labelId is the LAST entry
+    // in validHoleLabelIds (since it's parallel-sorted by descending area).
+    let smallestUsedByH2: "YES" | "NO" | "N/A" = "N/A"
+    if (holeDetection.validHoleLabelIds.length > 0) {
+      const smallestLabel =
+        holeDetection.validHoleLabelIds[holeDetection.validHoleLabelIds.length - 1]
+      smallestUsedByH2 =
+        h2FlatCapWithHolesBuilt === "YES" && usedHoleLabelIds.includes(smallestLabel)
+          ? "YES"
+          : "NO"
+    }
+    
+    console.log("[v0-solid] H2 small-counter viability:", {
+      smallestValidHoleArea: diagnostics.smallestValidHoleArea,
+      smallestValidHoleBboxW: diagnostics.smallestValidHoleBboxW,
+      smallestValidHoleBboxH: diagnostics.smallestValidHoleBboxH,
+      smallestValidHoleAreaToBboxRatio: diagnostics.smallestValidHoleAreaToBboxRatio?.toFixed(3),
+      smallestValidHoleUsedByH2: smallestUsedByH2,
+      usedHoleLabelIds,
+      validHoleLabelIds: holeDetection.validHoleLabelIds,
+    })
+    
     // Mirror H2 fields into stages.solidDiagnostics (panel reads them there)
     if (emptyStages.solidDiagnostics) {
       emptyStages.solidDiagnostics.h2FlatCapWithHolesBuilt = h2FlatCapWithHolesBuilt
@@ -931,6 +986,7 @@ export function buildMaskSolid(
       emptyStages.solidDiagnostics.h2FrontCapTris = h2FrontCapTris
       emptyStages.solidDiagnostics.h2FlatCapTrisBaseline = flatCapTris
       emptyStages.solidDiagnostics.h2TriDelta = triDelta
+      emptyStages.solidDiagnostics.smallestValidHoleUsedByH2 = smallestUsedByH2
     }
     
     // Mirror onto the returned diagnostics too
@@ -944,6 +1000,7 @@ export function buildMaskSolid(
       h2FrontCapTris,
       h2FlatCapTrisBaseline: flatCapTris,
       h2TriDelta: triDelta,
+      smallestValidHoleUsedByH2: smallestUsedByH2,
     }
     
     return {
@@ -1520,6 +1577,45 @@ function flatIndexCount(geom: THREE.BufferGeometry): number {
   return idx ? idx.count / 3 : 0
 }
 
+// Small-counter viability helper: examines the SMALLEST valid H1 hole.
+// H2-side ("usedByH2") defaults to "NO" when there are valid holes — the H2
+// branch flips it to "YES" if the smallest's labelId is among the holes that
+// actually got attached to shape.holes.
+function computeSmallestValidHoleViability(h: {
+  validHoleCount: number
+  holeAreas: number[]
+  validHoleBboxes: Array<{ w: number; h: number }>
+}): {
+  smallestValidHoleArea: number
+  smallestValidHoleBboxW: number
+  smallestValidHoleBboxH: number
+  smallestValidHoleAreaToBboxRatio: number
+  smallestValidHoleUsedByH2: "YES" | "NO" | "N/A"
+} {
+  if (h.validHoleCount === 0 || h.holeAreas.length === 0) {
+    return {
+      smallestValidHoleArea: 0,
+      smallestValidHoleBboxW: 0,
+      smallestValidHoleBboxH: 0,
+      smallestValidHoleAreaToBboxRatio: 0,
+      smallestValidHoleUsedByH2: "N/A",
+    }
+  }
+  // holeAreas/validHoleBboxes are sorted descending by area, so smallest is last.
+  const lastIdx = h.holeAreas.length - 1
+  const area = h.holeAreas[lastIdx] ?? 0
+  const bbox = h.validHoleBboxes[lastIdx] ?? { w: 0, h: 0 }
+  const bboxArea = bbox.w * bbox.h
+  const ratio = bboxArea > 0 ? area / bboxArea : 0
+  return {
+    smallestValidHoleArea: area,
+    smallestValidHoleBboxW: bbox.w,
+    smallestValidHoleBboxH: bbox.h,
+    smallestValidHoleAreaToBboxRatio: ratio,
+    smallestValidHoleUsedByH2: "NO",
+  }
+}
+
 // H2 helper: signed area of a Vector2 polygon (world space).
 function signedAreaOf(pts: THREE.Vector2[]): number {
   let s = 0
@@ -1604,6 +1700,9 @@ interface HoleDetectionResult {
   // validHoleLabelIds[k] is the labelId for the k-th entry in holeAreas (descending area).
   emptyLabels: Int32Array
   validHoleLabelIds: number[]
+  // Mask-space bbox (w,h) per valid hole, parallel to holeAreas/validHoleLabelIds.
+  // Used for the small-counter viability diagnostic.
+  validHoleBboxes: Array<{ w: number; h: number }>
 }
 
 // Conservative thresholds. Goal is reliable detection, not final modeling.
@@ -1710,8 +1809,8 @@ function detectInteriorHoles(
   const borderTouchingEmptyCount = rawComponents.length - detected.length
   
   // Conservative filtering pass.
-  // Track (area, labelId) pairs so we can sort them together and return labels.
-  const validPairs: Array<{ area: number; labelId: number }> = []
+  // Track (area, labelId, bw, bh) so we can sort and return per-hole bboxes.
+  const validPairs: Array<{ area: number; labelId: number; bw: number; bh: number }> = []
   const rejectReasons: string[] = []
   const rejectedHoleAreas: number[] = []
   
@@ -1739,7 +1838,7 @@ function detectInteriorHoles(
       rejectReasons.push(`borderInset<${HOLE_MIN_BORDER_INSET_PX}(area=${c.size})`)
       rejectedHoleAreas.push(c.size)
     } else {
-      validPairs.push({ area: c.size, labelId: c.labelId })
+      validPairs.push({ area: c.size, labelId: c.labelId, bw, bh })
     }
   }
   
@@ -1747,6 +1846,7 @@ function detectInteriorHoles(
   rejectedHoleAreas.sort((a, b) => b - a)
   const validAreas = validPairs.map((p) => p.area)
   const validHoleLabelIds = validPairs.map((p) => p.labelId)
+  const validHoleBboxes = validPairs.map((p) => ({ w: p.bw, h: p.bh }))
   
   return {
     detectedHoleCount: detected.length,
@@ -1759,6 +1859,7 @@ function detectInteriorHoles(
     rejectedHoleAreas,
     emptyLabels,
     validHoleLabelIds,
+    validHoleBboxes,
   }
 }
 
