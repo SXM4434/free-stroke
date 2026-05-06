@@ -782,6 +782,7 @@ function Scene({
   masterControlsRef,
   meshStatusRef,
   solidStatusRef,
+  extrudeDebugRef,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
@@ -804,6 +805,13 @@ function Scene({
   masterControlsRef?: React.RefObject<OrbitControlsImpl | null>
   meshStatusRef?: React.MutableRefObject<StrokeBuildStatus[]>
   solidStatusRef?: React.MutableRefObject<SolidBuildStatus | null>
+  // Diagnostic-only ref; populated in extrude mode for the depth-trace panel.
+  extrudeDebugRef?: React.MutableRefObject<{
+    depthParam: number
+    buildCount: number
+    bboxZ: number
+    activeEngine: GeometryMode
+  } | null>
 }) {
   // ---- Solid draw-in animation state ----
   // playheadRef.current is the source of truth, but ref mutations don't
@@ -855,6 +863,35 @@ function Scene({
       solidStatusRef.current = solidMesh?.solidStatus ?? null
     }
   }, [meshes, solidStatusRef])
+  
+  // ---- Extrude depth-trace diagnostic ----
+  // Populates extrudeDebugRef whenever the meshes array (output of useStrokeMeshes
+  // useMemo) changes. If the memo doesn't re-fire on a depth-slider move, this
+  // effect doesn't fire either and `buildCount` stays flat — that's the proof
+  // the rebuild path is broken. If it does fire and `bboxZ` matches the new
+  // depth, the rebuild path is correct and any visible-staleness is downstream
+  // (camera angle / material / R3F prop swap).
+  const extrudeBuildCountRef = useRef(0)
+  useEffect(() => {
+    if (!extrudeDebugRef) return
+    extrudeBuildCountRef.current += 1
+    let bboxZ = 0
+    for (const m of meshes) {
+      const g = m.tubeGeometry
+      g.computeBoundingBox()
+      const bb = g.boundingBox
+      if (bb) {
+        const dz = bb.max.z - bb.min.z
+        if (dz > bboxZ) bboxZ = dz
+      }
+    }
+    extrudeDebugRef.current = {
+      depthParam: extrudeParams?.depth ?? 0,
+      buildCount: extrudeBuildCountRef.current,
+      bboxZ,
+      activeEngine: geometryMode,
+    }
+  }, [meshes, extrudeParams?.depth, geometryMode, extrudeDebugRef])
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
   useEffect(() => {
@@ -987,6 +1024,12 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const [showDebug, setShowDebug] = useState(false)
   const meshStatusRef = useRef<StrokeBuildStatus[]>([])
   const solidStatusRef = useRef<SolidBuildStatus | null>(null)
+  const extrudeDebugRef = useRef<{
+    depthParam: number
+    buildCount: number
+    bboxZ: number
+    activeEngine: GeometryMode
+  } | null>(null)
 
   const { totalDuration } = useTimeline(rawStrokes)
 
@@ -1298,6 +1341,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                       masterControlsRef={isMaster ? undefined : controlsRef}
                       meshStatusRef={meshStatusRef}
                       solidStatusRef={solidStatusRef}
+                      extrudeDebugRef={isMaster ? extrudeDebugRef : undefined}
                     />
                   </Canvas>
                 </ViewportErrorBoundary>
@@ -1349,6 +1393,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 onProgressUpdate={onProgressUpdate}
                 meshStatusRef={meshStatusRef}
                 solidStatusRef={solidStatusRef}
+                extrudeDebugRef={extrudeDebugRef}
               />
             </Canvas>
           </ViewportErrorBoundary>
@@ -1366,6 +1411,22 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
           {comparing && compareLabel && (
             <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
           )}
+          {/* Extrude depth-trace diagnostic (extrude mode only).
+              Proves whether the depth-slider rebuild path is alive end-to-end:
+              if buildCount stays flat as you move the Depth slider, the memo
+              isn't re-firing; if buildCount increments AND bboxZ changes, the
+              rebuild is correct and any remaining staleness is downstream
+              (camera angle / R3F prop swap / material). */}
+          {geometryMode === "extrude" && extrudeDebugRef.current && (
+            <div className="mt-1 border-t border-border/50 pt-1">
+              <div className="font-semibold text-foreground">Depth trace:</div>
+              <div>depthParam: {extrudeDebugRef.current.depthParam.toFixed(3)}</div>
+              <div>previewBuildCount: {extrudeDebugRef.current.buildCount}</div>
+              <div>geometryBBoxZ: {extrudeDebugRef.current.bboxZ.toFixed(3)}</div>
+              <div>activeEngine: {extrudeDebugRef.current.activeEngine}</div>
+            </div>
+          )}
+          
           {/* Per-stroke extrude build status (extrude mode only) */}
           {geometryMode === "extrude" && (meshStatusRef.current?.length ?? 0) > 0 && (
             <div className="mt-1 border-t border-border/50 pt-1">

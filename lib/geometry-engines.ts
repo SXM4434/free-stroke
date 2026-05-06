@@ -1034,11 +1034,19 @@ export const ExtrudeEngine: GeometryEngine = {
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
       const { geometry, status } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
+      // Include the slider params that produced this geometry in the React key
+      // so changing depth/width/bevel forces React to unmount-and-remount the
+      // <mesh> element. This is belt-and-suspenders on top of the useStrokeMeshes
+      // dep array: even if a future ref-prop-swap regression in @react-three/fiber
+      // ever caused the mesh to retain the old BufferGeometry instance, a fresh
+      // mount picks up the new geometry unconditionally. Extrude meshes are static
+      // (no draw-in animation), so remounting on slider change has no animation cost.
+      const paramKey = `w${extrudeParams.width.toFixed(3)}-d${extrudeParams.depth.toFixed(3)}-b${extrudeParams.bevelEnabled ? 1 : 0}`
       if (geometry) {
         result.push({
           tubeGeometry: geometry,
           filteredCount: filtered.length,
-          key: `stroke-${si}-${stroke.points.length}`,
+          key: `stroke-${si}-${stroke.points.length}-${paramKey}`,
           mode: "extrude",
           buildStatus: status,
         })
@@ -1054,7 +1062,7 @@ export const ExtrudeEngine: GeometryEngine = {
           jointPositions: rodData.jointPositions,
           jointFractions: rodData.jointFractions,
           filteredCount: filtered.length,
-          key: `stroke-${si}-${stroke.points.length}-rod-fallback`,
+          key: `stroke-${si}-${stroke.points.length}-${paramKey}-rod-fallback`,
           mode: "rod",
           buildStatus: status,
         })
