@@ -44,9 +44,14 @@ function useStrokeMeshes(
   extrudeParams?: ExtrudeParams,
   solidParams?: SolidParams
 ): StrokeMeshData[] {
-  // Extract individual values to prevent object reference changes from triggering rebuilds
+  // Extract individual values to prevent object reference changes from triggering rebuilds.
+  // CRITICAL: every slider value the engine consumes must be listed here. If a value is
+  // omitted, moving its slider won't re-run the closure and preview will silently use
+  // a stale cached geometry (engine still receives the new value via the closed-over
+  // `extrudeParams` reference, but the memo never re-fires).
   const extrudeWidth = extrudeParams?.width
-  const extrudeBevel = extrudeParams?.bevel
+  const extrudeDepth = extrudeParams?.depth
+  const extrudeBevel = extrudeParams?.bevelEnabled
   const solidThickness = solidParams?.thickness
   const solidDepth = solidParams?.depth
   
@@ -54,7 +59,7 @@ function useStrokeMeshes(
     const engine = getEngine(mode)
     return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeBevel, solidThickness, solidDepth])
+  }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeDepth, extrudeBevel, solidThickness, solidDepth])
 }
 
 /* ---- Shared geometries ---- */
