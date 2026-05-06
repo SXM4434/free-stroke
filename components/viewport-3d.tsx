@@ -1859,6 +1859,62 @@ function SolidDebugOverlay() {
                 </span>
               </div>
 
+              {/* Counter-preserving detection (thinner mask used to find counters
+                  that thick strokes painted over) */}
+              <div className="mt-1 border-t border-orange-500/20 pt-1 text-[8px]">
+                <div className="mb-0.5 font-bold text-orange-300">
+                  COUNTER-PRESERVING DETECTION
+                </div>
+                <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                  <span className="text-gray-400">enabled:</span>
+                  <span
+                    className={
+                      s.counterDetectionEnabled === "YES"
+                        ? "text-green-400"
+                        : "text-gray-400"
+                    }
+                  >
+                    {s.counterDetectionEnabled ?? "NO"}
+                  </span>
+
+                  <span className="text-gray-400">actualThicknessPx:</span>
+                  <span>{((s.actualThicknessPx ?? 0) as number).toFixed(2)}</span>
+
+                  <span className="text-gray-400">counterThicknessPx:</span>
+                  <span>
+                    {((s.counterDetectionThicknessPx ?? 0) as number).toFixed(2)}
+                  </span>
+
+                  <span className="text-gray-400">counterDetectedHoleCount:</span>
+                  <span>{s.counterDetectedHoleCount ?? 0}</span>
+
+                  <span className="text-gray-400">counterValidHoleCount:</span>
+                  <span
+                    className={
+                      (s.counterValidHoleCount ?? 0) > 0
+                        ? "text-green-400"
+                        : "text-gray-400"
+                    }
+                  >
+                    {s.counterValidHoleCount ?? 0}
+                  </span>
+
+                  <span className="text-gray-400">counterHoleAreas:</span>
+                  <span>[{(s.counterHoleAreas ?? []).join(", ")}]</span>
+
+                  <span className="text-gray-400">holeSource:</span>
+                  <span
+                    className={
+                      s.counterHoleSource === "COUNTER_MASK"
+                        ? "text-green-400 font-bold"
+                        : "text-gray-300"
+                    }
+                  >
+                    {s.counterHoleSource ?? "ACTUAL_MASK"}
+                  </span>
+                </div>
+              </div>
+
               {/* Compact small-counter viability — pinpoints tight cursive counters */}
               <div className="mt-1 border-t border-orange-500/20 pt-1 text-[8px]">
                 <div className="mb-0.5 font-bold text-orange-300">

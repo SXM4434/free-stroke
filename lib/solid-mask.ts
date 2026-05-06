@@ -86,6 +86,14 @@ export interface MaskSolidDiagnostics {
   smallestValidHoleBboxH: number                 // mask-space bbox height
   smallestValidHoleAreaToBboxRatio: number       // 0 if no valid holes
   smallestValidHoleUsedByH2: "YES" | "NO" | "N/A"  // N/A when no valid holes
+  // Counter-preserving detection (H2 only)
+  counterDetectionEnabled: "YES" | "NO"
+  actualThicknessPx: number                       // mask-space stroke thickness used for outer body
+  counterDetectionThicknessPx: number             // thinner thickness used for hole detection (0 if disabled)
+  counterDetectedHoleCount: number                // total interior empties from counter mask (pre-filter)
+  counterValidHoleCount: number                   // valid interior holes from counter mask
+  counterHoleAreas: number[]                      // areas of valid holes from counter mask
+  counterHoleSource: "ACTUAL_MASK" | "COUNTER_MASK"  // which mask actually fed H2
 }
 
 export interface MaskSolidStats {
@@ -166,12 +174,53 @@ export interface MaskSolidStages {
     smallestValidHoleBboxH?: number
     smallestValidHoleAreaToBboxRatio?: number
     smallestValidHoleUsedByH2?: "YES" | "NO" | "N/A"
+    counterDetectionEnabled?: "YES" | "NO"
+    actualThicknessPx?: number
+    counterDetectionThicknessPx?: number
+    counterDetectedHoleCount?: number
+    counterValidHoleCount?: number
+    counterHoleAreas?: number[]
+    counterHoleSource?: "ACTUAL_MASK" | "COUNTER_MASK"
   }
 }
 
 // ============= Constants =============
 
 const MASK_RESOLUTION = 512
+
+// ============= H2 COUNTER-PRESERVING DETECTION =============
+// When the actual stroke is thick (medium-weight Solid lettering), small
+// closed counters (e.g. the lower loop of a cursive 'b' or 'e') get fully
+// painted in by the round-cap raster body and never appear as interior
+// empty regions in the actual mask. This makes them invisible to H1.
+//
+// Strategy: render a SECOND mask using a thinner "counter-detection"
+// thickness, run H1 on it, and use ITS holes for H2 if it produces more
+// valid holes than the actual mask. The outer silhouette / cap still
+// uses the actual-thickness mask — only the inner hole CONTOURS are
+// borrowed from the thinner mask.
+//
+// Topological safety: a thinner stroke renders a STRICTLY-CONTAINED
+// filled body (line-disks at radius r/2 ⊆ disks at radius r). Any
+// interior hole detected on the thinner body therefore lies inside the
+// thinner body, which lies inside the actual body — so cutting that
+// hole from the actual cap can never punch outside the actual outer
+// silhouette. We additionally point-in-polygon-test each candidate
+// hole's centroid against the actual outer contour as a defense-in-
+// depth check (handles degenerate cases like broken-into-pieces thin
+// strokes where the thinner "largest component" might not match the
+// actual largest component).
+//
+// Open / near-touch shapes: thinning a stroke can only WIDEN gaps, not
+// close them. So any open or near-touch shape that has no interior
+// hole on the actual mask also has no interior hole on the thinner
+// mask. False-positive holes are not introduced.
+const COUNTER_DETECTION_THICKNESS_SCALE = 0.5
+const COUNTER_DETECTION_MIN_PX = 6   // mask pixels
+const COUNTER_DETECTION_MAX_PX = 16  // mask pixels
+// Skip counter pass if actual is already thin enough that a halved
+// version wouldn't be meaningfully smaller (saves a full re-raster).
+const COUNTER_DETECTION_MIN_GAP_PX = 1.5
 
 // ============= GEOMETRY MODE SWITCH =============
 // FLAT_BASE             = original validated checkpoint (valid contour -> FLAT, invalid -> NULL)
@@ -275,7 +324,15 @@ export function buildMaskSolid(
     smallestValidHoleBboxW: 0,
     smallestValidHoleBboxH: 0,
     smallestValidHoleAreaToBboxRatio: 0,
-    smallestValidHoleUsedByH2: "N/A"
+    smallestValidHoleUsedByH2: "N/A",
+    // Counter-preserving detection defaults
+    counterDetectionEnabled: "NO",
+    actualThicknessPx: 0,
+    counterDetectionThicknessPx: 0,
+    counterDetectedHoleCount: 0,
+    counterValidHoleCount: 0,
+    counterHoleAreas: [],
+    counterHoleSource: "ACTUAL_MASK"
   }
   
   // Early exit for empty stroke
@@ -335,6 +392,14 @@ export function buildMaskSolid(
       smallestValidHoleBboxH: 0,
       smallestValidHoleAreaToBboxRatio: 0,
       smallestValidHoleUsedByH2: "N/A",
+      // Counter-preserving detection - not run
+      counterDetectionEnabled: "NO",
+      actualThicknessPx: 0,
+      counterDetectionThicknessPx: 0,
+      counterDetectedHoleCount: 0,
+      counterValidHoleCount: 0,
+      counterHoleAreas: [],
+      counterHoleSource: "ACTUAL_MASK",
     }
     return {
       geometry: null,
@@ -529,6 +594,14 @@ export function buildMaskSolid(
     h2TriDelta: 0,
     // Small-counter viability — H1 side here; H2 side overridden by branch
     ...computeSmallestValidHoleViability(holeDetection),
+    // Counter-preserving detection — defaults; overridden by H2 branch if it runs
+    counterDetectionEnabled: "NO",
+    actualThicknessPx: rasterDebug.rasterThicknessPx ?? 0,
+    counterDetectionThicknessPx: 0,
+    counterDetectedHoleCount: 0,
+    counterValidHoleCount: 0,
+    counterHoleAreas: [],
+    counterHoleSource: "ACTUAL_MASK",
   }
   
   // Mirror solid diagnostics into stages so the debug panel (which reads
@@ -565,6 +638,14 @@ export function buildMaskSolid(
     h2TriDelta: 0,
     // Small-counter viability — H1 side here; H2 side overridden by branch
     ...computeSmallestValidHoleViability(holeDetection),
+    // Counter-preserving detection — defaults; overridden by H2 branch if it runs
+    counterDetectionEnabled: "NO",
+    actualThicknessPx: rasterDebug.rasterThicknessPx ?? 0,
+    counterDetectionThicknessPx: 0,
+    counterDetectedHoleCount: 0,
+    counterValidHoleCount: 0,
+    counterHoleAreas: [],
+    counterHoleSource: "ACTUAL_MASK",
   }
   
   // HARD FAIL: Return NULL geometry if validation fails
@@ -732,21 +813,179 @@ export function buildMaskSolid(
     // Powers the small-counter viability "usedByH2" determination.
     const usedHoleLabelIds: number[] = []
     
-    // Only attempt to add holes if H1 found at least one valid hole.
+    // ===== COUNTER-PRESERVING DETECTION =====
+    // If the actual mask missed a counter (because thick stroke filled it in),
+    // re-raster the SAME stroke at a thinner counter-detection thickness and
+    // run H1 on it. If that produces MORE valid holes than the actual mask,
+    // we use the thinner mask's holes as our hole source for H2.
+    //
+    // Outer silhouette / cap continues to use the actual-thickness mask; only
+    // the inner hole contours are borrowed. Topological invariant (thinner
+    // body ⊆ actual body) plus a point-in-polygon centroid check against the
+    // actual outer contour together guarantee that any borrowed hole lies
+    // inside the actual cap.
+    const actualThicknessPx = rasterDebug.rasterThicknessPx ?? 0
+    let counterDetectionEnabled: "YES" | "NO" = "NO"
+    let counterDetectionThicknessPx = 0
+    let counterDetectedHoleCount = 0
+    let counterValidHoleCount = 0
+    let counterHoleAreas: number[] = []
+    let counterHoleSource: "ACTUAL_MASK" | "COUNTER_MASK" = "ACTUAL_MASK"
+    let activeHoleDetection = holeDetection
+    
+    if (actualThicknessPx > COUNTER_DETECTION_MIN_PX + COUNTER_DETECTION_MIN_GAP_PX) {
+      counterDetectionThicknessPx = Math.max(
+        COUNTER_DETECTION_MIN_PX,
+        Math.min(
+          COUNTER_DETECTION_MAX_PX,
+          actualThicknessPx * COUNTER_DETECTION_THICKNESS_SCALE
+        )
+      )
+      
+      if (counterDetectionThicknessPx < actualThicknessPx - COUNTER_DETECTION_MIN_GAP_PX) {
+        counterDetectionEnabled = "YES"
+        // Scale the WORLD-space input thickness by the same ratio, so the
+        // re-render lands at the desired mask-px counter thickness.
+        const worldCounterThickness =
+          thickness * (counterDetectionThicknessPx / actualThicknessPx)
+        
+        const counterRender = renderStrokeToMask(
+          stroke.points,
+          worldCounterThickness,
+          canvasWidth,
+          canvasHeight
+        )
+        
+        // Same canvas+resolution should produce same mask dims; bail otherwise.
+        if (
+          counterRender.width === width &&
+          counterRender.height === height &&
+          counterRender.filledCount > 0
+        ) {
+          const counterCC = labelConnectedComponents(
+            counterRender.mask,
+            counterRender.width,
+            counterRender.height
+          )
+          if (counterCC.componentCount > 0) {
+            // Pick largest component (same way as actual mask).
+            let counterLargestLabel = 1
+            let counterLargestSize = 0
+            for (let i = 1; i <= counterCC.componentCount; i++) {
+              if (counterCC.componentSizes[i] > counterLargestSize) {
+                counterLargestSize = counterCC.componentSizes[i]
+                counterLargestLabel = i
+              }
+            }
+            const counterComponentMask = new Array(
+              counterRender.width * counterRender.height
+            ).fill(false)
+            for (let i = 0; i < counterRender.mask.length; i++) {
+              counterComponentMask[i] = counterCC.labels[i] === counterLargestLabel
+            }
+            const counterHoles = detectInteriorHoles(
+              counterComponentMask,
+              counterRender.width,
+              counterRender.height
+            )
+            counterDetectedHoleCount = counterHoles.detectedHoleCount
+            counterValidHoleCount = counterHoles.validHoleCount
+            counterHoleAreas = counterHoles.holeAreas.slice()
+            
+            console.log("[v0-solid] COUNTER MASK detection:", {
+              actualThicknessPx,
+              counterDetectionThicknessPx,
+              counterDetected: counterHoles.detectedHoleCount,
+              counterValid: counterHoles.validHoleCount,
+              counterAreas: counterHoles.holeAreas,
+              counterRejected: counterHoles.rejectedHoleCount,
+              counterRejectReasons: counterHoles.holeRejectReasons,
+              counterBorderTouching: counterHoles.borderTouchingEmptyCount,
+              actualValid: holeDetection.validHoleCount,
+            })
+            
+            // Use counter-mask holes only if STRICTLY MORE valid holes than
+            // actual mask. (Equal counts → trust actual; same counters likely.)
+            if (counterHoles.validHoleCount > holeDetection.validHoleCount) {
+              // Defense-in-depth: each candidate hole's centroid must lie
+              // inside the actual outer contour. Filters out edge cases
+              // where a thinner stroke breaks into pieces and the "largest
+              // counter component" doesn't match the actual largest.
+              const filteredIdx: number[] = []
+              for (let k = 0; k < counterHoles.validHoleLabelIds.length; k++) {
+                const lid = counterHoles.validHoleLabelIds[k]
+                let sx = 0, sy = 0, n = 0
+                for (let i = 0; i < counterHoles.emptyLabels.length; i++) {
+                  if (counterHoles.emptyLabels[i] === lid) {
+                    sx += i % counterRender.width
+                    sy += Math.floor(i / counterRender.width)
+                    n++
+                  }
+                }
+                if (n === 0) continue
+                const cx = sx / n
+                const cy = sy / n
+                if (pointInPolygonMask(cx, cy, outerContour)) {
+                  filteredIdx.push(k)
+                } else {
+                  console.log(
+                    `[v0-solid] counter hole label=${lid} centroid=(${cx.toFixed(1)},${cy.toFixed(1)}) REJECTED (outside actual outer)`
+                  )
+                }
+              }
+              if (filteredIdx.length > 0) {
+                const filteredLabelIds = filteredIdx.map(
+                  (k) => counterHoles.validHoleLabelIds[k]
+                )
+                const filteredAreas = filteredIdx.map(
+                  (k) => counterHoles.holeAreas[k]
+                )
+                const filteredBboxes = filteredIdx.map(
+                  (k) => counterHoles.validHoleBboxes[k]
+                )
+                activeHoleDetection = {
+                  detectedHoleCount: counterHoles.detectedHoleCount,
+                  validHoleCount: filteredLabelIds.length,
+                  rejectedHoleCount:
+                    counterHoles.rejectedHoleCount +
+                    (counterHoles.validHoleLabelIds.length - filteredLabelIds.length),
+                  largestHoleArea: filteredAreas[0] ?? 0,
+                  holeAreas: filteredAreas,
+                  holeRejectReasons: counterHoles.holeRejectReasons,
+                  borderTouchingEmptyCount: counterHoles.borderTouchingEmptyCount,
+                  rejectedHoleAreas: counterHoles.rejectedHoleAreas,
+                  emptyLabels: counterHoles.emptyLabels,
+                  validHoleLabelIds: filteredLabelIds,
+                  validHoleBboxes: filteredBboxes,
+                }
+                counterHoleSource = "COUNTER_MASK"
+                console.log(
+                  `[v0-solid] COUNTER MASK selected as hole source (valid=${filteredLabelIds.length})`
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // Only attempt to add holes if the active source has at least one valid hole.
     if (
-      holeDetection.validHoleLabelIds.length > 0 &&
-      holeDetection.emptyLabels.length === width * height
+      activeHoleDetection.validHoleLabelIds.length > 0 &&
+      activeHoleDetection.emptyLabels.length === width * height
     ) {
       // Iterate EVERY valid hole — not just the largest. This is the H2
-      // contract: every valid H1 hole gets a chance to become a shape.holes
-      // entry. Per-hole failures are recorded individually so the panel
-      // shows exactly which valid hole was dropped and why.
-      for (const labelId of holeDetection.validHoleLabelIds) {
+      // contract: every valid hole from the ACTIVE source gets a chance to
+      // become a shape.holes entry. Per-hole failures are recorded
+      // individually so the panel shows exactly which hole was dropped.
+      // (Active source is either the actual mask or — when the actual mask
+      // missed a counter — the thinner counter-detection mask.)
+      for (const labelId of activeHoleDetection.validHoleLabelIds) {
         // Build a per-hole binary mask: TRUE where this hole's empty pixels are.
         const holeMask = new Array(width * height).fill(false)
         let pxCount = 0
         for (let i = 0; i < width * height; i++) {
-          if (holeDetection.emptyLabels[i] === labelId) {
+          if (activeHoleDetection.emptyLabels[i] === labelId) {
             holeMask[i] = true
             pxCount++
           }
@@ -953,27 +1192,34 @@ export function buildMaskSolid(
       triDeltaIndicatesHolesCut: triDelta > 0 ? "YES" : "NO",
     })
     
-    // Determine whether the SMALLEST valid H1 hole made it all the way through
-    // H2 to shape.holes. The smallest valid hole's labelId is the LAST entry
-    // in validHoleLabelIds (since it's parallel-sorted by descending area).
+    // Determine whether the SMALLEST valid hole from the ACTIVE source made
+    // it through H2. The smallest valid hole's labelId is the LAST entry in
+    // validHoleLabelIds (since they're parallel-sorted by descending area).
     let smallestUsedByH2: "YES" | "NO" | "N/A" = "N/A"
-    if (holeDetection.validHoleLabelIds.length > 0) {
+    if (activeHoleDetection.validHoleLabelIds.length > 0) {
       const smallestLabel =
-        holeDetection.validHoleLabelIds[holeDetection.validHoleLabelIds.length - 1]
+        activeHoleDetection.validHoleLabelIds[
+          activeHoleDetection.validHoleLabelIds.length - 1
+        ]
       smallestUsedByH2 =
         h2FlatCapWithHolesBuilt === "YES" && usedHoleLabelIds.includes(smallestLabel)
           ? "YES"
           : "NO"
     }
     
+    // Recompute viability fields from the ACTIVE source so the panel reflects
+    // what actually fed H2 (matters when COUNTER_MASK was selected).
+    const activeViability = computeSmallestValidHoleViability(activeHoleDetection)
+    
     console.log("[v0-solid] H2 small-counter viability:", {
-      smallestValidHoleArea: diagnostics.smallestValidHoleArea,
-      smallestValidHoleBboxW: diagnostics.smallestValidHoleBboxW,
-      smallestValidHoleBboxH: diagnostics.smallestValidHoleBboxH,
-      smallestValidHoleAreaToBboxRatio: diagnostics.smallestValidHoleAreaToBboxRatio?.toFixed(3),
+      activeSource: counterHoleSource,
+      smallestValidHoleArea: activeViability.smallestValidHoleArea,
+      smallestValidHoleBboxW: activeViability.smallestValidHoleBboxW,
+      smallestValidHoleBboxH: activeViability.smallestValidHoleBboxH,
+      smallestValidHoleAreaToBboxRatio: activeViability.smallestValidHoleAreaToBboxRatio?.toFixed(3),
       smallestValidHoleUsedByH2: smallestUsedByH2,
       usedHoleLabelIds,
-      validHoleLabelIds: holeDetection.validHoleLabelIds,
+      validHoleLabelIds: activeHoleDetection.validHoleLabelIds,
     })
     
     // Mirror H2 fields into stages.solidDiagnostics (panel reads them there)
@@ -987,6 +1233,17 @@ export function buildMaskSolid(
       emptyStages.solidDiagnostics.h2FlatCapTrisBaseline = flatCapTris
       emptyStages.solidDiagnostics.h2TriDelta = triDelta
       emptyStages.solidDiagnostics.smallestValidHoleUsedByH2 = smallestUsedByH2
+      emptyStages.solidDiagnostics.smallestValidHoleArea = activeViability.smallestValidHoleArea
+      emptyStages.solidDiagnostics.smallestValidHoleBboxW = activeViability.smallestValidHoleBboxW
+      emptyStages.solidDiagnostics.smallestValidHoleBboxH = activeViability.smallestValidHoleBboxH
+      emptyStages.solidDiagnostics.smallestValidHoleAreaToBboxRatio = activeViability.smallestValidHoleAreaToBboxRatio
+      emptyStages.solidDiagnostics.counterDetectionEnabled = counterDetectionEnabled
+      emptyStages.solidDiagnostics.actualThicknessPx = actualThicknessPx
+      emptyStages.solidDiagnostics.counterDetectionThicknessPx = counterDetectionThicknessPx
+      emptyStages.solidDiagnostics.counterDetectedHoleCount = counterDetectedHoleCount
+      emptyStages.solidDiagnostics.counterValidHoleCount = counterValidHoleCount
+      emptyStages.solidDiagnostics.counterHoleAreas = counterHoleAreas
+      emptyStages.solidDiagnostics.counterHoleSource = counterHoleSource
     }
     
     // Mirror onto the returned diagnostics too
@@ -1001,6 +1258,17 @@ export function buildMaskSolid(
       h2FlatCapTrisBaseline: flatCapTris,
       h2TriDelta: triDelta,
       smallestValidHoleUsedByH2: smallestUsedByH2,
+      smallestValidHoleArea: activeViability.smallestValidHoleArea,
+      smallestValidHoleBboxW: activeViability.smallestValidHoleBboxW,
+      smallestValidHoleBboxH: activeViability.smallestValidHoleBboxH,
+      smallestValidHoleAreaToBboxRatio: activeViability.smallestValidHoleAreaToBboxRatio,
+      counterDetectionEnabled,
+      actualThicknessPx,
+      counterDetectionThicknessPx,
+      counterDetectedHoleCount,
+      counterValidHoleCount,
+      counterHoleAreas,
+      counterHoleSource,
     }
     
     return {
@@ -1575,6 +1843,26 @@ function absShoelace(loop: Point2D[]): number {
 function flatIndexCount(geom: THREE.BufferGeometry): number {
   const idx = geom.getIndex()
   return idx ? idx.count / 3 : 0
+}
+
+// H2 helper: ray-casting point-in-polygon test in mask space.
+// Used by counter-preserving detection to verify that each candidate hole
+// borrowed from the thinner counter mask actually lies inside the actual
+// outer contour (defense-in-depth alongside the topological invariant).
+function pointInPolygonMask(px: number, py: number, poly: Point2D[]): boolean {
+  let inside = false
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x
+    const yi = poly[i].y
+    const xj = poly[j].x
+    const yj = poly[j].y
+    const denom = yj - yi
+    if (denom === 0) continue
+    const intersect =
+      yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / denom + xi
+    if (intersect) inside = !inside
+  }
+  return inside
 }
 
 // Small-counter viability helper: examines the SMALLEST valid H1 hole.
