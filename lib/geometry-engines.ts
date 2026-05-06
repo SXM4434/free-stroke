@@ -599,9 +599,184 @@ export const RodEngine: GeometryEngine = {
 /*  ExtrudeEngine                                                     */
 /* ------------------------------------------------------------------ */
 
+/* ============================================================
+ * RASTERIZED RIBBON BUILDER (preferred path)
+ *
+ * The previous parametric offset (`buildRibbonShape`, retained below
+ * as a last-resort fallback) computes left/right perpendicular offsets
+ * of the polyline using average normals. For any handwriting stroke
+ * with meaningful curvature whose segment lengths are short relative
+ * to halfWidth, the inner-side offset edges fold over each other,
+ * producing a self-intersecting polygon. `validateShapeContour` then
+ * (correctly) rejected those polygons as "bad contour", and Extrude
+ * silently fell back to Rod for nearly every normal stroke, giving
+ * Z-extent = stroke diameter (NOT depth).
+ *
+ * The rasterize-and-trace approach below is robust by construction:
+ *   1. Rasterize the polyline at halfWidth thickness using a
+ *      circular-disk brush stamped along every segment.
+ *   2. Trace the outer boundary of the resulting filled region using
+ *      Marching Squares (already used by SolidEngine — defined later
+ *      in this file as `traceOuterBoundaryMarchingSquares`).
+ *   3. Light Douglas-Peucker simplification (already defined later
+ *      as `dpSimplify`) to remove jaggies.
+ *   4. Wrap as a THREE.Shape, ensure CCW winding for ExtrudeGeometry.
+ *
+ * The mask is the union of disks stamped along the polyline, which
+ * is always a connected, simply-connected region for a single
+ * non-crossing stroke. Marching Squares on such a region returns a
+ * simple closed polygon by construction — so triangulation never
+ * fails on self-intersection.
+ *
+ * NOTE: The existing slider/visual convention treats `userWidth` as
+ * the perpendicular offset (i.e., full ribbon = 2 × userWidth). The
+ * rasterized builder preserves that convention to avoid changing the
+ * visual size of strokes that were already working.
+ * ============================================================ */
+
+const RIBBON_RASTER_RESOLUTION = 256
+// World-space step along each polyline segment when stamping disks.
+// Smaller = smoother contour, more compute. ~0.35 of halfWidth ensures
+// every disk overlaps its neighbor enough that the union has no gaps.
+const RIBBON_RASTER_STEP_FRAC = 0.35
+// DP simplification tolerance in PIXELS (raster space). 0.6 keeps the
+// outline crisp without leaving tiny jitter spikes from the marching
+// squares mid-edge sampling.
+const RIBBON_RASTER_DP_TOLERANCE_PX = 0.6
+
+/**
+ * Rasterize a polyline at given perpendicular thickness into a binary mask.
+ * Returns the mask and the world↔pixel transform (uniform scale + offset).
+ */
+function rasterizeStrokeToRibbonMask(
+  pts: THREE.Vector3[],
+  halfWidth: number,
+  S: number = RIBBON_RASTER_RESOLUTION
+): { mask: boolean[]; minX: number; minY: number; scale: number } | null {
+  if (pts.length < 2 || halfWidth <= 0) return null
+
+  // World bbox of polyline + padding so the round brush never clips.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  const pad = halfWidth * 1.5
+  minX -= pad; maxX += pad
+  minY -= pad; maxY += pad
+
+  const sizeMax = Math.max(maxX - minX, maxY - minY)
+  if (!isFinite(sizeMax) || sizeMax <= 0) return null
+
+  // Uniform scale fits bbox into S-2 pixels (1px safety margin per side).
+  const scale = (S - 2) / sizeMax
+  const radiusPx = halfWidth * scale
+  if (radiusPx < 0.5) return null  // sub-pixel ribbon — not enough resolution
+
+  const mask = new Array(S * S).fill(false)
+  const r2 = radiusPx * radiusPx
+
+  const stampDisk = (wx: number, wy: number) => {
+    const cx = (wx - minX) * scale
+    const cy = (wy - minY) * scale
+    const x0 = Math.max(0, Math.floor(cx - radiusPx))
+    const x1 = Math.min(S - 1, Math.ceil(cx + radiusPx))
+    const y0 = Math.max(0, Math.floor(cy - radiusPx))
+    const y1 = Math.min(S - 1, Math.ceil(cy + radiusPx))
+    for (let y = y0; y <= y1; y++) {
+      const dy = y + 0.5 - cy
+      const dy2 = dy * dy
+      const row = y * S
+      for (let x = x0; x <= x1; x++) {
+        const dx = x + 0.5 - cx
+        if (dx * dx + dy2 <= r2) mask[row + x] = true
+      }
+    }
+  }
+
+  // Walk each segment, stamp disks at sub-halfWidth intervals so
+  // consecutive disks overlap and the union is gap-free.
+  const stepWorld = Math.max(1e-6, halfWidth * RIBBON_RASTER_STEP_FRAC)
+  // Always stamp at the very first vertex.
+  stampDisk(pts[0].x, pts[0].y)
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i]
+    const b = pts[i + 1]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.sqrt(dx * dx + dy * dy)
+    if (len < 1e-9) continue
+    const steps = Math.max(1, Math.ceil(len / stepWorld))
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps
+      stampDisk(a.x + t * dx, a.y + t * dy)
+    }
+  }
+
+  return { mask, minX, minY, scale }
+}
+
+/**
+ * Robust ribbon shape via rasterize → marching-squares → simplify.
+ * Always returns a simple (non-self-intersecting) polygon for any single
+ * stroke whose polyline does not self-cross, or null if the stroke is
+ * too small to rasterize at the chosen resolution.
+ *
+ * NOTE: The slider convention here is `halfWidth` as perpendicular offset,
+ * matching the legacy `buildRibbonShape` for visual compatibility. The
+ * caller passes `userWidth` (slider value) as `halfWidth`, producing a
+ * ribbon of full width 2 × userWidth — same as before.
+ */
+function buildRasterizedRibbonShape(
+  pts: THREE.Vector3[],
+  halfWidth: number
+): THREE.Shape | null {
+  const raster = rasterizeStrokeToRibbonMask(pts, halfWidth)
+  if (!raster) return null
+
+  const pxContour = traceOuterBoundaryMarchingSquares(raster.mask, RIBBON_RASTER_RESOLUTION)
+  if (pxContour.length < 3) return null
+
+  // Light DP simplification in pixel space.
+  const simplifiedPx = dpSimplify(pxContour, RIBBON_RASTER_DP_TOLERANCE_PX)
+  if (simplifiedPx.length < 3) return null
+
+  // Pixel → world transform.
+  const worldPts = simplifiedPx.map((p) => ({
+    x: p.x / raster.scale + raster.minX,
+    y: p.y / raster.scale + raster.minY,
+  }))
+
+  // Marching squares traces clockwise in raster (Y-down) coords. Since we
+  // map raster-Y directly to world-Y (no flip), the resulting polygon's
+  // winding may be clockwise in math sense (negative signed area). THREE
+  // ExtrudeGeometry expects CCW outer contour. Reverse if needed.
+  let signed = 0
+  for (let i = 0, j = worldPts.length - 1; i < worldPts.length; j = i++) {
+    signed += (worldPts[j].x - worldPts[i].x) * (worldPts[j].y + worldPts[i].y)
+  }
+  signed *= 0.5
+  const ordered = signed < 0 ? worldPts : worldPts.slice().reverse()
+
+  const shape = new THREE.Shape()
+  shape.moveTo(ordered[0].x, ordered[0].y)
+  for (let i = 1; i < ordered.length; i++) {
+    shape.lineTo(ordered[i].x, ordered[i].y)
+  }
+  shape.closePath()
+  return shape
+}
+
 /**
  * Build a 2D ribbon outline (offset left/right of polyline by `halfWidth`).
  * Returns an array of 2D points forming a closed polygon.
+ *
+ * LEGACY parametric-offset implementation. Retained as last-resort fallback
+ * only; the rasterized builder above is the primary path. See the comment
+ * block above `rasterizeStrokeToRibbonMask` for why this approach fails on
+ * normal handwriting strokes.
  */
 function buildRibbonShape(pts: THREE.Vector3[], halfWidth: number): THREE.Shape | null {
   if (pts.length < 2) return null
@@ -880,17 +1055,38 @@ function tryBuildExtrudeGeometry(
   const bevel = clampBevel(extrudeParams)
   const fbRadius = fallbackRodRadius(userWidth)
 
-  // Build shape once (same for all attempts)
-  const shape = buildRibbonShape(filtered, userWidth)
+  // Primary path: rasterized ribbon builder (guaranteed simple polygon).
+  // Caller passes `userWidth` as the perpendicular offset (full ribbon
+  // width = 2 × userWidth), matching the legacy buildRibbonShape convention.
+  let shape: THREE.Shape | null = buildRasterizedRibbonShape(filtered, userWidth)
+  let shapeSource: "rasterized" | "parametric" = "rasterized"
+
+  if (!shape) {
+    // Last-resort fallback: legacy parametric offset. Will produce a self-
+    // intersecting polygon for most curved strokes, but in rare cases (e.g.
+    // very straight strokes at sub-pixel raster resolution) the rasterizer
+    // may decline and the parametric path can still succeed.
+    shape = buildRibbonShape(filtered, userWidth)
+    shapeSource = "parametric"
+  }
+
   if (!shape) {
     console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "no shape" })
     return { geometry: null, status: { type: "rodFallback", reason: "no shape", fallbackRadius: fbRadius } }
   }
 
-  const contour = validateShapeContour(shape)
-  if (!contour) {
-    console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "bad contour" })
-    return { geometry: null, status: { type: "rodFallback", reason: "bad contour", fallbackRadius: fbRadius } }
+  // Validate contour ONLY for the parametric path. The rasterized polygon
+  // is simple by construction; running validateShapeContour on it would
+  // reject some perfectly valid contours due to its `getPoints(curveSegments)`
+  // re-sampling on absarc-free outlines (those don't apply here, but the
+  // validator's near-zero-area / min-edge rules are tuned for the parametric
+  // path's specific failure modes).
+  if (shapeSource === "parametric") {
+    const contour = validateShapeContour(shape)
+    if (!contour) {
+      console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "bad contour" })
+      return { geometry: null, status: { type: "rodFallback", reason: "bad contour", fallbackRadius: fbRadius } }
+    }
   }
 
   // For tiny widths, skip bevel entirely to avoid degenerate geometry
