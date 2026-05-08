@@ -851,7 +851,20 @@ function Scene({
   // Populate meshStatusRef for debug overlay (extrude mode)
   useEffect(() => {
     if (meshStatusRef) {
-      meshStatusRef.current = meshes.map((m) => m.buildStatus ?? { type: "ok" })
+      // Placeholder status for non-extrude meshes (rod, solid, inflate). The
+      // extrude debug panel only renders when geometryMode === "extrude", so
+      // this fallback is only consumed for safety; the strategy tag here is
+      // never displayed.
+      meshStatusRef.current = meshes.map(
+        (m) =>
+          m.buildStatus ?? {
+            type: "ok",
+            width: 0,
+            depth: 0,
+            bevelEnabled: false,
+            strategy: "legacy",
+          },
+      )
     }
   }, [meshes, meshStatusRef])
 
@@ -1439,12 +1452,12 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                     : "text-red-500"
                 }>
                   {i}: {s.type === "ok"
-                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=${s.bevelEnabled}`
+                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=${s.bevelEnabled}`
                     : s.type === "bevelOff"
-                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(retry)`
+                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(retry)`
                     : s.type === "bevelOffTinyWidth"
-                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(tiny)`
-                    : `rod r=${s.fallbackRadius.toFixed(3)} (${s.reason}) depth=n/a bevel=n/a`}
+                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(tiny)`
+                    : `rod fallback strategy=${s.strategy} r=${s.fallbackRadius.toFixed(3)} (${s.reason}) depth=n/a bevel=n/a`}
                 </div>
               ))}
             </div>

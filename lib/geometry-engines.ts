@@ -128,12 +128,16 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
   depth: 0.15,
 }
 
+/** Identifies which Extrude shape-construction strategy produced a given mesh.
+ *  See EXTRUDE_GEOMETRY_STRATEGY in this file for the active default. */
+export type ExtrudeStrategyTag = "legacy" | "raster" | "rod-only"
+
 /** Per-stroke build status for debug overlay (Extrude mode) */
 export type StrokeBuildStatus =
-  | { type: "ok"; width: number; depth: number; bevelEnabled: boolean }
-  | { type: "bevelOff"; width: number; depth: number }
-  | { type: "bevelOffTinyWidth"; width: number; depth: number }
-  | { type: "rodFallback"; reason: string; fallbackRadius: number }
+  | { type: "ok"; width: number; depth: number; bevelEnabled: boolean; strategy: ExtrudeStrategyTag }
+  | { type: "bevelOff"; width: number; depth: number; strategy: ExtrudeStrategyTag }
+  | { type: "bevelOffTinyWidth"; width: number; depth: number; strategy: ExtrudeStrategyTag }
+  | { type: "rodFallback"; reason: string; fallbackRadius: number; strategy: ExtrudeStrategyTag }
 
 /** Debug contour data for Solid mode visualization */
 export interface SolidDebugContour {
@@ -644,6 +648,50 @@ const RIBBON_RASTER_STEP_FRAC = 0.35
 // squares mid-edge sampling.
 const RIBBON_RASTER_DP_TOLERANCE_PX = 0.6
 
+/* ============================================================
+ * EXTRUDE GEOMETRY STRATEGY SWITCH
+ *
+ * Controls which shape-construction path Extrude uses.
+ *
+ *   LEGACY_OFFSET_RIBBON  (default)
+ *     The original parametric perpendicular-offset ribbon. Produces a
+ *     smooth, calligraphic-feeling extrusion with thin variable-width
+ *     edges. May fall back to Rod on tightly curved strokes whose
+ *     inner-side offsets self-intersect (caught by validateShapeContour).
+ *     Visually closer to a "drawn" stroke than the Solid silhouette.
+ *
+ *   RASTER_TRACE_RIBBON   (experimental)
+ *     Stamps a circular disk along the polyline at halfWidth, traces
+ *     the union with marching squares, simplifies, and extrudes. Always
+ *     produces a simple polygon so Extrude never falls back to Rod for
+ *     normal handwriting. However it produces a chunkier, more uniform
+ *     silhouette that visually resembles Solid mode (Solid uses the same
+ *     rasterize-and-trace approach for its outer cap). Use only when the
+ *     legacy path's rod-fallback rate is unacceptable for a given input.
+ *
+ *   ROD_FALLBACK_ONLY     (debug)
+ *     Skips Extrude entirely; every stroke goes through buildRodGeometryData.
+ *     Depth slider does NOT apply. For diagnostic comparison only.
+ *
+ * Default is LEGACY_OFFSET_RIBBON because (a) it preserves the previous
+ * Extrude visual style users were accustomed to, and (b) it does not
+ * make Extrude visually indistinguishable from Solid. The rasterized path
+ * remains available behind this flag for evaluation.
+ * ============================================================ */
+export const EXTRUDE_GEOMETRY_STRATEGY:
+  | "LEGACY_OFFSET_RIBBON"
+  | "RASTER_TRACE_RIBBON"
+  | "ROD_FALLBACK_ONLY" = "LEGACY_OFFSET_RIBBON"
+
+function strategyTag(): ExtrudeStrategyTag {
+  switch (EXTRUDE_GEOMETRY_STRATEGY) {
+    case "RASTER_TRACE_RIBBON": return "raster"
+    case "ROD_FALLBACK_ONLY":   return "rod-only"
+    case "LEGACY_OFFSET_RIBBON":
+    default:                    return "legacy"
+  }
+}
+
 /**
  * Rasterize a polyline at given perpendicular thickness into a binary mask.
  * Returns the mask and the world↔pixel transform (uniform scale + offset).
@@ -1054,38 +1102,66 @@ function tryBuildExtrudeGeometry(
   const halfDepth = extrudeParams.depth / 2
   const bevel = clampBevel(extrudeParams)
   const fbRadius = fallbackRodRadius(userWidth)
+  const tag = strategyTag()
 
-  // Primary path: rasterized ribbon builder (guaranteed simple polygon).
-  // Caller passes `userWidth` as the perpendicular offset (full ribbon
-  // width = 2 × userWidth), matching the legacy buildRibbonShape convention.
-  let shape: THREE.Shape | null = buildRasterizedRibbonShape(filtered, userWidth)
-  let shapeSource: "rasterized" | "parametric" = "rasterized"
+  // ROD_FALLBACK_ONLY (debug strategy): never run Extrude; always emit a
+  // rodFallback status so the caller renders a TubeGeometry. Depth has no
+  // effect in this path — that is intentional and is the correct way to
+  // verify "this is what rod looks like" for visual comparison.
+  if (EXTRUDE_GEOMETRY_STRATEGY === "ROD_FALLBACK_ONLY") {
+    console.log(`[v0] stroke ${_si} final: rodFallback (strategy=rod-only)`)
+    return {
+      geometry: null,
+      status: { type: "rodFallback", reason: "strategy=rod-only", fallbackRadius: fbRadius, strategy: tag },
+    }
+  }
 
-  if (!shape) {
-    // Last-resort fallback: legacy parametric offset. Will produce a self-
-    // intersecting polygon for most curved strokes, but in rare cases (e.g.
-    // very straight strokes at sub-pixel raster resolution) the rasterizer
-    // may decline and the parametric path can still succeed.
+  // Build the ribbon shape according to the active strategy.
+  //
+  // LEGACY_OFFSET_RIBBON:
+  //   - Use only the parametric offset builder. If it produces a self-
+  //     intersecting / degenerate polygon, fall back to Rod (the original
+  //     pre-rasterizer behavior). This preserves the prior visual style.
+  //
+  // RASTER_TRACE_RIBBON:
+  //   - Use the rasterize-and-trace builder first (always simple by
+  //     construction). If raster declines (sub-pixel ribbon at 256-px
+  //     resolution), fall back to parametric, then validate. Then Rod.
+  let shape: THREE.Shape | null = null
+  let shapeSource: "parametric" | "rasterized" = "parametric"
+
+  if (EXTRUDE_GEOMETRY_STRATEGY === "RASTER_TRACE_RIBBON") {
+    shape = buildRasterizedRibbonShape(filtered, userWidth)
+    if (shape) {
+      shapeSource = "rasterized"
+    } else {
+      shape = buildRibbonShape(filtered, userWidth)
+      shapeSource = "parametric"
+    }
+  } else {
+    // LEGACY_OFFSET_RIBBON
     shape = buildRibbonShape(filtered, userWidth)
     shapeSource = "parametric"
   }
 
   if (!shape) {
-    console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "no shape" })
-    return { geometry: null, status: { type: "rodFallback", reason: "no shape", fallbackRadius: fbRadius } }
+    console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag})`, { reason: "no shape" })
+    return {
+      geometry: null,
+      status: { type: "rodFallback", reason: "no shape", fallbackRadius: fbRadius, strategy: tag },
+    }
   }
 
   // Validate contour ONLY for the parametric path. The rasterized polygon
-  // is simple by construction; running validateShapeContour on it would
-  // reject some perfectly valid contours due to its `getPoints(curveSegments)`
-  // re-sampling on absarc-free outlines (those don't apply here, but the
-  // validator's near-zero-area / min-edge rules are tuned for the parametric
-  // path's specific failure modes).
+  // is simple by construction.
   if (shapeSource === "parametric") {
     const contour = validateShapeContour(shape)
     if (!contour) {
-      console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "bad contour" })
-      return { geometry: null, status: { type: "rodFallback", reason: "bad contour", fallbackRadius: fbRadius } }
+      console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag})`, { reason: "bad contour" })
+      return {
+        geometry: null,
+        status: { type: "rodFallback", reason: "bad contour", fallbackRadius: fbRadius, strategy: tag },
+      }
     }
   }
 
@@ -1106,8 +1182,11 @@ function tryBuildExtrudeGeometry(
 
     if (geo1) {
       geo1.translate(0, 0, -halfDepth)
-      console.log(`[v0] stroke ${_si} final: extrude`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: true })
-      return { geometry: geo1, status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: true } }
+      console.log(`[v0] stroke ${_si} final: extrude (strategy=${tag})`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: true })
+      return {
+        geometry: geo1,
+        status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: true, strategy: tag },
+      }
     }
   }
 
@@ -1120,21 +1199,32 @@ function tryBuildExtrudeGeometry(
 
   if (geo2) {
     geo2.translate(0, 0, -halfDepth)
-    // Distinguish why bevel was off
     if (isTinyWidth && extrudeParams.bevelEnabled) {
-      console.log(`[v0] stroke ${_si} final: extrude(bevelOffTinyWidth)`, { width: userWidth, depth: extrudeParams.depth })
-      return { geometry: geo2, status: { type: "bevelOffTinyWidth", width: userWidth, depth: extrudeParams.depth } }
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOffTinyWidth) (strategy=${tag})`, { width: userWidth, depth: extrudeParams.depth })
+      return {
+        geometry: geo2,
+        status: { type: "bevelOffTinyWidth", width: userWidth, depth: extrudeParams.depth, strategy: tag },
+      }
     }
     if (useBevel) {
-      console.log(`[v0] stroke ${_si} final: extrude(bevelOff)`, { width: userWidth, depth: extrudeParams.depth })
-      return { geometry: geo2, status: { type: "bevelOff", width: userWidth, depth: extrudeParams.depth } }
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOff) (strategy=${tag})`, { width: userWidth, depth: extrudeParams.depth })
+      return {
+        geometry: geo2,
+        status: { type: "bevelOff", width: userWidth, depth: extrudeParams.depth, strategy: tag },
+      }
     }
-    console.log(`[v0] stroke ${_si} final: extrude`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: false })
-    return { geometry: geo2, status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: false } }
+    console.log(`[v0] stroke ${_si} final: extrude (strategy=${tag})`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: false })
+    return {
+      geometry: geo2,
+      status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: false, strategy: tag },
+    }
   }
 
-  console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "extrude failed" })
-  return { geometry: null, status: { type: "rodFallback", reason: "extrude failed", fallbackRadius: fbRadius } }
+  console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag})`, { reason: "extrude failed" })
+  return {
+    geometry: null,
+    status: { type: "rodFallback", reason: "extrude failed", fallbackRadius: fbRadius, strategy: tag },
+  }
 }
 
 /** Derive fallback rod radius from extrude width so Width slider affects fallback strokes too */
