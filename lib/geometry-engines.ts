@@ -129,8 +129,14 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
 }
 
 /** Identifies which Extrude shape-construction strategy produced a given mesh.
- *  See EXTRUDE_GEOMETRY_STRATEGY in this file for the active default. */
-export type ExtrudeStrategyTag = "legacy" | "raster" | "rod-only"
+ *  See EXTRUDE_GEOMETRY_STRATEGY in this file for the active default.
+ *
+ *   "legacy"    — parametric perpendicular-offset ribbon → THREE.ExtrudeGeometry
+ *   "segmented" — depth-aware per-segment prism strip (legacy contour fallback)
+ *   "raster"    — rasterize disks → marching-squares trace → THREE.ExtrudeGeometry
+ *   "rod-only"  — debug only; everything becomes a TubeGeometry, depth-blind
+ */
+export type ExtrudeStrategyTag = "legacy" | "segmented" | "raster" | "rod-only"
 
 /** Per-stroke build status for debug overlay (Extrude mode) */
 export type StrokeBuildStatus =
@@ -1087,6 +1093,133 @@ function safeExtrude(
 
 
 /**
+ * Segmented ribbon extrusion — depth-aware fallback for strokes whose
+ * legacy parametric ribbon contour self-intersects.
+ *
+ * Strategy: emit one rectangular prism per polyline segment. Each prism is
+ * oriented perpendicular to the segment direction in XY, with thickness =
+ * 2×halfWidth in the perpendicular direction and extent = depth in Z.
+ * Adjacent segment prisms may overlap internally; that is acceptable and
+ * visually invisible inside the solid mesh body. Per-vertex normals are
+ * computed so shading is smooth-ish along the stroke path.
+ *
+ * Why this works where legacy fails: there is no single global polygon
+ * to triangulate, so no self-intersection rejection occurs. Depth is
+ * consumed directly as Z extent. Visual result is closer to a calligraphic
+ * offset ribbon than a rasterized marching-squares chunky silhouette, and
+ * preserves the directional feel of Extrude mode vs Solid mode.
+ *
+ * Output is already centered on z=0 (range [-halfDepth, +halfDepth]), so
+ * no translate is needed at the call site.
+ *
+ * Winding: every face is CCW from its outward normal direction (verified
+ * by right-hand rule on a +X-oriented test segment). MeshPhysicalMaterial
+ * uses FrontSide by default, so wrong winding would produce holes — every
+ * quad below has been hand-checked.
+ */
+function buildSegmentedRibbonGeometry(
+  pts: THREE.Vector3[],
+  halfWidth: number,
+  depth: number
+): THREE.BufferGeometry | null {
+  if (pts.length < 2 || halfWidth <= 0 || depth <= 0) return null
+
+  const halfDepth = depth / 2
+  const N = pts.length
+
+  // Per-vertex perpendiculars using averaged adjacent-segment normals
+  // (miter-join). Adjacent segment prisms then share the same offset
+  // direction at the joint, reducing internal seams in the side-wall
+  // shading. We never require the resulting outer outline to be simple
+  // — we only emit triangle strips, not triangulate a polygon.
+  const perpX: number[] = new Array(N)
+  const perpY: number[] = new Array(N)
+  for (let i = 0; i < N; i++) {
+    let nx = 0, ny = 0
+    if (i > 0) {
+      const dx = pts[i].x - pts[i - 1].x
+      const dy = pts[i].y - pts[i - 1].y
+      const l = Math.hypot(dx, dy) || 1
+      // perpendicular to (dx,dy) rotated 90° CCW = (-dy/l, dx/l)
+      nx += -dy / l
+      ny += dx / l
+    }
+    if (i < N - 1) {
+      const dx = pts[i + 1].x - pts[i].x
+      const dy = pts[i + 1].y - pts[i].y
+      const l = Math.hypot(dx, dy) || 1
+      nx += -dy / l
+      ny += dx / l
+    }
+    const len = Math.hypot(nx, ny) || 1
+    perpX[i] = (nx / len) * halfWidth
+    perpY[i] = (ny / len) * halfWidth
+  }
+
+  const positions: number[] = []
+  const indices: number[] = []
+
+  const pushV = (x: number, y: number, z: number): number => {
+    const idx = positions.length / 3
+    positions.push(x, y, z)
+    return idx
+  }
+
+  // CCW quad: a→b→c→d emits triangles (a,b,c) and (a,c,d). Caller is
+  // responsible for ordering vertices so cross(b-a, c-a) points outward.
+  const quad = (a: number, b: number, c: number, d: number) => {
+    indices.push(a, b, c, a, c, d)
+  }
+
+  // 4 vertices per polyline point: top (+Z) and bottom (-Z) on each side
+  //   Lp = left +halfDepth   Rp = right +halfDepth
+  //   Lm = left -halfDepth   Rm = right -halfDepth
+  // "Left" = the +perpendicular side, "right" = the -perpendicular side.
+  const Lp: number[] = new Array(N)
+  const Rp: number[] = new Array(N)
+  const Lm: number[] = new Array(N)
+  const Rm: number[] = new Array(N)
+  for (let i = 0; i < N; i++) {
+    const px = pts[i].x
+    const py = pts[i].y
+    const dx = perpX[i]
+    const dy = perpY[i]
+    Lp[i] = pushV(px + dx, py + dy, +halfDepth)
+    Rp[i] = pushV(px - dx, py - dy, +halfDepth)
+    Lm[i] = pushV(px + dx, py + dy, -halfDepth)
+    Rm[i] = pushV(px - dx, py - dy, -halfDepth)
+  }
+
+  // Four side faces between every consecutive pair of polyline vertices.
+  for (let i = 0; i < N - 1; i++) {
+    // Top face (z=+halfDepth, normal +Z)
+    quad(Lp[i], Rp[i], Rp[i + 1], Lp[i + 1])
+    // Bottom face (z=-halfDepth, normal -Z)
+    quad(Lm[i], Lm[i + 1], Rm[i + 1], Rm[i])
+    // Left side wall (+perp side, normal +perp)
+    quad(Lp[i], Lp[i + 1], Lm[i + 1], Lm[i])
+    // Right side wall (-perp side, normal -perp)
+    quad(Rp[i], Rm[i], Rm[i + 1], Rp[i + 1])
+  }
+
+  // Stroke end caps. The polyline only has two true ends; intermediate
+  // segment joints share verts via the miter-join offset above, so no
+  // intra-stroke caps are emitted.
+  quad(Lp[0], Lm[0], Rm[0], Rp[0])                       // start cap, normal -dir
+  quad(Lp[N - 1], Rp[N - 1], Rm[N - 1], Lm[N - 1])       // end cap, normal +dir
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
+  geo.setIndex(indices)
+  geo.computeVertexNormals()
+  geo.computeBoundingBox()
+  geo.computeBoundingSphere()
+
+  return geo
+}
+
+
+/**
  * Try to build a valid ExtrudeGeometry for a stroke.
  * 1) If width < TINY_WIDTH_THRESHOLD, force bevel OFF to avoid degenerate extrusions.
  * 2) Try with bevel ON (if enabled and width not tiny).
@@ -1118,15 +1251,22 @@ function tryBuildExtrudeGeometry(
 
   // Build the ribbon shape according to the active strategy.
   //
-  // LEGACY_OFFSET_RIBBON:
-  //   - Use only the parametric offset builder. If it produces a self-
-  //     intersecting / degenerate polygon, fall back to Rod (the original
-  //     pre-rasterizer behavior). This preserves the prior visual style.
+  // LEGACY_OFFSET_RIBBON (default):
+  //   - Try parametric offset builder. If it produces a simple polygon, use
+  //     THREE.ExtrudeGeometry → smooth calligraphic ribbon (the preferred
+  //     visual style).
+  //   - If contour self-intersects ("bad contour") OR extrusion fails, fall
+  //     back to the DEPTH-AWARE segmented builder, NOT Rod. This is the
+  //     critical fix: previously every loopy handwriting stroke fell back
+  //     to a depth-blind Rod tube and the Depth slider had no visible effect.
+  //   - Rod only remains as final fallback if BOTH parametric and segmented
+  //     refuse (essentially only for truly degenerate input).
   //
   // RASTER_TRACE_RIBBON:
   //   - Use the rasterize-and-trace builder first (always simple by
   //     construction). If raster declines (sub-pixel ribbon at 256-px
-  //     resolution), fall back to parametric, then validate. Then Rod.
+  //     resolution), fall back to parametric, then validate; on bad contour,
+  //     also falls back to segmented; then Rod.
   let shape: THREE.Shape | null = null
   let shapeSource: "parametric" | "rasterized" = "parametric"
 
@@ -1144,12 +1284,46 @@ function tryBuildExtrudeGeometry(
     shapeSource = "parametric"
   }
 
-  if (!shape) {
-    console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag})`, { reason: "no shape" })
+  // Helper: depth-aware segmented fallback used when the parametric ribbon
+  // contour self-intersects or extrusion fails. Preserves Depth (Z extent
+  // equals depth slider value) and keeps a directional ribbon feel instead
+  // of falling back to a depth-blind Rod tube. See buildSegmentedRibbonGeometry
+  // for the per-segment prism construction.
+  const trySegmentedFallback = (reason: string): {
+    geometry: THREE.BufferGeometry | null
+    status: StrokeBuildStatus
+  } => {
+    const segGeo = buildSegmentedRibbonGeometry(filtered, userWidth, extrudeParams.depth)
+    if (segGeo) {
+      console.log(`[v0] stroke ${_si} final: extrude(segmented) (strategy=${tag}→segmented)`, {
+        width: userWidth,
+        depth: extrudeParams.depth,
+        reason,
+      })
+      // bevelEnabled reported as false because segmented prisms have hard
+      // perpendicular edges; bevel slider does not affect this path.
+      return {
+        geometry: segGeo,
+        status: {
+          type: "ok",
+          width: userWidth,
+          depth: extrudeParams.depth,
+          bevelEnabled: false,
+          strategy: "segmented",
+        },
+      }
+    }
+    console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag}, segmented declined)`, { reason })
     return {
       geometry: null,
-      status: { type: "rodFallback", reason: "no shape", fallbackRadius: fbRadius, strategy: tag },
+      status: { type: "rodFallback", reason: `segmented declined: ${reason}`, fallbackRadius: fbRadius, strategy: tag },
     }
+  }
+
+  if (!shape) {
+    // Truly degenerate input — both shape builders refused. Try segmented
+    // (it accepts any polyline with ≥2 distinct points), else Rod.
+    return trySegmentedFallback("no shape")
   }
 
   // Validate contour ONLY for the parametric path. The rasterized polygon
@@ -1157,11 +1331,10 @@ function tryBuildExtrudeGeometry(
   if (shapeSource === "parametric") {
     const contour = validateShapeContour(shape)
     if (!contour) {
-      console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag})`, { reason: "bad contour" })
-      return {
-        geometry: null,
-        status: { type: "rodFallback", reason: "bad contour", fallbackRadius: fbRadius, strategy: tag },
-      }
+      // Legacy contour self-intersects. Previously this fell back to Rod
+      // (depth-blind). Now fall back to the depth-aware segmented builder
+      // so normal loopy handwriting still responds to the Depth slider.
+      return trySegmentedFallback("bad contour")
     }
   }
 
@@ -1220,11 +1393,11 @@ function tryBuildExtrudeGeometry(
     }
   }
 
-  console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag})`, { reason: "extrude failed" })
-  return {
-    geometry: null,
-    status: { type: "rodFallback", reason: "extrude failed", fallbackRadius: fbRadius, strategy: tag },
-  }
+  // safeExtrude returned null even with bevel off and a valid contour.
+  // This is rare (degenerate triangulation in THREE.ExtrudeGeometry). Use
+  // segmented as a final depth-aware fallback before resorting to Rod, so
+  // even pathological strokes still respond to the Depth slider.
+  return trySegmentedFallback("extrude failed")
 }
 
 /** Derive fallback rod radius from extrude width so Width slider affects fallback strokes too */
