@@ -103,15 +103,58 @@ export type GeometryMode = "rod" | "extrude" | "inflate" | "solid"
 /** Extrude-mode parameters */
 export interface ExtrudeParams {
   width: number       // ribbon half-width in world units
-  depth: number       // extrusion depth
+  /** Depth-to-width MULTIPLIER (NOT raw depth). World-space depth is
+   *  computed by `computeEffectiveExtrudeDepth(depth, effectiveWidth)`. */
+  depth: number
   bevelEnabled: boolean
   bevelSize: number
   bevelSegments: number
 }
 
+/* ============================================================
+ * EXTRUDE DEPTH CALIBRATION (width-relative)
+ *
+ * `ExtrudeParams.depth` is interpreted as a DEPTH-TO-WIDTH MULTIPLIER,
+ * not a raw world-space depth. The engine computes:
+ *
+ *   effectiveDepth = clamp(multiplier × effectiveWidth, MIN, MAX)
+ *
+ * Rationale: the previous raw-depth slider (0.02–0.6, default 0.2)
+ * produced a depth-to-width ratio of ~3.3× at default, which makes
+ * the segmented fallback geometry look exploded for normal handwriting
+ * widths. Scaling depth as a multiple of width keeps strokes visually
+ * proportional across the full width range (0.03–0.09 typical).
+ *
+ * Anchor points (the spec):
+ *   very shallow: 0.25 × width
+ *   normal:       0.75 × width   ← default
+ *   deep:         1.25 × width
+ *   max:          2.00 × width
+ *
+ * Absolute floor/ceiling are applied so the geometry never collapses
+ * (tiny widths still get a visible depth) nor explodes past a sane
+ * world-space bound.
+ * ============================================================ */
+export const EXTRUDE_DEPTH_MULTIPLIER_MIN = 0.1
+export const EXTRUDE_DEPTH_MULTIPLIER_MAX = 2.0
+export const EXTRUDE_DEPTH_MULTIPLIER_STEP = 0.05
+export const EXTRUDE_DEPTH_MULTIPLIER_DEFAULT = 0.75
+// Absolute clamps on the resulting world-space depth (after multiplier × width).
+const EXTRUDE_EFFECTIVE_DEPTH_FLOOR = 0.005
+const EXTRUDE_EFFECTIVE_DEPTH_CEILING = 0.25
+
+/** Map a width-relative multiplier (`depth` slider value) + effective width
+ *  to a calibrated world-space depth that won't visually explode. */
+export function computeEffectiveExtrudeDepth(multiplier: number, effectiveWidth: number): number {
+  const raw = multiplier * effectiveWidth
+  if (!isFinite(raw) || raw <= 0) return EXTRUDE_EFFECTIVE_DEPTH_FLOOR
+  return Math.min(EXTRUDE_EFFECTIVE_DEPTH_CEILING, Math.max(EXTRUDE_EFFECTIVE_DEPTH_FLOOR, raw))
+}
+
 export const DEFAULT_EXTRUDE_PARAMS: ExtrudeParams = {
   width: 0.06,
-  depth: 0.2,
+  // NOTE: this is a MULTIPLIER, not raw depth. See block comment above.
+  depth: EXTRUDE_DEPTH_MULTIPLIER_DEFAULT,
   bevelEnabled: true,
   bevelSize: 0.015,
   bevelSegments: 2,
@@ -138,12 +181,22 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
  */
 export type ExtrudeStrategyTag = "legacy" | "segmented" | "raster" | "rod-only"
 
-/** Per-stroke build status for debug overlay (Extrude mode) */
+/**
+ * Per-stroke build status for debug overlay (Extrude mode).
+ *
+ * Fields:
+ *   width            — the effective ribbon half-width used for geometry
+ *   depth            — DEPRECATED alias for effectiveDepth (kept for compatibility);
+ *                       always equal to effectiveDepth on new code paths
+ *   depthMultiplier  — the raw slider value (interpreted as a width-relative multiplier)
+ *   effectiveDepth   — the calibrated world-space depth = computeEffectiveExtrudeDepth(...)
+ *   strategy         — which shape/extrusion strategy produced this mesh
+ */
 export type StrokeBuildStatus =
-  | { type: "ok"; width: number; depth: number; bevelEnabled: boolean; strategy: ExtrudeStrategyTag }
-  | { type: "bevelOff"; width: number; depth: number; strategy: ExtrudeStrategyTag }
-  | { type: "bevelOffTinyWidth"; width: number; depth: number; strategy: ExtrudeStrategyTag }
-  | { type: "rodFallback"; reason: string; fallbackRadius: number; strategy: ExtrudeStrategyTag }
+  | { type: "ok"; width: number; depth: number; bevelEnabled: boolean; strategy: ExtrudeStrategyTag; depthMultiplier: number; effectiveDepth: number }
+  | { type: "bevelOff"; width: number; depth: number; strategy: ExtrudeStrategyTag; depthMultiplier: number; effectiveDepth: number }
+  | { type: "bevelOffTinyWidth"; width: number; depth: number; strategy: ExtrudeStrategyTag; depthMultiplier: number; effectiveDepth: number }
+  | { type: "rodFallback"; reason: string; fallbackRadius: number; strategy: ExtrudeStrategyTag; depthMultiplier: number; effectiveDepth: number }
 
 /** Debug contour data for Solid mode visualization */
 export interface SolidDebugContour {
@@ -916,16 +969,22 @@ function buildRibbonShape(pts: THREE.Vector3[], halfWidth: number): THREE.Shape 
 }
 
 /** Auto-clamp bevel so it doesn't exceed half the extrusion depth */
-function clampBevel(ep: ExtrudeParams): { bevelSize: number; bevelThickness: number; bevelSegments: number } {
-  // THREE.ExtrudeGeometry bevel extends *outward* from the 2D shape outline,
-  // so ribbon width does NOT constrain bevelSize. Only depth matters:
-  // bevelThickness on each end eats into the extrusion, so cap at depth/2.
-  const maxBevel = ep.depth * 0.5
-  const bevelSize = Math.max(0, Math.min(ep.bevelSize, maxBevel))
+function clampBevel(
+  ep: ExtrudeParams,
+  effectiveDepth: number,
+  effectiveWidth: number,
+): { bevelSize: number; bevelThickness: number; bevelSegments: number } {
+  // bevelSize: outward-radius. bevelThickness: per-end Z eat-in.
+  // Cap by BOTH the effective world depth (so end-caps don't collapse) AND
+  // the effective width (so bevel doesn't visually swallow a thin ribbon).
+  const maxByDepth = effectiveDepth * 0.4
+  const maxByWidth = effectiveWidth * 0.4
+  const cap = Math.min(maxByDepth, maxByWidth)
+  const bevelSize = Math.max(0, Math.min(ep.bevelSize, cap))
   const bevelThickness = Math.max(0, Math.min(ep.bevelSize, bevelSize))
   const bevelSegments = Math.min(ep.bevelSegments, 6)
   return { bevelSize, bevelThickness, bevelSegments }
-}
+  }
 
 /**
  * Pass through user width directly. Small floor to avoid degenerate zero-width shapes.
@@ -1230,10 +1289,14 @@ function tryBuildExtrudeGeometry(
   filtered: THREE.Vector3[],
   extrudeParams: ExtrudeParams,
   userWidth: number,
-  _si: number
+  _si: number,
 ): { geometry: THREE.BufferGeometry | null; status: StrokeBuildStatus } {
-  const halfDepth = extrudeParams.depth / 2
-  const bevel = clampBevel(extrudeParams)
+  // ---- Compute calibrated effective depth from multiplier ----
+  // extrudeParams.depth is a width-relative multiplier; convert to world-space.
+  const depthMultiplier = extrudeParams.depth
+  const effectiveDepth = computeEffectiveExtrudeDepth(depthMultiplier, userWidth)
+  const halfDepth = effectiveDepth / 2
+  const bevel = clampBevel(extrudeParams, effectiveDepth, userWidth)
   const fbRadius = fallbackRodRadius(userWidth)
   const tag = strategyTag()
 
@@ -1245,7 +1308,14 @@ function tryBuildExtrudeGeometry(
     console.log(`[v0] stroke ${_si} final: rodFallback (strategy=rod-only)`)
     return {
       geometry: null,
-      status: { type: "rodFallback", reason: "strategy=rod-only", fallbackRadius: fbRadius, strategy: tag },
+      status: {
+        type: "rodFallback",
+        reason: "strategy=rod-only",
+        fallbackRadius: fbRadius,
+        strategy: tag,
+        depthMultiplier,
+        effectiveDepth,
+      },
     }
   }
 
@@ -1293,11 +1363,12 @@ function tryBuildExtrudeGeometry(
     geometry: THREE.BufferGeometry | null
     status: StrokeBuildStatus
   } => {
-    const segGeo = buildSegmentedRibbonGeometry(filtered, userWidth, extrudeParams.depth)
+    const segGeo = buildSegmentedRibbonGeometry(filtered, userWidth, effectiveDepth)
     if (segGeo) {
       console.log(`[v0] stroke ${_si} final: extrude(segmented) (strategy=${tag}→segmented)`, {
         width: userWidth,
-        depth: extrudeParams.depth,
+        depthMultiplier,
+        effectiveDepth,
         reason,
       })
       // bevelEnabled reported as false because segmented prisms have hard
@@ -1307,16 +1378,25 @@ function tryBuildExtrudeGeometry(
         status: {
           type: "ok",
           width: userWidth,
-          depth: extrudeParams.depth,
+          depth: effectiveDepth,
           bevelEnabled: false,
           strategy: "segmented",
+          depthMultiplier,
+          effectiveDepth,
         },
       }
     }
     console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag}, segmented declined)`, { reason })
     return {
       geometry: null,
-      status: { type: "rodFallback", reason: `segmented declined: ${reason}`, fallbackRadius: fbRadius, strategy: tag },
+      status: {
+        type: "rodFallback",
+        reason: `segmented declined: ${reason}`,
+        fallbackRadius: fbRadius,
+        strategy: tag,
+        depthMultiplier,
+        effectiveDepth,
+      },
     }
   }
 
@@ -1345,51 +1425,51 @@ function tryBuildExtrudeGeometry(
   // Attempt 1: with bevel (if enabled and not tiny)
   if (useBevel) {
     const geo1 = safeExtrude(shape, {
-      depth: extrudeParams.depth,
+      depth: effectiveDepth,
       bevelEnabled: true,
       bevelSize: bevel.bevelSize,
       bevelThickness: bevel.bevelThickness,
       bevelSegments: bevel.bevelSegments,
       curveSegments: EXTRUDE_CURVE_SEGMENTS,
-    }, filtered, extrudeParams.depth)
+    }, filtered, effectiveDepth)
 
     if (geo1) {
       geo1.translate(0, 0, -halfDepth)
-      console.log(`[v0] stroke ${_si} final: extrude (strategy=${tag})`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: true })
+      console.log(`[v0] stroke ${_si} final: extrude (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth, bevelEnabled: true })
       return {
         geometry: geo1,
-        status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: true, strategy: tag },
+        status: { type: "ok", width: userWidth, depth: effectiveDepth, bevelEnabled: true, strategy: tag, depthMultiplier, effectiveDepth },
       }
     }
   }
 
   // Attempt 2: bevel OFF (either because tiny width, or bevel attempt failed)
   const geo2 = safeExtrude(shape, {
-    depth: extrudeParams.depth,
+    depth: effectiveDepth,
     bevelEnabled: false,
     curveSegments: EXTRUDE_CURVE_SEGMENTS,
-  }, filtered, extrudeParams.depth)
+  }, filtered, effectiveDepth)
 
   if (geo2) {
     geo2.translate(0, 0, -halfDepth)
     if (isTinyWidth && extrudeParams.bevelEnabled) {
-      console.log(`[v0] stroke ${_si} final: extrude(bevelOffTinyWidth) (strategy=${tag})`, { width: userWidth, depth: extrudeParams.depth })
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOffTinyWidth) (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth })
       return {
         geometry: geo2,
-        status: { type: "bevelOffTinyWidth", width: userWidth, depth: extrudeParams.depth, strategy: tag },
+        status: { type: "bevelOffTinyWidth", width: userWidth, depth: effectiveDepth, strategy: tag, depthMultiplier, effectiveDepth },
       }
     }
     if (useBevel) {
-      console.log(`[v0] stroke ${_si} final: extrude(bevelOff) (strategy=${tag})`, { width: userWidth, depth: extrudeParams.depth })
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOff) (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth })
       return {
         geometry: geo2,
-        status: { type: "bevelOff", width: userWidth, depth: extrudeParams.depth, strategy: tag },
+        status: { type: "bevelOff", width: userWidth, depth: effectiveDepth, strategy: tag, depthMultiplier, effectiveDepth },
       }
     }
-    console.log(`[v0] stroke ${_si} final: extrude (strategy=${tag})`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: false })
+    console.log(`[v0] stroke ${_si} final: extrude (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth, bevelEnabled: false })
     return {
       geometry: geo2,
-      status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: false, strategy: tag },
+      status: { type: "ok", width: userWidth, depth: effectiveDepth, bevelEnabled: false, strategy: tag, depthMultiplier, effectiveDepth },
     }
   }
 
@@ -1590,7 +1670,11 @@ export const ExtrudeEngine: GeometryEngine = {
       settings: {
         ...params.settings,
         extrudeWidth: extrudeParams.width,
-        extrudeDepth: extrudeParams.depth,
+        // extrudeDepth is the slider value, now interpreted as a width-relative
+        // multiplier (see DEFAULT_EXTRUDE_PARAMS comment). The actual world-space
+        // depth used for each stroke = computeEffectiveExtrudeDepth(multiplier, width).
+        extrudeDepthMultiplier: extrudeParams.depth,
+        extrudeDepthEffective: computeEffectiveExtrudeDepth(extrudeParams.depth, extrudeParams.width),
         bevelEnabled: extrudeParams.bevelEnabled,
       },
     }

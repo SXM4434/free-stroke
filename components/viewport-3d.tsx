@@ -807,10 +807,18 @@ function Scene({
   solidStatusRef?: React.MutableRefObject<SolidBuildStatus | null>
   // Diagnostic-only ref; populated in extrude mode for the depth-trace panel.
   extrudeDebugRef?: React.MutableRefObject<{
+    /** Raw slider value (interpreted as width-relative multiplier). */
     depthParam: number
     buildCount: number
+    /** Max stroke geometry Z extent in the current frame (= effectiveDepth + bevel). */
     bboxZ: number
     activeEngine: GeometryMode
+    /** Width slider (effective width passed to the engine). */
+    widthValue: number
+    /** Calibrated world-space depth actually used = multiplier × width clamped. */
+    effectiveDepthUsed: number
+    /** effectiveDepthUsed / widthValue — the visual proportion. */
+    depthToWidthRatio: number
   } | null>
 }) {
   // ---- Solid draw-in animation state ----
@@ -863,6 +871,8 @@ function Scene({
             depth: 0,
             bevelEnabled: false,
             strategy: "legacy",
+            depthMultiplier: 0,
+            effectiveDepth: 0,
           },
       )
     }
@@ -898,13 +908,31 @@ function Scene({
         if (dz > bboxZ) bboxZ = dz
       }
     }
+    // Pull the calibrated effective depth/width from the first stroke's
+    // build status — the engine writes the actual values it used there, so
+    // this is the most authoritative source for the debug overlay.
+    let widthValue = extrudeParams?.width ?? 0
+    let effectiveDepthUsed = 0
+    for (const m of meshes) {
+      const s = m.buildStatus
+      if (!s || s.effectiveDepth <= 0) continue
+      // Only non-rodFallback variants carry width; rodFallback does not.
+      if (s.type !== "rodFallback") widthValue = s.width
+      effectiveDepthUsed = s.effectiveDepth
+      break
+    }
+    const depthToWidthRatio = widthValue > 0 ? effectiveDepthUsed / widthValue : 0
+
     extrudeDebugRef.current = {
       depthParam: extrudeParams?.depth ?? 0,
       buildCount: extrudeBuildCountRef.current,
       bboxZ,
       activeEngine: geometryMode,
+      widthValue,
+      effectiveDepthUsed,
+      depthToWidthRatio,
     }
-  }, [meshes, extrudeParams?.depth, geometryMode, extrudeDebugRef])
+  }, [meshes, extrudeParams?.depth, extrudeParams?.width, geometryMode, extrudeDebugRef])
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
   useEffect(() => {
@@ -1042,6 +1070,9 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
     buildCount: number
     bboxZ: number
     activeEngine: GeometryMode
+    widthValue: number
+    effectiveDepthUsed: number
+    depthToWidthRatio: number
   } | null>(null)
 
   const { totalDuration } = useTimeline(rawStrokes)
@@ -1433,7 +1464,10 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
           {geometryMode === "extrude" && extrudeDebugRef.current && (
             <div className="mt-1 border-t border-border/50 pt-1">
               <div className="font-semibold text-foreground">Depth trace:</div>
-              <div>depthParam: {extrudeDebugRef.current.depthParam.toFixed(3)}</div>
+              <div>depthSliderValue: {extrudeDebugRef.current.depthParam.toFixed(2)}×</div>
+              <div>widthValue: {extrudeDebugRef.current.widthValue.toFixed(3)}</div>
+              <div>effectiveDepthUsed: {extrudeDebugRef.current.effectiveDepthUsed.toFixed(3)}</div>
+              <div>depthToWidthRatio: {extrudeDebugRef.current.depthToWidthRatio.toFixed(2)}</div>
               <div>previewBuildCount: {extrudeDebugRef.current.buildCount}</div>
               <div>geometryBBoxZ: {extrudeDebugRef.current.bboxZ.toFixed(3)}</div>
               <div>activeEngine: {extrudeDebugRef.current.activeEngine}</div>
@@ -1452,12 +1486,12 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                     : "text-red-500"
                 }>
                   {i}: {s.type === "ok"
-                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=${s.bevelEnabled}`
+                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} mult=${s.depthMultiplier.toFixed(2)}× eff=${s.effectiveDepth.toFixed(3)} bevel=${s.bevelEnabled}`
                     : s.type === "bevelOff"
-                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(retry)`
+                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} mult=${s.depthMultiplier.toFixed(2)}× eff=${s.effectiveDepth.toFixed(3)} bevel=off(retry)`
                     : s.type === "bevelOffTinyWidth"
-                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(tiny)`
-                    : `rod fallback strategy=${s.strategy} r=${s.fallbackRadius.toFixed(3)} (${s.reason}) depth=n/a bevel=n/a`}
+                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} mult=${s.depthMultiplier.toFixed(2)}× eff=${s.effectiveDepth.toFixed(3)} bevel=off(tiny)`
+                    : `rod fallback strategy=${s.strategy} r=${s.fallbackRadius.toFixed(3)} (${s.reason}) mult=${s.depthMultiplier.toFixed(2)}× eff=${s.effectiveDepth.toFixed(3)}`}
                 </div>
               ))}
             </div>
