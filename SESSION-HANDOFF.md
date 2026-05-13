@@ -241,8 +241,43 @@ These are non-negotiable for this checkpoint:
 
 ## Next branch — `SOLID_HOLE_SUPPORT_PHASE_H3_EXTRUDED_HOLES_AND_INNER_WALLS`
 
+## Solid H3 control calibration checkpoint
+
+- **name:** Solid H3 Control Calibration
+- **label:** `SOLID_H3_CONTROL_CALIBRATION_PASS`
+- **status:** locked / stable enough to unblock the next QA pass
+
+### What is now true
+
+- Solid H3 is functionally active.
+- H3 uses H2 flat cap with holes as source.
+- H3 builds front cap, back cap, outer walls, and inner hole walls.
+- Solid Depth now affects actual H3 thickness.
+- Thickness and Depth controls now use calibrated effective values.
+- Mid-slider no longer enters breaking territory too early.
+- Breaking / experimental territory is now reserved closer to the upper end of the Thickness slider.
+- Preview/export parity is preserved through the same effective thickness/depth mapping.
+- H3 debug panel exposes raw-vs-effective Thickness and Depth values.
+- Rod, Extrude, and Inflate were untouched.
+
+### Important note
+
+- This does NOT mean Solid is final-polished.
+- It means Solid H3 is stable enough to stop blocking the next QA pass.
+- Future polish can still improve surface smoothness, edge cleanup, material feel, and extreme slider behavior.
+
+## Next branch — `SOLID_H3_QA_EXPORT_ANIMATION_CLEANUP`
+
+- verify GLB export preserves H3 through-holes
+- verify exported mesh is non-empty
+- verify animation final frame matches static H3 geometry
+- confirm open C does not create fake holes
+- confirm big O / donut exports with a through-hole
+- confirm b-like counters remain viable at normal/default controls
+- document any remaining limitations before Inflate
+
 ## Final saved checkpoint label
 
-`EXTRUDE_CONTINUOUS_RIBBON_WIDTH_DEPTH_PASS`
+`SOLID_H3_CONTROL_CALIBRATION_PASS`
 
 (supersedes all prior checkpoints; they remain in effect as underlying layers)
