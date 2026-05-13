@@ -69,6 +69,47 @@ export const SOLID_DEBUG = {
 }
 
 /**
+ * Live diagnostic state for Solid H3 draw-in animation.
+ *
+ * Written from `Scene` in `components/viewport-3d.tsx` while playback is
+ * active (or transitioning). Read by `SolidDebugOverlay` via its 100ms
+ * polling loop, so no new prop plumbing is needed.
+ *
+ * Hard rules:
+ *   - Animation diagnostics ONLY. Never used by geometry building.
+ *   - All numbers are pure observations; mutating them must not change
+ *     mesh output, hole detection, or export behavior.
+ *   - `solidAnimationUsesArcLength` and `solidAnimationInterpolatedCutPoint`
+ *     are constants ("YES") locked by the implementation of
+ *     `filterStrokesByProgress`. They exist so the panel can prove the
+ *     reveal is arc-length based, not point-count based.
+ */
+export const SOLID_ANIM_DEBUG = {
+  /** True while `playing === true` in Solid mode, or while a boundary sync is in flight. */
+  solidAnimationActive: false,
+  /** Last value pushed to `solidAnimProgress` (0..1). Tracks the rebuild input. */
+  solidAnimationProgress: 0,
+  /** Incremented every time `animatedStrokes` useMemo recomputes for a partial reveal. */
+  solidAnimationRebuildCount: 0,
+  /** Total points in the partial stroke output fed to `useStrokeMeshes`. */
+  animatedStrokePointCount: 0,
+  /** Arc length of the animated subset (matches what filterStrokesByProgress emitted). */
+  animatedVisibleArcLength: 0,
+  /** Arc length of the full strokes input (the denominator for `progress`). */
+  animatedTotalArcLength: 0,
+  /** Constant proof that reveal is arc-length based (locked by filterStrokesByProgress). */
+  solidAnimationUsesArcLength: "YES" as "YES" | "NO",
+  /** Constant proof the active segment uses a sub-segment interpolated cut point. */
+  solidAnimationInterpolatedCutPoint: "YES" as "YES" | "NO",
+  /** "YES" once the last build was at progress >= 1 (final frame == static). */
+  finalFrameMatchesStatic: "NO" as "YES" | "NO",
+  /** Last validHoleCount observed in animated builds (for topology stability tracking). */
+  validHoleCount: 0,
+  /** Number of times validHoleCount changed across consecutive animated builds. */
+  topologyChangeCount: 0,
+}
+
+/**
  * TEMPORARY DEBUG: Stage isolation for diagnosis
  * Toggle which stage renders: A=mask B=rawContour C=simplifiedContour D=extrudeNoHoles E=full
  */

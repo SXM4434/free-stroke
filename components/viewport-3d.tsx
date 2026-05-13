@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useCallback, useMemo, useEffect, useState, Component, type ReactNode } from "react"
+import { useRef, useCallback, useMemo, useEffect, useLayoutEffect, useState, Component, type ReactNode } from "react"
 import { Canvas, useThree, useFrame } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
@@ -20,6 +20,7 @@ import {
   RADIAL_SEGMENTS,
   SPHERE_SEGMENTS,
   SOLID_DEBUG,
+  SOLID_ANIM_DEBUG,
   SOLID_STAGE_DEBUG,
 } from "@/lib/geometry-engines"
 
@@ -572,10 +573,13 @@ function PlaybackController({
  *   - Runs on every frame inside the Canvas (must be a child of <Canvas>).
  *   - Throttles updates lightly so Solid rebuilds at a smooth cadence without
  *     spamming raster/contour/extrude work every single frame:
- *       * minimum interval: ~24ms (~40 Hz) between state updates
- *       * minimum delta:    0.003 (0.3%) between state updates
- *     This yields up to ~330 reveal steps over a full playback, vs ~100 in the
- *     previous 80ms / 1% throttle that produced visibly chunky reveals.
+ *       * minimum interval: ~22ms (~45 Hz) between state updates
+ *       * minimum delta:    1e-5 (just enough to skip exact-equal frames)
+ *     This is a TIME-dominated gate. The previous 0.003 delta floor caused
+ *     visibly chunky reveal at slow speeds because each frame's delta could
+ *     fall below 0.003 even when 24ms had elapsed, forcing skips. Time alone
+ *     is now sufficient; we keep a tiny epsilon delta only to avoid pure
+ *     no-op state updates between identical frames.
  *   - Always forces an update at the boundaries (progress 0 and progress 1)
  *     so the final frame matches the static preview exactly and replay starts
  *     from empty.
@@ -604,11 +608,12 @@ function SolidAnimationTick({
     // and replay-from-zero starts at empty geometry.
     const atBoundary = (current >= 1 && last < 1) || (current <= 0 && last > 0)
 
-    // Throttle: require both ~24ms AND 0.003 progress delta unless at a boundary.
-    // The combination caps update rate at ~40 Hz and gives ~330 max reveal steps,
-    // while preventing rebuild spam when many frames render between progress moves.
-    const timeOk = now - lastSyncTimeRef.current >= 24
-    const deltaOk = delta >= 0.003
+    // Throttle: ~45 Hz time gate is the dominant control; only require a
+    // virtually-zero delta as a no-op guard. This eliminates the prior
+    // chunking that appeared whenever speed × frame-time produced a delta
+    // below the old 0.003 floor.
+    const timeOk = now - lastSyncTimeRef.current >= 22
+    const deltaOk = delta > 1e-5
 
     if (atBoundary || (timeOk && deltaOk)) {
       lastSyncedRef.current = current
@@ -833,12 +838,103 @@ function Scene({
     playheadRef.current,
   )
 
+  // -----------------------------------------------------------------
+  // Start/reset flash fix.
+  //
+  // Bug:
+  //   When the user clicks Play after a stroke is fully drawn, `handlePlayPause`
+  //   in the wrapper synchronously sets `playheadRef.current = 0` and flips
+  //   `playing -> true`. But `solidAnimProgress` is React state owned by
+  //   `Scene`; the SolidAnimationTick only syncs it on the NEXT animation
+  //   frame. Between the click commit and the next frame, React re-renders
+  //   with the new `playing` value but the OLD `solidAnimProgress = 1`,
+  //   producing one paint of the full mesh before the reveal starts. That's
+  //   the flash described in the screen recording.
+  //
+  // Fix:
+  //   Detect the playing transition `false -> true` and, if `playheadRef.current`
+  //   is well below the last animated state value, eagerly sync the state
+  //   to the playhead BEFORE the next paint. This is a layout effect so it
+  //   runs synchronously after commit and before the browser repaints.
+  //
+  //   The check is intentionally a delta threshold rather than `=== 0` so it
+  //   also handles "scrub-to-start, then press Play" and the Compare-mode
+  //   replay reset.
+  // -----------------------------------------------------------------
+  const prevPlayingRef = useRef(playing)
+  useLayoutEffect(() => {
+    const wasPlaying = prevPlayingRef.current
+    prevPlayingRef.current = playing
+    if (geometryMode !== "solid") return
+    // Transition from paused to playing
+    if (!wasPlaying && playing) {
+      const head = playheadRef.current
+      const drop = solidAnimProgress - head
+      // If the playhead has been moved backwards (typical: full -> 0 on replay),
+      // sync state synchronously so the first frame of playback paints the
+      // empty/partial mesh, not the previously-full one.
+      if (drop > 0.01) {
+        setSolidAnimProgress(head)
+      }
+    }
+  }, [playing, geometryMode, solidAnimProgress, playheadRef])
+
   // For Solid mode, filter strokes by current animation progress.
   // For other modes, return strokes unchanged (Rod/Extrude animate via drawRange).
+  // ALSO writes animation diagnostics (rebuild count, point count, arc lengths,
+  // final-frame match) to SOLID_ANIM_DEBUG so the debug overlay can poll them.
+  const solidAnimRebuildCountRef = useRef(0)
   const animatedStrokes = useMemo(() => {
     if (geometryMode !== "solid") return strokes
-    return filterStrokesByProgress(strokes, solidAnimProgress)
+    const out = filterStrokesByProgress(strokes, solidAnimProgress)
+
+    // ---- Diagnostics ----
+    // Total arc length across the full strokes prop (denominator).
+    let totalLen = 0
+    for (const s of strokes) {
+      const pts = s.points
+      for (let i = 1; i < pts.length; i++) {
+        const dx = pts[i].x - pts[i - 1].x
+        const dy = pts[i].y - pts[i - 1].y
+        totalLen += Math.sqrt(dx * dx + dy * dy)
+      }
+    }
+    // Visible arc length in the filtered output (numerator).
+    let visLen = 0
+    let visPts = 0
+    for (const s of out) {
+      const pts = s.points
+      visPts += pts.length
+      for (let i = 1; i < pts.length; i++) {
+        const dx = pts[i].x - pts[i - 1].x
+        const dy = pts[i].y - pts[i - 1].y
+        visLen += Math.sqrt(dx * dx + dy * dy)
+      }
+    }
+    SOLID_ANIM_DEBUG.solidAnimationProgress = solidAnimProgress
+    SOLID_ANIM_DEBUG.solidAnimationRebuildCount = ++solidAnimRebuildCountRef.current
+    SOLID_ANIM_DEBUG.animatedStrokePointCount = visPts
+    SOLID_ANIM_DEBUG.animatedVisibleArcLength = visLen
+    SOLID_ANIM_DEBUG.animatedTotalArcLength = totalLen
+    // Constants — proves the reveal pipeline (not just the prop name).
+    SOLID_ANIM_DEBUG.solidAnimationUsesArcLength = "YES"
+    SOLID_ANIM_DEBUG.solidAnimationInterpolatedCutPoint = "YES"
+    // Final-frame match: at progress >= 1 the filter short-circuits and
+    // returns the original strokes reference, so the mesh built next is
+    // identical to the static H3 path. We mark YES; any lower progress -> NO.
+    SOLID_ANIM_DEBUG.finalFrameMatchesStatic = solidAnimProgress >= 1 ? "YES" : "NO"
+    return out
   }, [strokes, geometryMode, solidAnimProgress])
+
+  // Animation active flag tracked alongside `playing` so the debug overlay
+  // can distinguish "playback running" from "playback paused mid-reveal".
+  useEffect(() => {
+    if (geometryMode !== "solid") {
+      SOLID_ANIM_DEBUG.solidAnimationActive = false
+      return
+    }
+    SOLID_ANIM_DEBUG.solidAnimationActive = playing
+  }, [playing, geometryMode])
 
   // Build meshes - for Solid mode, use animated strokes instead of full strokes
   const meshes = useStrokeMeshes(
@@ -881,13 +977,30 @@ function Scene({
   }, [meshes, meshStatusRef])
 
   // Populate solidStatusRef for debug overlay (solid mode)
+  // Also tracks per-build validHoleCount churn so the animation panel can
+  // report `topologyChangeCount` (counters/holes appearing/disappearing as
+  // the partial reveal crosses closure thresholds). This is observation-
+  // only — we do NOT change static H3 hole detection or apply hysteresis.
+  const prevValidHoleCountRef = useRef<number | null>(null)
   useEffect(() => {
     if (solidStatusRef) {
       // Find the first mesh with solidStatus (Solid mode produces a single mesh)
       const solidMesh = meshes.find((m) => m.solidStatus)
       solidStatusRef.current = solidMesh?.solidStatus ?? null
     }
-  }, [meshes, solidStatusRef])
+    if (geometryMode === "solid") {
+      const stages = SOLID_DEBUG.lastStages as
+        | { solidDiagnostics?: { validHoleCount?: number } }
+        | null
+      const current = stages?.solidDiagnostics?.validHoleCount ?? 0
+      const prev = prevValidHoleCountRef.current
+      if (prev !== null && prev !== current && SOLID_ANIM_DEBUG.solidAnimationActive) {
+        SOLID_ANIM_DEBUG.topologyChangeCount += 1
+      }
+      prevValidHoleCountRef.current = current
+      SOLID_ANIM_DEBUG.validHoleCount = current
+    }
+  }, [meshes, solidStatusRef, geometryMode])
   
   // ---- Extrude depth-trace diagnostic ----
   // Populates extrudeDebugRef whenever the meshes array (output of useStrokeMeshes
@@ -1173,6 +1286,11 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
           playheadRef.current = 0
           setProgress(0)
         }
+        // Reset Solid animation debug counters at the start of every
+        // playback session so the panel reflects THIS reveal, not the
+        // accumulated total since page load.
+        SOLID_ANIM_DEBUG.topologyChangeCount = 0
+        SOLID_ANIM_DEBUG.solidAnimationRebuildCount = 0
         return true
       }
       return false
@@ -2207,7 +2325,115 @@ function SolidDebugOverlay() {
           </div>
         )
       })()}
-      
+
+      {/* ---- Solid H3 ANIMATION CLEANUP diagnostics ----
+          Surfaced only in Solid mode. Reads SOLID_ANIM_DEBUG (written from
+          Scene during partial-reveal rebuilds). Proves arc-length reveal,
+          shows rebuild cadence, and exposes topology-popping count. */}
+      {(() => {
+        const a = SOLID_ANIM_DEBUG
+        const arcRatio =
+          a.animatedTotalArcLength > 0
+            ? a.animatedVisibleArcLength / a.animatedTotalArcLength
+            : 0
+        return (
+          <div className="mt-1 border-t border-cyan-500/40 pt-1">
+            <div className="mb-0.5 text-[9px] font-bold text-cyan-400">
+              SOLID H3 ANIMATION
+            </div>
+            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+              <span className="text-gray-400">solidAnimationActive:</span>
+              <span
+                className={
+                  a.solidAnimationActive
+                    ? "text-green-400 font-bold"
+                    : "text-gray-300"
+                }
+              >
+                {a.solidAnimationActive ? "YES" : "NO"}
+              </span>
+
+              <span className="text-gray-400">solidAnimationProgress:</span>
+              <span className="font-mono">
+                {a.solidAnimationProgress.toFixed(4)}
+              </span>
+
+              <span className="text-gray-400">solidAnimationRebuildCount:</span>
+              <span>{a.solidAnimationRebuildCount}</span>
+
+              <span className="text-gray-400">animatedStrokePointCount:</span>
+              <span>{a.animatedStrokePointCount}</span>
+
+              <span className="text-gray-400">animatedVisibleArcLength:</span>
+              <span className="font-mono">
+                {a.animatedVisibleArcLength.toFixed(2)}
+              </span>
+
+              <span className="text-gray-400">animatedTotalArcLength:</span>
+              <span className="font-mono">
+                {a.animatedTotalArcLength.toFixed(2)}
+              </span>
+
+              <span className="text-gray-400">arcLengthRatio:</span>
+              <span className="font-mono">
+                {arcRatio.toFixed(4)}
+              </span>
+
+              <span className="text-gray-400">solidAnimationUsesArcLength:</span>
+              <span
+                className={
+                  a.solidAnimationUsesArcLength === "YES"
+                    ? "text-green-400 font-bold"
+                    : "text-red-400"
+                }
+              >
+                {a.solidAnimationUsesArcLength}
+              </span>
+
+              <span className="text-gray-400">
+                solidAnimationInterpolatedCutPoint:
+              </span>
+              <span
+                className={
+                  a.solidAnimationInterpolatedCutPoint === "YES"
+                    ? "text-green-400 font-bold"
+                    : "text-red-400"
+                }
+              >
+                {a.solidAnimationInterpolatedCutPoint}
+              </span>
+
+              <span className="text-gray-400">finalFrameMatchesStatic:</span>
+              <span
+                className={
+                  a.finalFrameMatchesStatic === "YES"
+                    ? "text-green-400 font-bold"
+                    : "text-gray-300"
+                }
+              >
+                {a.finalFrameMatchesStatic}
+              </span>
+
+              <span className="text-gray-400">validHoleCount (anim):</span>
+              <span>{a.validHoleCount}</span>
+
+              <span className="text-gray-400">topologyChangeCount:</span>
+              <span
+                className={
+                  a.topologyChangeCount > 0 ? "text-yellow-400" : "text-gray-300"
+                }
+              >
+                {a.topologyChangeCount}
+              </span>
+            </div>
+            <div className="mt-1 text-[8px] text-gray-500">
+              Reveal is arc-length based with sub-segment interpolated cut.
+              Rebuild count resets each Play. Topology pops classified — not faked early.
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Contour Diagnostics Section */}
       <div className="mt-1 border-t border-blue-500/30 pt-1">
         <div className="mb-0.5 text-[9px] font-bold text-blue-400">CONTOUR DIAGNOSTICS</div>

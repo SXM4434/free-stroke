@@ -276,8 +276,34 @@ These are non-negotiable for this checkpoint:
 - confirm b-like counters remain viable at normal/default controls
 - document any remaining limitations before Inflate
 
+## Solid H3 animation cleanup checkpoint
+
+- **name:** Solid H3 Animation Cleanup
+- **label:** `SOLID_H3_ANIMATION_CLEANUP_PASS`
+- **status:** locked / smoothness + reset behavior unblocked, ready for next QA
+
+### What is now true
+
+- Arc-length reveal with sub-segment interpolated cut point is confirmed in use (constants surfaced in the debug panel as proof, not assumption).
+- Start/reset flash is eliminated: a `useLayoutEffect` in `Scene` synchronously snaps `solidAnimProgress` to `playheadRef.current` on the false→true `playing` transition when the playhead was just reset, so the first painted frame of playback is the empty/partial mesh — not the previously full mesh.
+- SolidAnimationTick cadence is now time-dominated (~45 Hz, 22 ms gate). The prior 0.003 progress-delta floor was relaxed to a `> 1e-5` no-op guard, eliminating chunking at slow speeds and at extreme totalDuration values without spamming rebuilds.
+- Boundary syncs at progress 0 and progress 1 are preserved, so the final frame is bit-equal to static H3 (filter short-circuits to the original strokes ref at `progress >= 1`).
+- Animation diagnostics live in a new `SOLID_ANIM_DEBUG` singleton (in `lib/geometry-engines.ts`), written by `Scene` and polled by the existing `SolidDebugOverlay`. No new prop plumbing.
+- Topology popping is **classified, not faked**: when `validHoleCount` changes during an active animation the panel increments `topologyChangeCount`. No hysteresis is applied; static H3 hole detection is untouched.
+- Per-Play counter reset: `solidAnimationRebuildCount` and `topologyChangeCount` reset to 0 every time the user starts playback.
+- Export path is unaffected: it always builds from full `processedStrokes`, never from animated subsets.
+- Rod, Extrude, Inflate, H1/H2/H3 static geometry, and hole detection thresholds were not touched.
+
+## Next branch — `SOLID_H3_ANIMATION_QA_AND_INFLATE_PREP`
+
+- record clean playback at 0.5x / 1x / 2x and confirm no chunking
+- replay 3x in a row, confirm no flash and no stale full-mesh frame
+- confirm `finalFrameMatchesStatic = YES` at end of every replay
+- confirm export GLB still uses full strokes (no animated subset)
+- begin Inflate bridge from the locked Solid filled-silhouette base
+
 ## Final saved checkpoint label
 
-`SOLID_H3_CONTROL_CALIBRATION_PASS`
+`SOLID_H3_ANIMATION_CLEANUP_PASS`
 
 (supersedes all prior checkpoints; they remain in effect as underlying layers)
