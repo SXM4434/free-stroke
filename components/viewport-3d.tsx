@@ -2074,6 +2074,108 @@ function SolidDebugOverlay() {
                 H2 flat-cap proof — no extrusion, no walls, export untouched.
               </div>
             </div>
+
+            {/* H3: EXTRUDE_FROM_FLAT_CAP_WITH_HOLES — production extrusion */}
+            <div className="mt-1 border-t border-emerald-500/40 pt-1">
+              <div className="mb-0.5 text-[9px] font-bold text-emerald-400">
+                EXTRUDE FROM FLAT CAP WITH HOLES (H3)
+              </div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                <span className="text-gray-400">h3Built:</span>
+                <span
+                  className={
+                    s.h3Built === "YES"
+                      ? "text-green-400 font-bold"
+                      : s.h3Built === "NO"
+                        ? "text-red-400 font-bold"
+                        : "text-gray-400"
+                  }
+                >
+                  {s.h3Built ?? "—"}
+                </span>
+
+                <span className="text-gray-400">depth param:</span>
+                <span className="font-mono">
+                  {((s.solidDepthParam ?? 0) as number).toFixed(3)}
+                </span>
+
+                <span className="text-gray-400">depth effective:</span>
+                <span className="font-mono">
+                  {((s.solidDepthEffective ?? 0) as number).toFixed(3)}
+                </span>
+
+                <span className="text-gray-400">bbox Z:</span>
+                <span
+                  className={
+                    (s.geometryBBoxZ ?? 0) > 0
+                      ? "font-mono text-green-400"
+                      : "font-mono text-red-400"
+                  }
+                >
+                  {((s.geometryBBoxZ ?? 0) as number).toFixed(4)}
+                </span>
+
+                <span className="text-gray-400">frontCapTris:</span>
+                <span>{s.h3FrontCapTris ?? 0}</span>
+
+                <span className="text-gray-400">backCapTris:</span>
+                <span>{s.h3BackCapTris ?? 0}</span>
+
+                <span className="text-gray-400">outerWallSegs:</span>
+                <span
+                  className={
+                    (s.h3OuterWallSegments ?? 0) > 0 ? "text-green-400" : "text-red-400"
+                  }
+                >
+                  {s.h3OuterWallSegments ?? 0}
+                  {(s.h3SkippedOuterWallSegments ?? 0) > 0
+                    ? ` (skipped ${s.h3SkippedOuterWallSegments})`
+                    : ""}
+                </span>
+
+                <span className="text-gray-400">innerWallLoops:</span>
+                <span
+                  className={
+                    (s.h3InnerWallCount ?? 0) > 0 ? "text-green-400" : "text-gray-300"
+                  }
+                >
+                  {s.h3InnerWallCount ?? 0}
+                </span>
+
+                <span className="text-gray-400">innerWallSegs:</span>
+                <span
+                  className={
+                    (s.h3InnerWallSegments ?? 0) > 0 ? "text-green-400" : "text-gray-300"
+                  }
+                >
+                  {s.h3InnerWallSegments ?? 0}
+                  {(s.h3SkippedInnerWallSegments ?? 0) > 0
+                    ? ` (skipped ${s.h3SkippedInnerWallSegments})`
+                    : ""}
+                </span>
+
+                <span className="text-gray-400">totalVerts:</span>
+                <span>{s.h3TotalVerts ?? 0}</span>
+
+                <span className="text-gray-400">totalTris:</span>
+                <span>{s.h3TotalTris ?? 0}</span>
+
+                <span className="text-gray-400">exportSamePath:</span>
+                <span
+                  className={
+                    s.exportUsesSamePath === "YES"
+                      ? "text-green-400 font-bold"
+                      : "text-yellow-400"
+                  }
+                >
+                  {s.exportUsesSamePath ?? "—"}
+                </span>
+              </div>
+              <div className="mt-1 text-[8px] text-gray-500">
+                H3 production: cap + back cap + outer walls + inner walls. Depth
+                slider drives bbox Z. Export path identical to preview.
+              </div>
+            </div>
           </div>
         )
       })()}

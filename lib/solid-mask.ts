@@ -34,8 +34,13 @@ export interface MaskSolidResult {
 
 export interface MaskSolidDiagnostics {
   // Core geometry info
-  geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES"
-  geometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" | "NULL"
+  geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" | "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES"
+  geometryType:
+    | "FLAT"
+    | "EXTRUDE_FROM_FLAT_BASE"
+    | "FLAT_CAP_WITH_HOLES"
+    | "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES"
+    | "NULL"
   outerSignedArea: number
   outerWinding: "CCW" | "CW"
   // Raster stage fields - MUST be visible in debug panel
@@ -94,6 +99,23 @@ export interface MaskSolidDiagnostics {
   counterValidHoleCount: number                   // valid interior holes from counter mask
   counterHoleAreas: number[]                      // areas of valid holes from counter mask
   counterHoleSource: "ACTUAL_MASK" | "COUNTER_MASK"  // which mask actually fed H2
+  // H3 extruded cap with holes + inner side walls (only populated when mode = EXTRUDE_FROM_FLAT_CAP_WITH_HOLES)
+  h3Built?: "YES" | "NO"                          // YES once the extruded H3 geometry is assembled
+  h3HoleContoursUsed?: number                     // hole contours actually fed into ShapeUtils.triangulateShape
+  h3ShapeHoleCount?: number                       // shape.holes.length AFTER assembly (== holes used)
+  h3InnerWallCount?: number                       // distinct inner hole loops that contributed walls
+  h3InnerWallSegments?: number                    // total inner wall quads across all hole loops
+  h3OuterWallSegments?: number                    // outer wall quads (after epsilon-skip)
+  h3FrontCapTris?: number                         // triangles on the +Z cap
+  h3BackCapTris?: number                          // triangles on the -Z cap
+  h3SkippedOuterWallSegments?: number             // outer segments rejected by epsilon
+  h3SkippedInnerWallSegments?: number             // inner segments rejected by epsilon
+  h3TotalVerts?: number
+  h3TotalTris?: number
+  solidDepthParam?: number                        // live solidParams.depth flowed into geometry
+  solidDepthEffective?: number                    // value used after floor clamp
+  geometryBBoxZ?: number                          // measured Z extent of returned geometry
+  exportUsesSamePath?: "YES" | "NO"               // true: SolidEngine.buildExport flows through same buildMaskSolid call
 }
 
 export interface MaskSolidStats {
@@ -134,8 +156,13 @@ export interface MaskSolidStages {
   }
   // Solid mode diagnostic info for panel display
   solidDiagnostics?: {
-    geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES"
-    geometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" | "NULL"
+    geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" | "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES"
+    geometryType:
+      | "FLAT"
+      | "EXTRUDE_FROM_FLAT_BASE"
+      | "FLAT_CAP_WITH_HOLES"
+      | "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES"
+      | "NULL"
     gateExecuted: "YES" | "NO"
     contourClosed: "YES" | "NO"
     contourOrdered: "YES" | "NO"
@@ -181,6 +208,23 @@ export interface MaskSolidStages {
     counterValidHoleCount?: number
     counterHoleAreas?: number[]
     counterHoleSource?: "ACTUAL_MASK" | "COUNTER_MASK"
+    // H3 extruded cap-with-holes + inner walls
+    h3Built?: "YES" | "NO"
+    h3HoleContoursUsed?: number
+    h3ShapeHoleCount?: number
+    h3InnerWallCount?: number
+    h3InnerWallSegments?: number
+    h3OuterWallSegments?: number
+    h3FrontCapTris?: number
+    h3BackCapTris?: number
+    h3SkippedOuterWallSegments?: number
+    h3SkippedInnerWallSegments?: number
+    h3TotalVerts?: number
+    h3TotalTris?: number
+    solidDepthParam?: number
+    solidDepthEffective?: number
+    geometryBBoxZ?: number
+    exportUsesSamePath?: "YES" | "NO"
   }
 }
 
@@ -223,27 +267,33 @@ const COUNTER_DETECTION_MAX_PX = 16  // mask pixels
 const COUNTER_DETECTION_MIN_GAP_PX = 1.5
 
 // ============= GEOMETRY MODE SWITCH =============
-// FLAT_BASE             = original validated checkpoint (valid contour -> FLAT, invalid -> NULL)
-// EXTRUDE_FROM_FLAT_BASE = same validated flat base, then extruded (LOCKED, do not regress)
-// FLAT_CAP_WITH_HOLES   = H2 diagnostic mode: flat cap built from validated outer
-//                         contour + valid H1 holes traced as inner Path objects.
-//                         Used to prove holes can be visibly cut out of the cap.
-//                         No extrusion, no inner walls.
-//
-// EXTRUDE_FROM_FLAT_BASE remains the locked production path. To run the H2
-// flat-cap-with-holes test, set this constant to "FLAT_CAP_WITH_HOLES".
-const SOLID_GEOMETRY_MODE: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" =
-  "FLAT_CAP_WITH_HOLES"
+// FLAT_BASE                       = original validated checkpoint (valid contour -> FLAT, invalid -> NULL)
+// EXTRUDE_FROM_FLAT_BASE          = validated flat base, then extruded (no holes; LOCKED reference)
+// FLAT_CAP_WITH_HOLES             = H2 diagnostic: flat cap with valid H1 holes traced as inner Paths
+// EXTRUDE_FROM_FLAT_CAP_WITH_HOLES = H3: full extrusion of the H2 cap-with-holes triangulation;
+//                                   adds a mirrored back cap, manual outer side walls, AND manual
+//                                   inner side walls for every hole. Solid Depth slider drives the
+//                                   actual Z extent. Default mode. Reuses H2's hole-detection
+//                                   pipeline (including counter-preserving detection) for parity.
+const SOLID_GEOMETRY_MODE:
+  | "FLAT_BASE"
+  | "EXTRUDE_FROM_FLAT_BASE"
+  | "FLAT_CAP_WITH_HOLES"
+  | "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES" = "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES"
 
-// Extrusion depth in world units (only used when mode is EXTRUDE_FROM_FLAT_BASE)
+// Legacy hardcoded depth — used ONLY by the EXTRUDE_FROM_FLAT_BASE reference branch,
+// which must not regress. H3 uses the live `depth` parameter (see buildMaskSolid signature).
 const EXTRUDE_DEPTH = 0.15
+// Absolute minimum H3 effective depth in world units. Prevents zero/negative
+// depth from collapsing the mesh while keeping the slider's bottom end usable.
+const H3_DEPTH_FLOOR = 0.005
 
 // ============= Main Entry Point =============
 
 export function buildMaskSolid(
   stroke: TestStroke,
   thickness: number,
-  _depth: number,
+  depth: number,
   canvasWidth: number = 800,
   canvasHeight: number = 600
 ): MaskSolidResult {
@@ -540,12 +590,18 @@ export function buildMaskSolid(
   
   // Build diagnostics (will be used for both success and failure)
   // geometryType depends on SOLID_GEOMETRY_MODE when contour is valid
-  const successGeometryType: "FLAT" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" =
+  const successGeometryType:
+    | "FLAT"
+    | "EXTRUDE_FROM_FLAT_BASE"
+    | "FLAT_CAP_WITH_HOLES"
+    | "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES" =
     SOLID_GEOMETRY_MODE === "EXTRUDE_FROM_FLAT_BASE"
       ? "EXTRUDE_FROM_FLAT_BASE"
       : SOLID_GEOMETRY_MODE === "FLAT_CAP_WITH_HOLES"
         ? "FLAT_CAP_WITH_HOLES"
-        : "FLAT"
+        : SOLID_GEOMETRY_MODE === "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES"
+          ? "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES"
+          : "FLAT"
   
   const diagnostics: MaskSolidDiagnostics = {
     geometryMode: SOLID_GEOMETRY_MODE,
@@ -787,23 +843,33 @@ export function buildMaskSolid(
     }
   }
   
-  // ===== H2: FLAT_CAP_WITH_HOLES =====
-  // Diagnostic mode that proves valid H1-detected holes can be cut out of the
-  // flat cap. Same validated outer contour as FLAT_BASE; inner contours come
-  // from tracing each valid hole's pixel mask.
+  // ===== H2 / H3: cap-with-holes pipeline =====
+  // This block is shared by both H2 (flat cap only) and H3 (full extrusion).
+  // Both modes need exactly the same:
+  //   - counter-preserving hole detection (thinner re-raster to catch tight counters)
+  //   - per-hole mask-to-world contour tracing + simplification + winding fix
+  //   - ShapeUtils.triangulateShape on the validated outer + ordered hole contours
   //
-  // Hard rules:
-  //   - DOES NOT extrude.
-  //   - DOES NOT add inner side walls.
-  //   - DOES NOT modify export.
-  //   - DOES NOT change EXTRUDE_FROM_FLAT_BASE.
-  if (SOLID_GEOMETRY_MODE === "FLAT_CAP_WITH_HOLES") {
+  // H2 (FLAT_CAP_WITH_HOLES): returns the flat triangulated cap as-is.
+  // H3 (EXTRUDE_FROM_FLAT_CAP_WITH_HOLES): keeps the same cap as the +Z face,
+  //     mirrors it to a -Z back cap, then assembles outer side walls (from the
+  //     validated outer contour) and inner side walls (one quad strip per valid
+  //     hole contour) using the live `depth` parameter. See the bottom of this
+  //     block for the H3-only assembly + diagnostics.
+  if (
+    SOLID_GEOMETRY_MODE === "FLAT_CAP_WITH_HOLES" ||
+    SOLID_GEOMETRY_MODE === "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES"
+  ) {
     const h2HoleContourAreas: number[] = []
     const h2HoleContourRejectReasons: string[] = []
     let h2FlatCapWithHolesBuilt: "YES" | "NO" = "NO"
     let h2FrontCapTris = 0
     let h2ShapeHoleCount = 0
     let geometryWithHoles: THREE.BufferGeometry = flatGeom
+    // H3-visible references — populated inside the H2 path so the H3 assembly
+    // (below) can reuse exactly the same triangulated cap + hole contours.
+    let h3OrderedHolesWorld: THREE.Vector2[][] = []
+    let h3CapHasHoleTriangulation = false
     
     // Per-hole world-space contours (post simplification, post winding fix).
     // Used both for the THREE.Path attachment and for the direct
@@ -1077,6 +1143,8 @@ export function buildMaskSolid(
         })
       const orderedHoles = orderedIdx.map((i) => holeContoursWorld[i])
       const orderedAreas = orderedIdx.map((i) => h2HoleContourAreas[i])
+      // Expose ordered hole contours to the H3 assembly block below.
+      h3OrderedHolesWorld = orderedHoles
       
       // Build the shape WITH holes by attaching a THREE.Path per hole.
       const shapeWithHoles = new THREE.Shape(shapePts)
@@ -1133,6 +1201,7 @@ export function buildMaskSolid(
           h2FrontCapTris = triangulated.length
           geometryWithHoles = holesGeom
           h2FlatCapWithHolesBuilt = "YES"
+          h3CapHasHoleTriangulation = true
         } catch (e) {
           console.error("[v0-solid] H2 triangulateShape failed, falling back to ShapeGeometry:", e)
           // Fallback: ShapeGeometry path
@@ -1142,6 +1211,7 @@ export function buildMaskSolid(
             h2FrontCapTris = idx ? idx.count / 3 : 0
             geometryWithHoles = holesGeom
             h2FlatCapWithHolesBuilt = "YES"
+            h3CapHasHoleTriangulation = true
           } catch (e2) {
             console.error("[v0-solid] H2 ShapeGeometry fallback also failed:", e2)
             h2HoleContourRejectReasons.push(`triangulateShape-throw`)
@@ -1246,6 +1316,249 @@ export function buildMaskSolid(
       emptyStages.solidDiagnostics.counterHoleSource = counterHoleSource
     }
     
+    // ===================================================================
+    // ===== H3: EXTRUDE_FROM_FLAT_CAP_WITH_HOLES (default production mode)
+    // ===================================================================
+    // Reuses the H2 triangulated cap as the +Z front face, mirrors it to a
+    // -Z back face, and assembles manual side walls:
+    //   - Outer walls from the validated outer contour (`shapePts`, CCW)
+    //   - Inner walls per hole contour (`h3OrderedHolesWorld`, each CW)
+    //
+    // Wall winding note: the standard quad winding (A,D,C),(A,C,B) with
+    //   A = front-curr, B = front-next, C = back-next, D = back-curr
+    // produces a normal that is the RIGHT-perpendicular to the walk
+    // direction. For a CCW outer loop, right-perp points AWAY from the
+    // body (outside the solid). For a CW hole loop, right-perp ALSO
+    // points away from the body — i.e. into the hole interior. So the
+    // SAME winding works for both loop types, and signed-area direction
+    // takes care of normal orientation automatically.
+    let h3Diagnostics: Partial<MaskSolidDiagnostics> = {}
+    if (SOLID_GEOMETRY_MODE === "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES") {
+      const solidDepthEffective = Math.max(H3_DEPTH_FLOOR, depth)
+      const halfDepth = solidDepthEffective / 2
+      const WALL_EPSILON = 1e-5
+
+      // Cap source: the H2-built cap-with-holes (preferred) or flatGeom
+      // (when no valid holes were available; equivalent to outer-only).
+      const capGeom: THREE.BufferGeometry = h3CapHasHoleTriangulation
+        ? geometryWithHoles
+        : flatGeom
+      const capPosAttr = capGeom.getAttribute("position") as THREE.BufferAttribute | undefined
+      const capIdxAttr = capGeom.getIndex()
+
+      if (!capPosAttr || !capIdxAttr) {
+        console.error("[v0-solid] H3: cap geometry missing position/index — falling back to flat cap")
+        h3Diagnostics = {
+          h3Built: "NO",
+          h3HoleContoursUsed: h2HoleContourAreas.length,
+          h3ShapeHoleCount: h2ShapeHoleCount,
+          h3InnerWallCount: 0,
+          h3InnerWallSegments: 0,
+          h3OuterWallSegments: 0,
+          h3FrontCapTris: 0,
+          h3BackCapTris: 0,
+          h3SkippedOuterWallSegments: 0,
+          h3SkippedInnerWallSegments: 0,
+          h3TotalVerts: 0,
+          h3TotalTris: 0,
+          solidDepthParam: depth,
+          solidDepthEffective,
+          geometryBBoxZ: 0,
+          exportUsesSamePath: "YES",
+        }
+      } else {
+        const capPos = capPosAttr.array as Float32Array
+        const capIdx = capIdxAttr.array as ArrayLike<number>
+        const capVertCount = capPosAttr.count
+        const capTriCount = capIdx.length / 3
+
+        // Inner loops for walls — exactly the hole contours fed into
+        // triangulateShape. If H2 didn't actually attach them to the
+        // cap (fallback path or no holes), there are no inner walls.
+        const innerLoops: THREE.Vector2[][] = h3CapHasHoleTriangulation
+          ? h3OrderedHolesWorld
+          : []
+
+        // Count segments up front so buffer sizes are exact.
+        const countSegs = (loop: { x: number; y: number }[]) => {
+          let kept = 0
+          let skipped = 0
+          for (let i = 0; i < loop.length; i++) {
+            const a = loop[i]
+            const b = loop[(i + 1) % loop.length]
+            if (Math.hypot(b.x - a.x, b.y - a.y) < WALL_EPSILON) skipped++
+            else kept++
+          }
+          return { kept, skipped }
+        }
+        const outerSegStats = countSegs(shapePts)
+        let innerSegKeptTotal = 0
+        let innerSegSkippedTotal = 0
+        const innerSegStatsPerLoop: Array<{ kept: number; skipped: number }> = []
+        for (const loop of innerLoops) {
+          const s = countSegs(loop)
+          innerSegStatsPerLoop.push(s)
+          innerSegKeptTotal += s.kept
+          innerSegSkippedTotal += s.skipped
+        }
+
+        const wallQuadCount = outerSegStats.kept + innerSegKeptTotal
+        const h3TotalVerts = capVertCount * 2 + wallQuadCount * 4
+        const h3TotalTris = capTriCount * 2 + wallQuadCount * 2
+
+        const positions = new Float32Array(h3TotalVerts * 3)
+        const indices = new Uint32Array(h3TotalTris * 3)
+        let vOff = 0
+        let iOff = 0
+
+        // ----- Front cap (+Z) — identical triangulation to H2 cap -----
+        const frontBase = vOff
+        for (let v = 0; v < capVertCount; v++) {
+          positions[(vOff + v) * 3 + 0] = capPos[v * 3 + 0]
+          positions[(vOff + v) * 3 + 1] = capPos[v * 3 + 1]
+          positions[(vOff + v) * 3 + 2] = +halfDepth
+        }
+        vOff += capVertCount
+        for (let t = 0; t < capTriCount; t++) {
+          indices[iOff++] = frontBase + capIdx[t * 3 + 0]
+          indices[iOff++] = frontBase + capIdx[t * 3 + 1]
+          indices[iOff++] = frontBase + capIdx[t * 3 + 2]
+        }
+        const frontCapTrisH3 = capTriCount
+
+        // ----- Back cap (-Z) — same XY, reversed winding -----
+        const backBase = vOff
+        for (let v = 0; v < capVertCount; v++) {
+          positions[(vOff + v) * 3 + 0] = capPos[v * 3 + 0]
+          positions[(vOff + v) * 3 + 1] = capPos[v * 3 + 1]
+          positions[(vOff + v) * 3 + 2] = -halfDepth
+        }
+        vOff += capVertCount
+        for (let t = 0; t < capTriCount; t++) {
+          // Reverse winding so the back face normal points -Z.
+          indices[iOff++] = backBase + capIdx[t * 3 + 0]
+          indices[iOff++] = backBase + capIdx[t * 3 + 2]
+          indices[iOff++] = backBase + capIdx[t * 3 + 1]
+        }
+        const backCapTrisH3 = capTriCount
+
+        // ----- Wall builder (shared between outer and each inner loop) -----
+        const buildLoopWalls = (loop: { x: number; y: number }[]) => {
+          for (let i = 0; i < loop.length; i++) {
+            const a = loop[i]
+            const b = loop[(i + 1) % loop.length]
+            const dx = b.x - a.x
+            const dy = b.y - a.y
+            if (Math.hypot(dx, dy) < WALL_EPSILON) continue
+
+            const A = vOff + 0
+            const B = vOff + 1
+            const C = vOff + 2
+            const D = vOff + 3
+
+            positions[A * 3 + 0] = a.x; positions[A * 3 + 1] = a.y; positions[A * 3 + 2] = +halfDepth
+            positions[B * 3 + 0] = b.x; positions[B * 3 + 1] = b.y; positions[B * 3 + 2] = +halfDepth
+            positions[C * 3 + 0] = b.x; positions[C * 3 + 1] = b.y; positions[C * 3 + 2] = -halfDepth
+            positions[D * 3 + 0] = a.x; positions[D * 3 + 1] = a.y; positions[D * 3 + 2] = -halfDepth
+
+            vOff += 4
+
+            // Standard right-perp winding: works for both CCW outer and CW holes.
+            indices[iOff++] = A
+            indices[iOff++] = D
+            indices[iOff++] = C
+
+            indices[iOff++] = A
+            indices[iOff++] = C
+            indices[iOff++] = B
+          }
+        }
+
+        // ----- Outer walls (CCW shapePts) -----
+        buildLoopWalls(shapePts)
+
+        // ----- Inner walls per hole (CW orderedHoles) -----
+        for (const loop of innerLoops) {
+          buildLoopWalls(loop)
+        }
+
+        const extrudedH3 = new THREE.BufferGeometry()
+        extrudedH3.setAttribute("position", new THREE.BufferAttribute(positions, 3))
+        extrudedH3.setIndex(new THREE.BufferAttribute(indices, 1))
+        extrudedH3.computeVertexNormals()
+        extrudedH3.computeBoundingBox()
+
+        const bboxZ = extrudedH3.boundingBox
+          ? extrudedH3.boundingBox.max.z - extrudedH3.boundingBox.min.z
+          : 0
+
+        console.log("[v0-solid] EXTRUDE_FROM_FLAT_CAP_WITH_HOLES (H3):", {
+          solidDepthParam: depth,
+          solidDepthEffective,
+          halfDepth,
+          capHasHoles: h3CapHasHoleTriangulation,
+          capVertCount,
+          capTriCount,
+          frontCapTris: frontCapTrisH3,
+          backCapTris: backCapTrisH3,
+          outerWallSegments: outerSegStats.kept,
+          skippedOuterWallSegments: outerSegStats.skipped,
+          innerWallCount: innerLoops.length,
+          innerWallSegments: innerSegKeptTotal,
+          skippedInnerWallSegments: innerSegSkippedTotal,
+          innerSegStatsPerLoop,
+          totalVerts: h3TotalVerts,
+          totalTris: h3TotalTris,
+          bboxZ: bboxZ.toFixed(4),
+        })
+
+        // Replace the geometry that gets returned with the extruded mesh.
+        geometryWithHoles = extrudedH3
+
+        h3Diagnostics = {
+          h3Built: "YES",
+          h3HoleContoursUsed: innerLoops.length,
+          h3ShapeHoleCount: h2ShapeHoleCount,
+          h3InnerWallCount: innerLoops.length,
+          h3InnerWallSegments: innerSegKeptTotal,
+          h3OuterWallSegments: outerSegStats.kept,
+          h3FrontCapTris: frontCapTrisH3,
+          h3BackCapTris: backCapTrisH3,
+          h3SkippedOuterWallSegments: outerSegStats.skipped,
+          h3SkippedInnerWallSegments: innerSegSkippedTotal,
+          h3TotalVerts,
+          h3TotalTris,
+          solidDepthParam: depth,
+          solidDepthEffective,
+          geometryBBoxZ: bboxZ,
+          // SolidEngine.buildExport calls buildMaskSolid with the SAME
+          // (stroke, thickness, depth) signature as the preview path (see
+          // lib/geometry-engines.ts), so H3 export is identical to preview.
+          exportUsesSamePath: "YES",
+        }
+
+        // Mirror onto the panel-facing stages.solidDiagnostics too.
+        if (emptyStages.solidDiagnostics) {
+          emptyStages.solidDiagnostics.h3Built = "YES"
+          emptyStages.solidDiagnostics.h3HoleContoursUsed = innerLoops.length
+          emptyStages.solidDiagnostics.h3ShapeHoleCount = h2ShapeHoleCount
+          emptyStages.solidDiagnostics.h3InnerWallCount = innerLoops.length
+          emptyStages.solidDiagnostics.h3InnerWallSegments = innerSegKeptTotal
+          emptyStages.solidDiagnostics.h3OuterWallSegments = outerSegStats.kept
+          emptyStages.solidDiagnostics.h3FrontCapTris = frontCapTrisH3
+          emptyStages.solidDiagnostics.h3BackCapTris = backCapTrisH3
+          emptyStages.solidDiagnostics.h3SkippedOuterWallSegments = outerSegStats.skipped
+          emptyStages.solidDiagnostics.h3SkippedInnerWallSegments = innerSegSkippedTotal
+          emptyStages.solidDiagnostics.h3TotalVerts = h3TotalVerts
+          emptyStages.solidDiagnostics.h3TotalTris = h3TotalTris
+          emptyStages.solidDiagnostics.solidDepthParam = depth
+          emptyStages.solidDiagnostics.solidDepthEffective = solidDepthEffective
+          emptyStages.solidDiagnostics.geometryBBoxZ = bboxZ
+          emptyStages.solidDiagnostics.exportUsesSamePath = "YES"
+        }
+      }
+    }
+
     // Mirror onto the returned diagnostics too
     const diagnosticsH2: MaskSolidDiagnostics = {
       ...diagnostics,
@@ -1269,6 +1582,7 @@ export function buildMaskSolid(
       counterValidHoleCount,
       counterHoleAreas,
       counterHoleSource,
+      ...h3Diagnostics,
     }
     
     return {
