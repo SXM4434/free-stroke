@@ -107,6 +107,23 @@ export const SOLID_ANIM_DEBUG = {
   validHoleCount: 0,
   /** Number of times validHoleCount changed across consecutive animated builds. */
   topologyChangeCount: 0,
+  // ---- Hole stabilization (activation state machine) ----
+  /** Count of holes in the final-pass reference snapshot taken at Play start. */
+  finalHoleReferenceCount: 0,
+  /** Count of final holes currently activated by the per-frame state machine. */
+  activatedFinalHoleCount: 0,
+  /** Per-final-hole hit streak (frames in a row where a partial centroid matched). */
+  perHoleHitStreaks: [] as number[],
+  /** Per-final-hole miss streak (frames in a row with no partial centroid match). */
+  perHoleMissStreaks: [] as number[],
+  /** World-space match tolerance applied per final hole (parallel array). */
+  perHoleActivationRadiusWorld: [] as number[],
+  /** Last reported reject reasons from the buildMaskSolid safety filter. */
+  holeStabilizationLastReasons: [] as string[],
+  /** Did the last build write `holeStabilizationActive = YES`? */
+  holeStabilizationActive: "NO" as "YES" | "NO",
+  /** Frame counter — how many partial centroids the matcher saw last update. */
+  lastPartialCentroidCount: 0,
 }
 
 /**
@@ -458,6 +475,16 @@ export interface PreviewParams {
   canvasHeight: number
   extrudeParams?: ExtrudeParams
   solidParams?: SolidParams
+  /**
+   * OPTIONAL Solid H3 animation hole stabilization (animation-only).
+   *
+   * When the Solid mesh is being rebuilt as a partial reveal frame, this
+   * carries the activation-gated final hole contours that the buildMaskSolid
+   * pipeline should USE for cap triangulation + H3 inner walls — instead of
+   * trusting the partial-frame H1/H2 detection. Static and export callers
+   * NEVER pass this; behavior is identical to before.
+   */
+  holeStabilization?: import("./solid-mask").SolidHoleStabilization
 }
 
 export interface ExportResult {
@@ -4099,7 +4126,20 @@ export const SolidEngine: GeometryEngine = {
       SOLID_DEBUG.worldMaxY = maxY
     }
     
-    const result = buildMaskSolid(testStroke, worldThickness, effectiveDepth, canvasWidth, canvasHeight)
+    // Animation-only hole stabilization override.
+    // - Undefined for static builds and for ALL export calls (export site
+    //   below never reads params.holeStabilization).
+    // - Provided by Scene only while reveal-animating, with the active final
+    //   hole world contours and a per-frame activation decision already
+    //   applied (hysteresis is owned by Scene).
+    const result = buildMaskSolid(
+      testStroke,
+      worldThickness,
+      effectiveDepth,
+      canvasWidth,
+      canvasHeight,
+      params.holeStabilization,
+    )
 
     // ---- Stamp calibration diagnostics onto the panel-facing record ----
     // The engine itself receives only effective values; the slider values

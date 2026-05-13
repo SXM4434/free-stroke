@@ -43,7 +43,17 @@ function useStrokeMeshes(
   canvasHeight: number,
   mode: GeometryMode,
   extrudeParams?: ExtrudeParams,
-  solidParams?: SolidParams
+  solidParams?: SolidParams,
+  /**
+   * OPTIONAL Solid H3 animation hole stabilization (animation-only).
+   * Forwarded verbatim to `engine.buildPreview` for the Solid path. Static
+   * preview, Rod, Extrude, and Solid export do not read it.
+   *
+   * `holeStabilizationKey` is a cheap memo signature for the override so the
+   * useMemo doesn't have to compare deep contour arrays. Scene maintains it.
+   */
+  holeStabilization?: import("@/lib/solid-mask").SolidHoleStabilization,
+  holeStabilizationKey?: string,
 ): StrokeMeshData[] {
   // Extract individual values to prevent object reference changes from triggering rebuilds.
   // CRITICAL: every slider value the engine consumes must be listed here. If a value is
@@ -58,9 +68,15 @@ function useStrokeMeshes(
   
   return useMemo(() => {
     const engine = getEngine(mode)
-    return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
+    return engine.buildPreview(strokes, {
+      canvasWidth,
+      canvasHeight,
+      extrudeParams,
+      solidParams,
+      holeStabilization,
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeDepth, extrudeBevel, solidThickness, solidDepth])
+  }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeDepth, extrudeBevel, solidThickness, solidDepth, holeStabilizationKey])
 }
 
 /* ---- Shared geometries ---- */
@@ -936,6 +952,209 @@ function Scene({
     SOLID_ANIM_DEBUG.solidAnimationActive = playing
   }, [playing, geometryMode])
 
+  // -----------------------------------------------------------------
+  // Solid H3 ANIMATION_GATED hole stabilization — Scene-side state machine.
+  //
+  // Owns:
+  //   - `finalHoleRefRef`: snapshot of the final-pass hole world contours
+  //     and centroids, captured the moment playback starts. Source is
+  //     SOLID_DEBUG.lastStages.solidDiagnostics.stableHolesWorld, which the
+  //     most recent STATIC (pre-Play) build always populates. This means
+  //     the reference is built without any extra work — the static H3 mesh
+  //     the user was already looking at before they pressed Play IS the
+  //     reference.
+  //   - Per-final-hole activation streak counters (`hitStreak`, `missStreak`,
+  //     `active`). Updated AFTER each animated build by reading
+  //     SOLID_DEBUG.lastStages.solidDiagnostics.detectedPartialHoleCentroidsWorld
+  //     (the partial-frame H1/H2 detected centroids).
+  //   - `holeStabilizationKey` state: bumped on activation transitions so
+  //     useStrokeMeshes re-runs with the new active set.
+  //
+  // Behavior:
+  //   - threshold = 1 hit: as soon as partial detection sees a hole at
+  //     roughly the location of a final hole, override turns on for that
+  //     final hole.
+  //   - sticky: once activated, a final hole stays activated for the rest
+  //     of this playback session (no deactivation). The topological safety
+  //     filter inside buildMaskSolid (`centroid-inside-partial-outer`)
+  //     handles the "loop not yet enclosed" case automatically.
+  //   - All state resets to clean values on every false→true `playing`
+  //     transition, alongside the rebuild counter reset already in
+  //     handlePlayPause.
+  //
+  // Static H3 builds (playing=false, progress=1, exports) never see
+  // holeStabilization — they pass `undefined` and use partial detection.
+  // -----------------------------------------------------------------
+  type FinalHoleRef = {
+    holes: THREE.Vector2[][]
+    centroids: { x: number; y: number }[]
+    areasWorld: number[]
+    activationRadius: number[]
+  }
+  type HoleActivation = {
+    hitStreak: number
+    missStreak: number
+    active: boolean
+  }
+  const finalHoleRefRef = useRef<FinalHoleRef | null>(null)
+  const activationRef = useRef<HoleActivation[]>([])
+  const [holeStabilizationKey, setHoleStabilizationKey] = useState<string>("none")
+  const holeStabilizationRef = useRef<
+    import("@/lib/solid-mask").SolidHoleStabilization | undefined
+  >(undefined)
+  const lastSeenProgressRef = useRef<number>(playheadRef.current)
+
+  // Snapshot final hole reference on Play start.
+  // Runs at the same time the rebuild-count reset effect runs — false→true
+  // `playing` transition, BEFORE the first animated build (layout effect).
+  useLayoutEffect(() => {
+    const wasPlaying = prevPlayingRef.current
+    if (geometryMode !== "solid") return
+    if (!wasPlaying && playing) {
+      // Capture from the currently-displayed static H3's last build.
+      const stages = SOLID_DEBUG.lastStages as
+        | { solidDiagnostics?: { stableHolesWorld?: Array<Array<{ x: number; y: number }>> } }
+        | null
+      const snap = stages?.solidDiagnostics?.stableHolesWorld ?? []
+      if (snap.length > 0) {
+        const holes: THREE.Vector2[][] = snap.map((c) =>
+          c.map((p) => new THREE.Vector2(p.x, p.y)),
+        )
+        const centroids: { x: number; y: number }[] = []
+        const areasWorld: number[] = []
+        const activationRadius: number[] = []
+        for (const c of holes) {
+          let sx = 0, sy = 0
+          for (const p of c) { sx += p.x; sy += p.y }
+          const cx = sx / c.length
+          const cy = sy / c.length
+          // Signed-area magnitude in world units.
+          let area2 = 0
+          for (let i = 0; i < c.length; i++) {
+            const a = c[i]
+            const b = c[(i + 1) % c.length]
+            area2 += a.x * b.y - b.x * a.y
+          }
+          const area = Math.abs(area2) * 0.5
+          centroids.push({ x: cx, y: cy })
+          areasWorld.push(area)
+          // Tolerance: ~the hole's effective radius. Slightly generous so
+          // partial centroids that wobble around the hole still match.
+          activationRadius.push(Math.max(0.04, 0.7 * Math.sqrt(area / Math.PI)))
+        }
+        finalHoleRefRef.current = { holes, centroids, areasWorld, activationRadius }
+        activationRef.current = holes.map(() => ({
+          hitStreak: 0,
+          missStreak: 0,
+          active: false,
+        }))
+        SOLID_ANIM_DEBUG.finalHoleReferenceCount = holes.length
+        SOLID_ANIM_DEBUG.activatedFinalHoleCount = 0
+        SOLID_ANIM_DEBUG.perHoleActivationRadiusWorld = activationRadius
+        SOLID_ANIM_DEBUG.perHoleHitStreaks = activationRef.current.map(() => 0)
+        SOLID_ANIM_DEBUG.perHoleMissStreaks = activationRef.current.map(() => 0)
+      } else {
+        finalHoleRefRef.current = null
+        activationRef.current = []
+        SOLID_ANIM_DEBUG.finalHoleReferenceCount = 0
+        SOLID_ANIM_DEBUG.activatedFinalHoleCount = 0
+        SOLID_ANIM_DEBUG.perHoleActivationRadiusWorld = []
+        SOLID_ANIM_DEBUG.perHoleHitStreaks = []
+        SOLID_ANIM_DEBUG.perHoleMissStreaks = []
+      }
+      // Start the animation with NO override (no holes activated yet).
+      holeStabilizationRef.current = undefined
+      setHoleStabilizationKey(`play-${Date.now()}-none`)
+    }
+  }, [playing, geometryMode, playheadRef])
+
+  // After each animated mesh build, update activation state from the
+  // partial-frame detected centroids (which the build just stamped into
+  // SOLID_DEBUG.lastStages.solidDiagnostics.detectedPartialHoleCentroidsWorld).
+  // If activation flips for any hole, bump `holeStabilizationKey` so the
+  // next animated build picks up the new active set.
+  useEffect(() => {
+    if (geometryMode !== "solid" || !playing) return
+    const ref = finalHoleRefRef.current
+    if (!ref || ref.holes.length === 0) return
+
+    const stages = SOLID_DEBUG.lastStages as
+      | {
+          solidDiagnostics?: {
+            detectedPartialHoleCentroidsWorld?: Array<{ x: number; y: number; areaPx: number }>
+          }
+        }
+      | null
+    const partial = stages?.solidDiagnostics?.detectedPartialHoleCentroidsWorld ?? []
+    SOLID_ANIM_DEBUG.lastPartialCentroidCount = partial.length
+
+    let activationChanged = false
+    for (let i = 0; i < ref.holes.length; i++) {
+      const fc = ref.centroids[i]
+      const tol = ref.activationRadius[i]
+      // Did any partial centroid fall within tolerance of this final hole?
+      let matched = false
+      for (const p of partial) {
+        const dx = p.x - fc.x
+        const dy = p.y - fc.y
+        if (dx * dx + dy * dy <= tol * tol) {
+          matched = true
+          break
+        }
+      }
+      const state = activationRef.current[i]
+      if (matched) {
+        state.hitStreak += 1
+        state.missStreak = 0
+        // Threshold = 1: activate on the very first match. Sticky thereafter.
+        if (!state.active) {
+          state.active = true
+          activationChanged = true
+        }
+      } else {
+        state.missStreak += 1
+        // Once activated, NEVER deactivate this session. The topological
+        // safety filter handles "not yet enclosed" automatically.
+      }
+    }
+
+    // Mirror per-hole streaks for the panel.
+    SOLID_ANIM_DEBUG.perHoleHitStreaks = activationRef.current.map((s) => s.hitStreak)
+    SOLID_ANIM_DEBUG.perHoleMissStreaks = activationRef.current.map((s) => s.missStreak)
+    const activeCount = activationRef.current.filter((s) => s.active).length
+    SOLID_ANIM_DEBUG.activatedFinalHoleCount = activeCount
+
+    if (activationChanged) {
+      // Build the new override and a stable key signature.
+      const activeFinalHolesWorld: THREE.Vector2[][] = []
+      const sig: number[] = []
+      for (let i = 0; i < ref.holes.length; i++) {
+        if (activationRef.current[i].active) {
+          activeFinalHolesWorld.push(ref.holes[i])
+          sig.push(i)
+        }
+      }
+      holeStabilizationRef.current =
+        activeFinalHolesWorld.length > 0
+          ? { mode: "ANIMATION_GATED", activeFinalHolesWorld }
+          : undefined
+      setHoleStabilizationKey(`active-${sig.join(",")}-of-${ref.holes.length}`)
+    }
+  }, [geometryMode, playing, solidAnimProgress])
+
+  // When playback stops or progress reaches the end, clear the override so
+  // the final/static build runs the standard (unstabilized) path.
+  useEffect(() => {
+    if (geometryMode !== "solid") return
+    if (!playing || solidAnimProgress >= 1) {
+      if (holeStabilizationRef.current !== undefined) {
+        holeStabilizationRef.current = undefined
+        setHoleStabilizationKey("none")
+      }
+    }
+    lastSeenProgressRef.current = solidAnimProgress
+  }, [playing, solidAnimProgress, geometryMode])
+
   // Build meshes - for Solid mode, use animated strokes instead of full strokes
   const meshes = useStrokeMeshes(
     geometryMode === "solid" ? animatedStrokes : strokes,
@@ -943,7 +1162,9 @@ function Scene({
     canvasHeight,
     geometryMode,
     extrudeParams,
-    solidParams
+    solidParams,
+    geometryMode === "solid" ? holeStabilizationRef.current : undefined,
+    geometryMode === "solid" ? holeStabilizationKey : undefined,
   )
   const meshBounds = useStrokeBounds(meshes)
 
@@ -990,7 +1211,13 @@ function Scene({
     }
     if (geometryMode === "solid") {
       const stages = SOLID_DEBUG.lastStages as
-        | { solidDiagnostics?: { validHoleCount?: number } }
+        | {
+            solidDiagnostics?: {
+              validHoleCount?: number
+              holeStabilizationActive?: "YES" | "NO"
+              holeOverrideRejectReasons?: string[]
+            }
+          }
         | null
       const current = stages?.solidDiagnostics?.validHoleCount ?? 0
       const prev = prevValidHoleCountRef.current
@@ -999,6 +1226,10 @@ function Scene({
       }
       prevValidHoleCountRef.current = current
       SOLID_ANIM_DEBUG.validHoleCount = current
+      SOLID_ANIM_DEBUG.holeStabilizationActive =
+        stages?.solidDiagnostics?.holeStabilizationActive ?? "NO"
+      SOLID_ANIM_DEBUG.holeStabilizationLastReasons =
+        stages?.solidDiagnostics?.holeOverrideRejectReasons ?? []
     }
   }, [meshes, solidStatusRef, geometryMode])
   
@@ -2429,6 +2660,74 @@ function SolidDebugOverlay() {
             <div className="mt-1 text-[8px] text-gray-500">
               Reveal is arc-length based with sub-segment interpolated cut.
               Rebuild count resets each Play. Topology pops classified — not faked early.
+            </div>
+
+            {/* ---- Hole stabilization sub-block ---- */}
+            <div className="mt-1 border-t border-cyan-500/20 pt-1">
+              <div className="mb-0.5 text-[9px] font-bold text-cyan-300">
+                HOLE STABILIZATION
+              </div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                <span className="text-gray-400">holeStabilizationActive:</span>
+                <span
+                  className={
+                    a.holeStabilizationActive === "YES"
+                      ? "text-green-400 font-bold"
+                      : "text-gray-300"
+                  }
+                >
+                  {a.holeStabilizationActive}
+                </span>
+
+                <span className="text-gray-400">finalHoleReferenceCount:</span>
+                <span>{a.finalHoleReferenceCount}</span>
+
+                <span className="text-gray-400">activatedFinalHoleCount:</span>
+                <span
+                  className={
+                    a.activatedFinalHoleCount > 0
+                      ? "text-green-400 font-bold"
+                      : "text-gray-300"
+                  }
+                >
+                  {a.activatedFinalHoleCount}
+                </span>
+
+                <span className="text-gray-400">lastPartialCentroidCount:</span>
+                <span>{a.lastPartialCentroidCount}</span>
+
+                <span className="text-gray-400">perHoleHitStreaks:</span>
+                <span className="font-mono">
+                  [{a.perHoleHitStreaks.join(", ")}]
+                </span>
+
+                <span className="text-gray-400">perHoleMissStreaks:</span>
+                <span className="font-mono">
+                  [{a.perHoleMissStreaks.join(", ")}]
+                </span>
+
+                <span className="text-gray-400">perHoleActivationRadius:</span>
+                <span className="font-mono">
+                  [{a.perHoleActivationRadiusWorld
+                    .map((r) => r.toFixed(3))
+                    .join(", ")}]
+                </span>
+
+                {a.holeStabilizationLastReasons.length > 0 && (
+                  <>
+                    <span className="text-gray-400">lastRejects:</span>
+                    <span className="text-yellow-400 text-[8px]">
+                      {a.holeStabilizationLastReasons.slice(0, 3).join("; ")}
+                    </span>
+                  </>
+                )}
+              </div>
+              <div className="mt-1 text-[8px] text-gray-500">
+                Reference snapshotted from static H3 at Play start. Activation
+                threshold = 1 partial centroid match (sticky). Topological
+                safety filter drops finals whose centroid is outside the
+                current partial outer.
+              </div>
             </div>
           </div>
         )

@@ -1119,10 +1119,31 @@ export function buildMaskSolid(
       }
     }
     
-    // Only attempt to add holes if the active source has at least one valid hole.
+    // Only attempt to add holes if the active source has at least one valid
+    // hole — OR the caller supplied an animation hole stabilization override
+    // with at least one currently-active final hole. The second clause is
+    // what allows the H3 hole pipeline to stay alive across brief partial-
+    // detection drop-outs (e.g. mid-reveal sub-frames where the loop bridge
+    // pixel happens to be classified as empty for one frame). Static callers
+    // never pass `holeStabilization`, so their behavior is unchanged.
+    const overrideHasActiveHoles =
+      holeStabilization !== undefined &&
+      holeStabilization.mode === "ANIMATION_GATED" &&
+      holeStabilization.activeFinalHolesWorld.length > 0
+
+    // Hoisted so the final diagnostics object can read them regardless of
+    // whether the gate below is entered. Values stay at their defaults if
+    // the gate is skipped (no partial holes AND no override).
+    let stabilization_holeStabilizationActive: "YES" | "NO" = "NO"
+    let stabilization_holeOverrideKeptCount = 0
+    let stabilization_holeOverrideRejectedCount = 0
+    let stabilization_holeOverrideRejectReasons: string[] = []
+    let stabilization_stableHolesWorld: Array<Array<{ x: number; y: number }>> = []
+
     if (
-      activeHoleDetection.validHoleLabelIds.length > 0 &&
-      activeHoleDetection.emptyLabels.length === width * height
+      (activeHoleDetection.validHoleLabelIds.length > 0 &&
+        activeHoleDetection.emptyLabels.length === width * height) ||
+      overrideHasActiveHoles
     ) {
       // Iterate EVERY valid hole — not just the largest. This is the H2
       // contract: every valid hole from the ACTIVE source gets a chance to
@@ -1248,68 +1269,57 @@ export function buildMaskSolid(
       // drawn far enough yet" — using it would punch a wall outside the
       // partial body. We drop such holes for this frame; they re-qualify
       // automatically once enough stroke has been drawn.
-      let holeStabilizationActiveFlag: "YES" | "NO" = "NO"
-      let holeOverrideKeptCount = 0
-      let holeOverrideRejectedCount = 0
-      const holeOverrideRejectReasons: string[] = []
       if (holeStabilization && holeStabilization.mode === "ANIMATION_GATED") {
-        holeStabilizationActiveFlag = "YES"
+        stabilization_holeStabilizationActive = "YES"
         const overrideKept: THREE.Vector2[][] = []
         const overrideAreas: number[] = []
         const shapePolyForPip = shapePts.map((p) => ({ x: p.x, y: p.y }))
         for (let i = 0; i < holeStabilization.activeFinalHolesWorld.length; i++) {
           const finalHole = holeStabilization.activeFinalHolesWorld[i]
           if (!finalHole || finalHole.length < 3) {
-            holeOverrideRejectedCount++
-            holeOverrideRejectReasons.push(`final[${i}] degenerate-contour`)
+            stabilization_holeOverrideRejectedCount++
+            stabilization_holeOverrideRejectReasons.push(`final[${i}] degenerate-contour`)
             continue
           }
-          // Compute centroid + |signed area| for PIP and ordering.
           let fx = 0, fy = 0
           for (const p of finalHole) { fx += p.x; fy += p.y }
           fx /= finalHole.length
           fy /= finalHole.length
           if (!pointInPolygonMask(fx, fy, shapePolyForPip)) {
-            holeOverrideRejectedCount++
-            holeOverrideRejectReasons.push(`final[${i}] centroid-outside-partial-outer`)
+            stabilization_holeOverrideRejectedCount++
+            stabilization_holeOverrideRejectReasons.push(`final[${i}] centroid-outside-partial-outer`)
             continue
           }
           const sa = Math.abs(signedAreaOf(finalHole))
           if (sa < 1e-10) {
-            holeOverrideRejectedCount++
-            holeOverrideRejectReasons.push(`final[${i}] world-area~0`)
+            stabilization_holeOverrideRejectedCount++
+            stabilization_holeOverrideRejectReasons.push(`final[${i}] world-area~0`)
             continue
           }
           overrideKept.push(finalHole)
-          // The override "area" here is the world-space |signed area|.
-          // We scale it up to pseudo-px so it has comparable magnitude to
-          // h2HoleContourAreas (which use mask px counts). The exact value
-          // doesn't matter for geometry — only ordering does — but the
-          // panel readouts look cleaner if it stays positive and large.
           overrideAreas.push(sa * 1e6)
         }
-        // Re-sort the override-kept set by descending area.
         const ovIdx = overrideKept
           .map((_, i) => i)
           .sort((a, b) => overrideAreas[b] - overrideAreas[a])
         orderedHoles = ovIdx.map((i) => overrideKept[i])
         orderedAreas = ovIdx.map((i) => overrideAreas[i])
-        holeOverrideKeptCount = orderedHoles.length
-        // Replace label tracking with synthetic IDs so downstream "usedByH2"
-        // viability still has a coherent parallel array, even though the
-        // partial-frame labelIds no longer correspond to the substituted
-        // contours. (smallestValidHoleUsedByH2 will compare against the
-        // partial labelIds; that's expected — its source is the partial
-        // detection, not the override.)
+        stabilization_holeOverrideKeptCount = orderedHoles.length
         usedHoleLabelIds.length = 0
         for (let i = 0; i < orderedHoles.length; i++) usedHoleLabelIds.push(-(i + 1))
         console.log("[v0-solid] H3 ANIMATION_GATED override applied", {
           finalHoleCountIn: holeStabilization.activeFinalHolesWorld.length,
-          kept: holeOverrideKeptCount,
-          rejected: holeOverrideRejectedCount,
+          kept: stabilization_holeOverrideKeptCount,
+          rejected: stabilization_holeOverrideRejectedCount,
           partialDetectedHoles: holeContoursWorld.length,
         })
       }
+      // Capture the FINAL ordered hole contours (post-override-or-not) into
+      // the hoisted snapshot so the diagnostics object can expose exactly
+      // which contours fed cap triangulation + H3 inner walls.
+      stabilization_stableHolesWorld = orderedHoles.map((c) =>
+        c.map((p) => ({ x: p.x, y: p.y })),
+      )
       // Expose ordered hole contours to the H3 assembly block below.
       h3OrderedHolesWorld = orderedHoles
       
@@ -1481,6 +1491,19 @@ export function buildMaskSolid(
       emptyStages.solidDiagnostics.counterValidHoleCount = counterValidHoleCount
       emptyStages.solidDiagnostics.counterHoleAreas = counterHoleAreas
       emptyStages.solidDiagnostics.counterHoleSource = counterHoleSource
+      // Solid H3 animation hole stabilization mirrors. Always written so the
+      // panel can show "NO" when the override pipeline was not requested.
+      emptyStages.solidDiagnostics.detectedPartialHoleCentroidsWorld =
+        detectedPartialHoleCentroidsWorld
+      emptyStages.solidDiagnostics.stableHolesWorld = stabilization_stableHolesWorld
+      emptyStages.solidDiagnostics.holeStabilizationActive =
+        stabilization_holeStabilizationActive
+      emptyStages.solidDiagnostics.holeOverrideKeptCount =
+        stabilization_holeOverrideKeptCount
+      emptyStages.solidDiagnostics.holeOverrideRejectedCount =
+        stabilization_holeOverrideRejectedCount
+      emptyStages.solidDiagnostics.holeOverrideRejectReasons =
+        stabilization_holeOverrideRejectReasons
     }
     
     // ===================================================================
@@ -1749,6 +1772,12 @@ export function buildMaskSolid(
       counterValidHoleCount,
       counterHoleAreas,
       counterHoleSource,
+      detectedPartialHoleCentroidsWorld,
+      stableHolesWorld: stabilization_stableHolesWorld,
+      holeStabilizationActive: stabilization_holeStabilizationActive,
+      holeOverrideKeptCount: stabilization_holeOverrideKeptCount,
+      holeOverrideRejectedCount: stabilization_holeOverrideRejectedCount,
+      holeOverrideRejectReasons: stabilization_holeOverrideRejectReasons,
       ...h3Diagnostics,
     }
     

@@ -302,8 +302,38 @@ These are non-negotiable for this checkpoint:
 - confirm export GLB still uses full strokes (no animated subset)
 - begin Inflate bridge from the locked Solid filled-silhouette base
 
+## Solid H3 ANIMATION_GATED hole stabilization checkpoint
+
+- **name:** Solid H3 Animation Hole Stabilization
+- **label:** `SOLID_H3_ANIMATION_HOLE_STABILIZATION`
+- **status:** wired end-to-end, behind animation gate only — static + export unaffected
+
+### What is now true
+
+- `buildMaskSolid` accepts an OPTIONAL `holeStabilization` parameter (mode `"ANIMATION_GATED"`, plus `activeFinalHolesWorld`). Static, Rod, Extrude, and Solid export paths never pass it; their behavior is byte-identical to before.
+- On the animation path only, Scene snapshots the final-pass hole world contours from the currently-displayed static H3 (`SOLID_DEBUG.lastStages.solidDiagnostics.stableHolesWorld`) at the false→true `playing` transition. No extra `buildMaskSolid` call is needed — the static mesh the user was already looking at IS the reference.
+- A per-final-hole activation state machine runs after each animated build: it matches `detectedPartialHoleCentroidsWorld` (newly stamped by `buildMaskSolid`) against the snapshotted final hole centroids using a per-hole tolerance of `0.7 * sqrt(area/π)`. Threshold = 1 hit (first-match activation), sticky for the rest of playback.
+- The H2 gate in `buildMaskSolid` now also opens when `holeStabilization` carries at least one active final hole, so the override stays live across brief partial-detection drop-outs. When opened, the override replaces `orderedHoles`/`orderedAreas` with the topologically-safe subset of activated finals (centroid must lie inside the current partial outer), and that exact subset feeds cap triangulation, the H3 inner walls, and `stableHolesWorld` diagnostics.
+- New diagnostics (panel-visible under `HOLE STABILIZATION` in the Solid Debug overlay): `holeStabilizationActive`, `finalHoleReferenceCount`, `activatedFinalHoleCount`, `lastPartialCentroidCount`, `perHoleHitStreaks`, `perHoleMissStreaks`, `perHoleActivationRadius`, `lastRejects`. The override's per-hole reject reasons (`degenerate-contour`, `centroid-outside-partial-outer`, `world-area~0`) are surfaced verbatim.
+- Override clears automatically when playback stops or `solidAnimProgress >= 1`, so the static/final frame uses the unstabilized path and stays bit-equal to pre-animation static H3.
+
+### Pipeline summary (animation, per frame)
+
+1. Scene computes `animatedStrokes` from arc-length progress.
+2. Scene reads `activationRef.current` and builds `holeStabilization` only when activation transitions; otherwise reuses the last ref. A signature key feeds `useStrokeMeshes`'s `useMemo` deps.
+3. `SolidEngine.buildPreview` forwards `holeStabilization` to `buildMaskSolid`.
+4. `buildMaskSolid` runs normal partial-frame H1/H2 detection AND, if the override has active holes, substitutes its filtered subset before cap triangulation and H3 wall assembly.
+5. After the build, Scene reads partial centroids from `SOLID_DEBUG.lastStages.solidDiagnostics.detectedPartialHoleCentroidsWorld`, updates streaks, possibly flips activation, and (on flip) bumps the stabilization key.
+
+### Next QA
+
+- record clean playback on H, O, B, 8, & — confirm zero hole flicker once a hole has been seen once.
+- replay multiple times in a row, confirm `finalHoleReferenceCount` matches static H3 hole count every time.
+- confirm static H3 (paused or stopped) shows `holeStabilizationActive: NO`.
+- confirm export GLB hole count == static H3 hole count == final animation frame hole count.
+
 ## Final saved checkpoint label
 
-`SOLID_H3_ANIMATION_CLEANUP_PASS`
+`SOLID_H3_ANIMATION_HOLE_STABILIZATION`
 
-(supersedes all prior checkpoints; they remain in effect as underlying layers)
+(supersedes `SOLID_H3_ANIMATION_CLEANUP_PASS`; all prior checkpoints remain in effect as underlying layers)
