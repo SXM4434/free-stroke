@@ -32,6 +32,42 @@ export interface MaskSolidResult {
   diagnostics: MaskSolidDiagnostics
 }
 
+/**
+ * Animation-only hole stabilization override.
+ *
+ * When the Solid mode is reveal-animating, each partial-stroke frame
+ * re-runs H1/H2 hole detection on its OWN mask, which produces unstable
+ * hole counts and slightly-different hole contours frame-to-frame as
+ * loops approach closure. The result is visible counter pop / shape
+ * switching during playback.
+ *
+ * This struct lets the caller (Scene) supply a STABLE set of final-pass
+ * hole world-contours and a per-frame "active" decision (with hysteresis
+ * applied at the caller level). When provided to `buildMaskSolid`:
+ *
+ *   - H1/H2 detection STILL runs (so the diagnostics panel can prove
+ *     activation logic is working and so the partial centroids stay
+ *     available for the caller's next-frame activation decision).
+ *   - The detected partial-frame hole contours are DISCARDED for
+ *     geometry purposes.
+ *   - The cap triangulation, H2 shape holes, and H3 inner walls are
+ *     built from `activeFinalHolesWorld` instead — after a topological
+ *     safety filter (centroid must lie strictly inside the current
+ *     partial outer silhouette `shapePts`).
+ *
+ * Static (non-animated) callers MUST NOT pass this; behavior is exactly
+ * the same as before for the static pipeline.
+ */
+export interface SolidHoleStabilization {
+  mode: "ANIMATION_GATED"
+  /**
+   * Final-pass hole world-space contours, already sorted by descending
+   * |area| and forced to CW winding (the same conventions buildMaskSolid
+   * uses internally for partial-frame holes).
+   */
+  activeFinalHolesWorld: THREE.Vector2[][]
+}
+
 export interface MaskSolidDiagnostics {
   // Core geometry info
   geometryMode: "FLAT_BASE" | "EXTRUDE_FROM_FLAT_BASE" | "FLAT_CAP_WITH_HOLES" | "EXTRUDE_FROM_FLAT_CAP_WITH_HOLES"
@@ -121,6 +157,13 @@ export interface MaskSolidDiagnostics {
   solidEffectiveThicknessPx?: number              // calibrated px actually fed to lineWidth + H3 walls
   solidDepthSliderValue?: number                  // raw depth value the user picked on the slider
   solidDepthToThicknessRatio?: number             // effectiveDepth / worldThickness — for proportion QA
+  // ---- Solid H3 animation hole stabilization (animation-only) ----
+  detectedPartialHoleCentroidsWorld?: Array<{ x: number; y: number; areaPx: number }>
+  stableHolesWorld?: Array<Array<{ x: number; y: number }>>
+  holeStabilizationActive?: "YES" | "NO"
+  holeOverrideKeptCount?: number
+  holeOverrideRejectedCount?: number
+  holeOverrideRejectReasons?: string[]
 }
 
 export interface MaskSolidStats {
@@ -235,6 +278,13 @@ export interface MaskSolidStages {
     solidEffectiveThicknessPx?: number
     solidDepthSliderValue?: number
     solidDepthToThicknessRatio?: number
+    // Solid H3 animation hole stabilization (animation-only)
+    detectedPartialHoleCentroidsWorld?: Array<{ x: number; y: number; areaPx: number }>
+    stableHolesWorld?: Array<Array<{ x: number; y: number }>>
+    holeStabilizationActive?: "YES" | "NO"
+    holeOverrideKeptCount?: number
+    holeOverrideRejectedCount?: number
+    holeOverrideRejectReasons?: string[]
   }
 }
 
@@ -305,7 +355,26 @@ export function buildMaskSolid(
   thickness: number,
   depth: number,
   canvasWidth: number = 800,
-  canvasHeight: number = 600
+  canvasHeight: number = 600,
+  /**
+   * OPTIONAL animation-only hole stabilization.
+   *
+   * When undefined (static path, export path, any non-animated caller),
+   * the function behaves EXACTLY as before — no code path changes.
+   *
+   * When provided with mode="ANIMATION_GATED", the caller supplies the
+   * already-computed final-pass hole world contours that should be used
+   * for cap triangulation + H3 inner walls THIS FRAME. The partial-mask
+   * H1/H2 detection still runs so that diagnostics + activation matching
+   * remain available, but its detected hole contours are NOT used for
+   * geometry — they are replaced by the caller's `activeFinalHolesWorld`
+   * after a topological safety filter (each override hole's centroid
+   * must lie strictly inside the current partial outer silhouette).
+   *
+   * Static H1/H2 thresholds, static H3 geometry, and Solid export are
+   * NOT affected.
+   */
+  holeStabilization?: SolidHoleStabilization
 ): MaskSolidResult {
   const startTime = performance.now()
   
@@ -888,6 +957,11 @@ export function buildMaskSolid(
     // Parallel array of labelIds for each entry pushed into holeContoursWorld.
     // Powers the small-counter viability "usedByH2" determination.
     const usedHoleLabelIds: number[] = []
+    // Parallel array of world-space centroids + raw px area for each pushed
+    // hole. Exposed in diagnostics so the animation hole-stabilization gate
+    // (Scene) can match partial-frame detections against the cached final
+    // hole reference and decide activation per-frame.
+    const detectedPartialHoleCentroidsWorld: Array<{ x: number; y: number; areaPx: number }> = []
     
     // ===== COUNTER-PRESERVING DETECTION =====
     // If the actual mask missed a counter (because thick stroke filled it in),
@@ -1140,6 +1214,7 @@ export function buildMaskSolid(
         holeContoursWorld.push(holePts)
         h2HoleContourAreas.push(pxCount)
         usedHoleLabelIds.push(labelId)
+        detectedPartialHoleCentroidsWorld.push({ x: cx, y: cy, areaPx: pxCount })
       }
       
       // Sort holes by descending world-space |area|. Some triangulators are
@@ -1151,8 +1226,90 @@ export function buildMaskSolid(
           const ab = signedAreaOf(holeContoursWorld[b])
           return Math.abs(ab) - Math.abs(aa)
         })
-      const orderedHoles = orderedIdx.map((i) => holeContoursWorld[i])
-      const orderedAreas = orderedIdx.map((i) => h2HoleContourAreas[i])
+      let orderedHoles = orderedIdx.map((i) => holeContoursWorld[i])
+      let orderedAreas = orderedIdx.map((i) => h2HoleContourAreas[i])
+
+      // ===== Animation hole stabilization override =====
+      // If the caller (Scene) is animating Solid H3 and supplied a stable
+      // final-pass hole set with per-frame activation already decided
+      // (with hysteresis applied OUTSIDE this function), substitute the
+      // partial-frame detected hole contours with the caller's stable
+      // contours BEFORE cap triangulation / H3 wall assembly. This is the
+      // single intervention that stops the visible counter pop / shape
+      // switching during playback.
+      //
+      // Static H1/H2 thresholds, static H3 geometry, and Solid export are
+      // unaffected — they never pass `holeStabilization`.
+      //
+      // Topological safety: each override hole's centroid is point-in-
+      // polygon tested against the CURRENT partial outer silhouette
+      // `shapePts`. A final hole whose centroid is outside the partial
+      // outer can only mean "the loop containing this hole hasn't been
+      // drawn far enough yet" — using it would punch a wall outside the
+      // partial body. We drop such holes for this frame; they re-qualify
+      // automatically once enough stroke has been drawn.
+      let holeStabilizationActiveFlag: "YES" | "NO" = "NO"
+      let holeOverrideKeptCount = 0
+      let holeOverrideRejectedCount = 0
+      const holeOverrideRejectReasons: string[] = []
+      if (holeStabilization && holeStabilization.mode === "ANIMATION_GATED") {
+        holeStabilizationActiveFlag = "YES"
+        const overrideKept: THREE.Vector2[][] = []
+        const overrideAreas: number[] = []
+        const shapePolyForPip = shapePts.map((p) => ({ x: p.x, y: p.y }))
+        for (let i = 0; i < holeStabilization.activeFinalHolesWorld.length; i++) {
+          const finalHole = holeStabilization.activeFinalHolesWorld[i]
+          if (!finalHole || finalHole.length < 3) {
+            holeOverrideRejectedCount++
+            holeOverrideRejectReasons.push(`final[${i}] degenerate-contour`)
+            continue
+          }
+          // Compute centroid + |signed area| for PIP and ordering.
+          let fx = 0, fy = 0
+          for (const p of finalHole) { fx += p.x; fy += p.y }
+          fx /= finalHole.length
+          fy /= finalHole.length
+          if (!pointInPolygonMask(fx, fy, shapePolyForPip)) {
+            holeOverrideRejectedCount++
+            holeOverrideRejectReasons.push(`final[${i}] centroid-outside-partial-outer`)
+            continue
+          }
+          const sa = Math.abs(signedAreaOf(finalHole))
+          if (sa < 1e-10) {
+            holeOverrideRejectedCount++
+            holeOverrideRejectReasons.push(`final[${i}] world-area~0`)
+            continue
+          }
+          overrideKept.push(finalHole)
+          // The override "area" here is the world-space |signed area|.
+          // We scale it up to pseudo-px so it has comparable magnitude to
+          // h2HoleContourAreas (which use mask px counts). The exact value
+          // doesn't matter for geometry — only ordering does — but the
+          // panel readouts look cleaner if it stays positive and large.
+          overrideAreas.push(sa * 1e6)
+        }
+        // Re-sort the override-kept set by descending area.
+        const ovIdx = overrideKept
+          .map((_, i) => i)
+          .sort((a, b) => overrideAreas[b] - overrideAreas[a])
+        orderedHoles = ovIdx.map((i) => overrideKept[i])
+        orderedAreas = ovIdx.map((i) => overrideAreas[i])
+        holeOverrideKeptCount = orderedHoles.length
+        // Replace label tracking with synthetic IDs so downstream "usedByH2"
+        // viability still has a coherent parallel array, even though the
+        // partial-frame labelIds no longer correspond to the substituted
+        // contours. (smallestValidHoleUsedByH2 will compare against the
+        // partial labelIds; that's expected — its source is the partial
+        // detection, not the override.)
+        usedHoleLabelIds.length = 0
+        for (let i = 0; i < orderedHoles.length; i++) usedHoleLabelIds.push(-(i + 1))
+        console.log("[v0-solid] H3 ANIMATION_GATED override applied", {
+          finalHoleCountIn: holeStabilization.activeFinalHolesWorld.length,
+          kept: holeOverrideKeptCount,
+          rejected: holeOverrideRejectedCount,
+          partialDetectedHoles: holeContoursWorld.length,
+        })
+      }
       // Expose ordered hole contours to the H3 assembly block below.
       h3OrderedHolesWorld = orderedHoles
       
