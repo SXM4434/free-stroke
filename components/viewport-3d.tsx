@@ -2094,14 +2094,42 @@ function SolidDebugOverlay() {
                   {s.h3Built ?? "—"}
                 </span>
 
-                <span className="text-gray-400">depth param:</span>
+                {/* ---- Solid H3 control calibration (proves UI value is mapped before geometry) ---- */}
+                <span className="text-gray-400">thickness slider:</span>
                 <span className="font-mono">
-                  {((s.solidDepthParam ?? 0) as number).toFixed(3)}
+                  {(s.solidThicknessSliderValue ?? 0) as number}px
+                </span>
+
+                <span className="text-gray-400">thickness effective:</span>
+                <span
+                  className={
+                    (s.solidEffectiveThicknessPx ?? 0) !== (s.solidThicknessSliderValue ?? 0)
+                      ? "font-mono text-emerald-400"
+                      : "font-mono text-yellow-400"
+                  }
+                >
+                  {((s.solidEffectiveThicknessPx ?? 0) as number).toFixed(1)}px
+                </span>
+
+                <span className="text-gray-400">depth slider:</span>
+                <span className="font-mono">
+                  {((s.solidDepthSliderValue ?? s.solidDepthParam ?? 0) as number).toFixed(3)}
                 </span>
 
                 <span className="text-gray-400">depth effective:</span>
-                <span className="font-mono">
+                <span
+                  className={
+                    (s.solidDepthEffective ?? 0) !== (s.solidDepthSliderValue ?? 0)
+                      ? "font-mono text-emerald-400"
+                      : "font-mono text-yellow-400"
+                  }
+                >
                   {((s.solidDepthEffective ?? 0) as number).toFixed(3)}
+                </span>
+
+                <span className="text-gray-400">depth/thick ratio:</span>
+                <span className="font-mono">
+                  {((s.solidDepthToThicknessRatio ?? 0) as number).toFixed(3)}
                 </span>
 
                 <span className="text-gray-400">bbox Z:</span>

@@ -16,6 +16,12 @@ import {
   EXTRUDE_DEPTH_MULTIPLIER_MIN,
   EXTRUDE_DEPTH_MULTIPLIER_MAX,
   EXTRUDE_DEPTH_MULTIPLIER_STEP,
+  SOLID_THICKNESS_SLIDER_MIN,
+  SOLID_THICKNESS_SLIDER_MAX,
+  SOLID_THICKNESS_SLIDER_STEP,
+  SOLID_DEPTH_SLIDER_MIN,
+  SOLID_DEPTH_SLIDER_MAX,
+  SOLID_DEPTH_SLIDER_STEP,
 } from "@/lib/geometry-engines"
 
 const GEOMETRY_MODES: { value: GeometryMode; label: string; disabled: boolean; tooltip?: string }[] = [
@@ -139,14 +145,18 @@ export default function Home() {
       {/* Solid mode controls */}
       {geometryMode === "solid" && (
         <div className="flex h-10 shrink-0 items-center gap-4 border-b border-border bg-muted/30 px-4">
-          {/* Thickness */}
+          {/* Thickness — slider value is RAW px. The SolidEngine applies a
+              nonlinear calibration (see computeSolidEffectiveThicknessPx)
+              before feeding the value to canvas lineWidth + H3 walls, so
+              the breaking territory lives in the upper end of the slider
+              instead of the middle. */}
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="select-none font-medium">Thickness</span>
             <input
               type="range"
-              min={4}
-              max={64}
-              step={2}
+              min={SOLID_THICKNESS_SLIDER_MIN}
+              max={SOLID_THICKNESS_SLIDER_MAX}
+              step={SOLID_THICKNESS_SLIDER_STEP}
               value={solidParams.thickness}
               onChange={(e) => setSolidParams((p) => ({ ...p, thickness: Number(e.target.value) }))}
               className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
@@ -158,14 +168,15 @@ export default function Home() {
 
           <div className="h-4 w-px bg-border" />
 
-          {/* Depth */}
+          {/* Depth — slider value is RAW world depth. Calibrated through
+              computeSolidEffectiveDepth before being used as the H3 Z extent. */}
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="select-none font-medium">Depth</span>
             <input
               type="range"
-              min={0.02}
-              max={0.5}
-              step={0.01}
+              min={SOLID_DEPTH_SLIDER_MIN}
+              max={SOLID_DEPTH_SLIDER_MAX}
+              step={SOLID_DEPTH_SLIDER_STEP}
               value={solidParams.depth}
               onChange={(e) => setSolidParams((p) => ({ ...p, depth: Number(e.target.value) }))}
               className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"

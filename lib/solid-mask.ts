@@ -116,6 +116,11 @@ export interface MaskSolidDiagnostics {
   solidDepthEffective?: number                    // value used after floor clamp
   geometryBBoxZ?: number                          // measured Z extent of returned geometry
   exportUsesSamePath?: "YES" | "NO"               // true: SolidEngine.buildExport flows through same buildMaskSolid call
+  // ---- Solid H3 control calibration (stamped by SolidEngine after buildMaskSolid returns) ----
+  solidThicknessSliderValue?: number              // raw px value the user picked on the slider
+  solidEffectiveThicknessPx?: number              // calibrated px actually fed to lineWidth + H3 walls
+  solidDepthSliderValue?: number                  // raw depth value the user picked on the slider
+  solidDepthToThicknessRatio?: number             // effectiveDepth / worldThickness — for proportion QA
 }
 
 export interface MaskSolidStats {
@@ -225,6 +230,11 @@ export interface MaskSolidStages {
     solidDepthEffective?: number
     geometryBBoxZ?: number
     exportUsesSamePath?: "YES" | "NO"
+    // Solid H3 control calibration — stamped by SolidEngine after the engine returns
+    solidThicknessSliderValue?: number
+    solidEffectiveThicknessPx?: number
+    solidDepthSliderValue?: number
+    solidDepthToThicknessRatio?: number
   }
 }
 

@@ -181,13 +181,98 @@ export const DEFAULT_EXTRUDE_PARAMS: ExtrudeParams = {
 
 /** Solid-mode parameters */
 export interface SolidParams {
-  thickness: number   // stroke width in pixels when rasterizing (2D canvas lineWidth)
-  depth: number       // extrusion depth in world units
+  thickness: number   // raw slider value (px) — calibration is applied inside SolidEngine
+  depth: number       // raw slider value (world units) — calibration is applied inside SolidEngine
+}
+
+// =============================================================================
+// SOLID H3 CONTROL CALIBRATION
+// =============================================================================
+// The Solid Thickness and Depth sliders are EXPOSED in raw user-facing units
+// but the SolidEngine maps them through nonlinear curves before they reach
+// `buildMaskSolid`. This keeps the UI scale familiar while ensuring the
+// breaking territory of H3 (counters collapsing, mesh feeling chunky/broken)
+// lives in the upper 20–25% of each slider instead of the middle.
+//
+// Identity rule: if the user later wants to disable calibration, set both
+// curves to 1.0 and effective[min/max] equal to slider[min/max].
+// =============================================================================
+
+// --- Thickness slider (raw px fed to canvas lineWidth before calibration) ----
+export const SOLID_THICKNESS_SLIDER_MIN = 4
+export const SOLID_THICKNESS_SLIDER_MAX = 64
+export const SOLID_THICKNESS_SLIDER_STEP = 2
+export const SOLID_THICKNESS_SLIDER_DEFAULT = 38   // was 24 — calibrated to land at ~22px effective
+
+// Effective thickness range — what actually feeds canvas lineWidth.
+// effectiveMin keeps low-end strokes thin but stable.
+// effectiveMax caps how chunky H3 can get even at slider=max; this is what
+// pushes "breaking territory" to the far end of the slider instead of middle.
+const SOLID_THICKNESS_EFFECTIVE_MIN = 4
+const SOLID_THICKNESS_EFFECTIVE_MAX = 44
+
+// Curve > 1 compresses growth at the low end and accelerates at the high end.
+// 1.35 was chosen so that:
+//   slider=24 → effective ≈ 13   (was raw 24)
+//   slider=38 → effective ≈ 22   (new default — feels bold but stable)
+//   slider=40 → effective ≈ 24   (today's breaking point now safe)
+//   slider=56 → effective ≈ 37   (chunky but coherent)
+//   slider=64 → effective ≈ 44   (max — experimental/breaking territory)
+const SOLID_THICKNESS_CURVE = 1.35
+
+// --- Depth slider (raw world units fed as halfDepth*2 into H3 before calibration) ---
+export const SOLID_DEPTH_SLIDER_MIN = 0.02
+export const SOLID_DEPTH_SLIDER_MAX = 0.5
+export const SOLID_DEPTH_SLIDER_STEP = 0.01
+export const SOLID_DEPTH_SLIDER_DEFAULT = 0.18    // was 0.15 — modest bump for a more 3D default
+
+// Effective depth range — what actually feeds H3 extrusion Z extent.
+const SOLID_DEPTH_EFFECTIVE_MIN = 0.02
+const SOLID_DEPTH_EFFECTIVE_MAX = 0.5
+
+// Mild curve on depth so mid-slider isn't overly chunky in Z; max stays expressive.
+const SOLID_DEPTH_CURVE = 1.2
+
+/** Maps the raw Thickness slider value (px, 4..64) to an effective px value
+ *  consumed by canvas lineWidth and the H3 outer/inner wall pipeline.
+ *  Pure function. Used by BOTH `SolidEngine.buildPreview` and `buildExport`
+ *  so preview/export parity is exact. */
+export function computeSolidEffectiveThicknessPx(sliderPx: number): number {
+  const clamped = Math.max(
+    SOLID_THICKNESS_SLIDER_MIN,
+    Math.min(SOLID_THICKNESS_SLIDER_MAX, sliderPx)
+  )
+  const n =
+    (clamped - SOLID_THICKNESS_SLIDER_MIN) /
+    (SOLID_THICKNESS_SLIDER_MAX - SOLID_THICKNESS_SLIDER_MIN)
+  return (
+    SOLID_THICKNESS_EFFECTIVE_MIN +
+    Math.pow(n, SOLID_THICKNESS_CURVE) *
+      (SOLID_THICKNESS_EFFECTIVE_MAX - SOLID_THICKNESS_EFFECTIVE_MIN)
+  )
+}
+
+/** Maps the raw Depth slider value (world units, 0.02..0.5) to an effective
+ *  depth value consumed by H3 extrusion Z extent. Pure function — same
+ *  preview/export parity guarantee as the thickness mapping. */
+export function computeSolidEffectiveDepth(sliderDepth: number): number {
+  const clamped = Math.max(
+    SOLID_DEPTH_SLIDER_MIN,
+    Math.min(SOLID_DEPTH_SLIDER_MAX, sliderDepth)
+  )
+  const n =
+    (clamped - SOLID_DEPTH_SLIDER_MIN) /
+    (SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN)
+  return (
+    SOLID_DEPTH_EFFECTIVE_MIN +
+    Math.pow(n, SOLID_DEPTH_CURVE) *
+      (SOLID_DEPTH_EFFECTIVE_MAX - SOLID_DEPTH_EFFECTIVE_MIN)
+  )
 }
 
 export const DEFAULT_SOLID_PARAMS: SolidParams = {
-  thickness: 24,
-  depth: 0.15,
+  thickness: SOLID_THICKNESS_SLIDER_DEFAULT,
+  depth: SOLID_DEPTH_SLIDER_DEFAULT,
 }
 
 /** Identifies which Extrude shape-construction strategy produced a given mesh.
@@ -3942,10 +4027,19 @@ export const SolidEngine: GeometryEngine = {
     SOLID_DEBUG.pointCount = testStroke.points.length
     SOLID_DEBUG.buildMaskSolidCalled = true
     
-    // CRITICAL: Convert thickness from canvas pixels to world units
-    // Same scale factor as coordinate conversion: 3.0 / max(canvasWidth, canvasHeight)
+    // CRITICAL: Convert thickness from canvas pixels to world units.
+    // Same scale factor as coordinate conversion: 3.0 / max(canvasWidth, canvasHeight).
+    //
+    // CALIBRATION: The slider value is RAW. We pass it through
+    // `computeSolidEffectiveThicknessPx` first so that the breaking
+    // territory of H3 lands in the upper end of the slider, not the middle.
+    // The depth slider goes through `computeSolidEffectiveDepth` for the
+    // same reason. Both mappings are pure functions, so preview/export
+    // parity is exact (see `buildExport` below for the matching path).
     const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
-    const worldThickness = solidParams.thickness * coordScale
+    const effectiveThicknessPx = computeSolidEffectiveThicknessPx(solidParams.thickness)
+    const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
+    const worldThickness = effectiveThicknessPx * coordScale
     SOLID_DEBUG.inputThickness = solidParams.thickness
     SOLID_DEBUG.worldThickness = worldThickness
     
@@ -3964,8 +4058,31 @@ export const SolidEngine: GeometryEngine = {
       SOLID_DEBUG.worldMaxY = maxY
     }
     
-    const result = buildMaskSolid(testStroke, worldThickness, solidParams.depth, canvasWidth, canvasHeight)
-    
+    const result = buildMaskSolid(testStroke, worldThickness, effectiveDepth, canvasWidth, canvasHeight)
+
+    // ---- Stamp calibration diagnostics onto the panel-facing record ----
+    // The engine itself receives only effective values; the slider values
+    // belong to the UI layer. We surface BOTH so the debug panel can prove
+    // calibration is actually being applied (rather than identity).
+    const depthToThicknessRatio =
+      effectiveThicknessPx > 0
+        ? effectiveDepth / (effectiveThicknessPx * coordScale)
+        : 0
+    if (result.stages?.solidDiagnostics) {
+      result.stages.solidDiagnostics.solidThicknessSliderValue = solidParams.thickness
+      result.stages.solidDiagnostics.solidEffectiveThicknessPx = effectiveThicknessPx
+      result.stages.solidDiagnostics.solidDepthSliderValue = solidParams.depth
+      result.stages.solidDiagnostics.solidDepthEffective = effectiveDepth
+      result.stages.solidDiagnostics.solidDepthToThicknessRatio = depthToThicknessRatio
+    }
+    if (result.diagnostics) {
+      result.diagnostics.solidThicknessSliderValue = solidParams.thickness
+      result.diagnostics.solidEffectiveThicknessPx = effectiveThicknessPx
+      result.diagnostics.solidDepthSliderValue = solidParams.depth
+      result.diagnostics.solidDepthEffective = effectiveDepth
+      result.diagnostics.solidDepthToThicknessRatio = depthToThicknessRatio
+    }
+
     SOLID_DEBUG.filledPixels = result.stats.filledPixelCount
     SOLID_DEBUG.maskArea = result.stats.maskResolution * result.stats.maskResolution
     SOLID_DEBUG.filledPercent = SOLID_DEBUG.maskArea > 0 ? (SOLID_DEBUG.filledPixels / SOLID_DEBUG.maskArea) * 100 : 0
@@ -4058,12 +4175,15 @@ export const SolidEngine: GeometryEngine = {
     const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
     const disposables: THREE.BufferGeometry[] = []
 
-    // Convert strokes to sandbox format (canvas pixels -> world coords) and call sandbox pipeline
+    // Convert strokes to sandbox format (canvas pixels -> world coords) and call sandbox pipeline.
     const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
-    // Convert thickness from canvas pixels to world units
+    // Apply the SAME calibration mapping as buildPreview so export and preview
+    // produce identical geometry. No raw slider value reaches the engine.
     const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
-    const worldThickness = solidParams.thickness * coordScale
-    const result = buildMaskSolid(testStroke, worldThickness, solidParams.depth, canvasWidth, canvasHeight)
+    const effectiveThicknessPx = computeSolidEffectiveThicknessPx(solidParams.thickness)
+    const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
+    const worldThickness = effectiveThicknessPx * coordScale
+    const result = buildMaskSolid(testStroke, worldThickness, effectiveDepth, canvasWidth, canvasHeight)
     const geometry = result.geometry
 
     const rootGroup = new THREE.Group()
@@ -4076,8 +4196,10 @@ export const SolidEngine: GeometryEngine = {
       totalPoints: params.totalPoints,
       settings: {
         ...params.settings,
-        solidThickness: solidParams.thickness,
-        solidDepth: solidParams.depth,
+        solidThickness: solidParams.thickness,         // raw slider value
+        solidDepth: solidParams.depth,                 // raw slider value
+        solidEffectiveThicknessPx: effectiveThicknessPx, // calibrated value used in geometry
+        solidEffectiveDepth: effectiveDepth,             // calibrated value used in geometry
       },
     }
 
