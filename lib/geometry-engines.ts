@@ -112,36 +112,55 @@ export interface ExtrudeParams {
 }
 
 /* ============================================================
- * EXTRUDE DEPTH CALIBRATION (width-relative)
+ * EXTRUDE WIDTH CALIBRATION
+ *
+ * Width controls the ribbon HALF-WIDTH in world units (full ribbon
+ * width = 2 × value). Width is the dominant contributor to perceived
+ * stroke "mass" in XY. The previous slider range (0.02–0.20, default
+ * 0.06) was too aggressive: anything past ~0.065 visibly bloated the
+ * segmented fallback at corners. New range narrows the practical
+ * span and lowers the default so most strokes read as ribbons, not
+ * slabs. The effective-width clamp inside computeEffectiveWidth keeps
+ * geometry sane even if a future caller passes a value outside range.
+ * ============================================================ */
+export const EXTRUDE_WIDTH_MIN = 0.015
+export const EXTRUDE_WIDTH_MAX = 0.080
+export const EXTRUDE_WIDTH_STEP = 0.005
+export const EXTRUDE_WIDTH_DEFAULT = 0.035
+// Absolute clamps on the effective half-width actually used by geometry.
+const EXTRUDE_EFFECTIVE_WIDTH_FLOOR = 0.010
+const EXTRUDE_EFFECTIVE_WIDTH_CEILING = 0.085
+
+/* ============================================================
+ * EXTRUDE DEPTH CALIBRATION (width-relative multiplier)
  *
  * `ExtrudeParams.depth` is interpreted as a DEPTH-TO-WIDTH MULTIPLIER,
  * not a raw world-space depth. The engine computes:
  *
- *   effectiveDepth = clamp(multiplier × effectiveWidth, MIN, MAX)
+ *   effectiveDepth = clamp(multiplier × effectiveWidth, FLOOR, CEILING)
  *
- * Rationale: the previous raw-depth slider (0.02–0.6, default 0.2)
- * produced a depth-to-width ratio of ~3.3× at default, which makes
- * the segmented fallback geometry look exploded for normal handwriting
- * widths. Scaling depth as a multiple of width keeps strokes visually
- * proportional across the full width range (0.03–0.09 typical).
+ * Width controls XY footprint; Depth multiplier controls only Z
+ * extrusion height. They are decoupled: changing Depth does NOT inflate
+ * the XY footprint, and changing Width does NOT compress Z. The user
+ * asked for Depth to be EXPRESSIVE — multiplier max raised from 2.0
+ * to 4.0, default raised from 0.75 to 1.0, and the absolute world-space
+ * ceiling raised from 0.25 to 0.50 so a dramatic depth at moderate
+ * width still has headroom.
  *
- * Anchor points (the spec):
- *   very shallow: 0.25 × width
- *   normal:       0.75 × width   ← default
- *   deep:         1.25 × width
- *   max:          2.00 × width
- *
- * Absolute floor/ceiling are applied so the geometry never collapses
- * (tiny widths still get a visible depth) nor explodes past a sane
- * world-space bound.
+ * Anchor points (new spec):
+ *   shallow:  0.25×
+ *   default:  1.00×    ← stroke is as deep as it is half-wide
+ *   deep:     2.00×
+ *   dramatic: 3.00×
+ *   max:      4.00×
  * ============================================================ */
 export const EXTRUDE_DEPTH_MULTIPLIER_MIN = 0.1
-export const EXTRUDE_DEPTH_MULTIPLIER_MAX = 2.0
+export const EXTRUDE_DEPTH_MULTIPLIER_MAX = 4.0
 export const EXTRUDE_DEPTH_MULTIPLIER_STEP = 0.05
-export const EXTRUDE_DEPTH_MULTIPLIER_DEFAULT = 0.75
+export const EXTRUDE_DEPTH_MULTIPLIER_DEFAULT = 1.0
 // Absolute clamps on the resulting world-space depth (after multiplier × width).
 const EXTRUDE_EFFECTIVE_DEPTH_FLOOR = 0.005
-const EXTRUDE_EFFECTIVE_DEPTH_CEILING = 0.25
+const EXTRUDE_EFFECTIVE_DEPTH_CEILING = 0.50
 
 /** Map a width-relative multiplier (`depth` slider value) + effective width
  *  to a calibrated world-space depth that won't visually explode. */
@@ -152,7 +171,7 @@ export function computeEffectiveExtrudeDepth(multiplier: number, effectiveWidth:
 }
 
 export const DEFAULT_EXTRUDE_PARAMS: ExtrudeParams = {
-  width: 0.06,
+  width: EXTRUDE_WIDTH_DEFAULT,
   // NOTE: this is a MULTIPLIER, not raw depth. See block comment above.
   depth: EXTRUDE_DEPTH_MULTIPLIER_DEFAULT,
   bevelEnabled: true,
@@ -987,10 +1006,16 @@ function clampBevel(
   }
 
 /**
- * Pass through user width directly. Small floor to avoid degenerate zero-width shapes.
+ * Map the slider width to an effective half-width used by geometry. Currently
+ * identity within the calibrated [FLOOR, CEILING] envelope; we keep the helper
+ * separate so future tuning (e.g. nonlinear mapping, polyline-length-aware
+ * adjustments) can plug in without touching call sites. The CEILING is the
+ * critical guard: even if a future caller passes a wider value than the
+ * slider exposes, geometry will not blow up.
  */
 function computeEffectiveWidth(_filtered: THREE.Vector3[], userWidth: number): number {
-  return Math.max(userWidth, 0.001)
+  if (!isFinite(userWidth) || userWidth <= 0) return EXTRUDE_EFFECTIVE_WIDTH_FLOOR
+  return Math.min(EXTRUDE_EFFECTIVE_WIDTH_CEILING, Math.max(EXTRUDE_EFFECTIVE_WIDTH_FLOOR, userWidth))
 }
 
 /* ---- Contour validation ---- */
@@ -1186,33 +1211,81 @@ function buildSegmentedRibbonGeometry(
   const halfDepth = depth / 2
   const N = pts.length
 
-  // Per-vertex perpendiculars using averaged adjacent-segment normals
-  // (miter-join). Adjacent segment prisms then share the same offset
-  // direction at the joint, reducing internal seams in the side-wall
-  // shading. We never require the resulting outer outline to be simple
-  // — we only emit triangle strips, not triangulate a polygon.
+  // Per-vertex offset = perpendicular direction × miter length.
+  //
+  // For a vertex shared by tangents t1 (incoming) and t2 (outgoing), the
+  // CORRECT offset for an offset-curve ribbon is along the bisector NORMAL,
+  // with length = halfWidth / sin(angle/2). The previous implementation
+  // averaged the two unit perpendiculars and renormalized to halfWidth —
+  // which under-offsets the OUTER edge at sharp turns (creating notches)
+  // while the inner offsets self-overlap (creating chunky spikes). The
+  // miter formula fixes both.
+  //
+  // Sharp turns would otherwise produce a miter length that diverges as
+  // angle → 0. We clamp sin(angle/2) at MITER_CLAMP_SIN so the miter
+  // length is bounded at halfWidth / MITER_CLAMP_SIN. The visual cost of
+  // the clamp at very sharp corners is a slight inner overlap, which is
+  // already invisible inside a solid mesh body. The benefit is dramatic:
+  // no more corner explosions at moderate widths on loopy handwriting.
+  const MITER_CLAMP_SIN = 0.35  // ≈20° half-angle ⇒ miter capped at ~2.86×halfWidth
   const perpX: number[] = new Array(N)
   const perpY: number[] = new Array(N)
   for (let i = 0; i < N; i++) {
-    let nx = 0, ny = 0
+    // Incoming-segment tangent
+    let t1x = 0, t1y = 0, l1 = 0
     if (i > 0) {
       const dx = pts[i].x - pts[i - 1].x
       const dy = pts[i].y - pts[i - 1].y
-      const l = Math.hypot(dx, dy) || 1
-      // perpendicular to (dx,dy) rotated 90° CCW = (-dy/l, dx/l)
-      nx += -dy / l
-      ny += dx / l
+      l1 = Math.hypot(dx, dy)
+      if (l1 > 0) { t1x = dx / l1; t1y = dy / l1 }
     }
+    // Outgoing-segment tangent
+    let t2x = 0, t2y = 0, l2 = 0
     if (i < N - 1) {
       const dx = pts[i + 1].x - pts[i].x
       const dy = pts[i + 1].y - pts[i].y
-      const l = Math.hypot(dx, dy) || 1
-      nx += -dy / l
-      ny += dx / l
+      l2 = Math.hypot(dx, dy)
+      if (l2 > 0) { t2x = dx / l2; t2y = dy / l2 }
     }
-    const len = Math.hypot(nx, ny) || 1
-    perpX[i] = (nx / len) * halfWidth
-    perpY[i] = (ny / len) * halfWidth
+
+    let pX = 0, pY = 0, miterLen = halfWidth
+    if (l1 > 0 && l2 > 0) {
+      // Both segments exist → proper miter at the join.
+      const bx = t1x + t2x
+      const by = t1y + t2y
+      const bLen = Math.hypot(bx, by)
+      if (bLen < 1e-6) {
+        // 180° reversal — bisector is undefined; fall back to first perp.
+        pX = -t1y
+        pY = t1x
+        miterLen = halfWidth
+      } else {
+        const ubx = bx / bLen
+        const uby = by / bLen
+        // Miter normal = bisector rotated 90° CCW
+        pX = -uby
+        pY = ubx
+        // sin(angle/2): half-angle between t1 and the bisector unit vector.
+        // dot(t1, bisector_unit) = cos(angle/2); sin = sqrt(1 - cos²).
+        const cosHalf = t1x * ubx + t1y * uby
+        const sinHalf = Math.sqrt(Math.max(0, 1 - cosHalf * cosHalf))
+        const effSin = Math.max(sinHalf, MITER_CLAMP_SIN)
+        miterLen = halfWidth / effSin
+      }
+    } else if (l1 > 0) {
+      // End vertex — perpendicular to incoming segment.
+      pX = -t1y
+      pY = t1x
+      miterLen = halfWidth
+    } else if (l2 > 0) {
+      // Start vertex — perpendicular to outgoing segment.
+      pX = -t2y
+      pY = t2x
+      miterLen = halfWidth
+    }
+
+    perpX[i] = pX * miterLen
+    perpY[i] = pY * miterLen
   }
 
   const positions: number[] = []

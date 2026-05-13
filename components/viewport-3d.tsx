@@ -807,17 +807,19 @@ function Scene({
   solidStatusRef?: React.MutableRefObject<SolidBuildStatus | null>
   // Diagnostic-only ref; populated in extrude mode for the depth-trace panel.
   extrudeDebugRef?: React.MutableRefObject<{
-    /** Raw slider value (interpreted as width-relative multiplier). */
+    /** Raw depth-multiplier slider value (NOT a world-space depth). */
     depthParam: number
     buildCount: number
     /** Max stroke geometry Z extent in the current frame (= effectiveDepth + bevel). */
     bboxZ: number
     activeEngine: GeometryMode
-    /** Width slider (effective width passed to the engine). */
-    widthValue: number
-    /** Calibrated world-space depth actually used = multiplier × width clamped. */
+    /** Raw width slider value (what the user sees on the slider). */
+    widthSliderValue: number
+    /** Effective half-width actually consumed by the engine (after clamping). */
+    effectiveWidthUsed: number
+    /** Calibrated world-space depth actually used = multiplier × effectiveWidth clamped. */
     effectiveDepthUsed: number
-    /** effectiveDepthUsed / widthValue — the visual proportion. */
+    /** effectiveDepthUsed / effectiveWidthUsed — the visual proportion. */
     depthToWidthRatio: number
   } | null>
 }) {
@@ -910,25 +912,29 @@ function Scene({
     }
     // Pull the calibrated effective depth/width from the first stroke's
     // build status — the engine writes the actual values it used there, so
-    // this is the most authoritative source for the debug overlay.
-    let widthValue = extrudeParams?.width ?? 0
+    // this is the most authoritative source for the debug overlay. The
+    // RAW slider width is read directly from extrudeParams; we show both
+    // so the user can see exactly how the slider→engine clamp maps.
+    const widthSliderValue = extrudeParams?.width ?? 0
+    let effectiveWidthUsed = widthSliderValue
     let effectiveDepthUsed = 0
     for (const m of meshes) {
       const s = m.buildStatus
       if (!s || s.effectiveDepth <= 0) continue
       // Only non-rodFallback variants carry width; rodFallback does not.
-      if (s.type !== "rodFallback") widthValue = s.width
+      if (s.type !== "rodFallback") effectiveWidthUsed = s.width
       effectiveDepthUsed = s.effectiveDepth
       break
     }
-    const depthToWidthRatio = widthValue > 0 ? effectiveDepthUsed / widthValue : 0
+    const depthToWidthRatio = effectiveWidthUsed > 0 ? effectiveDepthUsed / effectiveWidthUsed : 0
 
     extrudeDebugRef.current = {
       depthParam: extrudeParams?.depth ?? 0,
       buildCount: extrudeBuildCountRef.current,
       bboxZ,
       activeEngine: geometryMode,
-      widthValue,
+      widthSliderValue,
+      effectiveWidthUsed,
       effectiveDepthUsed,
       depthToWidthRatio,
     }
@@ -1070,7 +1076,8 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
     buildCount: number
     bboxZ: number
     activeEngine: GeometryMode
-    widthValue: number
+    widthSliderValue: number
+    effectiveWidthUsed: number
     effectiveDepthUsed: number
     depthToWidthRatio: number
   } | null>(null)
@@ -1463,9 +1470,10 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               (camera angle / R3F prop swap / material). */}
           {geometryMode === "extrude" && extrudeDebugRef.current && (
             <div className="mt-1 border-t border-border/50 pt-1">
-              <div className="font-semibold text-foreground">Depth trace:</div>
-              <div>depthSliderValue: {extrudeDebugRef.current.depthParam.toFixed(2)}×</div>
-              <div>widthValue: {extrudeDebugRef.current.widthValue.toFixed(3)}</div>
+              <div className="font-semibold text-foreground">Extrude trace:</div>
+              <div>widthSliderValue: {extrudeDebugRef.current.widthSliderValue.toFixed(3)}</div>
+              <div>effectiveWidthUsed: {extrudeDebugRef.current.effectiveWidthUsed.toFixed(3)}</div>
+              <div>depthMultiplierSliderValue: {extrudeDebugRef.current.depthParam.toFixed(2)}×</div>
               <div>effectiveDepthUsed: {extrudeDebugRef.current.effectiveDepthUsed.toFixed(3)}</div>
               <div>depthToWidthRatio: {extrudeDebugRef.current.depthToWidthRatio.toFixed(2)}</div>
               <div>previewBuildCount: {extrudeDebugRef.current.buildCount}</div>
