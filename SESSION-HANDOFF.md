@@ -213,8 +213,36 @@ These are non-negotiable for this checkpoint:
   - no inner side walls yet
   - no export/animation changes yet
 
+## Extrude recovery checkpoint
+
+- **name:** Extrude Continuous-Ribbon Width/Depth Recovery
+- **label:** `EXTRUDE_CONTINUOUS_RIBBON_WIDTH_DEPTH_PASS`
+- **status:** locked / usable enough to unblock Solid H3
+
+### What is now true
+
+- Extrude no longer relies on Rod fallback for normal loopy handwriting.
+- Legacy offset-ribbon strategy still exists (still tried first).
+- Raster trace strategy still exists as experimental / non-default.
+- Rod fallback still exists only as emergency fallback (degenerate input only).
+- Continuous-ribbon fallback is the usable fallback for normal handwriting when legacy contour fails.
+- Depth works as a multiplier of effective width (decoupled from XY footprint).
+- Width range is now more controlled (calibrated slider + safe-envelope clamp inside the engine).
+- Depth range can be more expressive (multiplier max raised, world-space ceiling raised).
+- Preview/export parity is preserved (both flow through the same `tryBuildExtrudeGeometry`).
+- Debug panel shows width/depth trace values clearly (`widthSliderValue`, `effectiveWidthUsed`, `depthMultiplierSliderValue`, `effectiveDepthUsed`, `depthToWidthRatio`, `geometryBBoxZ`).
+- Solid H1/H2 code was not touched.
+
+### Important note
+
+- This checkpoint does NOT mean Extrude is final-polished.
+- It means Extrude is usable enough to stop blocking Solid H3.
+- Future polish can improve joins, caps, and style quality later.
+
+## Next branch — `SOLID_HOLE_SUPPORT_PHASE_H3_EXTRUDED_HOLES_AND_INNER_WALLS`
+
 ## Final saved checkpoint label
 
-`SOLID_HOLE_SUPPORT_H1_DETECTION_PASS`
+`EXTRUDE_CONTINUOUS_RIBBON_WIDTH_DEPTH_PASS`
 
 (supersedes all prior checkpoints; they remain in effect as underlying layers)
