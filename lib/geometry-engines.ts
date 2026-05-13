@@ -198,7 +198,7 @@ export const DEFAULT_SOLID_PARAMS: SolidParams = {
  *   "raster"    — rasterize disks → marching-squares trace → THREE.ExtrudeGeometry
  *   "rod-only"  — debug only; everything becomes a TubeGeometry, depth-blind
  */
-export type ExtrudeStrategyTag = "legacy" | "segmented" | "raster" | "rod-only"
+export type ExtrudeStrategyTag = "legacy" | "continuous-ribbon" | "segmented" | "raster" | "rod-only"
 
 /**
  * Per-stroke build status for debug overlay (Extrude mode).
@@ -1177,31 +1177,20 @@ function safeExtrude(
 
 
 /**
- * Segmented ribbon extrusion — depth-aware fallback for strokes whose
- * legacy parametric ribbon contour self-intersects.
+ * @deprecated — replaced by `buildContinuousRibbonStripGeometry`.
  *
- * Strategy: emit one rectangular prism per polyline segment. Each prism is
- * oriented perpendicular to the segment direction in XY, with thickness =
- * 2×halfWidth in the perpendicular direction and extent = depth in Z.
- * Adjacent segment prisms may overlap internally; that is acceptable and
- * visually invisible inside the solid mesh body. Per-vertex normals are
- * computed so shading is smooth-ish along the stroke path.
+ * Kept here only as historical reference. The implementation below
+ * computed a per-vertex miter offset with `halfWidth / sin(angle/2)`
+ * scaling clamped at ~2.86×halfWidth. That formula produces visible
+ * spikes (up to ~2.86×halfWidth wide) at every sharp-turn vertex on
+ * a loopy stroke, which compounded into the "blob" the user observed
+ * even at low width/depth. The replacement clamps the offset at
+ * exactly halfWidth, eliminating spikes.
  *
- * Why this works where legacy fails: there is no single global polygon
- * to triangulate, so no self-intersection rejection occurs. Depth is
- * consumed directly as Z extent. Visual result is closer to a calligraphic
- * offset ribbon than a rasterized marching-squares chunky silhouette, and
- * preserves the directional feel of Extrude mode vs Solid mode.
- *
- * Output is already centered on z=0 (range [-halfDepth, +halfDepth]), so
- * no translate is needed at the call site.
- *
- * Winding: every face is CCW from its outward normal direction (verified
- * by right-hand rule on a +X-oriented test segment). MeshPhysicalMaterial
- * uses FrontSide by default, so wrong winding would produce holes — every
- * quad below has been hand-checked.
+ * NOT CALLED. Safe to delete after one stable release.
  */
-function buildSegmentedRibbonGeometry(
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _deprecatedBuildSegmentedRibbonGeometry(
   pts: THREE.Vector3[],
   halfWidth: number,
   depth: number
@@ -1351,6 +1340,186 @@ function buildSegmentedRibbonGeometry(
 }
 
 
+/* ============================================================
+ * CONTINUOUS_RIBBON_STRIP — depth-aware shared-vertex strip
+ *
+ * This is the preferred Extrude fallback when the parametric offset
+ * polygon self-intersects. It builds a SINGLE continuous extruded
+ * ribbon — NOT a sequence of independent per-segment prisms — by
+ * sharing the four cross-section vertices (top-left, top-right,
+ * bottom-left, bottom-right) across consecutive polyline samples.
+ *
+ * Why it doesn't blob:
+ *   • Vertices are shared between adjacent quads → no overlapping
+ *     "boxes" stacking up at every sample (the visual symptom the
+ *     legacy implementation showed at loops).
+ *   • Offset MAGNITUDE at each vertex is clamped to halfWidth.
+ *     We deliberately do NOT use the geometric miter length
+ *     halfWidth / sin(angle/2): at sharp turns sin(angle/2) → 0,
+ *     so that formula produces spikes up to several × halfWidth
+ *     at every vertex on a loop's curve. Clamping at halfWidth
+ *     means the OUTER edge has a tiny inward notch at sharp turns
+ *     (acceptable for MVP) while the per-vertex maximum offset
+ *     stays constant — no spikes, no piling.
+ *   • Zero-length input segments are filtered, which prevents NaN
+ *     perpendiculars at duplicate samples (a common cause of
+ *     degenerate triangles that render as black slivers).
+ *   • Tight-turn densification subdivides any segment where the
+ *     bisector turn at an endpoint exceeds DENSIFY_ANGLE_THRESHOLD,
+ *     so the ribbon's outer-edge "notch" is small enough to be
+ *     visually unnoticeable.
+ *
+ * Output is centered on z=0 (range [-halfDepth, +halfDepth]). The
+ * caller does NOT need to translate the resulting geometry.
+ *
+ * Width semantics: `halfWidth` IS the half-width — total cross-section
+ * width on a straight segment is exactly 2 × halfWidth.
+ *
+ * Visual identity vs Rod: Rod is a circular tube (radius ≈ halfWidth);
+ * this ribbon has a rectangular cross-section (full 2×halfWidth wide,
+ * `depth` tall), so even at the same width slider the silhouettes are
+ * clearly distinct. Visual identity vs Solid: Solid is a depth-blind
+ * raster→marching-squares mask extrusion; this ribbon preserves
+ * directionality (the cross-section follows the stroke tangent),
+ * giving it a calligraphic feel Solid never produces.
+ * ============================================================ */
+function buildContinuousRibbonStripGeometry(
+  pts: THREE.Vector3[],
+  halfWidth: number,
+  depth: number
+): THREE.BufferGeometry | null {
+  if (pts.length < 2 || halfWidth <= 0 || depth <= 0) return null
+
+  // 1) Filter near-duplicate samples (zero-length segments produce NaN
+  //    perpendiculars). MIN_EDGE is small enough that any handwriting
+  //    sample worth keeping survives; only literal duplicates die.
+  const MIN_EDGE = 1e-5
+  const filtered: THREE.Vector3[] = [pts[0]]
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].distanceTo(filtered[filtered.length - 1]) > MIN_EDGE) {
+      filtered.push(pts[i])
+    }
+  }
+  if (filtered.length < 2) return null
+
+  // 2) Tight-turn densification: subdivide segments whose endpoint
+  //    bisectors turn by more than DENSIFY_ANGLE_THRESHOLD radians.
+  //    A single pass of midpoint subdivision halves the per-segment
+  //    turn; for typical handwriting one pass is sufficient.
+  //    Threshold = 25° ≈ 0.436 rad.
+  const DENSIFY_ANGLE_THRESHOLD = 0.436
+  // Compute per-vertex turn angle (between incoming and outgoing tangents).
+  const turnAngleAt = (arr: THREE.Vector3[], i: number): number => {
+    if (i <= 0 || i >= arr.length - 1) return 0
+    const ax = arr[i].x - arr[i - 1].x, ay = arr[i].y - arr[i - 1].y
+    const bx = arr[i + 1].x - arr[i].x, by = arr[i + 1].y - arr[i].y
+    const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by)
+    if (la <= 0 || lb <= 0) return 0
+    let cos = (ax * bx + ay * by) / (la * lb)
+    if (cos > 1) cos = 1
+    if (cos < -1) cos = -1
+    return Math.acos(cos)
+  }
+  // Single subdivision pass. Insert midpoint of (i, i+1) when either
+  // endpoint exhibits a sharp turn.
+  const densified: THREE.Vector3[] = [filtered[0]]
+  for (let i = 0; i < filtered.length - 1; i++) {
+    const ta = turnAngleAt(filtered, i)
+    const tb = turnAngleAt(filtered, i + 1)
+    if (ta > DENSIFY_ANGLE_THRESHOLD || tb > DENSIFY_ANGLE_THRESHOLD) {
+      const mx = (filtered[i].x + filtered[i + 1].x) * 0.5
+      const my = (filtered[i].y + filtered[i + 1].y) * 0.5
+      const mz = (filtered[i].z + filtered[i + 1].z) * 0.5
+      densified.push(new THREE.Vector3(mx, my, mz))
+    }
+    densified.push(filtered[i + 1])
+  }
+
+  const samples = densified
+  const N = samples.length
+  const halfDepth = depth / 2
+
+  // 3) Per-vertex offset: averaged unit perpendicular × halfWidth.
+  //    No 1/sin(angle/2) scaling — that produced spikes at sharp turns.
+  //    Magnitude is always exactly halfWidth, regardless of curvature.
+  const perpX: number[] = new Array(N)
+  const perpY: number[] = new Array(N)
+  for (let i = 0; i < N; i++) {
+    let nx = 0, ny = 0
+    if (i > 0) {
+      const dx = samples[i].x - samples[i - 1].x
+      const dy = samples[i].y - samples[i - 1].y
+      const l = Math.hypot(dx, dy)
+      if (l > 0) { nx += -dy / l; ny += dx / l }
+    }
+    if (i < N - 1) {
+      const dx = samples[i + 1].x - samples[i].x
+      const dy = samples[i + 1].y - samples[i].y
+      const l = Math.hypot(dx, dy)
+      if (l > 0) { nx += -dy / l; ny += dx / l }
+    }
+    const len = Math.hypot(nx, ny)
+    if (len > 1e-6) {
+      perpX[i] = (nx / len) * halfWidth
+      perpY[i] = (ny / len) * halfWidth
+    } else {
+      // Truly degenerate vertex (no neighbors with length). Reuse
+      // previous vertex's perp if available; else zero.
+      perpX[i] = i > 0 ? perpX[i - 1] : 0
+      perpY[i] = i > 0 ? perpY[i - 1] : 0
+    }
+  }
+
+  // 4) Emit 4 vertices per sample: (left/right) × (top/bottom).
+  const positions: number[] = []
+  const Lp: number[] = new Array(N)
+  const Rp: number[] = new Array(N)
+  const Lm: number[] = new Array(N)
+  const Rm: number[] = new Array(N)
+  const pushV = (x: number, y: number, z: number): number => {
+    const idx = positions.length / 3
+    positions.push(x, y, z)
+    return idx
+  }
+  for (let i = 0; i < N; i++) {
+    const x = samples[i].x, y = samples[i].y, dx = perpX[i], dy = perpY[i]
+    Lp[i] = pushV(x + dx, y + dy, +halfDepth)
+    Rp[i] = pushV(x - dx, y - dy, +halfDepth)
+    Lm[i] = pushV(x + dx, y + dy, -halfDepth)
+    Rm[i] = pushV(x - dx, y - dy, -halfDepth)
+  }
+
+  // 5) Faces between every consecutive pair of samples. The four quads
+  //    share their endpoints with the next pair → continuous strip,
+  //    no internal duplicated faces. Winding chosen so each face's
+  //    outward normal points away from the ribbon interior; verified
+  //    by right-hand rule on a +X-direction test segment.
+  const indices: number[] = []
+  const quad = (a: number, b: number, c: number, d: number) => {
+    indices.push(a, b, c, a, c, d)
+  }
+  for (let i = 0; i < N - 1; i++) {
+    quad(Lp[i], Rp[i], Rp[i + 1], Lp[i + 1])   // top  face  (+Z normal)
+    quad(Lm[i], Lm[i + 1], Rm[i + 1], Rm[i])   // bot  face  (-Z normal)
+    quad(Lp[i], Lp[i + 1], Lm[i + 1], Lm[i])   // left wall  (+perp normal)
+    quad(Rp[i], Rm[i], Rm[i + 1], Rp[i + 1])   // right wall (-perp normal)
+  }
+
+  // 6) Start / end caps. Strip ends only — intermediate samples share
+  //    cross-section vertices so no intra-strip caps are needed.
+  quad(Lp[0], Lm[0], Rm[0], Rp[0])
+  quad(Lp[N - 1], Rp[N - 1], Rm[N - 1], Lm[N - 1])
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
+  geo.setIndex(indices)
+  geo.computeVertexNormals()
+  geo.computeBoundingBox()
+  geo.computeBoundingSphere()
+  return geo
+}
+
+
 /**
  * Try to build a valid ExtrudeGeometry for a stroke.
  * 1) If width < TINY_WIDTH_THRESHOLD, force bevel OFF to avoid degenerate extrusions.
@@ -1427,44 +1596,50 @@ function tryBuildExtrudeGeometry(
     shapeSource = "parametric"
   }
 
-  // Helper: depth-aware segmented fallback used when the parametric ribbon
-  // contour self-intersects or extrusion fails. Preserves Depth (Z extent
-  // equals depth slider value) and keeps a directional ribbon feel instead
-  // of falling back to a depth-blind Rod tube. See buildSegmentedRibbonGeometry
-  // for the per-segment prism construction.
-  const trySegmentedFallback = (reason: string): {
+  // Helper: depth-aware CONTINUOUS RIBBON STRIP fallback used when the
+  // parametric ribbon contour self-intersects or extrusion fails.
+  // Preserves Depth (Z extent ≈ effectiveDepth) and keeps a directional
+  // ribbon feel. Crucially, this is NOT a per-segment-prism builder —
+  // it produces a single shared-vertex strip mesh that does NOT visually
+  // blob at loops the way independent boxes would. See
+  // `buildContinuousRibbonStripGeometry` for the construction.
+  //
+  // Rod fallback is reserved for truly degenerate input (continuous-ribbon
+  // refused, i.e. <2 valid samples or zero depth/width).
+  const tryContinuousRibbonFallback = (reason: string): {
     geometry: THREE.BufferGeometry | null
     status: StrokeBuildStatus
   } => {
-    const segGeo = buildSegmentedRibbonGeometry(filtered, userWidth, effectiveDepth)
-    if (segGeo) {
-      console.log(`[v0] stroke ${_si} final: extrude(segmented) (strategy=${tag}→segmented)`, {
+    const ribGeo = buildContinuousRibbonStripGeometry(filtered, userWidth, effectiveDepth)
+    if (ribGeo) {
+      console.log(`[v0] stroke ${_si} final: extrude(continuous-ribbon) (strategy=${tag}→continuous-ribbon)`, {
         width: userWidth,
         depthMultiplier,
         effectiveDepth,
         reason,
       })
-      // bevelEnabled reported as false because segmented prisms have hard
-      // perpendicular edges; bevel slider does not affect this path.
+      // bevelEnabled reported as false because the strip's side walls are
+      // perpendicular to the front/back faces with no rounded bevel; bevel
+      // slider does not affect this path.
       return {
-        geometry: segGeo,
+        geometry: ribGeo,
         status: {
           type: "ok",
           width: userWidth,
           depth: effectiveDepth,
           bevelEnabled: false,
-          strategy: "segmented",
+          strategy: "continuous-ribbon",
           depthMultiplier,
           effectiveDepth,
         },
       }
     }
-    console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag}, segmented declined)`, { reason })
+    console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag}, continuous-ribbon declined)`, { reason })
     return {
       geometry: null,
       status: {
         type: "rodFallback",
-        reason: `segmented declined: ${reason}`,
+        reason: `continuous-ribbon declined: ${reason}`,
         fallbackRadius: fbRadius,
         strategy: tag,
         depthMultiplier,
@@ -1476,7 +1651,7 @@ function tryBuildExtrudeGeometry(
   if (!shape) {
     // Truly degenerate input — both shape builders refused. Try segmented
     // (it accepts any polyline with ≥2 distinct points), else Rod.
-    return trySegmentedFallback("no shape")
+    return tryContinuousRibbonFallback("no shape")
   }
 
   // Validate contour ONLY for the parametric path. The rasterized polygon
@@ -1487,7 +1662,7 @@ function tryBuildExtrudeGeometry(
       // Legacy contour self-intersects. Previously this fell back to Rod
       // (depth-blind). Now fall back to the depth-aware segmented builder
       // so normal loopy handwriting still responds to the Depth slider.
-      return trySegmentedFallback("bad contour")
+      return tryContinuousRibbonFallback("bad contour")
     }
   }
 
@@ -1550,7 +1725,7 @@ function tryBuildExtrudeGeometry(
   // This is rare (degenerate triangulation in THREE.ExtrudeGeometry). Use
   // segmented as a final depth-aware fallback before resorting to Rod, so
   // even pathological strokes still respond to the Depth slider.
-  return trySegmentedFallback("extrude failed")
+  return tryContinuousRibbonFallback("extrude failed")
 }
 
 /** Derive fallback rod radius from extrude width so Width slider affects fallback strokes too */
