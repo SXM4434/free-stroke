@@ -342,9 +342,33 @@ function AnimatedStrokes({
 
       if (!mesh || !strokeMeshData) continue
 
-      // Extrude/Solid meshes are always fully visible (static, no animation)
-      if (strokeMeshData.mode === "extrude" || strokeMeshData.mode === "solid") {
+      // Solid meshes animate by REBUILDING geometry from progress-filtered
+      // strokes (see `animatedStrokes` useMemo + `SolidAnimationTick`), so the
+      // mesh itself is always fully visible; the partial reveal lives inside
+      // the geometry. Do not gate visibility here for Solid.
+      if (strokeMeshData.mode === "solid") {
         mesh.visible = true
+        continue
+      }
+
+      // Extrude meshes use a single ExtrudeGeometry per stroke whose index
+      // buffer interleaves cap triangulation and side walls, so per-segment
+      // `setDrawRange` would reveal caps before walls (visually broken).
+      // Animate Extrude via PER-STROKE TIMELINE GATING instead: the mesh
+      // pops fully visible at its `tStart`, stays visible afterwards. This
+      // is the same AnimatedStrokes path Rod uses, just at stroke-granularity
+      // (Rod additionally drives drawRange per-ring on top of the timeline).
+      //
+      // The Extrude geometry itself is NOT touched here — width/depth
+      // calibration, ribbon strategy, and continuous-ribbon fallback all
+      // continue to flow through the engine unchanged.
+      if (strokeMeshData.mode === "extrude") {
+        const timeline = timelines[si]
+        if (timeline) {
+          mesh.visible = currentTimeMs >= timeline.tStart
+        } else {
+          mesh.visible = true
+        }
         continue
       }
 
