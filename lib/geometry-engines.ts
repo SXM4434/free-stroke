@@ -1991,16 +1991,25 @@ export const ExtrudeEngine: GeometryEngine = {
       // Include the slider params that produced this geometry in the React key
       // so changing depth/width/bevel forces React to unmount-and-remount the
       // <mesh> element. This is belt-and-suspenders on top of the useStrokeMeshes
-      // dep array: even if a future ref-prop-swap regression in @react-three/fiber
-      // ever caused the mesh to retain the old BufferGeometry instance, a fresh
-      // mount picks up the new geometry unconditionally. Extrude meshes are static
-      // (no draw-in animation), so remounting on slider change has no animation cost.
+      // dep array.
+      //
+      // CRITICAL: do NOT include `stroke.points.length` in this key. During
+      // Extrude playback the stroke is rebuilt every ~22ms from an arc-length-
+      // filtered partial (see `filterStrokesByProgress` + the `animatedStrokes`
+      // useMemo in viewport-3d), and that partial grows by 1 point per tick.
+      // If the React key included that count, every progress tick would change
+      // the key, unmount the entire <group>, and remount it with the new
+      // geometry — losing the in-flight WebGL state between ticks and visibly
+      // producing a single late "appears all at once" paint at progress=1
+      // instead of a smooth progressive reveal. The slider paramKey already
+      // forces a remount when geometry parameters change, which is the only
+      // remount we actually want.
       const paramKey = `w${extrudeParams.width.toFixed(3)}-d${extrudeParams.depth.toFixed(3)}-b${extrudeParams.bevelEnabled ? 1 : 0}`
       if (geometry) {
         result.push({
           tubeGeometry: geometry,
           filteredCount: filtered.length,
-          key: `stroke-${si}-${stroke.points.length}-${paramKey}`,
+          key: `stroke-${si}-${paramKey}`,
           mode: "extrude",
           buildStatus: status,
         })
@@ -2016,7 +2025,9 @@ export const ExtrudeEngine: GeometryEngine = {
           jointPositions: rodData.jointPositions,
           jointFractions: rodData.jointFractions,
           filteredCount: filtered.length,
-          key: `stroke-${si}-${stroke.points.length}-${paramKey}-rod-fallback`,
+          // Same rationale: omit stroke.points.length so the rod-fallback group
+          // doesn't remount each progress tick during Extrude playback either.
+          key: `stroke-${si}-${paramKey}-rod-fallback`,
           mode: "rod",
           buildStatus: status,
         })
