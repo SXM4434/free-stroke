@@ -85,7 +85,21 @@ export const SOLID_DEBUG = {
  *     reveal is arc-length based, not point-count based.
  */
 export const SOLID_ANIM_DEBUG = {
-  /** True while `playing === true` in Solid mode, or while a boundary sync is in flight. */
+  /**
+   * Which animation strategy the last build went through. Set by `Scene` on
+   * every render so the debug overlay can prove the right path is in use:
+   *   - "drawRange"                              -> Rod (per-segment drawRange in AnimatedStrokes)
+   *   - "partialExtrudeRebuild"                  -> Extrude (animatedStrokes → ExtrudeGeometry rebuild)
+   *   - "partialSolidRebuildWithHoleStabilization" -> Solid (animatedStrokes → buildMaskSolid w/ override)
+   *   - "static"                                 -> Not animating
+   */
+  animationPath:
+    "static" as
+      | "static"
+      | "drawRange"
+      | "partialExtrudeRebuild"
+      | "partialSolidRebuildWithHoleStabilization",
+  /** True while `playing === true` in Solid or Extrude mode, or while a boundary sync is in flight. */
   solidAnimationActive: false,
   /** Last value pushed to `solidAnimProgress` (0..1). Tracks the rebuild input. */
   solidAnimationProgress: 0,
@@ -352,7 +366,7 @@ export type ExtrudeStrategyTag = "legacy" | "continuous-ribbon" | "segmented" | 
  *                       always equal to effectiveDepth on new code paths
  *   depthMultiplier  — the raw slider value (interpreted as a width-relative multiplier)
  *   effectiveDepth   — the calibrated world-space depth = computeEffectiveExtrudeDepth(...)
- *   strategy         — which shape/extrusion strategy produced this mesh
+ *   strategy         ��� which shape/extrusion strategy produced this mesh
  */
 export type StrokeBuildStatus =
   | { type: "ok"; width: number; depth: number; bevelEnabled: boolean; strategy: ExtrudeStrategyTag; depthMultiplier: number; effectiveDepth: number }

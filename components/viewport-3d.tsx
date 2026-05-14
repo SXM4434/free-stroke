@@ -342,33 +342,19 @@ function AnimatedStrokes({
 
       if (!mesh || !strokeMeshData) continue
 
-      // Solid meshes animate by REBUILDING geometry from progress-filtered
-      // strokes (see `animatedStrokes` useMemo + `SolidAnimationTick`), so the
-      // mesh itself is always fully visible; the partial reveal lives inside
-      // the geometry. Do not gate visibility here for Solid.
-      if (strokeMeshData.mode === "solid") {
+      // Solid AND Extrude both animate by REBUILDING geometry from
+      // progress-filtered strokes (see `animatedStrokes` useMemo +
+      // `SolidAnimationTick`). The mesh itself is always fully visible
+      // every frame; the partial reveal lives inside the geometry that
+      // `useStrokeMeshes` produces. Per-stroke visibility gating and
+      // per-segment drawRange are NEVER applied to these modes — they
+      // would either pop entire strokes (gating) or interleave cap and
+      // wall triangles incorrectly (drawRange on ExtrudeGeometry).
+      if (
+        strokeMeshData.mode === "solid" ||
+        strokeMeshData.mode === "extrude"
+      ) {
         mesh.visible = true
-        continue
-      }
-
-      // Extrude meshes use a single ExtrudeGeometry per stroke whose index
-      // buffer interleaves cap triangulation and side walls, so per-segment
-      // `setDrawRange` would reveal caps before walls (visually broken).
-      // Animate Extrude via PER-STROKE TIMELINE GATING instead: the mesh
-      // pops fully visible at its `tStart`, stays visible afterwards. This
-      // is the same AnimatedStrokes path Rod uses, just at stroke-granularity
-      // (Rod additionally drives drawRange per-ring on top of the timeline).
-      //
-      // The Extrude geometry itself is NOT touched here — width/depth
-      // calibration, ribbon strategy, and continuous-ribbon fallback all
-      // continue to flow through the engine unchanged.
-      if (strokeMeshData.mode === "extrude") {
-        const timeline = timelines[si]
-        if (timeline) {
-          mesh.visible = currentTimeMs >= timeline.tStart
-        } else {
-          mesh.visible = true
-        }
         continue
       }
 
@@ -603,34 +589,36 @@ function PlaybackController({
 /* ---- SolidAnimationTick: forces React re-render while playheadRef advances ----
  *
  * Why this exists:
- *   The Solid mesh is rebuilt from a `useMemo` that depends on a React state
- *   value (`solidAnimProgress`). The actual playback source-of-truth is
- *   `playheadRef.current`, which is a ref and does NOT trigger re-renders when
- *   mutated by `PlaybackController`. Without this tick, the Solid mesh never
- *   rebuilds during playback and appears static.
+ *   The Solid and Extrude meshes both rebuild from a `useMemo` that depends on
+ *   a React state value (`solidAnimProgress`). The actual playback source-of-
+ *   truth is `playheadRef.current`, which is a ref and does NOT trigger React
+ *   re-renders when mutated by `PlaybackController`. Without this tick, those
+ *   meshes never rebuild during playback and appear static.
+ *
+ *   The component name retains the `Solid` prefix because Solid was the first
+ *   consumer of this tick, but it now also drives the Extrude partial-stroke
+ *   rebuild path. Rod animation continues to be driven directly off
+ *   `playheadRef.current` inside `AnimatedStrokes` (drawRange), so this tick
+ *   has no effect on Rod and pays zero cost in Rod mode.
  *
  * Behavior:
  *   - Runs on every frame inside the Canvas (must be a child of <Canvas>).
- *   - Throttles updates lightly so Solid rebuilds at a smooth cadence without
- *     spamming raster/contour/extrude work every single frame:
+ *   - Throttles updates lightly so partial-rebuild modes don't spam raster
+ *     / contour / extrude work every single frame:
  *       * minimum interval: ~22ms (~45 Hz) between state updates
  *       * minimum delta:    1e-5 (just enough to skip exact-equal frames)
- *     This is a TIME-dominated gate. The previous 0.003 delta floor caused
- *     visibly chunky reveal at slow speeds because each frame's delta could
- *     fall below 0.003 even when 24ms had elapsed, forcing skips. Time alone
- *     is now sufficient; we keep a tiny epsilon delta only to avoid pure
- *     no-op state updates between identical frames.
  *   - Always forces an update at the boundaries (progress 0 and progress 1)
  *     so the final frame matches the static preview exactly and replay starts
  *     from empty.
- *   - Active for Solid mode only; other modes early-out and pay zero cost.
+ *   - Active for partial-rebuild modes only (Solid, Extrude). Rod and any
+ *     other mode early-out and pay zero cost.
  */
 function SolidAnimationTick({
-  isSolid,
+  enabled,
   playheadRef,
   setSolidAnimProgress,
 }: {
-  isSolid: boolean
+  enabled: boolean
   playheadRef: React.MutableRefObject<number>
   setSolidAnimProgress: React.Dispatch<React.SetStateAction<number>>
 }) {
@@ -638,20 +626,13 @@ function SolidAnimationTick({
   const lastSyncTimeRef = useRef<number>(0)
 
   useFrame(() => {
-    if (!isSolid) return
+    if (!enabled) return
     const current = playheadRef.current
     const last = lastSyncedRef.current
     const now = performance.now()
     const delta = Math.abs(current - last)
 
-    // Always sync at boundaries so final frame == full static preview
-    // and replay-from-zero starts at empty geometry.
     const atBoundary = (current >= 1 && last < 1) || (current <= 0 && last > 0)
-
-    // Throttle: ~45 Hz time gate is the dominant control; only require a
-    // virtually-zero delta as a no-op guard. This eliminates the prior
-    // chunking that appeared whenever speed × frame-time produced a delta
-    // below the old 0.003 floor.
     const timeOk = now - lastSyncTimeRef.current >= 22
     const deltaOk = delta > 1e-5
 
@@ -905,7 +886,10 @@ function Scene({
   useLayoutEffect(() => {
     const wasPlaying = prevPlayingRef.current
     prevPlayingRef.current = playing
-    if (geometryMode !== "solid") return
+    // Applies to both partial-rebuild modes. Rod animation does not use this
+    // state value, so Rod is unaffected. Other modes (none currently) are
+    // skipped to keep this fix narrowly scoped.
+    if (geometryMode !== "solid" && geometryMode !== "extrude") return
     // Transition from paused to playing
     if (!wasPlaying && playing) {
       const head = playheadRef.current
@@ -919,13 +903,22 @@ function Scene({
     }
   }, [playing, geometryMode, solidAnimProgress, playheadRef])
 
-  // For Solid mode, filter strokes by current animation progress.
-  // For other modes, return strokes unchanged (Rod/Extrude animate via drawRange).
+  // Filter strokes by current animation progress for partial-rebuild modes
+  // (Solid and Extrude). Rod returns strokes unchanged because Rod animates
+  // via per-segment drawRange inside `AnimatedStrokes` rather than rebuilding
+  // its geometry on every progress tick.
+  //
+  // The same `filterStrokesByProgress` helper is used for both modes — it is
+  // mode-agnostic (operates purely on `ProcessedStroke.points` arc length).
+  // For Extrude this means each ExtrudeGeometry is rebuilt from a shorter,
+  // arc-length-clipped copy of its source stroke every ~22ms, revealing the
+  // ribbon progressively along its path. No visibility gating is involved.
+  //
   // ALSO writes animation diagnostics (rebuild count, point count, arc lengths,
   // final-frame match) to SOLID_ANIM_DEBUG so the debug overlay can poll them.
   const solidAnimRebuildCountRef = useRef(0)
   const animatedStrokes = useMemo(() => {
-    if (geometryMode !== "solid") return strokes
+    if (geometryMode !== "solid" && geometryMode !== "extrude") return strokes
     const out = filterStrokesByProgress(strokes, solidAnimProgress)
 
     // ---- Diagnostics ----
@@ -968,13 +961,33 @@ function Scene({
 
   // Animation active flag tracked alongside `playing` so the debug overlay
   // can distinguish "playback running" from "playback paused mid-reveal".
+  // The flag stays true for any partial-rebuild mode while playing.
   useEffect(() => {
-    if (geometryMode !== "solid") {
+    if (geometryMode !== "solid" && geometryMode !== "extrude") {
       SOLID_ANIM_DEBUG.solidAnimationActive = false
       return
     }
     SOLID_ANIM_DEBUG.solidAnimationActive = playing
   }, [playing, geometryMode])
+
+  // Stamp the active animation strategy each render so the debug panel
+  // proves which path the build went through. "static" is reported when
+  // playback is not running OR progress is fully complete.
+  useEffect(() => {
+    if (!playing || solidAnimProgress >= 1) {
+      SOLID_ANIM_DEBUG.animationPath = "static"
+      return
+    }
+    if (geometryMode === "rod") {
+      SOLID_ANIM_DEBUG.animationPath = "drawRange"
+    } else if (geometryMode === "extrude") {
+      SOLID_ANIM_DEBUG.animationPath = "partialExtrudeRebuild"
+    } else if (geometryMode === "solid") {
+      SOLID_ANIM_DEBUG.animationPath = "partialSolidRebuildWithHoleStabilization"
+    } else {
+      SOLID_ANIM_DEBUG.animationPath = "static"
+    }
+  }, [geometryMode, playing, solidAnimProgress])
 
   // -----------------------------------------------------------------
   // Solid H3 ANIMATION_GATED hole stabilization — Scene-side state machine.
@@ -1179,9 +1192,22 @@ function Scene({
     lastSeenProgressRef.current = solidAnimProgress
   }, [playing, solidAnimProgress, geometryMode])
 
-  // Build meshes - for Solid mode, use animated strokes instead of full strokes
+  // Build meshes.
+  //
+  //  - Solid and Extrude both consume `animatedStrokes` (arc-length-filtered
+  //    partial copy of the source strokes for the current progress). At
+  //    progress >= 1 the filter short-circuits and returns the original
+  //    `strokes` reference, so the final-frame mesh is byte-identical to the
+  //    static preview that was rendered before Play was pressed.
+  //  - Rod consumes the full `strokes` because Rod animation is driven by
+  //    per-segment drawRange inside AnimatedStrokes, not by geometry rebuilds.
+  //  - `holeStabilization` is Solid-only by construction: only the Solid
+  //    H3 hole pipeline reads it. Extrude passes `undefined` so its geometry
+  //    path is untouched.
+  const useAnimatedStrokes =
+    geometryMode === "solid" || geometryMode === "extrude"
   const meshes = useStrokeMeshes(
-    geometryMode === "solid" ? animatedStrokes : strokes,
+    useAnimatedStrokes ? animatedStrokes : strokes,
     canvasWidth,
     canvasHeight,
     geometryMode,
@@ -1348,8 +1374,8 @@ function Scene({
 
       {/* Solid-only animation tick: forces React re-render of Solid mesh
           while playheadRef advances. No-op for other modes. */}
-      <SolidAnimationTick
-        isSolid={geometryMode === "solid"}
+        <SolidAnimationTick
+          enabled={geometryMode === "solid" || geometryMode === "extrude"}
         playheadRef={playheadRef}
         setSolidAnimProgress={setSolidAnimProgress}
       />
@@ -2597,6 +2623,22 @@ function SolidDebugOverlay() {
               SOLID H3 ANIMATION
             </div>
             <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+              <span className="text-gray-400">animationPath:</span>
+              <span
+                className={
+                  a.animationPath ===
+                  "partialSolidRebuildWithHoleStabilization"
+                    ? "text-green-400 font-bold"
+                    : a.animationPath === "partialExtrudeRebuild"
+                      ? "text-cyan-300 font-bold"
+                      : a.animationPath === "drawRange"
+                        ? "text-blue-300"
+                        : "text-gray-400"
+                }
+              >
+                {a.animationPath}
+              </span>
+
               <span className="text-gray-400">solidAnimationActive:</span>
               <span
                 className={
