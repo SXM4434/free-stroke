@@ -10,9 +10,11 @@ import {
   type SolidParams,
   DEFAULT_EXTRUDE_PARAMS,
   DEFAULT_SOLID_PARAMS,
-  EXTRUDE_WIDTH_MIN,
-  EXTRUDE_WIDTH_MAX,
-  EXTRUDE_WIDTH_STEP,
+  EXTRUDE_WIDTH_SLIDER_MIN,
+  EXTRUDE_WIDTH_SLIDER_MAX,
+  EXTRUDE_WIDTH_SLIDER_STEP,
+  mapExtrudeWidthSlider,
+  extrudeWidthToSlider,
   EXTRUDE_DEPTH_MULTIPLIER_MIN,
   EXTRUDE_DEPTH_MULTIPLIER_MAX,
   EXTRUDE_DEPTH_MULTIPLIER_STEP,
@@ -38,6 +40,16 @@ export default function Home() {
   )
   const [geometryMode, setGeometryMode] = useState<GeometryMode>("rod")
   const [extrudeParams, setExtrudeParams] = useState<ExtrudeParams>(DEFAULT_EXTRUDE_PARAMS)
+  // Width slider is a normalized t in [0, 1]. The effective half-width
+  // stored in `extrudeParams.width` is derived from t via
+  // `mapExtrudeWidthSlider`, which uses a quadratic curve so the middle
+  // of the slider lands on the previous default (clean), and the messy
+  // / breaking widths are reserved for the last ~25% of slider travel.
+  // The engine itself still consumes a raw half-width, so engine code
+  // does not need to know about the slider at all.
+  const [widthSlider, setWidthSlider] = useState<number>(
+    extrudeWidthToSlider(DEFAULT_EXTRUDE_PARAMS.width),
+  )
   const [solidParams, setSolidParams] = useState<SolidParams>(DEFAULT_SOLID_PARAMS)
   const settingsRef = useRef<ExportSettings>({
     spacing: 4,
@@ -85,24 +97,27 @@ export default function Home() {
       {/* Extrude mode controls */}
       {geometryMode === "extrude" && (
         <div className="flex h-10 shrink-0 items-center gap-4 border-b border-border bg-muted/30 px-4">
-          {/* Width */}
-          {/* Width — slider value is a half-width in world units. Range
-              is calibrated so the practical span keeps the segmented
-              fallback usable; the engine additionally clamps the effective
-              width into a safe envelope (see computeEffectiveWidth). */}
+          {/* Width — slider is a NORMALIZED t in [0, 1] mapped through a
+              quadratic curve to the effective half-width. Mid-slider lands
+              on the clean default; only the last ~25% of slider travel
+              reaches widths that are known to be chunky/breaking. */}
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="select-none font-medium">Width</span>
             <input
               type="range"
-              min={EXTRUDE_WIDTH_MIN}
-              max={EXTRUDE_WIDTH_MAX}
-              step={EXTRUDE_WIDTH_STEP}
-              value={extrudeParams.width}
-              onChange={(e) => setExtrudeParams((p) => ({ ...p, width: Number(e.target.value) }))}
+              min={EXTRUDE_WIDTH_SLIDER_MIN}
+              max={EXTRUDE_WIDTH_SLIDER_MAX}
+              step={EXTRUDE_WIDTH_SLIDER_STEP}
+              value={widthSlider}
+              onChange={(e) => {
+                const t = Number(e.target.value)
+                setWidthSlider(t)
+                setExtrudeParams((p) => ({ ...p, width: mapExtrudeWidthSlider(t) }))
+              }}
               className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
             />
-            <span className="w-8 select-none font-mono text-[10px]">
-              {extrudeParams.width.toFixed(3)}
+            <span className="w-16 select-none font-mono text-[10px] tabular-nums">
+              {Math.round(widthSlider * 100)}% · {extrudeParams.width.toFixed(3)}
             </span>
           </label>
 

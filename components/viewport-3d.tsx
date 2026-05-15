@@ -22,6 +22,7 @@ import {
   SOLID_DEBUG,
   SOLID_ANIM_DEBUG,
   SOLID_STAGE_DEBUG,
+  extrudeWidthToSlider,
 } from "@/lib/geometry-engines"
 
 
@@ -839,14 +840,18 @@ function Scene({
     /** Max stroke geometry Z extent in the current frame (= effectiveDepth + bevel). */
     bboxZ: number
     activeEngine: GeometryMode
-    /** Raw width slider value (what the user sees on the slider). */
+    /** Normalized Width slider t in [0, 1]. */
     widthSliderValue: number
-    /** Effective half-width actually consumed by the engine (after clamping). */
+    widthSliderPercent: number
+    /** Effective half-width actually consumed by the engine (after mapping + clamping). */
     effectiveWidthUsed: number
+    effectiveWidthPercent: number
     /** Calibrated world-space depth actually used = multiplier × effectiveWidth clamped. */
     effectiveDepthUsed: number
     /** effectiveDepthUsed / effectiveWidthUsed — the visual proportion. */
     depthToWidthRatio: number
+    strategy: string
+    buildStatus: string
   } | null>
 }) {
   // ---- Solid draw-in animation state ----
@@ -1099,9 +1104,26 @@ function Scene({
         SOLID_ANIM_DEBUG.perHoleHitStreaks = []
         SOLID_ANIM_DEBUG.perHoleMissStreaks = []
       }
-      // Start the animation with NO override (no holes activated yet).
-      holeStabilizationRef.current = undefined
-      setHoleStabilizationKey(`play-${Date.now()}-none`)
+      // Start the animation with an EMPTY-active override (mode is
+      // ANIMATION_GATED, activeFinalHolesWorld is []). Previously this
+      // was set to `undefined`, which meant buildMaskSolid took the
+      // unstabilized partial-detection path until the first hole
+      // activated — and the partial frames in between produced visible
+      // hole flicker (counter labels switching, holes blinking on/off,
+      // shape mid-stroke briefly punching a hole where the loop hadn't
+      // closed yet). With the empty override in place, the override
+      // block inside buildMaskSolid runs every frame and unconditionally
+      // REPLACES any partial-detection holes with the activated set
+      // (which is empty until a real hole genuinely activates). Net
+      // effect: zero holes from frame 0 through "no hole has activated
+      // yet", then once a hole activates it appears and sticks until
+      // playback ends. No flicker. Static H1/H2/H3 path is untouched
+      // (it never receives `holeStabilization`).
+      holeStabilizationRef.current = {
+        mode: "ANIMATION_GATED",
+        activeFinalHolesWorld: [],
+      }
+      setHoleStabilizationKey(`play-${Date.now()}-empty`)
     }
   }, [playing, geometryMode, playheadRef])
 
@@ -1171,10 +1193,16 @@ function Scene({
           sig.push(i)
         }
       }
-      holeStabilizationRef.current =
-        activeFinalHolesWorld.length > 0
-          ? { mode: "ANIMATION_GATED", activeFinalHolesWorld }
-          : undefined
+      // ALWAYS keep the override in ANIMATION_GATED mode during playback.
+      // Even with zero activated holes the override must be present so
+      // the buildMaskSolid override block wipes any partial-detection
+      // holes. Falling back to `undefined` here was a previous source
+      // of mid-playback hole flicker the moment an `activationChanged`
+      // event landed with no active holes left.
+      holeStabilizationRef.current = {
+        mode: "ANIMATION_GATED",
+        activeFinalHolesWorld,
+      }
       setHoleStabilizationKey(`active-${sig.join(",")}-of-${ref.holes.length}`)
     }
   }, [geometryMode, playing, solidAnimProgress])
@@ -1305,22 +1333,32 @@ function Scene({
       }
     }
     // Pull the calibrated effective depth/width from the first stroke's
-    // build status — the engine writes the actual values it used there, so
-    // this is the most authoritative source for the debug overlay. The
-    // RAW slider width is read directly from extrudeParams; we show both
-    // so the user can see exactly how the slider→engine clamp maps.
-    const widthSliderValue = extrudeParams?.width ?? 0
-    let effectiveWidthUsed = widthSliderValue
+    // build status — the engine writes the actual values it used there.
+    // The Width slider is now a normalized t in [0, 1]; the EFFECTIVE
+    // half-width is what extrudeParams.width carries (already mapped by
+    // app/page.tsx). Reconstruct the slider t from the effective width
+    // so both readings are visible in the debug panel even if a future
+    // caller bypasses the mapping helper.
+    const rawWidthParam = extrudeParams?.width ?? 0
+    let effectiveWidthUsed = rawWidthParam
     let effectiveDepthUsed = 0
+    let strategy = ""
+    let buildStatus = ""
     for (const m of meshes) {
       const s = m.buildStatus
-      if (!s || s.effectiveDepth <= 0) continue
-      // Only non-rodFallback variants carry width; rodFallback does not.
-      if (s.type !== "rodFallback") effectiveWidthUsed = s.width
-      effectiveDepthUsed = s.effectiveDepth
-      break
+      if (!s) continue
+      buildStatus = s.type
+      strategy = s.strategy
+      // Only non-rodFallback variants carry the engine-resolved width;
+      // rodFallback's effective half-width is implicit via fallbackRadius.
+      if (s.type !== "rodFallback") {
+        effectiveWidthUsed = s.width
+      }
+      if (s.effectiveDepth > 0) effectiveDepthUsed = s.effectiveDepth
+      if (effectiveDepthUsed > 0) break
     }
     const depthToWidthRatio = effectiveWidthUsed > 0 ? effectiveDepthUsed / effectiveWidthUsed : 0
+    const widthSliderValue = extrudeWidthToSlider(effectiveWidthUsed)
 
     extrudeDebugRef.current = {
       depthParam: extrudeParams?.depth ?? 0,
@@ -1328,9 +1366,13 @@ function Scene({
       bboxZ,
       activeEngine: geometryMode,
       widthSliderValue,
+      widthSliderPercent: Math.round(widthSliderValue * 100),
       effectiveWidthUsed,
+      effectiveWidthPercent: Math.round(extrudeWidthToSlider(effectiveWidthUsed) * 100),
       effectiveDepthUsed,
       depthToWidthRatio,
+      strategy: strategy || "unknown",
+      buildStatus: buildStatus || "unknown",
     }
   }, [meshes, extrudeParams?.depth, extrudeParams?.width, geometryMode, extrudeDebugRef])
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
@@ -1470,10 +1512,20 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
     buildCount: number
     bboxZ: number
     activeEngine: GeometryMode
+    /** Raw normalized slider t in [0, 1] — what the Width slider currently shows. */
     widthSliderValue: number
+    /** Slider value expressed as a 0–100% reading. */
+    widthSliderPercent: number
+    /** Effective half-width actually consumed by the engine (after mapping + clamp). */
     effectiveWidthUsed: number
+    /** Effective width expressed as a 0–100% reading of the slider envelope. */
+    effectiveWidthPercent: number
     effectiveDepthUsed: number
     depthToWidthRatio: number
+    /** Strategy reported by the first non-degenerate build status (proves which path ran). */
+    strategy: string
+    /** Build status type of the first stroke ("ok", "bevelOff", "rodFallback", ...). */
+    buildStatus: string
   } | null>(null)
 
   const { totalDuration } = useTimeline(rawStrokes)
@@ -1871,7 +1923,11 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             <div className="mt-1 border-t border-border/50 pt-1">
               <div className="font-semibold text-foreground">Extrude trace:</div>
               <div>widthSliderValue: {extrudeDebugRef.current.widthSliderValue.toFixed(3)}</div>
+              <div>widthSliderPercent: {extrudeDebugRef.current.widthSliderPercent}%</div>
               <div>effectiveWidthUsed: {extrudeDebugRef.current.effectiveWidthUsed.toFixed(3)}</div>
+              <div>effectiveWidthPercent: {extrudeDebugRef.current.effectiveWidthPercent}%</div>
+              <div>strategy: {extrudeDebugRef.current.strategy}</div>
+              <div>buildStatus: {extrudeDebugRef.current.buildStatus}</div>
               <div>depthMultiplierSliderValue: {extrudeDebugRef.current.depthParam.toFixed(2)}×</div>
               <div>effectiveDepthUsed: {extrudeDebugRef.current.effectiveDepthUsed.toFixed(3)}</div>
               <div>depthToWidthRatio: {extrudeDebugRef.current.depthToWidthRatio.toFixed(2)}</div>

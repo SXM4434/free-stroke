@@ -204,6 +204,78 @@ const EXTRUDE_EFFECTIVE_WIDTH_FLOOR = 0.010
 const EXTRUDE_EFFECTIVE_WIDTH_CEILING = 0.085
 
 /* ============================================================
+ * EXTRUDE WIDTH NONLINEAR SLIDER MAPPING
+ *
+ * The Width slider is exposed as a normalized t in [0, 1]. The
+ * mapping from t to the effective half-width is a quadratic curve
+ * tuned so the practical "clean" zone covers more than half of the
+ * slider:
+ *
+ *   width(t) = WIDTH_SLIDER_FLOOR + (WIDTH_SLIDER_CEIL - FLOOR) * t^p
+ *
+ * with the curve calibrated so:
+ *
+ *   t = 0.00 -> 0.020   (very thin, always clean)
+ *   t = 0.25 -> 0.024   (thin, clean)
+ *   t = 0.50 -> 0.035   (default, clean/bold)
+ *   t = 0.75 -> 0.054   (heavy but still controlled)
+ *   t = 1.00 -> 0.080   (chunky / experimental territory)
+ *
+ * The previous LINEAR slider mapped mid (0.0475) into the messy
+ * zone of the segmented-fallback join behavior. With the quadratic
+ * curve, t = 0.5 produces 0.035 — the original DEFAULT effective
+ * width — so by definition the middle of the slider now feels
+ * exactly like "clean default". Slider positions above ~0.75 are
+ * where the user-acceptable "this starts to get chunky" range
+ * begins; only the last ~25% of slider travel ever reaches the
+ * known-breaking widths.
+ *
+ * The effective-width clamp inside computeEffectiveWidth is still
+ * applied AFTER mapping, so even a future caller that bypasses
+ * this mapping cannot drive geometry outside the safe envelope.
+ * ============================================================ */
+export const EXTRUDE_WIDTH_SLIDER_MIN = 0
+export const EXTRUDE_WIDTH_SLIDER_MAX = 1
+export const EXTRUDE_WIDTH_SLIDER_STEP = 0.01
+export const EXTRUDE_WIDTH_SLIDER_DEFAULT = 0.5
+const EXTRUDE_WIDTH_SLIDER_FLOOR = 0.020
+const EXTRUDE_WIDTH_SLIDER_CEIL = 0.080
+const EXTRUDE_WIDTH_SLIDER_EXP = 2.0
+
+/**
+ * Map a normalized Width slider value `t in [0, 1]` to the effective
+ * extrude half-width. Always returns a finite value inside the
+ * absolute effective-width clamp envelope.
+ *
+ * Inverse helper (`extrudeWidthToSlider`) exists for diagnostics so
+ * the debug panel can show "what slider position produced this width"
+ * even if a caller passed a raw width into ExtrudeParams directly.
+ */
+export function mapExtrudeWidthSlider(t: number): number {
+  if (!isFinite(t)) return EXTRUDE_WIDTH_DEFAULT
+  const clamped = Math.min(1, Math.max(0, t))
+  const raw =
+    EXTRUDE_WIDTH_SLIDER_FLOOR +
+    (EXTRUDE_WIDTH_SLIDER_CEIL - EXTRUDE_WIDTH_SLIDER_FLOOR) *
+      Math.pow(clamped, EXTRUDE_WIDTH_SLIDER_EXP)
+  return Math.min(
+    EXTRUDE_EFFECTIVE_WIDTH_CEILING,
+    Math.max(EXTRUDE_EFFECTIVE_WIDTH_FLOOR, raw),
+  )
+}
+
+/** Inverse of `mapExtrudeWidthSlider` — diagnostics only. */
+export function extrudeWidthToSlider(width: number): number {
+  if (!isFinite(width)) return EXTRUDE_WIDTH_SLIDER_DEFAULT
+  const span = EXTRUDE_WIDTH_SLIDER_CEIL - EXTRUDE_WIDTH_SLIDER_FLOOR
+  if (span <= 0) return EXTRUDE_WIDTH_SLIDER_DEFAULT
+  const ratio = (width - EXTRUDE_WIDTH_SLIDER_FLOOR) / span
+  if (ratio <= 0) return 0
+  if (ratio >= 1) return 1
+  return Math.pow(ratio, 1 / EXTRUDE_WIDTH_SLIDER_EXP)
+}
+
+/* ============================================================
  * EXTRUDE DEPTH CALIBRATION (width-relative multiplier)
  *
  * `ExtrudeParams.depth` is interpreted as a DEPTH-TO-WIDTH MULTIPLIER,
