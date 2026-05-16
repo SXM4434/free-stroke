@@ -98,8 +98,7 @@ export const SOLID_ANIM_DEBUG = {
       | "static"
       | "drawRange"
       | "partialExtrudeRebuild"
-      | "partialSolidRebuildWithHoleStabilization"
-      | "partialSolidRebuildNoHolesCommitAtEnd",
+      | "partialSolidRebuildWithHoleStabilization",
   /** True while `playing === true` in Solid or Extrude mode, or while a boundary sync is in flight. */
   solidAnimationActive: false,
   /** Last value pushed to `solidAnimProgress` (0..1). Tracks the rebuild input. */
@@ -139,27 +138,38 @@ export const SOLID_ANIM_DEBUG = {
   holeStabilizationActive: "NO" as "YES" | "NO",
   /** Frame counter — how many partial centroids the matcher saw last update. */
   lastPartialCentroidCount: 0,
-  // ---- Solid animation no-holes reveal mode (CURRENT STRATEGY) ----
-  /** Chosen animation hole strategy. */
-  solidAnimationHoleMode: "LIVE_DETECTION" as
-    | "LIVE_DETECTION"
-    | "FILLED_DURING_REVEAL_COMMIT_AT_END",
-  /** "YES" while the partial reveal is being built with H2 disabled this frame. */
-  animationUsesHolesDuringReveal: "YES" as "YES" | "NO",
-  /** Progress at which the no-holes flag flips off and the final H3 commits (1.0 by default). */
-  holeCommitProgress: 1,
-  /** "YES" when the current frame is the commit frame (progress >= holeCommitProgress). */
-  isHoleCommitFrame: "NO" as "YES" | "NO",
-  /** Hole count from the static H3 reference snapshot taken at Play start. */
+  // ---- Solid animation hole stabilization (CURRENT STRATEGY) ----
+  //
+  // Active strategy: STICKY_FINAL_HOLE_CONTOURS.
+  //
+  // DEPRECATED / removed strategies — intentionally absent from this union
+  // so any caller still referencing them produces a TypeScript error:
+  //   - "LIVE_DETECTION"                      (no centroid-PIP override, deprecated)
+  //   - "FILLED_DURING_REVEAL_COMMIT_AT_END" (filled-blob reveal, abandoned)
+  /** Active animation hole strategy label. */
+  solidAnimationHoleMode:
+    "STICKY_FINAL_HOLE_CONTOURS" as "STICKY_FINAL_HOLE_CONTOURS",
+  /** Number of final static H3 holes captured at Play start (0 if no holes). */
   finalStaticHoleCount: 0,
-  /** Hole count actively cut into the partial mesh this frame (should be 0 during reveal). */
+  /** Number of holes actively attached to the cap THIS frame. */
   animatedActiveHoleCount: 0,
-  /** Topology changes counted strictly during the active reveal (should be 0). */
-  topologyChangeCountDuringReveal: 0,
-  /** "YES" when validHoleCount on the final committed frame matches the static reference. */
+  /** Number of final holes matched at least once but not yet streak-confirmed. */
+  pendingHoleCount: 0,
+  /** Indices (snapshot order) of final holes currently active this frame. */
+  activeHoleIds: [] as number[],
+  /** solidAnimProgress at which each final hole flipped to active (NaN before activation). */
+  holeActivationProgress: [] as number[],
+  /** Where this frame's hole contours come from. */
+  holeSourceDuringAnimation:
+    "FINAL_STATIC_FOR_ACTIVE_NONE_OTHERWISE" as
+      | "FINAL_STATIC_FOR_ACTIVE_NONE_OTHERWISE"
+      | "STATIC",
+  /** "YES" once at least one final-static contour is in use this session. */
+  usingFinalHoleContoursForAnimation: "NO" as "YES" | "NO",
+  /** "YES" when validHoleCount on the final committed frame matches finalStaticHoleCount. */
   finalFrameHoleMatch: "NO" as "YES" | "NO",
-  /** "YES" when the final committed frame used the full unfiltered strokes + no-holes flag OFF. */
-  usingStaticH3AtFinalFrame: "NO" as "YES" | "NO",
+  /** "YES" if the first frame of the latest playback painted with progress at the start. */
+  firstFrameResetClean: "NO" as "YES" | "NO",
 }
 
 /**

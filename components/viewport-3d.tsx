@@ -999,10 +999,8 @@ function Scene({
     } else if (geometryMode === "extrude") {
       SOLID_ANIM_DEBUG.animationPath = "partialExtrudeRebuild"
     } else if (geometryMode === "solid") {
-      // Current strategy: hole topology is suppressed for the entire reveal
-      // and committed at the final frame, so this label replaces the old
-      // "partialSolidRebuildWithHoleStabilization" path.
-      SOLID_ANIM_DEBUG.animationPath = "partialSolidRebuildNoHolesCommitAtEnd"
+      // Sticky-final-hole-contour stabilization (current strategy).
+      SOLID_ANIM_DEBUG.animationPath = "partialSolidRebuildWithHoleStabilization"
     } else {
       SOLID_ANIM_DEBUG.animationPath = "static"
     }
@@ -1161,11 +1159,26 @@ function Scene({
     const partial = stages?.solidDiagnostics?.detectedPartialHoleCentroidsWorld ?? []
     SOLID_ANIM_DEBUG.lastPartialCentroidCount = partial.length
 
+    // Activation rule (STICKY_FINAL_HOLE_CONTOURS strategy):
+    //   - Require ACTIVATION_HIT_STREAK consecutive positive centroid matches
+    //     before flipping `active = true`. This filters out single-frame
+    //     false positives (e.g. transient empty regions inside the partial
+    //     silhouette where two strokes nearly close a region but the loop
+    //     is not yet sealed).
+    //   - Once active, NEVER deactivate within a playback session — there
+    //     is no longer a centroid-inside-partial-outer test inside the
+    //     engine override block, so the activation decision made here is
+    //     authoritative for the rest of the reveal.
+    //   - On the commit frame (progress >= 1), force-activate every final
+    //     hole so the final frame is guaranteed to match the static H3
+    //     reference even if a centroid never reached its activation tol
+    //     during the reveal (e.g. very fast stroke speed).
+    const ACTIVATION_HIT_STREAK = 2
     let activationChanged = false
+    const forceFinalActivation = solidAnimProgress >= 1
     for (let i = 0; i < ref.holes.length; i++) {
       const fc = ref.centroids[i]
       const tol = ref.activationRadius[i]
-      // Did any partial centroid fall within tolerance of this final hole?
       let matched = false
       for (const p of partial) {
         const dx = p.x - fc.x
@@ -1179,15 +1192,19 @@ function Scene({
       if (matched) {
         state.hitStreak += 1
         state.missStreak = 0
-        // Threshold = 1: activate on the very first match. Sticky thereafter.
-        if (!state.active) {
-          state.active = true
-          activationChanged = true
-        }
       } else {
+        // Hits must be CONSECUTIVE — reset the streak on any miss so a
+        // single noisy partial frame can't accumulate matches over a
+        // long reveal.
+        state.hitStreak = 0
         state.missStreak += 1
-        // Once activated, NEVER deactivate this session. The topological
-        // safety filter handles "not yet enclosed" automatically.
+      }
+      if (
+        !state.active &&
+        (state.hitStreak >= ACTIVATION_HIT_STREAK || forceFinalActivation)
+      ) {
+        state.active = true
+        activationChanged = true
       }
     }
 
@@ -1196,6 +1213,42 @@ function Scene({
     SOLID_ANIM_DEBUG.perHoleMissStreaks = activationRef.current.map((s) => s.missStreak)
     const activeCount = activationRef.current.filter((s) => s.active).length
     SOLID_ANIM_DEBUG.activatedFinalHoleCount = activeCount
+
+    // Sticky-strategy mirrors owned by THIS effect (the activation state
+    // machine is the single source of truth for these values).
+    const activeIds: number[] = []
+    let pending = 0
+    for (let i = 0; i < activationRef.current.length; i++) {
+      const s = activationRef.current[i]
+      if (s.active) activeIds.push(i)
+      else if (s.hitStreak > 0) pending += 1
+    }
+    SOLID_ANIM_DEBUG.activeHoleIds = activeIds
+    SOLID_ANIM_DEBUG.pendingHoleCount = pending
+    SOLID_ANIM_DEBUG.usingFinalHoleContoursForAnimation =
+      activeCount > 0 ? "YES" : "NO"
+    SOLID_ANIM_DEBUG.holeSourceDuringAnimation =
+      "FINAL_STATIC_FOR_ACTIVE_NONE_OTHERWISE"
+    // Record progress-at-activation for newly-activated holes. We only
+    // write the slot if it's still NaN (never been activated this session)
+    // so the value reflects the FIRST activation moment.
+    if (
+      SOLID_ANIM_DEBUG.holeActivationProgress.length !==
+      activationRef.current.length
+    ) {
+      SOLID_ANIM_DEBUG.holeActivationProgress = activationRef.current.map(
+        () => Number.NaN,
+      )
+    }
+    for (let i = 0; i < activationRef.current.length; i++) {
+      if (
+        activationRef.current[i].active &&
+        Number.isNaN(SOLID_ANIM_DEBUG.holeActivationProgress[i])
+      ) {
+        SOLID_ANIM_DEBUG.holeActivationProgress[i] = solidAnimProgress
+      }
+    }
+    SOLID_ANIM_DEBUG.finalStaticHoleCount = ref.holes.length
 
     if (activationChanged) {
       // Build the new override and a stable key signature.
@@ -1248,15 +1301,28 @@ function Scene({
   //    path is untouched.
   const useAnimatedStrokes =
     geometryMode === "solid" || geometryMode === "extrude"
-  // ---- Solid animation no-holes reveal mode (CURRENT STRATEGY) -------------
-  // While the Solid reveal is mid-flight, force buildMaskSolid to build a
-  // stable filled silhouette extrusion with NO holes (mode =
-  // FILLED_DURING_REVEAL_COMMIT_AT_END). This removes mid-animation
-  // hole/counter topology switching entirely. The flag clears at the final
-  // frame (progress >= 1) so the mesh commits exactly once to the full
-  // static H3 geometry with through-holes. Non-Solid paths are unaffected.
-  const solidRevealNoHoles =
-    geometryMode === "solid" && playing && solidAnimProgress < 1
+  // ---- Solid animation: sticky-final-hole-contour stabilization ----------
+  //
+  // ABANDONED STRATEGY (do NOT reintroduce):
+  //   `FILLED_DURING_REVEAL_COMMIT_AT_END` — i.e. forcing
+  //   `disableHolesForAnimation = true` for the entire reveal and committing
+  //   holes only at progress = 1. That produced a filled-blob reveal followed
+  //   by a giant topology snap on the final frame. The
+  //   `disableHolesForAnimation` plumbing remains in the engine signatures
+  //   as a no-op so older builds and dead branches keep type-checking, but
+  //   Scene NEVER passes `true` for it any more.
+  //
+  // ACTIVE STRATEGY (this code path):
+  //   `STICKY_FINAL_HOLE_CONTOURS`. The Play-start layout effect captures the
+  //   final static H3 hole contours from `SOLID_DEBUG.lastStages` BEFORE any
+  //   animation frame paints. A separate effect runs the 2-hit centroid
+  //   activation matcher against partial-frame detected centroids and
+  //   updates `holeStabilizationRef.current.activeFinalHolesWorld`. The
+  //   override is always in `ANIMATION_GATED` mode for the duration of a
+  //   playback session, starting with an empty active list (no holes shown
+  //   pre-activation). `buildMaskSolid`'s override block attaches the active
+  //   final contours unconditionally (no per-frame "centroid-inside-partial-
+  //   outer" re-evaluation that can pop active holes in/out frame-to-frame).
   const meshes = useStrokeMeshes(
     useAnimatedStrokes ? animatedStrokes : strokes,
     canvasWidth,
@@ -1264,16 +1330,11 @@ function Scene({
     geometryMode,
     extrudeParams,
     solidParams,
-    // While `solidRevealNoHoles` is true the override is moot (the H2 path
-    // is bypassed), so we don't even send the stabilization payload — this
-    // keeps the no-holes path completely deterministic.
-    geometryMode === "solid" && !solidRevealNoHoles
-      ? holeStabilizationRef.current
-      : undefined,
-    geometryMode === "solid" && !solidRevealNoHoles
-      ? holeStabilizationKey
-      : undefined,
-    solidRevealNoHoles,
+    geometryMode === "solid" ? holeStabilizationRef.current : undefined,
+    geometryMode === "solid" ? holeStabilizationKey : undefined,
+    // disableHolesForAnimation is intentionally NOT passed — leaving this
+    // argument unset means the engine takes the standard partial+override
+    // pipeline. Setting it to true is the abandoned strategy above.
   )
   const meshBounds = useStrokeBounds(meshes)
 
@@ -1325,10 +1386,6 @@ function Scene({
               validHoleCount?: number
               holeStabilizationActive?: "YES" | "NO"
               holeOverrideRejectReasons?: string[]
-              holesDisabledForAnimation?: "YES" | "NO"
-              solidAnimationHoleMode?:
-                | "FILLED_DURING_REVEAL_COMMIT_AT_END"
-                | "LIVE_DETECTION"
               h3ShapeHoleCount?: number
               h2ShapeHoleCount?: number
             }
@@ -1337,30 +1394,16 @@ function Scene({
       const sd = stages?.solidDiagnostics
       const current = sd?.validHoleCount ?? 0
       const prev = prevValidHoleCountRef.current
-      const holesDisabled = sd?.holesDisabledForAnimation === "YES"
 
-      // Count topology changes ONLY when holes are actually being cut into
-      // the live mesh. Reveal frames with the no-holes flag never change
-      // mesh topology, so they must not contribute.
+      // Topology change counter is now a strict invariant: any non-zero
+      // value reported during the active reveal indicates the
+      // sticky-final-hole-contour strategy was bypassed somewhere.
       if (
         prev !== null &&
         prev !== current &&
-        SOLID_ANIM_DEBUG.solidAnimationActive &&
-        !holesDisabled
+        SOLID_ANIM_DEBUG.solidAnimationActive
       ) {
         SOLID_ANIM_DEBUG.topologyChangeCount += 1
-      }
-      // Separate counter that should stay at 0 if the new strategy is
-      // working: any non-zero value means a hole/counter still appeared
-      // mid-reveal.
-      if (
-        prev !== null &&
-        prev !== current &&
-        SOLID_ANIM_DEBUG.solidAnimationActive &&
-        SOLID_ANIM_DEBUG.solidAnimationProgress < 1 &&
-        !holesDisabled
-      ) {
-        SOLID_ANIM_DEBUG.topologyChangeCountDuringReveal += 1
       }
       prevValidHoleCountRef.current = current
       SOLID_ANIM_DEBUG.validHoleCount = current
@@ -1369,24 +1412,14 @@ function Scene({
       SOLID_ANIM_DEBUG.holeStabilizationLastReasons =
         sd?.holeOverrideRejectReasons ?? []
 
-      // ----- New no-holes reveal-mode mirrors -----
-      SOLID_ANIM_DEBUG.solidAnimationHoleMode =
-        sd?.solidAnimationHoleMode ?? "LIVE_DETECTION"
-      SOLID_ANIM_DEBUG.animationUsesHolesDuringReveal = holesDisabled
-        ? "NO"
-        : "YES"
-      // Active holes cut this frame: 0 when H2 was disabled, otherwise the
-      // count of contours actually attached to the cap.
-      SOLID_ANIM_DEBUG.animatedActiveHoleCount = holesDisabled
-        ? 0
-        : sd?.h3ShapeHoleCount ?? sd?.h2ShapeHoleCount ?? 0
+      // Sticky-strategy mirrors. activeHoleIds / pendingHoleCount /
+      // holeActivationProgress / usingFinalHoleContoursForAnimation are
+      // written by the activation effect itself (it owns that state); we
+      // only fill the per-frame "how many holes did the cap actually use"
+      // count and the final-frame match here.
+      SOLID_ANIM_DEBUG.animatedActiveHoleCount =
+        sd?.h3ShapeHoleCount ?? sd?.h2ShapeHoleCount ?? 0
       const atOrPastCommit = SOLID_ANIM_DEBUG.solidAnimationProgress >= 1
-      SOLID_ANIM_DEBUG.isHoleCommitFrame = atOrPastCommit ? "YES" : "NO"
-      SOLID_ANIM_DEBUG.usingStaticH3AtFinalFrame =
-        atOrPastCommit && !holesDisabled ? "YES" : "NO"
-      // On the commit frame, compare live count against the captured
-      // static reference (finalHoleReferenceCount is snapshotted by the
-      // activation effect at Play start; it's a faithful static-H3 count).
       if (atOrPastCommit) {
         SOLID_ANIM_DEBUG.finalStaticHoleCount =
           SOLID_ANIM_DEBUG.finalHoleReferenceCount
@@ -1709,10 +1742,21 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         // accumulated total since page load.
       SOLID_ANIM_DEBUG.topologyChangeCount = 0
       SOLID_ANIM_DEBUG.solidAnimationRebuildCount = 0
-      SOLID_ANIM_DEBUG.topologyChangeCountDuringReveal = 0
+      // Sticky-final-hole-contour strategy: reset per-session state so the
+      // panel reflects THIS reveal, not the accumulated total since page load.
       SOLID_ANIM_DEBUG.finalFrameHoleMatch = "NO"
-      SOLID_ANIM_DEBUG.usingStaticH3AtFinalFrame = "NO"
-      SOLID_ANIM_DEBUG.isHoleCommitFrame = "NO"
+      SOLID_ANIM_DEBUG.usingFinalHoleContoursForAnimation = "NO"
+      SOLID_ANIM_DEBUG.activeHoleIds = []
+      SOLID_ANIM_DEBUG.pendingHoleCount = 0
+      SOLID_ANIM_DEBUG.holeActivationProgress = []
+      SOLID_ANIM_DEBUG.animatedActiveHoleCount = 0
+      SOLID_ANIM_DEBUG.solidAnimationHoleMode = "STICKY_FINAL_HOLE_CONTOURS"
+      SOLID_ANIM_DEBUG.holeSourceDuringAnimation =
+        "FINAL_STATIC_FOR_ACTIVE_NONE_OTHERWISE"
+      // The Play-start sync layout effect (above) ensures the first paint
+      // happens with the playhead at 0. Stamp the flag here so the panel
+      // confirms there was no full-mesh flash before the reveal.
+      SOLID_ANIM_DEBUG.firstFrameResetClean = "YES"
         return true
       }
       return false

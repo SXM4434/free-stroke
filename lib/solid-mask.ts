@@ -164,11 +164,12 @@ export interface MaskSolidDiagnostics {
   holeOverrideKeptCount?: number
   holeOverrideRejectedCount?: number
   holeOverrideRejectReasons?: string[]
-  // ---- Animation no-holes reveal mode (current strategy) ----
-  /** "YES" while the partial reveal is being built with H2 disabled. */
+  // ---- Animation hole strategy ----
+  /** "YES" only if a caller forced the legacy `disableHolesForAnimation`
+   *  flag for this frame. Scene never does this in the current strategy. */
   holesDisabledForAnimation?: "YES" | "NO"
-  /** Echoes the chosen animation strategy name for the debug panel. */
-  solidAnimationHoleMode?: "FILLED_DURING_REVEAL_COMMIT_AT_END" | "LIVE_DETECTION"
+  /** Echoes the active animation hole strategy name. */
+  solidAnimationHoleMode?: "STICKY_FINAL_HOLE_CONTOURS"
 }
 
 export interface MaskSolidStats {
@@ -290,9 +291,9 @@ export interface MaskSolidStages {
     holeOverrideKeptCount?: number
     holeOverrideRejectedCount?: number
     holeOverrideRejectReasons?: string[]
-    // Animation no-holes reveal mode (current strategy)
+    // Sticky-final-hole-contour strategy (current)
     holesDisabledForAnimation?: "YES" | "NO"
-    solidAnimationHoleMode?: "FILLED_DURING_REVEAL_COMMIT_AT_END" | "LIVE_DETECTION"
+    solidAnimationHoleMode?: "STICKY_FINAL_HOLE_CONTOURS"
   }
 }
 
@@ -1296,32 +1297,33 @@ export function buildMaskSolid(
       // Static H1/H2 thresholds, static H3 geometry, and Solid export are
       // unaffected — they never pass `holeStabilization`.
       //
-      // Topological safety: each override hole's centroid is point-in-
-      // polygon tested against the CURRENT partial outer silhouette
-      // `shapePts`. A final hole whose centroid is outside the partial
-      // outer can only mean "the loop containing this hole hasn't been
-      // drawn far enough yet" — using it would punch a wall outside the
-      // partial body. We drop such holes for this frame; they re-qualify
-      // automatically once enough stroke has been drawn.
+      // Sticky-final-hole-contour stabilization:
+      //
+      //   The CALLER (Scene) is responsible for deciding which final holes
+      //   are "active" this frame, using the 2-hit centroid activation
+      //   matcher. By the time a final hole lands in `activeFinalHolesWorld`,
+      //   the caller has already confirmed (a) it matches a real final hole
+      //   and (b) the partial silhouette has reached it. From that point
+      //   on the contour is TRUSTED — we attach it unconditionally for the
+      //   rest of the reveal.
+      //
+      //   The previous "centroid-inside-partial-outer" test that lived here
+      //   was the documented root cause of post-activation hole switching:
+      //   an active hole could pop in and out frame-to-frame as the partial
+      //   silhouette's centroid coverage wobbled. That test is gone now;
+      //   the only remaining filters are mathematical sanity (need >= 3
+      //   points, non-zero signed area). Static H1/H2/H3 callers never
+      //   reach this block (they never pass `holeStabilization`), so their
+      //   behavior is unchanged.
       if (holeStabilization && holeStabilization.mode === "ANIMATION_GATED") {
         stabilization_holeStabilizationActive = "YES"
         const overrideKept: THREE.Vector2[][] = []
         const overrideAreas: number[] = []
-        const shapePolyForPip = shapePts.map((p) => ({ x: p.x, y: p.y }))
         for (let i = 0; i < holeStabilization.activeFinalHolesWorld.length; i++) {
           const finalHole = holeStabilization.activeFinalHolesWorld[i]
           if (!finalHole || finalHole.length < 3) {
             stabilization_holeOverrideRejectedCount++
             stabilization_holeOverrideRejectReasons.push(`final[${i}] degenerate-contour`)
-            continue
-          }
-          let fx = 0, fy = 0
-          for (const p of finalHole) { fx += p.x; fy += p.y }
-          fx /= finalHole.length
-          fy /= finalHole.length
-          if (!pointInPolygonMask(fx, fy, shapePolyForPip)) {
-            stabilization_holeOverrideRejectedCount++
-            stabilization_holeOverrideRejectReasons.push(`final[${i}] centroid-outside-partial-outer`)
             continue
           }
           const sa = Math.abs(signedAreaOf(finalHole))
@@ -1538,14 +1540,15 @@ export function buildMaskSolid(
         stabilization_holeOverrideRejectedCount
       emptyStages.solidDiagnostics.holeOverrideRejectReasons =
         stabilization_holeOverrideRejectReasons
-      // Animation no-holes reveal mode mirrors. ALWAYS written so the
-      // panel can prove whether a given frame ran with or without H2.
+      // Sticky-final-hole-contour strategy: the engine always reports the
+      // same active label. The `disableHolesForAnimation` parameter remains
+      // accepted so external callers can't break the type contract, but
+      // Scene never sets it true any more — so this branch consistently
+      // emits the sticky-strategy label.
       emptyStages.solidDiagnostics.holesDisabledForAnimation =
         disableHolesForAnimation ? "YES" : "NO"
       emptyStages.solidDiagnostics.solidAnimationHoleMode =
-        disableHolesForAnimation
-          ? "FILLED_DURING_REVEAL_COMMIT_AT_END"
-          : "LIVE_DETECTION"
+        "STICKY_FINAL_HOLE_CONTOURS"
     }
     
     // ===================================================================
