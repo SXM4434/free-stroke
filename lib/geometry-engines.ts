@@ -98,7 +98,8 @@ export const SOLID_ANIM_DEBUG = {
       | "static"
       | "drawRange"
       | "partialExtrudeRebuild"
-      | "partialSolidRebuildWithHoleStabilization",
+      | "partialSolidRebuildWithHoleStabilization"
+      | "partialSolidRebuildNoHolesCommitAtEnd",
   /** True while `playing === true` in Solid or Extrude mode, or while a boundary sync is in flight. */
   solidAnimationActive: false,
   /** Last value pushed to `solidAnimProgress` (0..1). Tracks the rebuild input. */
@@ -138,6 +139,27 @@ export const SOLID_ANIM_DEBUG = {
   holeStabilizationActive: "NO" as "YES" | "NO",
   /** Frame counter — how many partial centroids the matcher saw last update. */
   lastPartialCentroidCount: 0,
+  // ---- Solid animation no-holes reveal mode (CURRENT STRATEGY) ----
+  /** Chosen animation hole strategy. */
+  solidAnimationHoleMode: "LIVE_DETECTION" as
+    | "LIVE_DETECTION"
+    | "FILLED_DURING_REVEAL_COMMIT_AT_END",
+  /** "YES" while the partial reveal is being built with H2 disabled this frame. */
+  animationUsesHolesDuringReveal: "YES" as "YES" | "NO",
+  /** Progress at which the no-holes flag flips off and the final H3 commits (1.0 by default). */
+  holeCommitProgress: 1,
+  /** "YES" when the current frame is the commit frame (progress >= holeCommitProgress). */
+  isHoleCommitFrame: "NO" as "YES" | "NO",
+  /** Hole count from the static H3 reference snapshot taken at Play start. */
+  finalStaticHoleCount: 0,
+  /** Hole count actively cut into the partial mesh this frame (should be 0 during reveal). */
+  animatedActiveHoleCount: 0,
+  /** Topology changes counted strictly during the active reveal (should be 0). */
+  topologyChangeCountDuringReveal: 0,
+  /** "YES" when validHoleCount on the final committed frame matches the static reference. */
+  finalFrameHoleMatch: "NO" as "YES" | "NO",
+  /** "YES" when the final committed frame used the full unfiltered strokes + no-holes flag OFF. */
+  usingStaticH3AtFinalFrame: "NO" as "YES" | "NO",
 }
 
 /**
@@ -571,6 +593,15 @@ export interface PreviewParams {
    * NEVER pass this; behavior is identical to before.
    */
   holeStabilization?: import("./solid-mask").SolidHoleStabilization
+  /**
+   * OPTIONAL animation-only no-holes mode for Solid partial reveals.
+   *
+   * When true, Scene is rendering a mid-reveal partial frame and wants the
+   * Solid mesh to be a stable filled silhouette extrusion with NO holes.
+   * Passes straight through to buildMaskSolid; static + export callers
+   * never set this so their behavior is unchanged.
+   */
+  disableHolesForAnimation?: boolean
 }
 
 export interface ExportResult {
@@ -4235,7 +4266,12 @@ export const SolidEngine: GeometryEngine = {
       effectiveDepth,
       canvasWidth,
       canvasHeight,
-      params.holeStabilization,
+      // During reveal we explicitly suppress holes (see disableHolesForAnimation
+      // below), so the stabilization override would be moot. Pass it only when
+      // holes ARE allowed this frame, which preserves the previous behavior
+      // for any future caller that still uses it (export never sets either).
+      params.disableHolesForAnimation ? undefined : params.holeStabilization,
+      params.disableHolesForAnimation,
     )
 
     // ---- Stamp calibration diagnostics onto the panel-facing record ----

@@ -55,6 +55,16 @@ function useStrokeMeshes(
    */
   holeStabilization?: import("@/lib/solid-mask").SolidHoleStabilization,
   holeStabilizationKey?: string,
+  /**
+   * OPTIONAL Solid animation-only no-holes reveal mode.
+   *
+   * When true, the Solid mesh is rebuilt as a stable filled silhouette
+   * extrusion with H2 disabled. Used by Scene during the active reveal
+   * (progress < 1) to eliminate mid-animation hole/counter topology
+   * switching. Cleared on the final frame so the mesh commits to the
+   * full static H3 geometry exactly once.
+   */
+  disableHolesForAnimation?: boolean,
 ): StrokeMeshData[] {
   // Extract individual values to prevent object reference changes from triggering rebuilds.
   // CRITICAL: every slider value the engine consumes must be listed here. If a value is
@@ -75,9 +85,10 @@ function useStrokeMeshes(
       extrudeParams,
       solidParams,
       holeStabilization,
+      disableHolesForAnimation,
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeDepth, extrudeBevel, solidThickness, solidDepth, holeStabilizationKey])
+  }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeDepth, extrudeBevel, solidThickness, solidDepth, holeStabilizationKey, disableHolesForAnimation])
 }
 
 /* ---- Shared geometries ---- */
@@ -988,7 +999,10 @@ function Scene({
     } else if (geometryMode === "extrude") {
       SOLID_ANIM_DEBUG.animationPath = "partialExtrudeRebuild"
     } else if (geometryMode === "solid") {
-      SOLID_ANIM_DEBUG.animationPath = "partialSolidRebuildWithHoleStabilization"
+      // Current strategy: hole topology is suppressed for the entire reveal
+      // and committed at the final frame, so this label replaces the old
+      // "partialSolidRebuildWithHoleStabilization" path.
+      SOLID_ANIM_DEBUG.animationPath = "partialSolidRebuildNoHolesCommitAtEnd"
     } else {
       SOLID_ANIM_DEBUG.animationPath = "static"
     }
@@ -1234,6 +1248,15 @@ function Scene({
   //    path is untouched.
   const useAnimatedStrokes =
     geometryMode === "solid" || geometryMode === "extrude"
+  // ---- Solid animation no-holes reveal mode (CURRENT STRATEGY) -------------
+  // While the Solid reveal is mid-flight, force buildMaskSolid to build a
+  // stable filled silhouette extrusion with NO holes (mode =
+  // FILLED_DURING_REVEAL_COMMIT_AT_END). This removes mid-animation
+  // hole/counter topology switching entirely. The flag clears at the final
+  // frame (progress >= 1) so the mesh commits exactly once to the full
+  // static H3 geometry with through-holes. Non-Solid paths are unaffected.
+  const solidRevealNoHoles =
+    geometryMode === "solid" && playing && solidAnimProgress < 1
   const meshes = useStrokeMeshes(
     useAnimatedStrokes ? animatedStrokes : strokes,
     canvasWidth,
@@ -1241,8 +1264,16 @@ function Scene({
     geometryMode,
     extrudeParams,
     solidParams,
-    geometryMode === "solid" ? holeStabilizationRef.current : undefined,
-    geometryMode === "solid" ? holeStabilizationKey : undefined,
+    // While `solidRevealNoHoles` is true the override is moot (the H2 path
+    // is bypassed), so we don't even send the stabilization payload — this
+    // keeps the no-holes path completely deterministic.
+    geometryMode === "solid" && !solidRevealNoHoles
+      ? holeStabilizationRef.current
+      : undefined,
+    geometryMode === "solid" && !solidRevealNoHoles
+      ? holeStabilizationKey
+      : undefined,
+    solidRevealNoHoles,
   )
   const meshBounds = useStrokeBounds(meshes)
 
@@ -1294,20 +1325,74 @@ function Scene({
               validHoleCount?: number
               holeStabilizationActive?: "YES" | "NO"
               holeOverrideRejectReasons?: string[]
+              holesDisabledForAnimation?: "YES" | "NO"
+              solidAnimationHoleMode?:
+                | "FILLED_DURING_REVEAL_COMMIT_AT_END"
+                | "LIVE_DETECTION"
+              h3ShapeHoleCount?: number
+              h2ShapeHoleCount?: number
             }
           }
         | null
-      const current = stages?.solidDiagnostics?.validHoleCount ?? 0
+      const sd = stages?.solidDiagnostics
+      const current = sd?.validHoleCount ?? 0
       const prev = prevValidHoleCountRef.current
-      if (prev !== null && prev !== current && SOLID_ANIM_DEBUG.solidAnimationActive) {
+      const holesDisabled = sd?.holesDisabledForAnimation === "YES"
+
+      // Count topology changes ONLY when holes are actually being cut into
+      // the live mesh. Reveal frames with the no-holes flag never change
+      // mesh topology, so they must not contribute.
+      if (
+        prev !== null &&
+        prev !== current &&
+        SOLID_ANIM_DEBUG.solidAnimationActive &&
+        !holesDisabled
+      ) {
         SOLID_ANIM_DEBUG.topologyChangeCount += 1
+      }
+      // Separate counter that should stay at 0 if the new strategy is
+      // working: any non-zero value means a hole/counter still appeared
+      // mid-reveal.
+      if (
+        prev !== null &&
+        prev !== current &&
+        SOLID_ANIM_DEBUG.solidAnimationActive &&
+        SOLID_ANIM_DEBUG.solidAnimationProgress < 1 &&
+        !holesDisabled
+      ) {
+        SOLID_ANIM_DEBUG.topologyChangeCountDuringReveal += 1
       }
       prevValidHoleCountRef.current = current
       SOLID_ANIM_DEBUG.validHoleCount = current
       SOLID_ANIM_DEBUG.holeStabilizationActive =
-        stages?.solidDiagnostics?.holeStabilizationActive ?? "NO"
+        sd?.holeStabilizationActive ?? "NO"
       SOLID_ANIM_DEBUG.holeStabilizationLastReasons =
-        stages?.solidDiagnostics?.holeOverrideRejectReasons ?? []
+        sd?.holeOverrideRejectReasons ?? []
+
+      // ----- New no-holes reveal-mode mirrors -----
+      SOLID_ANIM_DEBUG.solidAnimationHoleMode =
+        sd?.solidAnimationHoleMode ?? "LIVE_DETECTION"
+      SOLID_ANIM_DEBUG.animationUsesHolesDuringReveal = holesDisabled
+        ? "NO"
+        : "YES"
+      // Active holes cut this frame: 0 when H2 was disabled, otherwise the
+      // count of contours actually attached to the cap.
+      SOLID_ANIM_DEBUG.animatedActiveHoleCount = holesDisabled
+        ? 0
+        : sd?.h3ShapeHoleCount ?? sd?.h2ShapeHoleCount ?? 0
+      const atOrPastCommit = SOLID_ANIM_DEBUG.solidAnimationProgress >= 1
+      SOLID_ANIM_DEBUG.isHoleCommitFrame = atOrPastCommit ? "YES" : "NO"
+      SOLID_ANIM_DEBUG.usingStaticH3AtFinalFrame =
+        atOrPastCommit && !holesDisabled ? "YES" : "NO"
+      // On the commit frame, compare live count against the captured
+      // static reference (finalHoleReferenceCount is snapshotted by the
+      // activation effect at Play start; it's a faithful static-H3 count).
+      if (atOrPastCommit) {
+        SOLID_ANIM_DEBUG.finalStaticHoleCount =
+          SOLID_ANIM_DEBUG.finalHoleReferenceCount
+        SOLID_ANIM_DEBUG.finalFrameHoleMatch =
+          current === SOLID_ANIM_DEBUG.finalHoleReferenceCount ? "YES" : "NO"
+      }
     }
   }, [meshes, solidStatusRef, geometryMode])
   
@@ -1622,8 +1707,12 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         // Reset Solid animation debug counters at the start of every
         // playback session so the panel reflects THIS reveal, not the
         // accumulated total since page load.
-        SOLID_ANIM_DEBUG.topologyChangeCount = 0
-        SOLID_ANIM_DEBUG.solidAnimationRebuildCount = 0
+      SOLID_ANIM_DEBUG.topologyChangeCount = 0
+      SOLID_ANIM_DEBUG.solidAnimationRebuildCount = 0
+      SOLID_ANIM_DEBUG.topologyChangeCountDuringReveal = 0
+      SOLID_ANIM_DEBUG.finalFrameHoleMatch = "NO"
+      SOLID_ANIM_DEBUG.usingStaticH3AtFinalFrame = "NO"
+      SOLID_ANIM_DEBUG.isHoleCommitFrame = "NO"
         return true
       }
       return false

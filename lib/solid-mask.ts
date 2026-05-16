@@ -164,6 +164,11 @@ export interface MaskSolidDiagnostics {
   holeOverrideKeptCount?: number
   holeOverrideRejectedCount?: number
   holeOverrideRejectReasons?: string[]
+  // ---- Animation no-holes reveal mode (current strategy) ----
+  /** "YES" while the partial reveal is being built with H2 disabled. */
+  holesDisabledForAnimation?: "YES" | "NO"
+  /** Echoes the chosen animation strategy name for the debug panel. */
+  solidAnimationHoleMode?: "FILLED_DURING_REVEAL_COMMIT_AT_END" | "LIVE_DETECTION"
 }
 
 export interface MaskSolidStats {
@@ -285,6 +290,9 @@ export interface MaskSolidStages {
     holeOverrideKeptCount?: number
     holeOverrideRejectedCount?: number
     holeOverrideRejectReasons?: string[]
+    // Animation no-holes reveal mode (current strategy)
+    holesDisabledForAnimation?: "YES" | "NO"
+    solidAnimationHoleMode?: "FILLED_DURING_REVEAL_COMMIT_AT_END" | "LIVE_DETECTION"
   }
 }
 
@@ -374,7 +382,27 @@ export function buildMaskSolid(
    * Static H1/H2 thresholds, static H3 geometry, and Solid export are
    * NOT affected.
    */
-  holeStabilization?: SolidHoleStabilization
+  holeStabilization?: SolidHoleStabilization,
+  /**
+   * OPTIONAL animation-only no-holes mode.
+   *
+   * When true (Solid animation reveal-in-progress callers ONLY), the
+   * H2 cap-with-holes triangulation is skipped wholesale. The H3 assembly
+   * then takes the existing "no valid holes" fall-through path, producing
+   * the no-holes outer-silhouette extrusion using the live `depth` param.
+   * H1 detection still runs (cheap, useful for the debug panel), but its
+   * results are NEVER fed to geometry while this flag is on.
+   *
+   * Effect:
+   *   - shape.holes never gets a Path attached
+   *   - H3 inner walls are not built
+   *   - `holeStabilization` override (if also passed) is ignored
+   *   - geometry is a stable filled silhouette extrusion with live depth
+   *
+   * Static path, export path, and the static H1/H2/H3 production geometry
+   * are completely unaffected — they call this function without this flag.
+   */
+  disableHolesForAnimation?: boolean
 ): MaskSolidResult {
   const startTime = performance.now()
   
@@ -1140,10 +1168,16 @@ export function buildMaskSolid(
     let stabilization_holeOverrideRejectReasons: string[] = []
     let stabilization_stableHolesWorld: Array<Array<{ x: number; y: number }>> = []
 
+    // Animation-only short-circuit: when the caller has explicitly asked for
+    // a no-holes partial reveal, refuse to build the H2 cap-with-holes
+    // pipeline regardless of detection results or override input. This is
+    // the SOLE switch that controls mid-reveal hole topology — once it's
+    // off (final frame or static path), this branch runs exactly as before.
     if (
-      (activeHoleDetection.validHoleLabelIds.length > 0 &&
+      !disableHolesForAnimation &&
+      ((activeHoleDetection.validHoleLabelIds.length > 0 &&
         activeHoleDetection.emptyLabels.length === width * height) ||
-      overrideHasActiveHoles
+        overrideHasActiveHoles)
     ) {
       // Iterate EVERY valid hole — not just the largest. This is the H2
       // contract: every valid hole from the ACTIVE source gets a chance to
@@ -1504,6 +1538,14 @@ export function buildMaskSolid(
         stabilization_holeOverrideRejectedCount
       emptyStages.solidDiagnostics.holeOverrideRejectReasons =
         stabilization_holeOverrideRejectReasons
+      // Animation no-holes reveal mode mirrors. ALWAYS written so the
+      // panel can prove whether a given frame ran with or without H2.
+      emptyStages.solidDiagnostics.holesDisabledForAnimation =
+        disableHolesForAnimation ? "YES" : "NO"
+      emptyStages.solidDiagnostics.solidAnimationHoleMode =
+        disableHolesForAnimation
+          ? "FILLED_DURING_REVEAL_COMMIT_AT_END"
+          : "LIVE_DETECTION"
     }
     
     // ===================================================================
