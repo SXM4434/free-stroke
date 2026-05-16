@@ -4496,10 +4496,9 @@ export const SolidEngine: GeometryEngine = {
 
 /** Inflate-mode debug state. Read by the panel when Debug is ON. */
 export const INFLATE_DEBUG = {
-  inflateMode: "BEVEL_EXTRUDE_WITH_SOLID_FALLBACK" as
-    | "BEVEL_EXTRUDE_WITH_SOLID_FALLBACK",
+  inflateMode: "SOLID_H3_PASSTHROUGH" as "SOLID_H3_PASSTHROUGH",
   inflateStrategy:
-    "Solid mask + ExtrudeGeometry bevel; falls back to Solid H3 geometry on failure",
+    "Phase 1 wiring proof — renders Solid H3 geometry through the Inflate engine to confirm engine/mode/render plumbing. Bevel/dome work returns once visible.",
   // ---- Path probes (set on every buildPreview call) ----
   inflateEngineCalled: "NO" as "YES" | "NO",
   inflateBuildPreviewCalled: "NO" as "YES" | "NO",
@@ -4552,13 +4551,26 @@ export const InflateEngine: GeometryEngine = {
     for (const s of strokes) inputPts += s.points?.length ?? 0
     INFLATE_DEBUG.inputPointCount = inputPts
 
+    console.log("[v0] InflateEngine.buildPreview called", {
+      strokes: strokes.length,
+      points: inputPts,
+      canvasWidth,
+      canvasHeight,
+    })
+
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
       INFLATE_DEBUG.inflateFailureReason =
         strokes.length === 0 ? "no strokes" : "canvas 0"
+      console.log("[v0] InflateEngine: early return —", INFLATE_DEBUG.inflateFailureReason)
       return []
     }
 
-    // Reuse Solid's calibration + coord scale exactly.
+    // Reuse Solid's calibration + coord scale exactly. The Inflate Phase 1
+    // strategy is deliberately identical to Solid's geometry pipeline at
+    // this stage: same calibration, same buildMaskSolid call, same H3
+    // geometry. The only Inflate-specific behavior is that the engine
+    // OWNS its own debug state and is invoked from the inflate mode. This
+    // proves the wiring is sound before we stack bevel/dome work on top.
     const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
     const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
       solidParams.thickness,
@@ -4566,6 +4578,7 @@ export const InflateEngine: GeometryEngine = {
     const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
     const worldThickness = effectiveThicknessPx * coordScale
     INFLATE_DEBUG.effectiveThickness = effectiveThicknessPx
+    INFLATE_DEBUG.puffAmount = effectiveDepth
 
     const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
     INFLATE_DEBUG.inflateSolidMaskCalled = "YES"
@@ -4583,132 +4596,23 @@ export const InflateEngine: GeometryEngine = {
     } catch (e) {
       INFLATE_DEBUG.inflateFailureReason = `buildMaskSolid threw: ${(e as Error).message}`
       INFLATE_DEBUG.inflateFallback = "SOLID_BASE_NULL_FAILED"
+      console.log("[v0] InflateEngine: buildMaskSolid threw", e)
       return []
     }
 
-    const stages = solidResult.stages
-    const simplifiedOuter = stages.simplifiedOuter
-    const simplifiedHoles = stages.simplifiedHoles ?? []
-    INFLATE_DEBUG.inflateOuterContourPoints = simplifiedOuter?.length ?? 0
-    INFLATE_DEBUG.inflateHoleCount = simplifiedHoles.length
+    INFLATE_DEBUG.inflateOuterContourPoints =
+      solidResult.stages.simplifiedOuter?.length ?? 0
+    INFLATE_DEBUG.inflateHoleCount = solidResult.stages.simplifiedHoles?.length ?? 0
 
-    // ---- Step A: try BEVEL_EXTRUDE (puffy look) ----
-    let bevelGeometry: THREE.BufferGeometry | null = null
-    if (simplifiedOuter && simplifiedOuter.length >= 3) {
-      // Replicate the Solid mask-to-world transform (matches solid-mask.ts
-      // toWorldX/toWorldY at line ~844).
-      const maskW = stages.maskWidth
-      const maskH = stages.maskHeight
-      const scaleX = canvasWidth / maskW
-      const scaleY = canvasHeight / maskH
-      const maskScale = Math.min(scaleX, scaleY)
-      const normScale = 3 / Math.max(canvasWidth, canvasHeight)
-      const toWorldX = (mx: number) => (mx - maskW / 2) * maskScale * normScale
-      const toWorldY = (my: number) => -(my - maskH / 2) * maskScale * normScale
-
-      let outerWorld = simplifiedOuter.map(
-        (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)),
-      )
-
-      // CRITICAL: enforce CCW winding for the outer contour.
-      // The mask raster contour is traced in pixel space (Y-down). After we
-      // flip Y in toWorldY, the winding direction inverts. THREE.Shape
-      // requires CCW for the outer contour; passing CW silently produces
-      // an inverted (back-facing) extrude that backface-culls to nothing.
-      // This was the documented root cause of the empty Inflate viewport.
-      let signedArea = 0
-      for (let i = 0; i < outerWorld.length; i++) {
-        const a = outerWorld[i]
-        const b = outerWorld[(i + 1) % outerWorld.length]
-        signedArea += (b.x - a.x) * (b.y + a.y)
-      }
-      // Pixel-space CCW = sum > 0 (Y-down). After Y flip, world-space CCW
-      // requires sum < 0. If sum > 0, reverse to make it CCW in world.
-      if (signedArea > 0) outerWorld = outerWorld.reverse()
-
-      const shape = new THREE.Shape(outerWorld)
-      let holesUsed = 0
-      for (const holeMask of simplifiedHoles) {
-        if (!holeMask || holeMask.length < 3) continue
-        let holeWorld = holeMask.map(
-          (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)),
-        )
-        // Holes need OPPOSITE winding from the outer (CW in world space).
-        let hSigned = 0
-        for (let i = 0; i < holeWorld.length; i++) {
-          const a = holeWorld[i]
-          const b = holeWorld[(i + 1) % holeWorld.length]
-          hSigned += (b.x - a.x) * (b.y + a.y)
-        }
-        if (hSigned < 0) holeWorld = holeWorld.reverse()
-        shape.holes.push(new THREE.Path(holeWorld))
-        holesUsed++
-      }
-
-      // Conservative bevel sizing — a bevel larger than half the
-      // silhouette's narrowest pinch causes triangulation to produce zero
-      // triangles. We start CONSERVATIVE on the first attempt to maximize
-      // success probability. The visual goal is "rounded edge", not
-      // "spherical dome", so a modest bevel still reads as inflated.
-      const puffDepth = Math.max(0.001, effectiveDepth)
-      INFLATE_DEBUG.puffAmount = puffDepth
-      // bevelSize is the inset distance in XY. Cap it to a small fraction
-      // of the calibrated thickness so we never bevel past silhouette
-      // pinch points.
-      const safeBevelSize = Math.max(0.0008, worldThickness * 0.18)
-      const bevelThickness = Math.max(0.0008, puffDepth * 0.45)
-
-      try {
-        bevelGeometry = new THREE.ExtrudeGeometry(shape, {
-          depth: puffDepth,
-          bevelEnabled: true,
-          bevelThickness,
-          bevelSize: safeBevelSize,
-          bevelOffset: 0,
-          bevelSegments: 4,
-          curveSegments: 10,
-          steps: 1,
-        })
-        const vc = bevelGeometry.getAttribute("position")?.count ?? 0
-        if (vc < 3) {
-          // Triangulator returned nothing usable; treat as failure.
-          bevelGeometry = null
-          INFLATE_DEBUG.inflateFailureReason =
-            "ExtrudeGeometry returned <3 vertices"
-        } else {
-          // Center on Z, similar to Solid extrude centering.
-          bevelGeometry.translate(0, 0, -(puffDepth + bevelThickness) / 2)
-          bevelGeometry.computeVertexNormals()
-        }
-      } catch (e) {
-        INFLATE_DEBUG.inflateFailureReason = `ExtrudeGeometry threw: ${(e as Error).message}`
-        bevelGeometry = null
-      }
-    } else {
-      INFLATE_DEBUG.inflateFailureReason =
-        "no valid outer contour from Solid mask pipeline"
-    }
-
-    // ---- Step B: pick a geometry — prefer bevel, fall back to Solid H3 ----
-    let geometry: THREE.BufferGeometry | null = bevelGeometry
-    if (geometry) {
-      INFLATE_DEBUG.inflateBevelGeometryCreated = "YES"
-    } else if (solidResult.geometry) {
-      // Visible fallback: the same H3 geometry Solid renders. Guarantees
-      // we never show an empty viewport for a valid stroke. Per Phase 1
-      // spec: "If the puffy bevel geometry fails, temporarily make
-      // Inflate render the known-good Solid H3 geometry as a fallback."
-      geometry = solidResult.geometry
-      INFLATE_DEBUG.inflateFallback = "SOLID_BASE_VISIBLE"
-    } else {
+    const geometry = solidResult.geometry
+    if (!geometry) {
       INFLATE_DEBUG.inflateFallback = "SOLID_BASE_NULL_FAILED"
-      if (!INFLATE_DEBUG.inflateFailureReason) {
-        INFLATE_DEBUG.inflateFailureReason =
-          "both BEVEL_EXTRUDE and Solid H3 returned null"
-      }
+      INFLATE_DEBUG.inflateFailureReason = "Solid H3 returned null geometry"
+      console.log("[v0] InflateEngine: solidResult.geometry is null")
       return []
     }
 
+    INFLATE_DEBUG.inflateFallback = "SOLID_BASE_VISIBLE"
     INFLATE_DEBUG.inflateGeometryCreated = "YES"
     INFLATE_DEBUG.inflateVertexCount = geometry.getAttribute("position")?.count ?? 0
     geometry.computeBoundingBox()
@@ -4719,10 +4623,15 @@ export const InflateEngine: GeometryEngine = {
       INFLATE_DEBUG.geometryBBoxZ = bb.max.z - bb.min.z
     }
 
+    console.log("[v0] InflateEngine: returning Solid H3 geometry", {
+      vertexCount: INFLATE_DEBUG.inflateVertexCount,
+      bbox: [INFLATE_DEBUG.geometryBBoxX, INFLATE_DEBUG.geometryBBoxY, INFLATE_DEBUG.geometryBBoxZ],
+    })
+
     const meshData: StrokeMeshData = {
       tubeGeometry: geometry,
       filteredCount: inputPts,
-      key: `inflate-${strokes.length}-${canvasWidth}x${canvasHeight}-${effectiveDepth.toFixed(4)}-${INFLATE_DEBUG.inflateBevelGeometryCreated}`,
+      key: `inflate-${strokes.length}-${canvasWidth}x${canvasHeight}-${effectiveDepth.toFixed(4)}-${effectiveThicknessPx}`,
       mode: "inflate",
     }
     return [meshData]

@@ -1351,7 +1351,7 @@ function Scene({
   // during draw-in animation. For other modes we keep mesh-derived bounds.
   const stableBounds = useStableStrokesBounds(strokes, canvasWidth, canvasHeight)
 
-  const bounds = geometryMode === "solid" ? stableBounds ?? meshBounds : meshBounds
+  const bounds = geometryMode === "solid" || geometryMode === "inflate" ? stableBounds ?? meshBounds : meshBounds
 
   // Populate meshStatusRef for debug overlay (extrude mode)
   useEffect(() => {
