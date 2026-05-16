@@ -332,8 +332,42 @@ These are non-negotiable for this checkpoint:
 - confirm static H3 (paused or stopped) shows `holeStabilizationActive: NO`.
 - confirm export GLB hole count == static H3 hole count == final animation frame hole count.
 
+## Solid H3 animation hole stabilization RESTORED checkpoint
+
+- **name:** Solid H3 Animation Hole Stabilization Restored
+- **label:** `SOLID_H3_ANIMATION_HOLE_STABILIZATION_RESTORED_PASS`
+- **status:** locked / visually acceptable for MVP — do not reopen
+
+### What is now true
+
+- The bad `FILLED_DURING_REVEAL_COMMIT_AT_END` strategy was removed.
+- Solid animation is back on `STICKY_FINAL_HOLE_CONTOURS`.
+- Active final holes are no longer re-evaluated against the partial silhouette every frame.
+- Once a hole activates during playback, it stays active for that playback session.
+- Final frame force-activates remaining final holes so it matches static H3.
+- The huge filled-blob-to-holed-mesh snap is gone.
+- Solid animation is visually acceptable for MVP and should not be reopened right now.
+- Static Solid H3 geometry/export remain unchanged.
+- Rod, Extrude, and Inflate were untouched.
+
+### Important note
+
+- This is not final animation polish.
+- Some tiny topology weirdness may still exist because Solid animation rebuilds partial geometry.
+- That is acceptable for MVP.
+- Do not keep iterating on Solid animation unless a major regression appears.
+
+## Next branch — `CROSS_MODE_SMOKE_TEST_BEFORE_INFLATE`
+
+- Rod animation still plays.
+- Extrude animation still plays progressively.
+- Solid animation still plays with stable enough holes.
+- Solid final frame matches static H3.
+- Export still exports the full static model, not animated partial strokes.
+- If smoke test passes, move to `INFLATE_MODE_PHASE_1`.
+
 ## Final saved checkpoint label
 
-`SOLID_H3_ANIMATION_HOLE_STABILIZATION`
+`SOLID_H3_ANIMATION_HOLE_STABILIZATION_RESTORED_PASS`
 
-(supersedes `SOLID_H3_ANIMATION_CLEANUP_PASS`; all prior checkpoints remain in effect as underlying layers)
+(supersedes `SOLID_H3_ANIMATION_HOLE_STABILIZATION`; all prior checkpoints remain in effect as underlying layers)
