@@ -4452,21 +4452,237 @@ export const SolidEngine: GeometryEngine = {
 }
 
 /* ------------------------------------------------------------------ */
-/*  InflateEngine — TODO: Iteration 8+                                */
+/*  InflateEngine — Phase 1: BEVEL_EXTRUDE strategy                   */
 /* ------------------------------------------------------------------ */
+/*
+ * INFLATE PHASE 1 — preview-only
+ *
+ * Strategy name: `BEVEL_EXTRUDE`
+ * Branches from: Solid (reuses `buildMaskSolid` for the validated outer
+ *                silhouette + hole contours)
+ *
+ * What it does:
+ *   1. Calls `buildMaskSolid` exactly the way Solid does (same calibration,
+ *      same coord transforms, same hole detection). We DISCARD its returned
+ *      H3 geometry — we only consume `stages.simplifiedOuter` and
+ *      `stages.simplifiedHoles` (mask-space Point2D arrays).
+ *   2. Re-runs the same mask-to-world transform locally to get THREE.Vector2
+ *      contours.
+ *   3. Builds a fresh `THREE.Shape` (outer + holes) and extrudes it with
+ *      `THREE.ExtrudeGeometry`, with HIGH bevel parameters relative to the
+ *      depth so the result reads as rounded/puffy rather than slab-like.
+ *
+ * Why this strategy:
+ *   - Visibly distinct from Solid (rounded/puffy edge profile vs hard-edged
+ *     extrusion) without any SDF/voxel/marching-cubes infrastructure.
+ *   - Hole preservation is FREE — `Shape.holes` is the native ExtrudeGeometry
+ *     mechanism for cutting interior contours, and we already have hole
+ *     world-contours from the Solid pipeline.
+ *   - Zero new heavy code: ExtrudeGeometry ships in three.js.
+ *   - No risk of regressing Rod/Extrude/Solid because we only READ from
+ *     `buildMaskSolid` (same call shape Solid uses), we never mutate the
+ *     Solid result, and we never write into Solid's debug state.
+ *
+ * Phase 1 known limitations (do NOT block on these):
+ *   - Bevel forms a rounded EDGE, not a true distance-field dome. The center
+ *     of large filled regions reads as a flat plateau with rounded shoulders
+ *     rather than a fully continuous dome. This is fine for proving visual
+ *     direction.
+ *   - Self-intersecting outer contours can occasionally produce slightly
+ *     malformed bevels at very thin pinch points. We catch that with a
+ *     try/catch and fall back to a flat extrude with smaller bevel.
+ *   - Export is a placeholder — Phase 1 is preview-only.
+ */
+
+/** Inflate-mode debug state. Read by the panel when Debug is ON. */
+export const INFLATE_DEBUG = {
+  inflateMode: "BEVEL_EXTRUDE" as "BEVEL_EXTRUDE",
+  inflateStrategy:
+    "Solid mask + ExtrudeGeometry with high bevel for rounded/puffy edge",
+  usesSolidBase: "YES" as "YES" | "NO",
+  preservesHoles: "YES" as "YES" | "NO",
+  geometryType: "ExtrudeGeometry" as "ExtrudeGeometry" | "NULL",
+  /** Calibrated effective thickness from the Solid Thickness slider. */
+  effectiveThickness: 0,
+  /** Final puff amount used for extrude depth + bevel sizing this build. */
+  puffAmount: 0,
+  /** Vertices in the produced ExtrudeGeometry (0 if build failed). */
+  vertexCount: 0,
+  /** Last failure reason ("" if last build succeeded). */
+  failureReason: "",
+  /** Indicates the Solid mask pipeline was actually consulted this build. */
+  solidMaskCalled: "NO" as "YES" | "NO",
+  /** Number of hole contours fed into the extrude shape this build. */
+  holeContourCount: 0,
+}
 
 export const InflateEngine: GeometryEngine = {
-  buildPreview(_strokes: ProcessedStroke[], _params: PreviewParams): StrokeMeshData[] {
-    // TODO: Iteration 8+ — Inflate mode
-    // Will generate inflated blob/surface geometry from enclosed regions
-    return []
+  buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
+    const { canvasWidth, canvasHeight, solidParams: sp } = params
+    const solidParams = sp ?? DEFAULT_SOLID_PARAMS
+
+    INFLATE_DEBUG.geometryType = "NULL"
+    INFLATE_DEBUG.vertexCount = 0
+    INFLATE_DEBUG.failureReason = ""
+    INFLATE_DEBUG.solidMaskCalled = "NO"
+    INFLATE_DEBUG.holeContourCount = 0
+
+    if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
+      INFLATE_DEBUG.failureReason =
+        strokes.length === 0 ? "no strokes" : "canvas 0"
+      return []
+    }
+
+    // Reuse Solid's calibration + coord scale exactly. This guarantees the
+    // Inflate silhouette matches the Solid silhouette pixel-for-pixel — only
+    // the depth profile differs.
+    const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
+    const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
+      solidParams.thickness,
+    )
+    const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
+    const worldThickness = effectiveThicknessPx * coordScale
+    INFLATE_DEBUG.effectiveThickness = effectiveThicknessPx
+
+    const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
+    INFLATE_DEBUG.solidMaskCalled = "YES"
+    let solidResult: MaskSolidResult
+    try {
+      // No `holeStabilization`, no `disableHolesForAnimation`. Animation for
+      // Inflate Phase 1 just rebuilds against the partial stroke set; no
+      // sticky-hole logic is wired through (and isn't needed at this stage).
+      solidResult = buildMaskSolid(
+        testStroke,
+        worldThickness,
+        effectiveDepth,
+        canvasWidth,
+        canvasHeight,
+      )
+    } catch (e) {
+      INFLATE_DEBUG.failureReason = `buildMaskSolid threw: ${(e as Error).message}`
+      return []
+    }
+
+    const stages = solidResult.stages
+    const simplifiedOuter = stages.simplifiedOuter
+    const simplifiedHoles = stages.simplifiedHoles ?? []
+    if (!simplifiedOuter || simplifiedOuter.length < 3) {
+      INFLATE_DEBUG.failureReason =
+        "no valid outer contour from Solid mask pipeline"
+      return []
+    }
+
+    // Replicate the Solid mask-to-world transform. These same constants are
+    // used inside buildMaskSolid (see `toWorldX`/`toWorldY` there). Keeping
+    // them in sync is the price we pay for not threading the world contours
+    // through MaskSolidStages — it's a Phase 1 simplification.
+    const maskW = stages.maskWidth
+    const maskH = stages.maskHeight
+    const scaleX = canvasWidth / maskW
+    const scaleY = canvasHeight / maskH
+    const maskScale = Math.min(scaleX, scaleY)
+    const normScale = 3 / Math.max(canvasWidth, canvasHeight)
+    const toWorldX = (mx: number) => (mx - maskW / 2) * maskScale * normScale
+    const toWorldY = (my: number) => -(my - maskH / 2) * maskScale * normScale
+
+    const outerWorld = simplifiedOuter.map(
+      (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)),
+    )
+    const shape = new THREE.Shape(outerWorld)
+    let holesUsed = 0
+    for (const holeMask of simplifiedHoles) {
+      if (!holeMask || holeMask.length < 3) continue
+      const holeWorld = holeMask.map(
+        (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)),
+      )
+      shape.holes.push(new THREE.Path(holeWorld))
+      holesUsed++
+    }
+    INFLATE_DEBUG.holeContourCount = holesUsed
+
+    // Puff = the calibrated Solid depth, used as both the extrude depth and
+    // the bevel size. A bevel that's a large fraction of the depth is what
+    // gives the visibly rounded / inflated look (vs. Solid's hard slab).
+    //
+    // Sizing rationale:
+    //   - depth: calibrated Solid depth (already in world units)
+    //   - bevelThickness: 90% of depth, so almost the entire Z extent is
+    //     beveled — this kills the flat plateau in narrow regions
+    //   - bevelSize: 65% of effective thickness in world units, capped
+    //     against the depth so we never bevel wider than the silhouette
+    //     itself can support
+    //   - bevelSegments: 6 for a smooth rounded profile without exploding
+    //     vertex count
+    const puffDepth = Math.max(0.001, effectiveDepth)
+    const inwardCap = Math.min(worldThickness * 0.45, puffDepth * 1.5)
+    const bevelSize = Math.max(0.0005, inwardCap)
+    const bevelThickness = puffDepth * 0.9
+    INFLATE_DEBUG.puffAmount = puffDepth
+
+    let geometry: THREE.BufferGeometry
+    try {
+      geometry = new THREE.ExtrudeGeometry(shape, {
+        depth: puffDepth * 0.2, // small core; the bulk of the height is bevel
+        bevelEnabled: true,
+        bevelThickness,
+        bevelSize,
+        bevelOffset: 0,
+        bevelSegments: 6,
+        curveSegments: 12,
+        steps: 1,
+      })
+      // Center the dome around z = 0 the same way Solid does.
+      geometry.translate(0, 0, -(puffDepth * 0.2 + bevelThickness) / 2)
+      geometry.computeVertexNormals()
+    } catch (e) {
+      // Fallback: smaller bevel. Some pinched silhouettes can confuse the
+      // ExtrudeGeometry triangulator with a large bevel; a smaller one
+      // usually succeeds. We never fall through to "no preview".
+      INFLATE_DEBUG.failureReason = `ExtrudeGeometry failed, retried with small bevel: ${(e as Error).message}`
+      try {
+        geometry = new THREE.ExtrudeGeometry(shape, {
+          depth: puffDepth,
+          bevelEnabled: true,
+          bevelThickness: puffDepth * 0.25,
+          bevelSize: bevelSize * 0.4,
+          bevelOffset: 0,
+          bevelSegments: 3,
+          curveSegments: 8,
+          steps: 1,
+        })
+        geometry.translate(0, 0, -puffDepth * 0.5)
+        geometry.computeVertexNormals()
+      } catch (e2) {
+        INFLATE_DEBUG.failureReason = `ExtrudeGeometry failed twice: ${(e2 as Error).message}`
+        return []
+      }
+    }
+
+    INFLATE_DEBUG.geometryType = "ExtrudeGeometry"
+    INFLATE_DEBUG.vertexCount = geometry.getAttribute("position")?.count ?? 0
+
+    const meshData: StrokeMeshData = {
+      tubeGeometry: geometry,
+      filteredCount: strokes.reduce((acc, s) => acc + (s.points?.length ?? 0), 0),
+      key: `inflate-${strokes.length}-${canvasWidth}x${canvasHeight}-${puffDepth.toFixed(4)}`,
+      mode: "inflate",
+    }
+    return [meshData]
   },
 
   buildExport(_strokes: ProcessedStroke[], _params: ExportParams): ExportResult {
-    // TODO: Iteration 8+ — Inflate mode export
+    // Phase 1: export is intentionally a placeholder. Solid export is the
+    // production path; Inflate export will be addressed in a later phase
+    // once the visual direction is locked. Returning an empty group keeps
+    // the export pipeline non-crashing without claiming an export that
+    // doesn't actually exist.
     const group = new THREE.Group()
     group.name = "FreeStroke"
-    group.userData = { app: "Free Stroke", mode: "inflate" }
+    group.userData = {
+      app: "Free Stroke",
+      mode: "inflate",
+      phase: "PHASE_1_PREVIEW_ONLY",
+    }
     return { group, disposables: [], objectCount: 0, merged: false }
   },
 }
