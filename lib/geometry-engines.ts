@@ -4496,24 +4496,35 @@ export const SolidEngine: GeometryEngine = {
 
 /** Inflate-mode debug state. Read by the panel when Debug is ON. */
 export const INFLATE_DEBUG = {
-  inflateMode: "BEVEL_EXTRUDE" as "BEVEL_EXTRUDE",
+  inflateMode: "BEVEL_EXTRUDE_WITH_SOLID_FALLBACK" as
+    | "BEVEL_EXTRUDE_WITH_SOLID_FALLBACK",
   inflateStrategy:
-    "Solid mask + ExtrudeGeometry with high bevel for rounded/puffy edge",
-  usesSolidBase: "YES" as "YES" | "NO",
-  preservesHoles: "YES" as "YES" | "NO",
-  geometryType: "ExtrudeGeometry" as "ExtrudeGeometry" | "NULL",
-  /** Calibrated effective thickness from the Solid Thickness slider. */
+    "Solid mask + ExtrudeGeometry bevel; falls back to Solid H3 geometry on failure",
+  // ---- Path probes (set on every buildPreview call) ----
+  inflateEngineCalled: "NO" as "YES" | "NO",
+  inflateBuildPreviewCalled: "NO" as "YES" | "NO",
+  inflateSolidMaskCalled: "NO" as "YES" | "NO",
+  inflateSolidMaskSucceeded: "NO" as "YES" | "NO",
+  inflateOuterContourPoints: 0,
+  inflateHoleCount: 0,
+  inflateBevelGeometryCreated: "NO" as "YES" | "NO",
+  inflateGeometryCreated: "NO" as "YES" | "NO",
+  inflateVertexCount: 0,
+  inflateFallback: "NONE" as
+    | "NONE"
+    | "SOLID_BASE_VISIBLE"
+    | "SOLID_BASE_NULL_FAILED",
+  inflateFailureReason: "",
+  // ---- Sizing diagnostics ----
   effectiveThickness: 0,
-  /** Final puff amount used for extrude depth + bevel sizing this build. */
   puffAmount: 0,
-  /** Vertices in the produced ExtrudeGeometry (0 if build failed). */
-  vertexCount: 0,
-  /** Last failure reason ("" if last build succeeded). */
-  failureReason: "",
-  /** Indicates the Solid mask pipeline was actually consulted this build. */
-  solidMaskCalled: "NO" as "YES" | "NO",
-  /** Number of hole contours fed into the extrude shape this build. */
-  holeContourCount: 0,
+  // ---- Geometry bbox (proves something is in view) ----
+  geometryBBoxX: 0,
+  geometryBBoxY: 0,
+  geometryBBoxZ: 0,
+  // ---- Stroke counters (proves not animating to empty) ----
+  inputStrokeCount: 0,
+  inputPointCount: 0,
 }
 
 export const InflateEngine: GeometryEngine = {
@@ -4521,21 +4532,33 @@ export const InflateEngine: GeometryEngine = {
     const { canvasWidth, canvasHeight, solidParams: sp } = params
     const solidParams = sp ?? DEFAULT_SOLID_PARAMS
 
-    INFLATE_DEBUG.geometryType = "NULL"
-    INFLATE_DEBUG.vertexCount = 0
-    INFLATE_DEBUG.failureReason = ""
-    INFLATE_DEBUG.solidMaskCalled = "NO"
-    INFLATE_DEBUG.holeContourCount = 0
+    // Reset all probes for this call.
+    INFLATE_DEBUG.inflateEngineCalled = "YES"
+    INFLATE_DEBUG.inflateBuildPreviewCalled = "YES"
+    INFLATE_DEBUG.inflateSolidMaskCalled = "NO"
+    INFLATE_DEBUG.inflateSolidMaskSucceeded = "NO"
+    INFLATE_DEBUG.inflateOuterContourPoints = 0
+    INFLATE_DEBUG.inflateHoleCount = 0
+    INFLATE_DEBUG.inflateBevelGeometryCreated = "NO"
+    INFLATE_DEBUG.inflateGeometryCreated = "NO"
+    INFLATE_DEBUG.inflateVertexCount = 0
+    INFLATE_DEBUG.inflateFallback = "NONE"
+    INFLATE_DEBUG.inflateFailureReason = ""
+    INFLATE_DEBUG.geometryBBoxX = 0
+    INFLATE_DEBUG.geometryBBoxY = 0
+    INFLATE_DEBUG.geometryBBoxZ = 0
+    INFLATE_DEBUG.inputStrokeCount = strokes.length
+    let inputPts = 0
+    for (const s of strokes) inputPts += s.points?.length ?? 0
+    INFLATE_DEBUG.inputPointCount = inputPts
 
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
-      INFLATE_DEBUG.failureReason =
+      INFLATE_DEBUG.inflateFailureReason =
         strokes.length === 0 ? "no strokes" : "canvas 0"
       return []
     }
 
-    // Reuse Solid's calibration + coord scale exactly. This guarantees the
-    // Inflate silhouette matches the Solid silhouette pixel-for-pixel — only
-    // the depth profile differs.
+    // Reuse Solid's calibration + coord scale exactly.
     const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
     const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
       solidParams.thickness,
@@ -4545,12 +4568,10 @@ export const InflateEngine: GeometryEngine = {
     INFLATE_DEBUG.effectiveThickness = effectiveThicknessPx
 
     const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
-    INFLATE_DEBUG.solidMaskCalled = "YES"
+    INFLATE_DEBUG.inflateSolidMaskCalled = "YES"
+
     let solidResult: MaskSolidResult
     try {
-      // No `holeStabilization`, no `disableHolesForAnimation`. Animation for
-      // Inflate Phase 1 just rebuilds against the partial stroke set; no
-      // sticky-hole logic is wired through (and isn't needed at this stage).
       solidResult = buildMaskSolid(
         testStroke,
         worldThickness,
@@ -4558,113 +4579,150 @@ export const InflateEngine: GeometryEngine = {
         canvasWidth,
         canvasHeight,
       )
+      INFLATE_DEBUG.inflateSolidMaskSucceeded = "YES"
     } catch (e) {
-      INFLATE_DEBUG.failureReason = `buildMaskSolid threw: ${(e as Error).message}`
+      INFLATE_DEBUG.inflateFailureReason = `buildMaskSolid threw: ${(e as Error).message}`
+      INFLATE_DEBUG.inflateFallback = "SOLID_BASE_NULL_FAILED"
       return []
     }
 
     const stages = solidResult.stages
     const simplifiedOuter = stages.simplifiedOuter
     const simplifiedHoles = stages.simplifiedHoles ?? []
-    if (!simplifiedOuter || simplifiedOuter.length < 3) {
-      INFLATE_DEBUG.failureReason =
+    INFLATE_DEBUG.inflateOuterContourPoints = simplifiedOuter?.length ?? 0
+    INFLATE_DEBUG.inflateHoleCount = simplifiedHoles.length
+
+    // ---- Step A: try BEVEL_EXTRUDE (puffy look) ----
+    let bevelGeometry: THREE.BufferGeometry | null = null
+    if (simplifiedOuter && simplifiedOuter.length >= 3) {
+      // Replicate the Solid mask-to-world transform (matches solid-mask.ts
+      // toWorldX/toWorldY at line ~844).
+      const maskW = stages.maskWidth
+      const maskH = stages.maskHeight
+      const scaleX = canvasWidth / maskW
+      const scaleY = canvasHeight / maskH
+      const maskScale = Math.min(scaleX, scaleY)
+      const normScale = 3 / Math.max(canvasWidth, canvasHeight)
+      const toWorldX = (mx: number) => (mx - maskW / 2) * maskScale * normScale
+      const toWorldY = (my: number) => -(my - maskH / 2) * maskScale * normScale
+
+      let outerWorld = simplifiedOuter.map(
+        (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)),
+      )
+
+      // CRITICAL: enforce CCW winding for the outer contour.
+      // The mask raster contour is traced in pixel space (Y-down). After we
+      // flip Y in toWorldY, the winding direction inverts. THREE.Shape
+      // requires CCW for the outer contour; passing CW silently produces
+      // an inverted (back-facing) extrude that backface-culls to nothing.
+      // This was the documented root cause of the empty Inflate viewport.
+      let signedArea = 0
+      for (let i = 0; i < outerWorld.length; i++) {
+        const a = outerWorld[i]
+        const b = outerWorld[(i + 1) % outerWorld.length]
+        signedArea += (b.x - a.x) * (b.y + a.y)
+      }
+      // Pixel-space CCW = sum > 0 (Y-down). After Y flip, world-space CCW
+      // requires sum < 0. If sum > 0, reverse to make it CCW in world.
+      if (signedArea > 0) outerWorld = outerWorld.reverse()
+
+      const shape = new THREE.Shape(outerWorld)
+      let holesUsed = 0
+      for (const holeMask of simplifiedHoles) {
+        if (!holeMask || holeMask.length < 3) continue
+        let holeWorld = holeMask.map(
+          (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)),
+        )
+        // Holes need OPPOSITE winding from the outer (CW in world space).
+        let hSigned = 0
+        for (let i = 0; i < holeWorld.length; i++) {
+          const a = holeWorld[i]
+          const b = holeWorld[(i + 1) % holeWorld.length]
+          hSigned += (b.x - a.x) * (b.y + a.y)
+        }
+        if (hSigned < 0) holeWorld = holeWorld.reverse()
+        shape.holes.push(new THREE.Path(holeWorld))
+        holesUsed++
+      }
+
+      // Conservative bevel sizing — a bevel larger than half the
+      // silhouette's narrowest pinch causes triangulation to produce zero
+      // triangles. We start CONSERVATIVE on the first attempt to maximize
+      // success probability. The visual goal is "rounded edge", not
+      // "spherical dome", so a modest bevel still reads as inflated.
+      const puffDepth = Math.max(0.001, effectiveDepth)
+      INFLATE_DEBUG.puffAmount = puffDepth
+      // bevelSize is the inset distance in XY. Cap it to a small fraction
+      // of the calibrated thickness so we never bevel past silhouette
+      // pinch points.
+      const safeBevelSize = Math.max(0.0008, worldThickness * 0.18)
+      const bevelThickness = Math.max(0.0008, puffDepth * 0.45)
+
+      try {
+        bevelGeometry = new THREE.ExtrudeGeometry(shape, {
+          depth: puffDepth,
+          bevelEnabled: true,
+          bevelThickness,
+          bevelSize: safeBevelSize,
+          bevelOffset: 0,
+          bevelSegments: 4,
+          curveSegments: 10,
+          steps: 1,
+        })
+        const vc = bevelGeometry.getAttribute("position")?.count ?? 0
+        if (vc < 3) {
+          // Triangulator returned nothing usable; treat as failure.
+          bevelGeometry = null
+          INFLATE_DEBUG.inflateFailureReason =
+            "ExtrudeGeometry returned <3 vertices"
+        } else {
+          // Center on Z, similar to Solid extrude centering.
+          bevelGeometry.translate(0, 0, -(puffDepth + bevelThickness) / 2)
+          bevelGeometry.computeVertexNormals()
+        }
+      } catch (e) {
+        INFLATE_DEBUG.inflateFailureReason = `ExtrudeGeometry threw: ${(e as Error).message}`
+        bevelGeometry = null
+      }
+    } else {
+      INFLATE_DEBUG.inflateFailureReason =
         "no valid outer contour from Solid mask pipeline"
+    }
+
+    // ---- Step B: pick a geometry — prefer bevel, fall back to Solid H3 ----
+    let geometry: THREE.BufferGeometry | null = bevelGeometry
+    if (geometry) {
+      INFLATE_DEBUG.inflateBevelGeometryCreated = "YES"
+    } else if (solidResult.geometry) {
+      // Visible fallback: the same H3 geometry Solid renders. Guarantees
+      // we never show an empty viewport for a valid stroke. Per Phase 1
+      // spec: "If the puffy bevel geometry fails, temporarily make
+      // Inflate render the known-good Solid H3 geometry as a fallback."
+      geometry = solidResult.geometry
+      INFLATE_DEBUG.inflateFallback = "SOLID_BASE_VISIBLE"
+    } else {
+      INFLATE_DEBUG.inflateFallback = "SOLID_BASE_NULL_FAILED"
+      if (!INFLATE_DEBUG.inflateFailureReason) {
+        INFLATE_DEBUG.inflateFailureReason =
+          "both BEVEL_EXTRUDE and Solid H3 returned null"
+      }
       return []
     }
 
-    // Replicate the Solid mask-to-world transform. These same constants are
-    // used inside buildMaskSolid (see `toWorldX`/`toWorldY` there). Keeping
-    // them in sync is the price we pay for not threading the world contours
-    // through MaskSolidStages — it's a Phase 1 simplification.
-    const maskW = stages.maskWidth
-    const maskH = stages.maskHeight
-    const scaleX = canvasWidth / maskW
-    const scaleY = canvasHeight / maskH
-    const maskScale = Math.min(scaleX, scaleY)
-    const normScale = 3 / Math.max(canvasWidth, canvasHeight)
-    const toWorldX = (mx: number) => (mx - maskW / 2) * maskScale * normScale
-    const toWorldY = (my: number) => -(my - maskH / 2) * maskScale * normScale
-
-    const outerWorld = simplifiedOuter.map(
-      (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)),
-    )
-    const shape = new THREE.Shape(outerWorld)
-    let holesUsed = 0
-    for (const holeMask of simplifiedHoles) {
-      if (!holeMask || holeMask.length < 3) continue
-      const holeWorld = holeMask.map(
-        (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)),
-      )
-      shape.holes.push(new THREE.Path(holeWorld))
-      holesUsed++
+    INFLATE_DEBUG.inflateGeometryCreated = "YES"
+    INFLATE_DEBUG.inflateVertexCount = geometry.getAttribute("position")?.count ?? 0
+    geometry.computeBoundingBox()
+    const bb = geometry.boundingBox
+    if (bb) {
+      INFLATE_DEBUG.geometryBBoxX = bb.max.x - bb.min.x
+      INFLATE_DEBUG.geometryBBoxY = bb.max.y - bb.min.y
+      INFLATE_DEBUG.geometryBBoxZ = bb.max.z - bb.min.z
     }
-    INFLATE_DEBUG.holeContourCount = holesUsed
-
-    // Puff = the calibrated Solid depth, used as both the extrude depth and
-    // the bevel size. A bevel that's a large fraction of the depth is what
-    // gives the visibly rounded / inflated look (vs. Solid's hard slab).
-    //
-    // Sizing rationale:
-    //   - depth: calibrated Solid depth (already in world units)
-    //   - bevelThickness: 90% of depth, so almost the entire Z extent is
-    //     beveled — this kills the flat plateau in narrow regions
-    //   - bevelSize: 65% of effective thickness in world units, capped
-    //     against the depth so we never bevel wider than the silhouette
-    //     itself can support
-    //   - bevelSegments: 6 for a smooth rounded profile without exploding
-    //     vertex count
-    const puffDepth = Math.max(0.001, effectiveDepth)
-    const inwardCap = Math.min(worldThickness * 0.45, puffDepth * 1.5)
-    const bevelSize = Math.max(0.0005, inwardCap)
-    const bevelThickness = puffDepth * 0.9
-    INFLATE_DEBUG.puffAmount = puffDepth
-
-    let geometry: THREE.BufferGeometry
-    try {
-      geometry = new THREE.ExtrudeGeometry(shape, {
-        depth: puffDepth * 0.2, // small core; the bulk of the height is bevel
-        bevelEnabled: true,
-        bevelThickness,
-        bevelSize,
-        bevelOffset: 0,
-        bevelSegments: 6,
-        curveSegments: 12,
-        steps: 1,
-      })
-      // Center the dome around z = 0 the same way Solid does.
-      geometry.translate(0, 0, -(puffDepth * 0.2 + bevelThickness) / 2)
-      geometry.computeVertexNormals()
-    } catch (e) {
-      // Fallback: smaller bevel. Some pinched silhouettes can confuse the
-      // ExtrudeGeometry triangulator with a large bevel; a smaller one
-      // usually succeeds. We never fall through to "no preview".
-      INFLATE_DEBUG.failureReason = `ExtrudeGeometry failed, retried with small bevel: ${(e as Error).message}`
-      try {
-        geometry = new THREE.ExtrudeGeometry(shape, {
-          depth: puffDepth,
-          bevelEnabled: true,
-          bevelThickness: puffDepth * 0.25,
-          bevelSize: bevelSize * 0.4,
-          bevelOffset: 0,
-          bevelSegments: 3,
-          curveSegments: 8,
-          steps: 1,
-        })
-        geometry.translate(0, 0, -puffDepth * 0.5)
-        geometry.computeVertexNormals()
-      } catch (e2) {
-        INFLATE_DEBUG.failureReason = `ExtrudeGeometry failed twice: ${(e2 as Error).message}`
-        return []
-      }
-    }
-
-    INFLATE_DEBUG.geometryType = "ExtrudeGeometry"
-    INFLATE_DEBUG.vertexCount = geometry.getAttribute("position")?.count ?? 0
 
     const meshData: StrokeMeshData = {
       tubeGeometry: geometry,
-      filteredCount: strokes.reduce((acc, s) => acc + (s.points?.length ?? 0), 0),
-      key: `inflate-${strokes.length}-${canvasWidth}x${canvasHeight}-${puffDepth.toFixed(4)}`,
+      filteredCount: inputPts,
+      key: `inflate-${strokes.length}-${canvasWidth}x${canvasHeight}-${effectiveDepth.toFixed(4)}-${INFLATE_DEBUG.inflateBevelGeometryCreated}`,
       mode: "inflate",
     }
     return [meshData]
