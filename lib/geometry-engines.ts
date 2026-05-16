@@ -4496,9 +4496,13 @@ export const SolidEngine: GeometryEngine = {
 
 /** Inflate-mode debug state. Read by the panel when Debug is ON. */
 export const INFLATE_DEBUG = {
-  inflateMode: "SOLID_H3_PASSTHROUGH" as "SOLID_H3_PASSTHROUGH",
+  inflateMode: "SOLID_BASE_NORMAL_PUFF" as
+    | "SOLID_BASE_NORMAL_PUFF"
+    | "SOLID_H3_PASSTHROUGH",
   inflateStrategy:
-    "Phase 1 wiring proof — renders Solid H3 geometry through the Inflate engine to confirm engine/mode/render plumbing. Bevel/dome work returns once visible.",
+    "Clone Solid H3, displace vertices along their normals by Puff amount, recompute normals.",
+  usesSolidBase: "YES" as "YES" | "NO",
+  fallbackUsed: "NO" as "YES" | "NO",
   // ---- Path probes (set on every buildPreview call) ----
   inflateEngineCalled: "NO" as "YES" | "NO",
   inflateBuildPreviewCalled: "NO" as "YES" | "NO",
@@ -4506,24 +4510,25 @@ export const INFLATE_DEBUG = {
   inflateSolidMaskSucceeded: "NO" as "YES" | "NO",
   inflateOuterContourPoints: 0,
   inflateHoleCount: 0,
-  inflateBevelGeometryCreated: "NO" as "YES" | "NO",
   inflateGeometryCreated: "NO" as "YES" | "NO",
-  inflateVertexCount: 0,
-  inflateFallback: "NONE" as
-    | "NONE"
-    | "SOLID_BASE_VISIBLE"
-    | "SOLID_BASE_NULL_FAILED",
-  inflateFailureReason: "",
+  // ---- Puff diagnostics ----
+  puffAmount: 0,
+  puffDisplacement: 0,
+  vertexCount: 0,
+  movedVertexCount: 0,
+  bboxBeforeX: 0,
+  bboxBeforeY: 0,
+  bboxBeforeZ: 0,
+  bboxAfterX: 0,
+  bboxAfterY: 0,
+  bboxAfterZ: 0,
+  differsFromSolidBase: "NO" as "YES" | "NO",
   // ---- Sizing diagnostics ----
   effectiveThickness: 0,
-  puffAmount: 0,
-  // ---- Geometry bbox (proves something is in view) ----
-  geometryBBoxX: 0,
-  geometryBBoxY: 0,
-  geometryBBoxZ: 0,
-  // ---- Stroke counters (proves not animating to empty) ----
+  // ---- Stroke counters ----
   inputStrokeCount: 0,
   inputPointCount: 0,
+  failureReason: "",
 }
 
 export const InflateEngine: GeometryEngine = {
@@ -4532,45 +4537,43 @@ export const InflateEngine: GeometryEngine = {
     const solidParams = sp ?? DEFAULT_SOLID_PARAMS
 
     // Reset all probes for this call.
+    INFLATE_DEBUG.inflateMode = "SOLID_BASE_NORMAL_PUFF"
+    INFLATE_DEBUG.inflateStrategy =
+      "Clone Solid H3, displace vertices along their normals by Puff amount, recompute normals."
+    INFLATE_DEBUG.usesSolidBase = "YES"
+    INFLATE_DEBUG.fallbackUsed = "NO"
     INFLATE_DEBUG.inflateEngineCalled = "YES"
     INFLATE_DEBUG.inflateBuildPreviewCalled = "YES"
     INFLATE_DEBUG.inflateSolidMaskCalled = "NO"
     INFLATE_DEBUG.inflateSolidMaskSucceeded = "NO"
     INFLATE_DEBUG.inflateOuterContourPoints = 0
     INFLATE_DEBUG.inflateHoleCount = 0
-    INFLATE_DEBUG.inflateBevelGeometryCreated = "NO"
     INFLATE_DEBUG.inflateGeometryCreated = "NO"
-    INFLATE_DEBUG.inflateVertexCount = 0
-    INFLATE_DEBUG.inflateFallback = "NONE"
-    INFLATE_DEBUG.inflateFailureReason = ""
-    INFLATE_DEBUG.geometryBBoxX = 0
-    INFLATE_DEBUG.geometryBBoxY = 0
-    INFLATE_DEBUG.geometryBBoxZ = 0
+    INFLATE_DEBUG.puffDisplacement = 0
+    INFLATE_DEBUG.vertexCount = 0
+    INFLATE_DEBUG.movedVertexCount = 0
+    INFLATE_DEBUG.bboxBeforeX = 0
+    INFLATE_DEBUG.bboxBeforeY = 0
+    INFLATE_DEBUG.bboxBeforeZ = 0
+    INFLATE_DEBUG.bboxAfterX = 0
+    INFLATE_DEBUG.bboxAfterY = 0
+    INFLATE_DEBUG.bboxAfterZ = 0
+    INFLATE_DEBUG.differsFromSolidBase = "NO"
+    INFLATE_DEBUG.failureReason = ""
     INFLATE_DEBUG.inputStrokeCount = strokes.length
     let inputPts = 0
     for (const s of strokes) inputPts += s.points?.length ?? 0
     INFLATE_DEBUG.inputPointCount = inputPts
 
-    console.log("[v0] InflateEngine.buildPreview called", {
-      strokes: strokes.length,
-      points: inputPts,
-      canvasWidth,
-      canvasHeight,
-    })
-
     if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
-      INFLATE_DEBUG.inflateFailureReason =
+      INFLATE_DEBUG.failureReason =
         strokes.length === 0 ? "no strokes" : "canvas 0"
-      console.log("[v0] InflateEngine: early return —", INFLATE_DEBUG.inflateFailureReason)
       return []
     }
 
-    // Reuse Solid's calibration + coord scale exactly. The Inflate Phase 1
-    // strategy is deliberately identical to Solid's geometry pipeline at
-    // this stage: same calibration, same buildMaskSolid call, same H3
-    // geometry. The only Inflate-specific behavior is that the engine
-    // OWNS its own debug state and is invoked from the inflate mode. This
-    // proves the wiring is sound before we stack bevel/dome work on top.
+    // Reuse Solid's calibration + coord scale exactly. The Inflate base is
+    // Solid's H3 geometry — we then puff it along normals to make it
+    // visibly different from Solid.
     const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
     const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
       solidParams.thickness,
@@ -4578,7 +4581,7 @@ export const InflateEngine: GeometryEngine = {
     const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
     const worldThickness = effectiveThicknessPx * coordScale
     INFLATE_DEBUG.effectiveThickness = effectiveThicknessPx
-    INFLATE_DEBUG.puffAmount = effectiveDepth
+    INFLATE_DEBUG.puffAmount = solidParams.depth
 
     const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
     INFLATE_DEBUG.inflateSolidMaskCalled = "YES"
@@ -4594,9 +4597,7 @@ export const InflateEngine: GeometryEngine = {
       )
       INFLATE_DEBUG.inflateSolidMaskSucceeded = "YES"
     } catch (e) {
-      INFLATE_DEBUG.inflateFailureReason = `buildMaskSolid threw: ${(e as Error).message}`
-      INFLATE_DEBUG.inflateFallback = "SOLID_BASE_NULL_FAILED"
-      console.log("[v0] InflateEngine: buildMaskSolid threw", e)
+      INFLATE_DEBUG.failureReason = `buildMaskSolid threw: ${(e as Error).message}`
       return []
     }
 
@@ -4604,34 +4605,152 @@ export const InflateEngine: GeometryEngine = {
       solidResult.stages.simplifiedOuter?.length ?? 0
     INFLATE_DEBUG.inflateHoleCount = solidResult.stages.simplifiedHoles?.length ?? 0
 
-    const geometry = solidResult.geometry
-    if (!geometry) {
-      INFLATE_DEBUG.inflateFallback = "SOLID_BASE_NULL_FAILED"
-      INFLATE_DEBUG.inflateFailureReason = "Solid H3 returned null geometry"
-      console.log("[v0] InflateEngine: solidResult.geometry is null")
+    const baseGeometry = solidResult.geometry
+    if (!baseGeometry) {
+      INFLATE_DEBUG.failureReason = "Solid H3 returned null geometry"
       return []
     }
 
-    INFLATE_DEBUG.inflateFallback = "SOLID_BASE_VISIBLE"
-    INFLATE_DEBUG.inflateGeometryCreated = "YES"
-    INFLATE_DEBUG.inflateVertexCount = geometry.getAttribute("position")?.count ?? 0
-    geometry.computeBoundingBox()
-    const bb = geometry.boundingBox
-    if (bb) {
-      INFLATE_DEBUG.geometryBBoxX = bb.max.x - bb.min.x
-      INFLATE_DEBUG.geometryBBoxY = bb.max.y - bb.min.y
-      INFLATE_DEBUG.geometryBBoxZ = bb.max.z - bb.min.z
+    // ---- Compute base bbox for diff comparison ----
+    baseGeometry.computeBoundingBox()
+    const bbBefore = baseGeometry.boundingBox
+    if (bbBefore) {
+      INFLATE_DEBUG.bboxBeforeX = bbBefore.max.x - bbBefore.min.x
+      INFLATE_DEBUG.bboxBeforeY = bbBefore.max.y - bbBefore.min.y
+      INFLATE_DEBUG.bboxBeforeZ = bbBefore.max.z - bbBefore.min.z
     }
 
-    console.log("[v0] InflateEngine: returning Solid H3 geometry", {
-      vertexCount: INFLATE_DEBUG.inflateVertexCount,
-      bbox: [INFLATE_DEBUG.geometryBBoxX, INFLATE_DEBUG.geometryBBoxY, INFLATE_DEBUG.geometryBBoxZ],
-    })
+    // ---- Strategy: SOLID_BASE_NORMAL_PUFF ----
+    // 1. Clone the Solid H3 geometry so we never mutate Solid's mesh.
+    // 2. Make sure we have non-indexed vertex normals (a geometry produced
+    //    by the H3 pipeline already has them, but we recompute defensively).
+    // 3. Displace each position along its corresponding normal by
+    //    `puffDisplacement` world units. Normals on the front cap point
+    //    +Z, back cap -Z, side walls outward in XY — so the displacement
+    //    bulges the cap outward along Z AND fattens the silhouette
+    //    laterally, which reads as "puffy/inflated" vs Solid's hard slab.
+    // 4. Recompute normals so lighting follows the new surface.
+    //
+    // Why this is visibly different from Solid:
+    //   - Z-bbox grows by ~2 * puffDisplacement (front + back caps move
+    //     outward in opposite directions).
+    //   - XY silhouette grows by ~puffDisplacement on every side.
+    //   - Sharp edges between cap and side wall round off, because cap
+    //     verts move +Z and side-wall verts move outward, but neighbor
+    //     verts share averaged normals → corner displacement is partial.
+    //   - Holes shrink slightly (their inward-facing normals push hole
+    //     walls toward the hole center). For very small holes this can
+    //     close them — documented limitation, not a failure.
+    //
+    // Why it can't fail catastrophically:
+    //   - We never re-triangulate. We only nudge existing vertices.
+    //   - Topology is preserved exactly.
+    //   - If puff is 0, geometry equals Solid (still visible).
+    //   - If anything throws, we fall back to the unmodified base.
+
+    let geometry: THREE.BufferGeometry
+    let movedVertexCount = 0
+    let puffDisplacement = 0
+    try {
+      // Clone so Solid's cached geometry stays untouched. .clone() copies
+      // attributes but creates new typed array buffers, so subsequent
+      // writes are safe.
+      geometry = baseGeometry.clone()
+
+      // Ensure the clone is non-indexed-friendly: BufferGeometry.clone
+      // preserves the index, which is fine for our per-vertex displace.
+      // We need fresh normals matching the cloned positions.
+      geometry.computeVertexNormals()
+
+      const positions = geometry.getAttribute("position") as
+        | THREE.BufferAttribute
+        | undefined
+      const normals = geometry.getAttribute("normal") as
+        | THREE.BufferAttribute
+        | undefined
+      if (!positions || !normals) {
+        throw new Error("base geometry missing position or normal attribute")
+      }
+
+      // Puff displacement maps the calibrated solid depth to a meaningful
+      // world-space nudge. Using `worldThickness * 0.6` as the dominant
+      // term keeps the puff proportional to stroke thickness (so thin
+      // strokes don't blow up and thick strokes still look puffy).
+      // The depth slider modulates this — at min depth the puff is
+      // ~30% of thickness, at max depth ~120%.
+      const depthRange = SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN
+      const depthNorm =
+        depthRange > 0
+          ? (solidParams.depth - SOLID_DEPTH_SLIDER_MIN) / depthRange
+          : 0.5
+      // 0.30 → 1.20 multiplier of worldThickness as Puff slider sweeps.
+      const puffMultiplier = 0.3 + depthNorm * 0.9
+      puffDisplacement = worldThickness * puffMultiplier
+      INFLATE_DEBUG.puffDisplacement = puffDisplacement
+
+      const count = positions.count
+      INFLATE_DEBUG.vertexCount = count
+
+      // Displace every vertex along its (averaged) normal.
+      // Threshold for counting "moved" verts is small to avoid float noise.
+      const moveThreshold = 1e-9
+      for (let i = 0; i < count; i++) {
+        const px = positions.getX(i)
+        const py = positions.getY(i)
+        const pz = positions.getZ(i)
+        const nx = normals.getX(i)
+        const ny = normals.getY(i)
+        const nz = normals.getZ(i)
+        const len = Math.hypot(nx, ny, nz)
+        if (len < moveThreshold) continue
+        const dx = (nx / len) * puffDisplacement
+        const dy = (ny / len) * puffDisplacement
+        const dz = (nz / len) * puffDisplacement
+        positions.setXYZ(i, px + dx, py + dy, pz + dz)
+        movedVertexCount++
+      }
+      positions.needsUpdate = true
+
+      // Recompute normals so lighting follows the puffed surface.
+      geometry.computeVertexNormals()
+      geometry.computeBoundingBox()
+    } catch (e) {
+      // Puff failed — fall back to the unmodified Solid H3 base so we
+      // never show an empty viewport. This is the explicit, debug-flagged
+      // safety path. The viewport will look like Solid in this case;
+      // `fallbackUsed: YES` makes that diagnosable.
+      INFLATE_DEBUG.failureReason = `puff failed: ${(e as Error).message}`
+      INFLATE_DEBUG.fallbackUsed = "YES"
+      INFLATE_DEBUG.inflateMode = "SOLID_H3_PASSTHROUGH"
+      INFLATE_DEBUG.inflateStrategy =
+        "Fallback — puff failed, returning Solid H3 unchanged."
+      geometry = baseGeometry
+      geometry.computeBoundingBox()
+    }
+
+    INFLATE_DEBUG.inflateGeometryCreated = "YES"
+    INFLATE_DEBUG.movedVertexCount = movedVertexCount
+    INFLATE_DEBUG.vertexCount = geometry.getAttribute("position")?.count ?? 0
+
+    const bbAfter = geometry.boundingBox
+    if (bbAfter) {
+      INFLATE_DEBUG.bboxAfterX = bbAfter.max.x - bbAfter.min.x
+      INFLATE_DEBUG.bboxAfterY = bbAfter.max.y - bbAfter.min.y
+      INFLATE_DEBUG.bboxAfterZ = bbAfter.max.z - bbAfter.min.z
+    }
+
+    // Confirm the puffed mesh is actually different from the Solid base.
+    const bboxDelta =
+      Math.abs(INFLATE_DEBUG.bboxAfterX - INFLATE_DEBUG.bboxBeforeX) +
+      Math.abs(INFLATE_DEBUG.bboxAfterY - INFLATE_DEBUG.bboxBeforeY) +
+      Math.abs(INFLATE_DEBUG.bboxAfterZ - INFLATE_DEBUG.bboxBeforeZ)
+    INFLATE_DEBUG.differsFromSolidBase =
+      INFLATE_DEBUG.fallbackUsed === "NO" && bboxDelta > 1e-6 ? "YES" : "NO"
 
     const meshData: StrokeMeshData = {
       tubeGeometry: geometry,
       filteredCount: inputPts,
-      key: `inflate-${strokes.length}-${canvasWidth}x${canvasHeight}-${effectiveDepth.toFixed(4)}-${effectiveThicknessPx}`,
+      key: `inflate-${strokes.length}-${canvasWidth}x${canvasHeight}-${effectiveDepth.toFixed(4)}-${effectiveThicknessPx}-${puffDisplacement.toFixed(4)}-${INFLATE_DEBUG.fallbackUsed}`,
       mode: "inflate",
     }
     return [meshData]
