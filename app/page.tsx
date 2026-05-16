@@ -30,7 +30,7 @@ const GEOMETRY_MODES: { value: GeometryMode; label: string; disabled: boolean; t
   { value: "rod", label: "Rod", disabled: false },
   { value: "extrude", label: "Extrude", disabled: false },
   { value: "solid", label: "Solid", disabled: false },
-  { value: "inflate", label: "Inflate", disabled: true, tooltip: "Coming soon" },
+  { value: "inflate", label: "Inflate", disabled: false, tooltip: "Phase 1 preview (no export yet)" },
 ]
 
 export default function Home() {
@@ -203,6 +203,56 @@ export default function Home() {
         </div>
       )}
 
+      {/* Inflate mode controls (Phase 1 — BEVEL_EXTRUDE strategy)
+          Reuses the Solid Thickness + Depth state intentionally. Thickness
+          informs the bevel-inset cap so puffy edges don't blow past the
+          silhouette in narrow regions; Depth becomes the puff amount
+          (extrude depth + bevel thickness). Phase 1 is preview-only —
+          export is a placeholder until a later phase. */}
+      {geometryMode === "inflate" && (
+        <div className="flex h-10 shrink-0 items-center gap-4 border-b border-border bg-muted/30 px-4">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="select-none font-medium">Thickness</span>
+            <input
+              type="range"
+              min={SOLID_THICKNESS_SLIDER_MIN}
+              max={SOLID_THICKNESS_SLIDER_MAX}
+              step={SOLID_THICKNESS_SLIDER_STEP}
+              value={solidParams.thickness}
+              onChange={(e) => setSolidParams((p) => ({ ...p, thickness: Number(e.target.value) }))}
+              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+            />
+            <span className="w-8 select-none font-mono text-[10px]">
+              {solidParams.thickness}px
+            </span>
+          </label>
+
+          <div className="h-4 w-px bg-border" />
+
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="select-none font-medium">Puff</span>
+            <input
+              type="range"
+              min={SOLID_DEPTH_SLIDER_MIN}
+              max={SOLID_DEPTH_SLIDER_MAX}
+              step={SOLID_DEPTH_SLIDER_STEP}
+              value={solidParams.depth}
+              onChange={(e) => setSolidParams((p) => ({ ...p, depth: Number(e.target.value) }))}
+              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+            />
+            <span className="w-8 select-none font-mono text-[10px]">
+              {solidParams.depth.toFixed(2)}
+            </span>
+          </label>
+
+          <div className="h-4 w-px bg-border" />
+
+          <span className="select-none font-mono text-[10px] text-muted-foreground">
+            Phase 1 preview · export disabled
+          </span>
+        </div>
+      )}
+
       {/* Two-column layout */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left column: drawing canvas */}
@@ -218,7 +268,7 @@ export default function Home() {
 
         {/* Right column: 3D viewport */}
         <div className="flex-1">
-          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" ? solidParams : undefined} settingsRef={settingsRef} />
+          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} settingsRef={settingsRef} />
         </div>
       </div>
     </div>

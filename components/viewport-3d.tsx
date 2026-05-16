@@ -1001,6 +1001,12 @@ function Scene({
     } else if (geometryMode === "solid") {
       // Sticky-final-hole-contour stabilization (current strategy).
       SOLID_ANIM_DEBUG.animationPath = "partialSolidRebuildWithHoleStabilization"
+    } else if (geometryMode === "inflate") {
+      // Phase 1: Inflate animates by rebuilding the bevel-extrude mesh
+      // against the progressive stroke prefix — same shape as the Extrude
+      // animation. No sticky-hole logic; partial holes are accepted as
+      // detected each frame. This is a known Phase 1 simplification.
+      SOLID_ANIM_DEBUG.animationPath = "partialExtrudeRebuild"
     } else {
       SOLID_ANIM_DEBUG.animationPath = "static"
     }
@@ -1300,7 +1306,9 @@ function Scene({
   //    H3 hole pipeline reads it. Extrude passes `undefined` so its geometry
   //    path is untouched.
   const useAnimatedStrokes =
-    geometryMode === "solid" || geometryMode === "extrude"
+    geometryMode === "solid" ||
+    geometryMode === "extrude" ||
+    geometryMode === "inflate"
   // ---- Solid animation: sticky-final-hole-contour stabilization ----------
   //
   // ABANDONED STRATEGY (do NOT reintroduce):
@@ -1535,7 +1543,7 @@ function Scene({
       {/* Solid-only animation tick: forces React re-render of Solid mesh
           while playheadRef advances. No-op for other modes. */}
         <SolidAnimationTick
-          enabled={geometryMode === "solid" || geometryMode === "extrude"}
+          enabled={geometryMode === "solid" || geometryMode === "extrude" || geometryMode === "inflate"}
         playheadRef={playheadRef}
         setSolidAnimProgress={setSolidAnimProgress}
       />
