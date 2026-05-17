@@ -4496,39 +4496,103 @@ export const SolidEngine: GeometryEngine = {
 
 /** Inflate-mode debug state. Read by the panel when Debug is ON. */
 export const INFLATE_DEBUG = {
-  inflateMode: "SOLID_BASE_NORMAL_PUFF" as
-    | "SOLID_BASE_NORMAL_PUFF"
+  inflateMode: "RASTER_DISTANCE_FIELD_DOME" as
+    | "RASTER_DISTANCE_FIELD_DOME"
     | "SOLID_H3_PASSTHROUGH",
   inflateStrategy:
-    "Clone Solid H3, displace vertices along their normals by Puff amount, recompute normals.",
-  usesSolidBase: "YES" as "YES" | "NO",
+    "Re-rasterize stroke to binary mask, compute distance-to-edge on the corner grid, build a watertight puffy heightfield mesh (top + bottom caps meet at the mask boundary).",
+  usesSolidBase: "NO" as "YES" | "NO",
+  usesRasterMask: "YES" as "YES" | "NO",
   fallbackUsed: "NO" as "YES" | "NO",
-  // ---- Path probes (set on every buildPreview call) ----
+  preservesHoles: "YES" as "YES" | "NO",
+  // ---- Path probes ----
   inflateEngineCalled: "NO" as "YES" | "NO",
   inflateBuildPreviewCalled: "NO" as "YES" | "NO",
-  inflateSolidMaskCalled: "NO" as "YES" | "NO",
-  inflateSolidMaskSucceeded: "NO" as "YES" | "NO",
-  inflateOuterContourPoints: 0,
-  inflateHoleCount: 0,
   inflateGeometryCreated: "NO" as "YES" | "NO",
-  // ---- Puff diagnostics ----
+  // ---- Raster / distance-field diagnostics ----
+  maskResolution: "0x0",
+  filledPixelCount: 0,
+  maxDistanceToEdge: 0,
+  domeHeight: 0,
   puffAmount: 0,
-  puffDisplacement: 0,
-  vertexCount: 0,
-  movedVertexCount: 0,
-  bboxBeforeX: 0,
-  bboxBeforeY: 0,
-  bboxBeforeZ: 0,
-  bboxAfterX: 0,
-  bboxAfterY: 0,
-  bboxAfterZ: 0,
-  differsFromSolidBase: "NO" as "YES" | "NO",
-  // ---- Sizing diagnostics ----
   effectiveThickness: 0,
+  // ---- Mesh diagnostics ----
+  vertexCount: 0,
+  triangleCount: 0,
+  sideWallSegmentCount: 0,
+  differsFromSolidBase: "NO" as "YES" | "NO",
   // ---- Stroke counters ----
   inputStrokeCount: 0,
   inputPointCount: 0,
   failureReason: "",
+}
+
+/**
+ * Fallback used when distance-field dome construction fails. Returns the
+ * Solid H3 geometry unchanged so the viewport is never empty for a valid
+ * stroke. Sets the appropriate `INFLATE_DEBUG` fields so this path is
+ * fully diagnosable from the panel.
+ */
+function inflateFallbackToSolid(
+  strokes: ProcessedStroke[],
+  canvasWidth: number,
+  canvasHeight: number,
+  solidParams: SolidParams,
+  _coordScale: number,
+  _effectiveThicknessPx: number,
+  effectiveDepth: number,
+  inputPts: number,
+): StrokeMeshData[] {
+  INFLATE_DEBUG.fallbackUsed = "YES"
+  INFLATE_DEBUG.inflateMode = "SOLID_H3_PASSTHROUGH"
+  INFLATE_DEBUG.usesSolidBase = "YES"
+  INFLATE_DEBUG.inflateStrategy =
+    "Fallback — RASTER_DISTANCE_FIELD_DOME failed, returning Solid H3 unchanged. See failureReason."
+
+  const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
+  const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
+    solidParams.thickness,
+  )
+  const worldThickness = effectiveThicknessPx * coordScale
+  const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
+
+  let solidResult: MaskSolidResult
+  try {
+    solidResult = buildMaskSolid(
+      testStroke,
+      worldThickness,
+      effectiveDepth,
+      canvasWidth,
+      canvasHeight,
+    )
+  } catch (e) {
+    INFLATE_DEBUG.failureReason =
+      (INFLATE_DEBUG.failureReason || "") +
+      ` | fallback buildMaskSolid threw: ${(e as Error).message}`
+    return []
+  }
+
+  const baseGeometry = solidResult.geometry
+  if (!baseGeometry) {
+    INFLATE_DEBUG.failureReason =
+      (INFLATE_DEBUG.failureReason || "") +
+      " | fallback Solid H3 returned null geometry"
+    return []
+  }
+
+  baseGeometry.computeBoundingBox()
+  INFLATE_DEBUG.inflateGeometryCreated = "YES"
+  INFLATE_DEBUG.vertexCount =
+    baseGeometry.getAttribute("position")?.count ?? 0
+  INFLATE_DEBUG.differsFromSolidBase = "NO"
+
+  const meshData: StrokeMeshData = {
+    tubeGeometry: baseGeometry,
+    filteredCount: inputPts,
+    key: `inflate-fallback-${strokes.length}-${canvasWidth}x${canvasHeight}-${effectiveDepth.toFixed(4)}`,
+    mode: "inflate",
+  }
+  return [meshData]
 }
 
 export const InflateEngine: GeometryEngine = {
@@ -4536,28 +4600,26 @@ export const InflateEngine: GeometryEngine = {
     const { canvasWidth, canvasHeight, solidParams: sp } = params
     const solidParams = sp ?? DEFAULT_SOLID_PARAMS
 
-    // Reset all probes for this call.
-    INFLATE_DEBUG.inflateMode = "SOLID_BASE_NORMAL_PUFF"
+    // ---- Reset all probes ----
+    INFLATE_DEBUG.inflateMode = "RASTER_DISTANCE_FIELD_DOME"
     INFLATE_DEBUG.inflateStrategy =
-      "Clone Solid H3, displace vertices along their normals by Puff amount, recompute normals."
-    INFLATE_DEBUG.usesSolidBase = "YES"
+      "Re-rasterize stroke to binary mask, compute distance-to-edge on the corner grid, build a watertight puffy heightfield mesh (top + bottom caps meet at the mask boundary)."
+    INFLATE_DEBUG.usesSolidBase = "NO"
+    INFLATE_DEBUG.usesRasterMask = "YES"
     INFLATE_DEBUG.fallbackUsed = "NO"
+    INFLATE_DEBUG.preservesHoles = "YES"
     INFLATE_DEBUG.inflateEngineCalled = "YES"
     INFLATE_DEBUG.inflateBuildPreviewCalled = "YES"
-    INFLATE_DEBUG.inflateSolidMaskCalled = "NO"
-    INFLATE_DEBUG.inflateSolidMaskSucceeded = "NO"
-    INFLATE_DEBUG.inflateOuterContourPoints = 0
-    INFLATE_DEBUG.inflateHoleCount = 0
     INFLATE_DEBUG.inflateGeometryCreated = "NO"
-    INFLATE_DEBUG.puffDisplacement = 0
+    INFLATE_DEBUG.maskResolution = "0x0"
+    INFLATE_DEBUG.filledPixelCount = 0
+    INFLATE_DEBUG.maxDistanceToEdge = 0
+    INFLATE_DEBUG.domeHeight = 0
+    INFLATE_DEBUG.puffAmount = solidParams.depth
+    INFLATE_DEBUG.effectiveThickness = 0
     INFLATE_DEBUG.vertexCount = 0
-    INFLATE_DEBUG.movedVertexCount = 0
-    INFLATE_DEBUG.bboxBeforeX = 0
-    INFLATE_DEBUG.bboxBeforeY = 0
-    INFLATE_DEBUG.bboxBeforeZ = 0
-    INFLATE_DEBUG.bboxAfterX = 0
-    INFLATE_DEBUG.bboxAfterY = 0
-    INFLATE_DEBUG.bboxAfterZ = 0
+    INFLATE_DEBUG.triangleCount = 0
+    INFLATE_DEBUG.sideWallSegmentCount = 0
     INFLATE_DEBUG.differsFromSolidBase = "NO"
     INFLATE_DEBUG.failureReason = ""
     INFLATE_DEBUG.inputStrokeCount = strokes.length
@@ -4571,186 +4633,458 @@ export const InflateEngine: GeometryEngine = {
       return []
     }
 
-    // Reuse Solid's calibration + coord scale exactly. The Inflate base is
-    // Solid's H3 geometry — we then puff it along normals to make it
-    // visibly different from Solid.
+    // ---- Calibration (matches Solid's coord scale exactly) ----
     const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
     const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
       solidParams.thickness,
     )
     const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
-    const worldThickness = effectiveThicknessPx * coordScale
     INFLATE_DEBUG.effectiveThickness = effectiveThicknessPx
-    INFLATE_DEBUG.puffAmount = solidParams.depth
 
-    const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
-    INFLATE_DEBUG.inflateSolidMaskCalled = "YES"
+    // ---- Stage 1: Re-rasterize stroke into a binary mask ----
+    // We don't reuse Solid's mask because we want our own resolution + a
+    // straight, dependency-free path that this engine fully owns.
+    //
+    // Mask resolution: keep modest (≤ 256 on the long axis) to bound the
+    // grid mesh vertex count. Per-cell quads = (W-1)*(H-1)*2 triangles for
+    // top + bottom caps + side walls.
+    const longSide = Math.max(canvasWidth, canvasHeight)
+    const targetLong = 192
+    const maskScale = targetLong / longSide
+    const maskW = Math.max(8, Math.round(canvasWidth * maskScale))
+    const maskH = Math.max(8, Math.round(canvasHeight * maskScale))
+    INFLATE_DEBUG.maskResolution = `${maskW}x${maskH}`
 
-    let solidResult: MaskSolidResult
+    // Convert each stroke point to mask pixel coords. Strokes come in as
+    // ProcessedStroke (canvas-pixel coords, Y-down).
+    const px2mask = (px: number, py: number): { mx: number; my: number } => ({
+      mx: px * (maskW / canvasWidth),
+      my: py * (maskH / canvasHeight),
+    })
+
+    // Use an offscreen 2D canvas to rasterize the stroke as a fat path.
+    // This handles round caps/joins for free — same primitive Solid uses.
+    let canvas: HTMLCanvasElement
     try {
-      solidResult = buildMaskSolid(
-        testStroke,
-        worldThickness,
-        effectiveDepth,
+      canvas = document.createElement("canvas")
+    } catch (e) {
+      INFLATE_DEBUG.failureReason = `canvas create failed: ${(e as Error).message}`
+      return inflateFallbackToSolid(
+        strokes,
         canvasWidth,
         canvasHeight,
+        solidParams,
+        coordScale,
+        effectiveThicknessPx,
+        effectiveDepth,
+        inputPts,
       )
-      INFLATE_DEBUG.inflateSolidMaskSucceeded = "YES"
-    } catch (e) {
-      INFLATE_DEBUG.failureReason = `buildMaskSolid threw: ${(e as Error).message}`
-      return []
     }
-
-    INFLATE_DEBUG.inflateOuterContourPoints =
-      solidResult.stages.simplifiedOuter?.length ?? 0
-    INFLATE_DEBUG.inflateHoleCount = solidResult.stages.simplifiedHoles?.length ?? 0
-
-    const baseGeometry = solidResult.geometry
-    if (!baseGeometry) {
-      INFLATE_DEBUG.failureReason = "Solid H3 returned null geometry"
-      return []
+    canvas.width = maskW
+    canvas.height = maskH
+    const ctx = canvas.getContext("2d")
+    if (!ctx) {
+      INFLATE_DEBUG.failureReason = "2d context unavailable"
+      return inflateFallbackToSolid(
+        strokes,
+        canvasWidth,
+        canvasHeight,
+        solidParams,
+        coordScale,
+        effectiveThicknessPx,
+        effectiveDepth,
+        inputPts,
+      )
     }
-
-    // ---- Compute base bbox for diff comparison ----
-    baseGeometry.computeBoundingBox()
-    const bbBefore = baseGeometry.boundingBox
-    if (bbBefore) {
-      INFLATE_DEBUG.bboxBeforeX = bbBefore.max.x - bbBefore.min.x
-      INFLATE_DEBUG.bboxBeforeY = bbBefore.max.y - bbBefore.min.y
-      INFLATE_DEBUG.bboxBeforeZ = bbBefore.max.z - bbBefore.min.z
+    ctx.fillStyle = "black"
+    ctx.fillRect(0, 0, maskW, maskH)
+    ctx.strokeStyle = "white"
+    ctx.lineCap = "round"
+    ctx.lineJoin = "round"
+    // Stroke width in mask pixels = canvas-pixel thickness * mask scale.
+    ctx.lineWidth = Math.max(1, effectiveThicknessPx * maskScale)
+    ctx.beginPath()
+    for (const s of strokes) {
+      if (!s.points || s.points.length === 0) continue
+      const first = px2mask(s.points[0].x, s.points[0].y)
+      ctx.moveTo(first.mx, first.my)
+      for (let i = 1; i < s.points.length; i++) {
+        const p = px2mask(s.points[i].x, s.points[i].y)
+        ctx.lineTo(p.mx, p.my)
+      }
     }
+    ctx.stroke()
 
-    // ---- Strategy: SOLID_BASE_NORMAL_PUFF ----
-    // 1. Clone the Solid H3 geometry so we never mutate Solid's mesh.
-    // 2. Make sure we have non-indexed vertex normals (a geometry produced
-    //    by the H3 pipeline already has them, but we recompute defensively).
-    // 3. Displace each position along its corresponding normal by
-    //    `puffDisplacement` world units. Normals on the front cap point
-    //    +Z, back cap -Z, side walls outward in XY — so the displacement
-    //    bulges the cap outward along Z AND fattens the silhouette
-    //    laterally, which reads as "puffy/inflated" vs Solid's hard slab.
-    // 4. Recompute normals so lighting follows the new surface.
-    //
-    // Why this is visibly different from Solid:
-    //   - Z-bbox grows by ~2 * puffDisplacement (front + back caps move
-    //     outward in opposite directions).
-    //   - XY silhouette grows by ~puffDisplacement on every side.
-    //   - Sharp edges between cap and side wall round off, because cap
-    //     verts move +Z and side-wall verts move outward, but neighbor
-    //     verts share averaged normals → corner displacement is partial.
-    //   - Holes shrink slightly (their inward-facing normals push hole
-    //     walls toward the hole center). For very small holes this can
-    //     close them — documented limitation, not a failure.
-    //
-    // Why it can't fail catastrophically:
-    //   - We never re-triangulate. We only nudge existing vertices.
-    //   - Topology is preserved exactly.
-    //   - If puff is 0, geometry equals Solid (still visible).
-    //   - If anything throws, we fall back to the unmodified base.
-
-    let geometry: THREE.BufferGeometry
-    let movedVertexCount = 0
-    let puffDisplacement = 0
+    // Read back into a binary boolean array.
+    let img: ImageData
     try {
-      // Clone so Solid's cached geometry stays untouched. .clone() copies
-      // attributes but creates new typed array buffers, so subsequent
-      // writes are safe.
-      geometry = baseGeometry.clone()
-
-      // Ensure the clone is non-indexed-friendly: BufferGeometry.clone
-      // preserves the index, which is fine for our per-vertex displace.
-      // We need fresh normals matching the cloned positions.
-      geometry.computeVertexNormals()
-
-      const positions = geometry.getAttribute("position") as
-        | THREE.BufferAttribute
-        | undefined
-      const normals = geometry.getAttribute("normal") as
-        | THREE.BufferAttribute
-        | undefined
-      if (!positions || !normals) {
-        throw new Error("base geometry missing position or normal attribute")
-      }
-
-      // Puff displacement maps the calibrated solid depth to a meaningful
-      // world-space nudge. Using `worldThickness * 0.6` as the dominant
-      // term keeps the puff proportional to stroke thickness (so thin
-      // strokes don't blow up and thick strokes still look puffy).
-      // The depth slider modulates this — at min depth the puff is
-      // ~30% of thickness, at max depth ~120%.
-      const depthRange = SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN
-      const depthNorm =
-        depthRange > 0
-          ? (solidParams.depth - SOLID_DEPTH_SLIDER_MIN) / depthRange
-          : 0.5
-      // 0.30 → 1.20 multiplier of worldThickness as Puff slider sweeps.
-      const puffMultiplier = 0.3 + depthNorm * 0.9
-      puffDisplacement = worldThickness * puffMultiplier
-      INFLATE_DEBUG.puffDisplacement = puffDisplacement
-
-      const count = positions.count
-      INFLATE_DEBUG.vertexCount = count
-
-      // Displace every vertex along its (averaged) normal.
-      // Threshold for counting "moved" verts is small to avoid float noise.
-      const moveThreshold = 1e-9
-      for (let i = 0; i < count; i++) {
-        const px = positions.getX(i)
-        const py = positions.getY(i)
-        const pz = positions.getZ(i)
-        const nx = normals.getX(i)
-        const ny = normals.getY(i)
-        const nz = normals.getZ(i)
-        const len = Math.hypot(nx, ny, nz)
-        if (len < moveThreshold) continue
-        const dx = (nx / len) * puffDisplacement
-        const dy = (ny / len) * puffDisplacement
-        const dz = (nz / len) * puffDisplacement
-        positions.setXYZ(i, px + dx, py + dy, pz + dz)
-        movedVertexCount++
-      }
-      positions.needsUpdate = true
-
-      // Recompute normals so lighting follows the puffed surface.
-      geometry.computeVertexNormals()
-      geometry.computeBoundingBox()
+      img = ctx.getImageData(0, 0, maskW, maskH)
     } catch (e) {
-      // Puff failed — fall back to the unmodified Solid H3 base so we
-      // never show an empty viewport. This is the explicit, debug-flagged
-      // safety path. The viewport will look like Solid in this case;
-      // `fallbackUsed: YES` makes that diagnosable.
-      INFLATE_DEBUG.failureReason = `puff failed: ${(e as Error).message}`
-      INFLATE_DEBUG.fallbackUsed = "YES"
-      INFLATE_DEBUG.inflateMode = "SOLID_H3_PASSTHROUGH"
-      INFLATE_DEBUG.inflateStrategy =
-        "Fallback — puff failed, returning Solid H3 unchanged."
-      geometry = baseGeometry
-      geometry.computeBoundingBox()
+      INFLATE_DEBUG.failureReason = `getImageData failed: ${(e as Error).message}`
+      return inflateFallbackToSolid(
+        strokes,
+        canvasWidth,
+        canvasHeight,
+        solidParams,
+        coordScale,
+        effectiveThicknessPx,
+        effectiveDepth,
+        inputPts,
+      )
     }
+    const filled = new Uint8Array(maskW * maskH)
+    let filledCount = 0
+    for (let i = 0; i < maskW * maskH; i++) {
+      // Threshold any non-black pixel as filled.
+      if (img.data[i * 4] > 32) {
+        filled[i] = 1
+        filledCount++
+      }
+    }
+    INFLATE_DEBUG.filledPixelCount = filledCount
+
+    if (filledCount < 4) {
+      INFLATE_DEBUG.failureReason = `too few filled pixels (${filledCount})`
+      return inflateFallbackToSolid(
+        strokes,
+        canvasWidth,
+        canvasHeight,
+        solidParams,
+        coordScale,
+        effectiveThicknessPx,
+        effectiveDepth,
+        inputPts,
+      )
+    }
+
+    // ---- Stage 2: Distance-to-edge field on the CORNER grid ----
+    // Build a (maskW+1) x (maskH+1) corner grid where each corner is
+    // "inside" iff ALL four neighboring pixels are filled. This makes the
+    // boundary an exact silhouette of filled pixels and cleanly excludes
+    // hole regions (any corner adjacent to an unfilled pixel becomes
+    // boundary, including hole borders).
+    const gW = maskW + 1
+    const gH = maskH + 1
+    const cornerInside = new Uint8Array(gW * gH)
+    for (let cy = 0; cy < gH; cy++) {
+      for (let cx = 0; cx < gW; cx++) {
+        // Sample the 4 pixels touching this corner: (cx-1,cy-1), (cx,cy-1),
+        // (cx-1,cy), (cx,cy). Any out-of-bounds neighbor is treated as
+        // empty (background), making the canvas border behave as the
+        // outer edge.
+        const tl =
+          cx > 0 && cy > 0 ? filled[(cy - 1) * maskW + (cx - 1)] : 0
+        const tr = cx < maskW && cy > 0 ? filled[(cy - 1) * maskW + cx] : 0
+        const bl = cx > 0 && cy < maskH ? filled[cy * maskW + (cx - 1)] : 0
+        const br = cx < maskW && cy < maskH ? filled[cy * maskW + cx] : 0
+        cornerInside[cy * gW + cx] = tl && tr && bl && br ? 1 : 0
+      }
+    }
+
+    // Two-pass chamfer (3-4) distance transform on cornerInside grid.
+    // Distances are in mask units (1 unit = 1 mask pixel).
+    const INF = 1e9
+    const dist = new Float32Array(gW * gH)
+    for (let i = 0; i < gW * gH; i++) {
+      dist[i] = cornerInside[i] ? INF : 0
+    }
+    // Forward pass.
+    for (let y = 0; y < gH; y++) {
+      for (let x = 0; x < gW; x++) {
+        const i = y * gW + x
+        if (!cornerInside[i]) continue
+        let d = dist[i]
+        if (x > 0) d = Math.min(d, dist[i - 1] + 3)
+        if (y > 0) d = Math.min(d, dist[i - gW] + 3)
+        if (x > 0 && y > 0) d = Math.min(d, dist[i - gW - 1] + 4)
+        if (x < gW - 1 && y > 0) d = Math.min(d, dist[i - gW + 1] + 4)
+        dist[i] = d
+      }
+    }
+    // Backward pass.
+    for (let y = gH - 1; y >= 0; y--) {
+      for (let x = gW - 1; x >= 0; x--) {
+        const i = y * gW + x
+        if (!cornerInside[i]) continue
+        let d = dist[i]
+        if (x < gW - 1) d = Math.min(d, dist[i + 1] + 3)
+        if (y < gH - 1) d = Math.min(d, dist[i + gW] + 3)
+        if (x < gW - 1 && y < gH - 1) d = Math.min(d, dist[i + gW + 1] + 4)
+        if (x > 0 && y < gH - 1) d = Math.min(d, dist[i + gW - 1] + 4)
+        dist[i] = d
+      }
+    }
+    // Convert chamfer (3,4) units back to "pixels". /3 yields a result
+    // close to true Euclidean distance for our purposes (visual height,
+    // not surveyor-grade).
+    let maxDist = 0
+    for (let i = 0; i < gW * gH; i++) {
+      if (cornerInside[i]) {
+        dist[i] = dist[i] / 3
+        if (dist[i] > maxDist) maxDist = dist[i]
+      }
+    }
+    INFLATE_DEBUG.maxDistanceToEdge = maxDist
+    if (maxDist < 0.5) {
+      INFLATE_DEBUG.failureReason = `distance field collapsed (max=${maxDist.toFixed(2)})`
+      return inflateFallbackToSolid(
+        strokes,
+        canvasWidth,
+        canvasHeight,
+        solidParams,
+        coordScale,
+        effectiveThicknessPx,
+        effectiveDepth,
+        inputPts,
+      )
+    }
+
+    // ---- Stage 3: Convert distance to dome height with smoothstep ----
+    // Dome height in WORLD units. The Puff slider scales it. We want a
+    // visibly puffy dome at default Puff and a stronger dome at high Puff.
+    // Map the calibrated effective depth (already nicely calibrated by
+    // Solid) to a worldspace height factor, then add a baseline so the
+    // dome is never invisible at min Puff.
+    const depthRange = SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN
+    const depthNorm =
+      depthRange > 0
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              (solidParams.depth - SOLID_DEPTH_SLIDER_MIN) / depthRange,
+            ),
+          )
+        : 0.5
+    // Baseline 0.6 of effectiveDepth, scaling up to 1.6 of effectiveDepth.
+    const heightScale = effectiveDepth * (0.6 + depthNorm * 1.0)
+    // Falloff factor: how fast height ramps from 0 at the edge to maximum
+    // at the center. Using `min(d / referenceDist, 1)` gives a wide flat
+    // dome top for thick strokes, while smoothstep softens the edge.
+    // referenceDist scaled with effective thickness so thicker strokes
+    // get a wider plateau.
+    const referenceDist = Math.max(2, (effectiveThicknessPx * maskScale) / 2)
+    INFLATE_DEBUG.domeHeight = heightScale
+
+    // Per-corner height: 0 outside the inside-region, smoothstep ramp
+    // inside up to heightScale.
+    const cornerHeight = new Float32Array(gW * gH)
+    for (let i = 0; i < gW * gH; i++) {
+      if (!cornerInside[i]) {
+        cornerHeight[i] = 0
+        continue
+      }
+      const t = Math.min(1, dist[i] / referenceDist)
+      // smoothstep: 3t^2 - 2t^3
+      const s = t * t * (3 - 2 * t)
+      cornerHeight[i] = s * heightScale
+    }
+
+    // ---- Stage 4: Build the heightfield mesh ----
+    // We construct a SINGLE BufferGeometry containing:
+    //   - Top cap: one quad per "filled cell" (cell = 4 corners all
+    //     `cornerInside`). Top vertex z = +cornerHeight.
+    //   - Bottom cap: same cells, mirrored, z = -cornerHeight (the bottom
+    //     mirrors the top so the silhouette is symmetric — reads as fully
+    //     puffy from any angle).
+    //   - Side walls: for every "boundary edge" (an edge where one side
+    //     is a filled cell and the other is NOT), emit a vertical quad
+    //     between (top corner z = +cornerHeight) and (bottom corner z =
+    //     -cornerHeight). Because cornerHeight is 0 at boundary corners,
+    //     the wall collapses to zero height at the silhouette → top and
+    //     bottom caps meet seamlessly. This is what makes the mesh
+    //     watertight without any vertex welding.
+    //
+    // Coordinate system: mask pixel (cx, cy) -> world (wx, wy).
+    //   pixelX = cx * (canvasWidth / maskW)
+    //   pixelY = cy * (canvasHeight / maskH)
+    //   worldX = (pixelX - canvasWidth/2) * coordScale
+    //   worldY = -(pixelY - canvasHeight/2) * coordScale  // flip Y
+    const cw2 = canvasWidth / 2
+    const ch2 = canvasHeight / 2
+    const px2wX = (cx: number) =>
+      (cx * (canvasWidth / maskW) - cw2) * coordScale
+    const px2wY = (cy: number) =>
+      -(cy * (canvasHeight / maskH) - ch2) * coordScale
+
+    // Identify "filled cells" — cells whose 4 corners are all inside.
+    const cellW = maskW
+    const cellH = maskH
+    const cellFilled = new Uint8Array(cellW * cellH)
+    for (let y = 0; y < cellH; y++) {
+      for (let x = 0; x < cellW; x++) {
+        const tl = cornerInside[y * gW + x]
+        const tr = cornerInside[y * gW + (x + 1)]
+        const bl = cornerInside[(y + 1) * gW + x]
+        const br = cornerInside[(y + 1) * gW + (x + 1)]
+        cellFilled[y * cellW + x] = tl && tr && bl && br ? 1 : 0
+      }
+    }
+
+    // We will build positions/indices using PER-CORNER vertex IDs for the
+    // top cap and PER-CORNER vertex IDs for the bottom cap. Sharing
+    // corners across cells is the key to a smooth-shaded heightfield with
+    // a low triangle count.
+    //
+    // Map each corner index used by ANY filled cell to a "compact" vertex
+    // ID for top and bottom.
+    const topVertId = new Int32Array(gW * gH)
+    const botVertId = new Int32Array(gW * gH)
+    topVertId.fill(-1)
+    botVertId.fill(-1)
+    const positions: number[] = []
+    let nextId = 0
+
+    const ensureTop = (cx: number, cy: number): number => {
+      const ci = cy * gW + cx
+      if (topVertId[ci] !== -1) return topVertId[ci]
+      const id = nextId++
+      topVertId[ci] = id
+      positions.push(px2wX(cx), px2wY(cy), cornerHeight[ci])
+      return id
+    }
+    const ensureBot = (cx: number, cy: number): number => {
+      const ci = cy * gW + cx
+      if (botVertId[ci] !== -1) return botVertId[ci]
+      const id = nextId++
+      botVertId[ci] = id
+      positions.push(px2wX(cx), px2wY(cy), -cornerHeight[ci])
+      return id
+    }
+
+    const indices: number[] = []
+    let triangleCount = 0
+    let cellsBuilt = 0
+
+    for (let y = 0; y < cellH; y++) {
+      for (let x = 0; x < cellW; x++) {
+        if (!cellFilled[y * cellW + x]) continue
+        cellsBuilt++
+
+        // Top cap (CCW when viewed from +Z).
+        const tA = ensureTop(x, y)
+        const tB = ensureTop(x + 1, y)
+        const tC = ensureTop(x + 1, y + 1)
+        const tD = ensureTop(x, y + 1)
+        // Note: world Y flips, so a +y mask cell is -y world. To keep top
+        // faces facing +Z (camera looks down -Z), we wind the indices so
+        // the cross product points +Z. With mask Y flipped, going
+        // (x,y)→(x+1,y)→(x+1,y+1)→(x,y+1) is CCW in world.
+        indices.push(tA, tD, tC)
+        indices.push(tA, tC, tB)
+        triangleCount += 2
+
+        // Bottom cap (CCW when viewed from -Z, i.e. reversed winding).
+        const bA = ensureBot(x, y)
+        const bB = ensureBot(x + 1, y)
+        const bC = ensureBot(x + 1, y + 1)
+        const bD = ensureBot(x, y + 1)
+        indices.push(bA, bB, bC)
+        indices.push(bA, bC, bD)
+        triangleCount += 2
+      }
+    }
+
+    if (cellsBuilt === 0) {
+      INFLATE_DEBUG.failureReason = "no filled cells after corner test"
+      return inflateFallbackToSolid(
+        strokes,
+        canvasWidth,
+        canvasHeight,
+        solidParams,
+        coordScale,
+        effectiveThicknessPx,
+        effectiveDepth,
+        inputPts,
+      )
+    }
+
+    // ---- Stage 5: Side walls along boundary edges ----
+    // For each filled cell, look at its 4 edges. An edge is a "boundary
+    // edge" if the adjacent cell is NOT filled (or is out of bounds). For
+    // each boundary edge, emit a vertical quad from top corners to bottom
+    // corners. Because cornerHeight is 0 at boundary corners, this quad
+    // collapses to a degenerate strip exactly at the silhouette — which is
+    // what we want: the cap meets the wall at z=0 with no gap.
+    let sideWallSegmentCount = 0
+    const isFilled = (x: number, y: number): boolean =>
+      x >= 0 && x < cellW && y >= 0 && y < cellH
+        ? cellFilled[y * cellW + x] === 1
+        : false
+
+    for (let y = 0; y < cellH; y++) {
+      for (let x = 0; x < cellW; x++) {
+        if (!cellFilled[y * cellW + x]) continue
+
+        // TOP edge (y direction -1): boundary if cell (x, y-1) not filled.
+        if (!isFilled(x, y - 1)) {
+          const t1 = ensureTop(x, y)
+          const t2 = ensureTop(x + 1, y)
+          const b1 = ensureBot(x, y)
+          const b2 = ensureBot(x + 1, y)
+          // Outward normal points -Y in mask = +Y in world (Y flipped).
+          // CCW from outside: t1 → t2 → b2 → b1.
+          indices.push(t1, t2, b2)
+          indices.push(t1, b2, b1)
+          triangleCount += 2
+          sideWallSegmentCount++
+        }
+        // BOTTOM edge (y direction +1).
+        if (!isFilled(x, y + 1)) {
+          const t1 = ensureTop(x + 1, y + 1)
+          const t2 = ensureTop(x, y + 1)
+          const b1 = ensureBot(x + 1, y + 1)
+          const b2 = ensureBot(x, y + 1)
+          indices.push(t1, t2, b2)
+          indices.push(t1, b2, b1)
+          triangleCount += 2
+          sideWallSegmentCount++
+        }
+        // LEFT edge (x direction -1).
+        if (!isFilled(x - 1, y)) {
+          const t1 = ensureTop(x, y + 1)
+          const t2 = ensureTop(x, y)
+          const b1 = ensureBot(x, y + 1)
+          const b2 = ensureBot(x, y)
+          indices.push(t1, t2, b2)
+          indices.push(t1, b2, b1)
+          triangleCount += 2
+          sideWallSegmentCount++
+        }
+        // RIGHT edge (x direction +1).
+        if (!isFilled(x + 1, y)) {
+          const t1 = ensureTop(x + 1, y)
+          const t2 = ensureTop(x + 1, y + 1)
+          const b1 = ensureBot(x + 1, y)
+          const b2 = ensureBot(x + 1, y + 1)
+          indices.push(t1, t2, b2)
+          indices.push(t1, b2, b1)
+          triangleCount += 2
+          sideWallSegmentCount++
+        }
+      }
+    }
+    INFLATE_DEBUG.sideWallSegmentCount = sideWallSegmentCount
+    INFLATE_DEBUG.triangleCount = triangleCount
+    INFLATE_DEBUG.vertexCount = positions.length / 3
+
+    // ---- Stage 6: Build the BufferGeometry ----
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(positions, 3),
+    )
+    geometry.setIndex(indices)
+    geometry.computeVertexNormals()
+    geometry.computeBoundingBox()
 
     INFLATE_DEBUG.inflateGeometryCreated = "YES"
-    INFLATE_DEBUG.movedVertexCount = movedVertexCount
-    INFLATE_DEBUG.vertexCount = geometry.getAttribute("position")?.count ?? 0
-
-    const bbAfter = geometry.boundingBox
-    if (bbAfter) {
-      INFLATE_DEBUG.bboxAfterX = bbAfter.max.x - bbAfter.min.x
-      INFLATE_DEBUG.bboxAfterY = bbAfter.max.y - bbAfter.min.y
-      INFLATE_DEBUG.bboxAfterZ = bbAfter.max.z - bbAfter.min.z
-    }
-
-    // Confirm the puffed mesh is actually different from the Solid base.
-    const bboxDelta =
-      Math.abs(INFLATE_DEBUG.bboxAfterX - INFLATE_DEBUG.bboxBeforeX) +
-      Math.abs(INFLATE_DEBUG.bboxAfterY - INFLATE_DEBUG.bboxBeforeY) +
-      Math.abs(INFLATE_DEBUG.bboxAfterZ - INFLATE_DEBUG.bboxBeforeZ)
-    INFLATE_DEBUG.differsFromSolidBase =
-      INFLATE_DEBUG.fallbackUsed === "NO" && bboxDelta > 1e-6 ? "YES" : "NO"
+    INFLATE_DEBUG.differsFromSolidBase = "YES" // structurally distinct from H3
 
     const meshData: StrokeMeshData = {
       tubeGeometry: geometry,
       filteredCount: inputPts,
-      key: `inflate-${strokes.length}-${canvasWidth}x${canvasHeight}-${effectiveDepth.toFixed(4)}-${effectiveThicknessPx}-${puffDisplacement.toFixed(4)}-${INFLATE_DEBUG.fallbackUsed}`,
+      key: `inflate-rdfd-${strokes.length}-${maskW}x${maskH}-${effectiveDepth.toFixed(4)}-${effectiveThicknessPx}-${heightScale.toFixed(4)}-${INFLATE_DEBUG.fallbackUsed}`,
       mode: "inflate",
     }
     return [meshData]
