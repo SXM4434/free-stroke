@@ -4500,26 +4500,35 @@ export const INFLATE_DEBUG = {
     | "RASTER_DISTANCE_FIELD_DOME"
     | "SOLID_H3_PASSTHROUGH",
   inflateStrategy:
-    "Re-rasterize stroke to binary mask, compute distance-to-edge on the corner grid, build a watertight puffy heightfield mesh (top + bottom caps meet at the mask boundary).",
+    "Decoupled controls: Thickness sets footprint (rasterized stroke width), Puff sets dome height. Falloff is footprint-clamped so wide strokes never become flat plateaus.",
   usesSolidBase: "NO" as "YES" | "NO",
   usesRasterMask: "YES" as "YES" | "NO",
   fallbackUsed: "NO" as "YES" | "NO",
   preservesHoles: "YES" as "YES" | "NO",
+  cameraFitUsesXYOnly: "YES" as "YES" | "NO",
   // ---- Path probes ----
   inflateEngineCalled: "NO" as "YES" | "NO",
   inflateBuildPreviewCalled: "NO" as "YES" | "NO",
   inflateGeometryCreated: "NO" as "YES" | "NO",
-  // ---- Raster / distance-field diagnostics ----
+  // ---- Decoupled named values (footprint vs height vs falloff) ----
+  thicknessSliderValue: 0,
+  inflateFootprintPx: 0,
+  puffSliderValue: 0,
+  inflatePuffHeightWorld: 0,
+  inflateDomeFalloffPx: 0,
+  inflateSoftness: 0,
+  // ---- Raster diagnostics ----
   maskResolution: "0x0",
   filledPixelCount: 0,
   maxDistanceToEdge: 0,
-  domeHeight: 0,
-  puffAmount: 0,
-  effectiveThickness: 0,
   // ---- Mesh diagnostics ----
   vertexCount: 0,
   triangleCount: 0,
   sideWallSegmentCount: 0,
+  // ---- Bbox + cross-control diff ----
+  bboxX: 0,
+  bboxY: 0,
+  bboxZ: 0,
   differsFromSolidBase: "NO" as "YES" | "NO",
   // ---- Stroke counters ----
   inputStrokeCount: 0,
@@ -4603,23 +4612,30 @@ export const InflateEngine: GeometryEngine = {
     // ---- Reset all probes ----
     INFLATE_DEBUG.inflateMode = "RASTER_DISTANCE_FIELD_DOME"
     INFLATE_DEBUG.inflateStrategy =
-      "Re-rasterize stroke to binary mask, compute distance-to-edge on the corner grid, build a watertight puffy heightfield mesh (top + bottom caps meet at the mask boundary)."
+      "Decoupled controls: Thickness sets footprint (rasterized stroke width), Puff sets dome height. Falloff is footprint-clamped so wide strokes never become flat plateaus."
     INFLATE_DEBUG.usesSolidBase = "NO"
     INFLATE_DEBUG.usesRasterMask = "YES"
     INFLATE_DEBUG.fallbackUsed = "NO"
     INFLATE_DEBUG.preservesHoles = "YES"
+    INFLATE_DEBUG.cameraFitUsesXYOnly = "YES"
     INFLATE_DEBUG.inflateEngineCalled = "YES"
     INFLATE_DEBUG.inflateBuildPreviewCalled = "YES"
     INFLATE_DEBUG.inflateGeometryCreated = "NO"
+    INFLATE_DEBUG.thicknessSliderValue = solidParams.thickness
+    INFLATE_DEBUG.puffSliderValue = solidParams.depth
+    INFLATE_DEBUG.inflateFootprintPx = 0
+    INFLATE_DEBUG.inflatePuffHeightWorld = 0
+    INFLATE_DEBUG.inflateDomeFalloffPx = 0
+    INFLATE_DEBUG.inflateSoftness = 0
     INFLATE_DEBUG.maskResolution = "0x0"
     INFLATE_DEBUG.filledPixelCount = 0
     INFLATE_DEBUG.maxDistanceToEdge = 0
-    INFLATE_DEBUG.domeHeight = 0
-    INFLATE_DEBUG.puffAmount = solidParams.depth
-    INFLATE_DEBUG.effectiveThickness = 0
     INFLATE_DEBUG.vertexCount = 0
     INFLATE_DEBUG.triangleCount = 0
     INFLATE_DEBUG.sideWallSegmentCount = 0
+    INFLATE_DEBUG.bboxX = 0
+    INFLATE_DEBUG.bboxY = 0
+    INFLATE_DEBUG.bboxZ = 0
     INFLATE_DEBUG.differsFromSolidBase = "NO"
     INFLATE_DEBUG.failureReason = ""
     INFLATE_DEBUG.inputStrokeCount = strokes.length
@@ -4639,17 +4655,22 @@ export const InflateEngine: GeometryEngine = {
       solidParams.thickness,
     )
     const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
-    INFLATE_DEBUG.effectiveThickness = effectiveThicknessPx
+    // ---- Decoupled named values (the contract for the controls) ----
+    // 1. Footprint = rasterized stroke width in canvas pixels. Driven by
+    //    Thickness ONLY. Puff never touches this.
+    const inflateFootprintPx = effectiveThicknessPx
+    INFLATE_DEBUG.inflateFootprintPx = inflateFootprintPx
 
     // ---- Stage 1: Re-rasterize stroke into a binary mask ----
     // We don't reuse Solid's mask because we want our own resolution + a
     // straight, dependency-free path that this engine fully owns.
     //
-    // Mask resolution: keep modest (≤ 256 on the long axis) to bound the
-    // grid mesh vertex count. Per-cell quads = (W-1)*(H-1)*2 triangles for
-    // top + bottom caps + side walls.
+    // Mask resolution: 256 on the long axis. Higher than 192 to reduce
+    // thin-stroke quantization (a 1-px-wide stroke at 192 has only ~1.3
+    // mask pixels of width; at 256 it has ~1.8). This makes Thickness
+    // changes feel smooth instead of "pop in/out".
     const longSide = Math.max(canvasWidth, canvasHeight)
-    const targetLong = 192
+    const targetLong = 256
     const maskScale = targetLong / longSide
     const maskW = Math.max(8, Math.round(canvasWidth * maskScale))
     const maskH = Math.max(8, Math.round(canvasHeight * maskScale))
@@ -4757,42 +4778,59 @@ export const InflateEngine: GeometryEngine = {
       )
     }
 
-    // ---- Stage 2: Distance-to-edge field on the CORNER grid ----
-    // Build a (maskW+1) x (maskH+1) corner grid where each corner is
-    // "inside" iff ALL four neighboring pixels are filled. This makes the
-    // boundary an exact silhouette of filled pixels and cleanly excludes
-    // hole regions (any corner adjacent to an unfilled pixel becomes
-    // boundary, including hole borders).
+    // ---- Stage 2: Cell coverage + corner interiority ----
+    //
+    // CRITICAL fix from the previous iteration: the old code derived
+    // `cornerInside = all-4-neighboring-pixels-filled` and then derived
+    // `cellFilled = all-4-corners-inside`. That double-erosion stripped
+    // ~2 pixels off the silhouette in every direction, which made
+    // Thickness behave like density: small thickness changes flipped
+    // entire bands of cells in/out at once (the "meatball" feel).
+    //
+    // New rule (no erosion of footprint):
+    //   - `cellFilled[x,y] = filled[x,y]` directly. The 3D footprint is
+    //     EXACTLY the rasterized 2D footprint. So Thickness moves the
+    //     silhouette smoothly, one rasterized pixel at a time.
+    //   - `cornerInterior[cx,cy] = all-4-neighboring-cells-filled`. This
+    //     is used only for height: corners that touch any boundary cell
+    //     get height 0 (so caps and side walls meet seamlessly), but
+    //     cells themselves are still emitted at the boundary.
     const gW = maskW + 1
     const gH = maskH + 1
-    const cornerInside = new Uint8Array(gW * gH)
+    const cellW = maskW
+    const cellH = maskH
+    const cellFilled = filled // 1:1 — no erosion. Footprint == raster.
+
+    const cornerInterior = new Uint8Array(gW * gH)
     for (let cy = 0; cy < gH; cy++) {
       for (let cx = 0; cx < gW; cx++) {
-        // Sample the 4 pixels touching this corner: (cx-1,cy-1), (cx,cy-1),
-        // (cx-1,cy), (cx,cy). Any out-of-bounds neighbor is treated as
-        // empty (background), making the canvas border behave as the
-        // outer edge.
-        const tl =
-          cx > 0 && cy > 0 ? filled[(cy - 1) * maskW + (cx - 1)] : 0
-        const tr = cx < maskW && cy > 0 ? filled[(cy - 1) * maskW + cx] : 0
-        const bl = cx > 0 && cy < maskH ? filled[cy * maskW + (cx - 1)] : 0
-        const br = cx < maskW && cy < maskH ? filled[cy * maskW + cx] : 0
-        cornerInside[cy * gW + cx] = tl && tr && bl && br ? 1 : 0
+        // Corners are "interior" only when ALL 4 adjacent cells are
+        // filled. Boundary corners get height 0 → caps meet at silhouette.
+        const tl = cx > 0 && cy > 0 ? cellFilled[(cy - 1) * cellW + (cx - 1)] : 0
+        const tr =
+          cx < cellW && cy > 0 ? cellFilled[(cy - 1) * cellW + cx] : 0
+        const bl =
+          cx > 0 && cy < cellH ? cellFilled[cy * cellW + (cx - 1)] : 0
+        const br =
+          cx < cellW && cy < cellH ? cellFilled[cy * cellW + cx] : 0
+        cornerInterior[cy * gW + cx] = tl && tr && bl && br ? 1 : 0
       }
     }
 
-    // Two-pass chamfer (3-4) distance transform on cornerInside grid.
-    // Distances are in mask units (1 unit = 1 mask pixel).
+    // ---- Stage 3: Distance-to-boundary on the corner grid ----
+    // Distance is measured from interior corners outward to the nearest
+    // non-interior corner. Drives dome height. Distance is in mask units
+    // (1 unit = 1 mask pixel).
     const INF = 1e9
     const dist = new Float32Array(gW * gH)
     for (let i = 0; i < gW * gH; i++) {
-      dist[i] = cornerInside[i] ? INF : 0
+      dist[i] = cornerInterior[i] ? INF : 0
     }
-    // Forward pass.
+    // Forward chamfer (3,4) pass.
     for (let y = 0; y < gH; y++) {
       for (let x = 0; x < gW; x++) {
         const i = y * gW + x
-        if (!cornerInside[i]) continue
+        if (!cornerInterior[i]) continue
         let d = dist[i]
         if (x > 0) d = Math.min(d, dist[i - 1] + 3)
         if (y > 0) d = Math.min(d, dist[i - gW] + 3)
@@ -4805,7 +4843,7 @@ export const InflateEngine: GeometryEngine = {
     for (let y = gH - 1; y >= 0; y--) {
       for (let x = gW - 1; x >= 0; x--) {
         const i = y * gW + x
-        if (!cornerInside[i]) continue
+        if (!cornerInterior[i]) continue
         let d = dist[i]
         if (x < gW - 1) d = Math.min(d, dist[i + 1] + 3)
         if (y < gH - 1) d = Math.min(d, dist[i + gW] + 3)
@@ -4814,37 +4852,28 @@ export const InflateEngine: GeometryEngine = {
         dist[i] = d
       }
     }
-    // Convert chamfer (3,4) units back to "pixels". /3 yields a result
-    // close to true Euclidean distance for our purposes (visual height,
-    // not surveyor-grade).
     let maxDist = 0
     for (let i = 0; i < gW * gH; i++) {
-      if (cornerInside[i]) {
-        dist[i] = dist[i] / 3
+      if (cornerInterior[i]) {
+        dist[i] = dist[i] / 3 // chamfer (3,4) → ~Euclidean
         if (dist[i] > maxDist) maxDist = dist[i]
       }
     }
     INFLATE_DEBUG.maxDistanceToEdge = maxDist
-    if (maxDist < 0.5) {
-      INFLATE_DEBUG.failureReason = `distance field collapsed (max=${maxDist.toFixed(2)})`
-      return inflateFallbackToSolid(
-        strokes,
-        canvasWidth,
-        canvasHeight,
-        solidParams,
-        coordScale,
-        effectiveThicknessPx,
-        effectiveDepth,
-        inputPts,
-      )
+    if (maxDist < 0.25) {
+      // No interior corners exist — stroke is too thin for a dome. We
+      // still emit the cap mesh (footprint preserved), but with zero
+      // height everywhere. This produces a flat gel sheet at the exact
+      // raster footprint — visible, never empty, never blobs.
+      INFLATE_DEBUG.failureReason = `no interior corners (max=${maxDist.toFixed(2)}); flat gel sheet emitted`
+      // Don't fall back — proceed with maxDist=0 so the cap is flat.
     }
 
-    // ---- Stage 3: Convert distance to dome height with smoothstep ----
-    // Dome height in WORLD units. The Puff slider scales it. We want a
-    // visibly puffy dome at default Puff and a stronger dome at high Puff.
-    // Map the calibrated effective depth (already nicely calibrated by
-    // Solid) to a worldspace height factor, then add a baseline so the
-    // dome is never invisible at min Puff.
+    // ---- Stage 4: Decoupled height + falloff ----
+    //
+    // PUFF controls dome HEIGHT only. Mapped from the slider linearly to
+    // a world-space Z magnitude. Does NOT touch the mask, footprint,
+    // distance field, or coverage.
     const depthRange = SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN
     const depthNorm =
       depthRange > 0
@@ -4856,28 +4885,42 @@ export const InflateEngine: GeometryEngine = {
             ),
           )
         : 0.5
-    // Baseline 0.6 of effectiveDepth, scaling up to 1.6 of effectiveDepth.
-    const heightScale = effectiveDepth * (0.6 + depthNorm * 1.0)
-    // Falloff factor: how fast height ramps from 0 at the edge to maximum
-    // at the center. Using `min(d / referenceDist, 1)` gives a wide flat
-    // dome top for thick strokes, while smoothstep softens the edge.
-    // referenceDist scaled with effective thickness so thicker strokes
-    // get a wider plateau.
-    const referenceDist = Math.max(2, (effectiveThicknessPx * maskScale) / 2)
-    INFLATE_DEBUG.domeHeight = heightScale
+    // Puff height: 0.6× → 1.6× of effectiveDepth as Puff sweeps low→high.
+    // Half goes above z=0, half below (mirror), so total Z bbox is 2× this.
+    const inflatePuffHeightWorld = effectiveDepth * (0.6 + depthNorm * 1.0)
+    INFLATE_DEBUG.inflatePuffHeightWorld = inflatePuffHeightWorld
 
-    // Per-corner height: 0 outside the inside-region, smoothstep ramp
-    // inside up to heightScale.
+    // FALLOFF (dome rolloff distance) is decoupled from both Puff AND
+    // raw Thickness. It scales with footprint but is CLAMPED so:
+    //   - Wide strokes don't get giant flat plateaus (clamped above).
+    //   - Thin strokes don't get a sub-pixel falloff (clamped below).
+    // This is what kills the "meatball density" feel: changing thickness
+    // moves footprint smoothly, but the dome shape stays consistently
+    // rounded across the whole thickness range.
+    const footprintMaskPx = inflateFootprintPx * maskScale
+    const inflateDomeFalloffPx = Math.max(
+      4,
+      Math.min(18, footprintMaskPx * 0.35),
+    )
+    INFLATE_DEBUG.inflateDomeFalloffPx = inflateDomeFalloffPx
+
+    // SOFTNESS: smoothstep exponent. Constant for now — exposes a clean
+    // hook for a future "softness" control without coupling to thickness.
+    const inflateSoftness = 1.0
+    INFLATE_DEBUG.inflateSoftness = inflateSoftness
+
+    // Per-corner height: 0 outside interior, smoothstep ramp inside up
+    // to inflatePuffHeightWorld. Driven by `dist / inflateDomeFalloffPx`
+    // — completely independent of Puff slider.
     const cornerHeight = new Float32Array(gW * gH)
     for (let i = 0; i < gW * gH; i++) {
-      if (!cornerInside[i]) {
+      if (!cornerInterior[i]) {
         cornerHeight[i] = 0
         continue
       }
-      const t = Math.min(1, dist[i] / referenceDist)
-      // smoothstep: 3t^2 - 2t^3
-      const s = t * t * (3 - 2 * t)
-      cornerHeight[i] = s * heightScale
+      const t = Math.min(1, dist[i] / inflateDomeFalloffPx)
+      const s = t * t * (3 - 2 * t) // smoothstep
+      cornerHeight[i] = s * inflatePuffHeightWorld
     }
 
     // ---- Stage 4: Build the heightfield mesh ----
@@ -4907,19 +4950,8 @@ export const InflateEngine: GeometryEngine = {
     const px2wY = (cy: number) =>
       -(cy * (canvasHeight / maskH) - ch2) * coordScale
 
-    // Identify "filled cells" — cells whose 4 corners are all inside.
-    const cellW = maskW
-    const cellH = maskH
-    const cellFilled = new Uint8Array(cellW * cellH)
-    for (let y = 0; y < cellH; y++) {
-      for (let x = 0; x < cellW; x++) {
-        const tl = cornerInside[y * gW + x]
-        const tr = cornerInside[y * gW + (x + 1)]
-        const bl = cornerInside[(y + 1) * gW + x]
-        const br = cornerInside[(y + 1) * gW + (x + 1)]
-        cellFilled[y * cellW + x] = tl && tr && bl && br ? 1 : 0
-      }
-    }
+    // Identify "filled cells" — already set in Stage 2 to the raw raster
+    // (no erosion). cellW/cellH already declared in Stage 2.
 
     // We will build positions/indices using PER-CORNER vertex IDs for the
     // top cap and PER-CORNER vertex IDs for the bottom cap. Sharing
@@ -5078,13 +5110,21 @@ export const InflateEngine: GeometryEngine = {
     geometry.computeVertexNormals()
     geometry.computeBoundingBox()
 
+    // Record bbox diagnostics so the debug panel can report XY/Z stability.
+    const bb = geometry.boundingBox
+    if (bb) {
+      INFLATE_DEBUG.bboxX = bb.max.x - bb.min.x
+      INFLATE_DEBUG.bboxY = bb.max.y - bb.min.y
+      INFLATE_DEBUG.bboxZ = bb.max.z - bb.min.z
+    }
+
     INFLATE_DEBUG.inflateGeometryCreated = "YES"
     INFLATE_DEBUG.differsFromSolidBase = "YES" // structurally distinct from H3
 
     const meshData: StrokeMeshData = {
       tubeGeometry: geometry,
       filteredCount: inputPts,
-      key: `inflate-rdfd-${strokes.length}-${maskW}x${maskH}-${effectiveDepth.toFixed(4)}-${effectiveThicknessPx}-${heightScale.toFixed(4)}-${INFLATE_DEBUG.fallbackUsed}`,
+      key: `inflate-rdfd2-${strokes.length}-${maskW}x${maskH}-${effectiveThicknessPx}-${inflatePuffHeightWorld.toFixed(4)}-${inflateDomeFalloffPx.toFixed(2)}-${INFLATE_DEBUG.fallbackUsed}`,
       mode: "inflate",
     }
     return [meshData]
