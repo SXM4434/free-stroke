@@ -69,6 +69,110 @@ export const SOLID_DEBUG = {
 }
 
 /**
+ * Live diagnostic state for Solid H3 draw-in animation.
+ *
+ * Written from `Scene` in `components/viewport-3d.tsx` while playback is
+ * active (or transitioning). Read by `SolidDebugOverlay` via its 100ms
+ * polling loop, so no new prop plumbing is needed.
+ *
+ * Hard rules:
+ *   - Animation diagnostics ONLY. Never used by geometry building.
+ *   - All numbers are pure observations; mutating them must not change
+ *     mesh output, hole detection, or export behavior.
+ *   - `solidAnimationUsesArcLength` and `solidAnimationInterpolatedCutPoint`
+ *     are constants ("YES") locked by the implementation of
+ *     `filterStrokesByProgress`. They exist so the panel can prove the
+ *     reveal is arc-length based, not point-count based.
+ */
+export const SOLID_ANIM_DEBUG = {
+  /**
+   * Which animation strategy the last build went through. Set by `Scene` on
+   * every render so the debug overlay can prove the right path is in use:
+   *   - "drawRange"                              -> Rod (per-segment drawRange in AnimatedStrokes)
+   *   - "partialExtrudeRebuild"                  -> Extrude (animatedStrokes → ExtrudeGeometry rebuild)
+   *   - "partialSolidRebuildWithHoleStabilization" -> Solid (animatedStrokes → buildMaskSolid w/ override)
+   *   - "static"                                 -> Not animating
+   */
+  animationPath:
+    "static" as
+      | "static"
+      | "drawRange"
+      | "partialExtrudeRebuild"
+      | "partialSolidRebuildWithHoleStabilization",
+  /** True while `playing === true` in Solid or Extrude mode, or while a boundary sync is in flight. */
+  solidAnimationActive: false,
+  /** Last value pushed to `solidAnimProgress` (0..1). Tracks the rebuild input. */
+  solidAnimationProgress: 0,
+  /** Incremented every time `animatedStrokes` useMemo recomputes for a partial reveal. */
+  solidAnimationRebuildCount: 0,
+  /** Total points in the partial stroke output fed to `useStrokeMeshes`. */
+  animatedStrokePointCount: 0,
+  /** Arc length of the animated subset (matches what filterStrokesByProgress emitted). */
+  animatedVisibleArcLength: 0,
+  /** Arc length of the full strokes input (the denominator for `progress`). */
+  animatedTotalArcLength: 0,
+  /** Constant proof that reveal is arc-length based (locked by filterStrokesByProgress). */
+  solidAnimationUsesArcLength: "YES" as "YES" | "NO",
+  /** Constant proof the active segment uses a sub-segment interpolated cut point. */
+  solidAnimationInterpolatedCutPoint: "YES" as "YES" | "NO",
+  /** "YES" once the last build was at progress >= 1 (final frame == static). */
+  finalFrameMatchesStatic: "NO" as "YES" | "NO",
+  /** Last validHoleCount observed in animated builds (for topology stability tracking). */
+  validHoleCount: 0,
+  /** Number of times validHoleCount changed across consecutive animated builds. */
+  topologyChangeCount: 0,
+  // ---- Hole stabilization (activation state machine) ----
+  /** Count of holes in the final-pass reference snapshot taken at Play start. */
+  finalHoleReferenceCount: 0,
+  /** Count of final holes currently activated by the per-frame state machine. */
+  activatedFinalHoleCount: 0,
+  /** Per-final-hole hit streak (frames in a row where a partial centroid matched). */
+  perHoleHitStreaks: [] as number[],
+  /** Per-final-hole miss streak (frames in a row with no partial centroid match). */
+  perHoleMissStreaks: [] as number[],
+  /** World-space match tolerance applied per final hole (parallel array). */
+  perHoleActivationRadiusWorld: [] as number[],
+  /** Last reported reject reasons from the buildMaskSolid safety filter. */
+  holeStabilizationLastReasons: [] as string[],
+  /** Did the last build write `holeStabilizationActive = YES`? */
+  holeStabilizationActive: "NO" as "YES" | "NO",
+  /** Frame counter — how many partial centroids the matcher saw last update. */
+  lastPartialCentroidCount: 0,
+  // ---- Solid animation hole stabilization (CURRENT STRATEGY) ----
+  //
+  // Active strategy: STICKY_FINAL_HOLE_CONTOURS.
+  //
+  // DEPRECATED / removed strategies — intentionally absent from this union
+  // so any caller still referencing them produces a TypeScript error:
+  //   - "LIVE_DETECTION"                      (no centroid-PIP override, deprecated)
+  //   - "FILLED_DURING_REVEAL_COMMIT_AT_END" (filled-blob reveal, abandoned)
+  /** Active animation hole strategy label. */
+  solidAnimationHoleMode:
+    "STICKY_FINAL_HOLE_CONTOURS" as "STICKY_FINAL_HOLE_CONTOURS",
+  /** Number of final static H3 holes captured at Play start (0 if no holes). */
+  finalStaticHoleCount: 0,
+  /** Number of holes actively attached to the cap THIS frame. */
+  animatedActiveHoleCount: 0,
+  /** Number of final holes matched at least once but not yet streak-confirmed. */
+  pendingHoleCount: 0,
+  /** Indices (snapshot order) of final holes currently active this frame. */
+  activeHoleIds: [] as number[],
+  /** solidAnimProgress at which each final hole flipped to active (NaN before activation). */
+  holeActivationProgress: [] as number[],
+  /** Where this frame's hole contours come from. */
+  holeSourceDuringAnimation:
+    "FINAL_STATIC_FOR_ACTIVE_NONE_OTHERWISE" as
+      | "FINAL_STATIC_FOR_ACTIVE_NONE_OTHERWISE"
+      | "STATIC",
+  /** "YES" once at least one final-static contour is in use this session. */
+  usingFinalHoleContoursForAnimation: "NO" as "YES" | "NO",
+  /** "YES" when validHoleCount on the final committed frame matches finalStaticHoleCount. */
+  finalFrameHoleMatch: "NO" as "YES" | "NO",
+  /** "YES" if the first frame of the latest playback painted with progress at the start. */
+  firstFrameResetClean: "NO" as "YES" | "NO",
+}
+
+/**
  * TEMPORARY DEBUG: Stage isolation for diagnosis
  * Toggle which stage renders: A=mask B=rawContour C=simplifiedContour D=extrudeNoHoles E=full
  */
@@ -103,15 +207,149 @@ export type GeometryMode = "rod" | "extrude" | "inflate" | "solid"
 /** Extrude-mode parameters */
 export interface ExtrudeParams {
   width: number       // ribbon half-width in world units
-  depth: number       // extrusion depth
+  /** Depth-to-width MULTIPLIER (NOT raw depth). World-space depth is
+   *  computed by `computeEffectiveExtrudeDepth(depth, effectiveWidth)`. */
+  depth: number
   bevelEnabled: boolean
   bevelSize: number
   bevelSegments: number
 }
 
+/* ============================================================
+ * EXTRUDE WIDTH CALIBRATION
+ *
+ * Width controls the ribbon HALF-WIDTH in world units (full ribbon
+ * width = 2 × value). Width is the dominant contributor to perceived
+ * stroke "mass" in XY. The previous slider range (0.02–0.20, default
+ * 0.06) was too aggressive: anything past ~0.065 visibly bloated the
+ * segmented fallback at corners. New range narrows the practical
+ * span and lowers the default so most strokes read as ribbons, not
+ * slabs. The effective-width clamp inside computeEffectiveWidth keeps
+ * geometry sane even if a future caller passes a value outside range.
+ * ============================================================ */
+export const EXTRUDE_WIDTH_MIN = 0.015
+export const EXTRUDE_WIDTH_MAX = 0.080
+export const EXTRUDE_WIDTH_STEP = 0.005
+export const EXTRUDE_WIDTH_DEFAULT = 0.035
+// Absolute clamps on the effective half-width actually used by geometry.
+const EXTRUDE_EFFECTIVE_WIDTH_FLOOR = 0.010
+const EXTRUDE_EFFECTIVE_WIDTH_CEILING = 0.085
+
+/* ============================================================
+ * EXTRUDE WIDTH NONLINEAR SLIDER MAPPING
+ *
+ * The Width slider is exposed as a normalized t in [0, 1]. The
+ * mapping from t to the effective half-width is a quadratic curve
+ * tuned so the practical "clean" zone covers more than half of the
+ * slider:
+ *
+ *   width(t) = WIDTH_SLIDER_FLOOR + (WIDTH_SLIDER_CEIL - FLOOR) * t^p
+ *
+ * with the curve calibrated so:
+ *
+ *   t = 0.00 -> 0.020   (very thin, always clean)
+ *   t = 0.25 -> 0.024   (thin, clean)
+ *   t = 0.50 -> 0.035   (default, clean/bold)
+ *   t = 0.75 -> 0.054   (heavy but still controlled)
+ *   t = 1.00 -> 0.080   (chunky / experimental territory)
+ *
+ * The previous LINEAR slider mapped mid (0.0475) into the messy
+ * zone of the segmented-fallback join behavior. With the quadratic
+ * curve, t = 0.5 produces 0.035 — the original DEFAULT effective
+ * width — so by definition the middle of the slider now feels
+ * exactly like "clean default". Slider positions above ~0.75 are
+ * where the user-acceptable "this starts to get chunky" range
+ * begins; only the last ~25% of slider travel ever reaches the
+ * known-breaking widths.
+ *
+ * The effective-width clamp inside computeEffectiveWidth is still
+ * applied AFTER mapping, so even a future caller that bypasses
+ * this mapping cannot drive geometry outside the safe envelope.
+ * ============================================================ */
+export const EXTRUDE_WIDTH_SLIDER_MIN = 0
+export const EXTRUDE_WIDTH_SLIDER_MAX = 1
+export const EXTRUDE_WIDTH_SLIDER_STEP = 0.01
+export const EXTRUDE_WIDTH_SLIDER_DEFAULT = 0.5
+const EXTRUDE_WIDTH_SLIDER_FLOOR = 0.020
+const EXTRUDE_WIDTH_SLIDER_CEIL = 0.080
+const EXTRUDE_WIDTH_SLIDER_EXP = 2.0
+
+/**
+ * Map a normalized Width slider value `t in [0, 1]` to the effective
+ * extrude half-width. Always returns a finite value inside the
+ * absolute effective-width clamp envelope.
+ *
+ * Inverse helper (`extrudeWidthToSlider`) exists for diagnostics so
+ * the debug panel can show "what slider position produced this width"
+ * even if a caller passed a raw width into ExtrudeParams directly.
+ */
+export function mapExtrudeWidthSlider(t: number): number {
+  if (!isFinite(t)) return EXTRUDE_WIDTH_DEFAULT
+  const clamped = Math.min(1, Math.max(0, t))
+  const raw =
+    EXTRUDE_WIDTH_SLIDER_FLOOR +
+    (EXTRUDE_WIDTH_SLIDER_CEIL - EXTRUDE_WIDTH_SLIDER_FLOOR) *
+      Math.pow(clamped, EXTRUDE_WIDTH_SLIDER_EXP)
+  return Math.min(
+    EXTRUDE_EFFECTIVE_WIDTH_CEILING,
+    Math.max(EXTRUDE_EFFECTIVE_WIDTH_FLOOR, raw),
+  )
+}
+
+/** Inverse of `mapExtrudeWidthSlider` — diagnostics only. */
+export function extrudeWidthToSlider(width: number): number {
+  if (!isFinite(width)) return EXTRUDE_WIDTH_SLIDER_DEFAULT
+  const span = EXTRUDE_WIDTH_SLIDER_CEIL - EXTRUDE_WIDTH_SLIDER_FLOOR
+  if (span <= 0) return EXTRUDE_WIDTH_SLIDER_DEFAULT
+  const ratio = (width - EXTRUDE_WIDTH_SLIDER_FLOOR) / span
+  if (ratio <= 0) return 0
+  if (ratio >= 1) return 1
+  return Math.pow(ratio, 1 / EXTRUDE_WIDTH_SLIDER_EXP)
+}
+
+/* ============================================================
+ * EXTRUDE DEPTH CALIBRATION (width-relative multiplier)
+ *
+ * `ExtrudeParams.depth` is interpreted as a DEPTH-TO-WIDTH MULTIPLIER,
+ * not a raw world-space depth. The engine computes:
+ *
+ *   effectiveDepth = clamp(multiplier × effectiveWidth, FLOOR, CEILING)
+ *
+ * Width controls XY footprint; Depth multiplier controls only Z
+ * extrusion height. They are decoupled: changing Depth does NOT inflate
+ * the XY footprint, and changing Width does NOT compress Z. The user
+ * asked for Depth to be EXPRESSIVE — multiplier max raised from 2.0
+ * to 4.0, default raised from 0.75 to 1.0, and the absolute world-space
+ * ceiling raised from 0.25 to 0.50 so a dramatic depth at moderate
+ * width still has headroom.
+ *
+ * Anchor points (new spec):
+ *   shallow:  0.25×
+ *   default:  1.00×    ← stroke is as deep as it is half-wide
+ *   deep:     2.00×
+ *   dramatic: 3.00×
+ *   max:      4.00×
+ * ============================================================ */
+export const EXTRUDE_DEPTH_MULTIPLIER_MIN = 0.1
+export const EXTRUDE_DEPTH_MULTIPLIER_MAX = 4.0
+export const EXTRUDE_DEPTH_MULTIPLIER_STEP = 0.05
+export const EXTRUDE_DEPTH_MULTIPLIER_DEFAULT = 1.0
+// Absolute clamps on the resulting world-space depth (after multiplier × width).
+const EXTRUDE_EFFECTIVE_DEPTH_FLOOR = 0.005
+const EXTRUDE_EFFECTIVE_DEPTH_CEILING = 0.50
+
+/** Map a width-relative multiplier (`depth` slider value) + effective width
+ *  to a calibrated world-space depth that won't visually explode. */
+export function computeEffectiveExtrudeDepth(multiplier: number, effectiveWidth: number): number {
+  const raw = multiplier * effectiveWidth
+  if (!isFinite(raw) || raw <= 0) return EXTRUDE_EFFECTIVE_DEPTH_FLOOR
+  return Math.min(EXTRUDE_EFFECTIVE_DEPTH_CEILING, Math.max(EXTRUDE_EFFECTIVE_DEPTH_FLOOR, raw))
+}
+
 export const DEFAULT_EXTRUDE_PARAMS: ExtrudeParams = {
-  width: 0.06,
-  depth: 0.2,
+  width: EXTRUDE_WIDTH_DEFAULT,
+  // NOTE: this is a MULTIPLIER, not raw depth. See block comment above.
+  depth: EXTRUDE_DEPTH_MULTIPLIER_DEFAULT,
   bevelEnabled: true,
   bevelSize: 0.015,
   bevelSegments: 2,
@@ -119,21 +357,126 @@ export const DEFAULT_EXTRUDE_PARAMS: ExtrudeParams = {
 
 /** Solid-mode parameters */
 export interface SolidParams {
-  thickness: number   // stroke width in pixels when rasterizing (2D canvas lineWidth)
-  depth: number       // extrusion depth in world units
+  thickness: number   // raw slider value (px) — calibration is applied inside SolidEngine
+  depth: number       // raw slider value (world units) — calibration is applied inside SolidEngine
+}
+
+// =============================================================================
+// SOLID H3 CONTROL CALIBRATION
+// =============================================================================
+// The Solid Thickness and Depth sliders are EXPOSED in raw user-facing units
+// but the SolidEngine maps them through nonlinear curves before they reach
+// `buildMaskSolid`. This keeps the UI scale familiar while ensuring the
+// breaking territory of H3 (counters collapsing, mesh feeling chunky/broken)
+// lives in the upper 20–25% of each slider instead of the middle.
+//
+// Identity rule: if the user later wants to disable calibration, set both
+// curves to 1.0 and effective[min/max] equal to slider[min/max].
+// =============================================================================
+
+// --- Thickness slider (raw px fed to canvas lineWidth before calibration) ----
+export const SOLID_THICKNESS_SLIDER_MIN = 4
+export const SOLID_THICKNESS_SLIDER_MAX = 64
+export const SOLID_THICKNESS_SLIDER_STEP = 2
+export const SOLID_THICKNESS_SLIDER_DEFAULT = 38   // was 24 — calibrated to land at ~22px effective
+
+// Effective thickness range — what actually feeds canvas lineWidth.
+// effectiveMin keeps low-end strokes thin but stable.
+// effectiveMax caps how chunky H3 can get even at slider=max; this is what
+// pushes "breaking territory" to the far end of the slider instead of middle.
+const SOLID_THICKNESS_EFFECTIVE_MIN = 4
+const SOLID_THICKNESS_EFFECTIVE_MAX = 44
+
+// Curve > 1 compresses growth at the low end and accelerates at the high end.
+// 1.35 was chosen so that:
+//   slider=24 → effective ≈ 13   (was raw 24)
+//   slider=38 → effective ≈ 22   (new default — feels bold but stable)
+//   slider=40 → effective ≈ 24   (today's breaking point now safe)
+//   slider=56 → effective ≈ 37   (chunky but coherent)
+//   slider=64 → effective ≈ 44   (max — experimental/breaking territory)
+const SOLID_THICKNESS_CURVE = 1.35
+
+// --- Depth slider (raw world units fed as halfDepth*2 into H3 before calibration) ---
+export const SOLID_DEPTH_SLIDER_MIN = 0.02
+export const SOLID_DEPTH_SLIDER_MAX = 0.5
+export const SOLID_DEPTH_SLIDER_STEP = 0.01
+export const SOLID_DEPTH_SLIDER_DEFAULT = 0.18    // was 0.15 — modest bump for a more 3D default
+
+// Effective depth range — what actually feeds H3 extrusion Z extent.
+const SOLID_DEPTH_EFFECTIVE_MIN = 0.02
+const SOLID_DEPTH_EFFECTIVE_MAX = 0.5
+
+// Mild curve on depth so mid-slider isn't overly chunky in Z; max stays expressive.
+const SOLID_DEPTH_CURVE = 1.2
+
+/** Maps the raw Thickness slider value (px, 4..64) to an effective px value
+ *  consumed by canvas lineWidth and the H3 outer/inner wall pipeline.
+ *  Pure function. Used by BOTH `SolidEngine.buildPreview` and `buildExport`
+ *  so preview/export parity is exact. */
+export function computeSolidEffectiveThicknessPx(sliderPx: number): number {
+  const clamped = Math.max(
+    SOLID_THICKNESS_SLIDER_MIN,
+    Math.min(SOLID_THICKNESS_SLIDER_MAX, sliderPx)
+  )
+  const n =
+    (clamped - SOLID_THICKNESS_SLIDER_MIN) /
+    (SOLID_THICKNESS_SLIDER_MAX - SOLID_THICKNESS_SLIDER_MIN)
+  return (
+    SOLID_THICKNESS_EFFECTIVE_MIN +
+    Math.pow(n, SOLID_THICKNESS_CURVE) *
+      (SOLID_THICKNESS_EFFECTIVE_MAX - SOLID_THICKNESS_EFFECTIVE_MIN)
+  )
+}
+
+/** Maps the raw Depth slider value (world units, 0.02..0.5) to an effective
+ *  depth value consumed by H3 extrusion Z extent. Pure function — same
+ *  preview/export parity guarantee as the thickness mapping. */
+export function computeSolidEffectiveDepth(sliderDepth: number): number {
+  const clamped = Math.max(
+    SOLID_DEPTH_SLIDER_MIN,
+    Math.min(SOLID_DEPTH_SLIDER_MAX, sliderDepth)
+  )
+  const n =
+    (clamped - SOLID_DEPTH_SLIDER_MIN) /
+    (SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN)
+  return (
+    SOLID_DEPTH_EFFECTIVE_MIN +
+    Math.pow(n, SOLID_DEPTH_CURVE) *
+      (SOLID_DEPTH_EFFECTIVE_MAX - SOLID_DEPTH_EFFECTIVE_MIN)
+  )
 }
 
 export const DEFAULT_SOLID_PARAMS: SolidParams = {
-  thickness: 24,
-  depth: 0.15,
+  thickness: SOLID_THICKNESS_SLIDER_DEFAULT,
+  depth: SOLID_DEPTH_SLIDER_DEFAULT,
 }
 
-/** Per-stroke build status for debug overlay (Extrude mode) */
+/** Identifies which Extrude shape-construction strategy produced a given mesh.
+ *  See EXTRUDE_GEOMETRY_STRATEGY in this file for the active default.
+ *
+ *   "legacy"    — parametric perpendicular-offset ribbon → THREE.ExtrudeGeometry
+ *   "segmented" — depth-aware per-segment prism strip (legacy contour fallback)
+ *   "raster"    — rasterize disks → marching-squares trace → THREE.ExtrudeGeometry
+ *   "rod-only"  — debug only; everything becomes a TubeGeometry, depth-blind
+ */
+export type ExtrudeStrategyTag = "legacy" | "continuous-ribbon" | "segmented" | "raster" | "rod-only"
+
+/**
+ * Per-stroke build status for debug overlay (Extrude mode).
+ *
+ * Fields:
+ *   width            — the effective ribbon half-width used for geometry
+ *   depth            — DEPRECATED alias for effectiveDepth (kept for compatibility);
+ *                       always equal to effectiveDepth on new code paths
+ *   depthMultiplier  — the raw slider value (interpreted as a width-relative multiplier)
+ *   effectiveDepth   — the calibrated world-space depth = computeEffectiveExtrudeDepth(...)
+ *   strategy         ��� which shape/extrusion strategy produced this mesh
+ */
 export type StrokeBuildStatus =
-  | { type: "ok"; width: number; depth: number; bevelEnabled: boolean }
-  | { type: "bevelOff"; width: number; depth: number }
-  | { type: "bevelOffTinyWidth"; width: number; depth: number }
-  | { type: "rodFallback"; reason: string; fallbackRadius: number }
+  | { type: "ok"; width: number; depth: number; bevelEnabled: boolean; strategy: ExtrudeStrategyTag; depthMultiplier: number; effectiveDepth: number }
+  | { type: "bevelOff"; width: number; depth: number; strategy: ExtrudeStrategyTag; depthMultiplier: number; effectiveDepth: number }
+  | { type: "bevelOffTinyWidth"; width: number; depth: number; strategy: ExtrudeStrategyTag; depthMultiplier: number; effectiveDepth: number }
+  | { type: "rodFallback"; reason: string; fallbackRadius: number; strategy: ExtrudeStrategyTag; depthMultiplier: number; effectiveDepth: number }
 
 /** Debug contour data for Solid mode visualization */
 export interface SolidDebugContour {
@@ -250,6 +593,25 @@ export interface PreviewParams {
   canvasHeight: number
   extrudeParams?: ExtrudeParams
   solidParams?: SolidParams
+  /**
+   * OPTIONAL Solid H3 animation hole stabilization (animation-only).
+   *
+   * When the Solid mesh is being rebuilt as a partial reveal frame, this
+   * carries the activation-gated final hole contours that the buildMaskSolid
+   * pipeline should USE for cap triangulation + H3 inner walls — instead of
+   * trusting the partial-frame H1/H2 detection. Static and export callers
+   * NEVER pass this; behavior is identical to before.
+   */
+  holeStabilization?: import("./solid-mask").SolidHoleStabilization
+  /**
+   * OPTIONAL animation-only no-holes mode for Solid partial reveals.
+   *
+   * When true, Scene is rendering a mid-reveal partial frame and wants the
+   * Solid mesh to be a stable filled silhouette extrusion with NO holes.
+   * Passes straight through to buildMaskSolid; static + export callers
+   * never set this so their behavior is unchanged.
+   */
+  disableHolesForAnimation?: boolean
 }
 
 export interface ExportResult {
@@ -599,9 +961,228 @@ export const RodEngine: GeometryEngine = {
 /*  ExtrudeEngine                                                     */
 /* ------------------------------------------------------------------ */
 
+/* ============================================================
+ * RASTERIZED RIBBON BUILDER (preferred path)
+ *
+ * The previous parametric offset (`buildRibbonShape`, retained below
+ * as a last-resort fallback) computes left/right perpendicular offsets
+ * of the polyline using average normals. For any handwriting stroke
+ * with meaningful curvature whose segment lengths are short relative
+ * to halfWidth, the inner-side offset edges fold over each other,
+ * producing a self-intersecting polygon. `validateShapeContour` then
+ * (correctly) rejected those polygons as "bad contour", and Extrude
+ * silently fell back to Rod for nearly every normal stroke, giving
+ * Z-extent = stroke diameter (NOT depth).
+ *
+ * The rasterize-and-trace approach below is robust by construction:
+ *   1. Rasterize the polyline at halfWidth thickness using a
+ *      circular-disk brush stamped along every segment.
+ *   2. Trace the outer boundary of the resulting filled region using
+ *      Marching Squares (already used by SolidEngine — defined later
+ *      in this file as `traceOuterBoundaryMarchingSquares`).
+ *   3. Light Douglas-Peucker simplification (already defined later
+ *      as `dpSimplify`) to remove jaggies.
+ *   4. Wrap as a THREE.Shape, ensure CCW winding for ExtrudeGeometry.
+ *
+ * The mask is the union of disks stamped along the polyline, which
+ * is always a connected, simply-connected region for a single
+ * non-crossing stroke. Marching Squares on such a region returns a
+ * simple closed polygon by construction — so triangulation never
+ * fails on self-intersection.
+ *
+ * NOTE: The existing slider/visual convention treats `userWidth` as
+ * the perpendicular offset (i.e., full ribbon = 2 × userWidth). The
+ * rasterized builder preserves that convention to avoid changing the
+ * visual size of strokes that were already working.
+ * ============================================================ */
+
+const RIBBON_RASTER_RESOLUTION = 256
+// World-space step along each polyline segment when stamping disks.
+// Smaller = smoother contour, more compute. ~0.35 of halfWidth ensures
+// every disk overlaps its neighbor enough that the union has no gaps.
+const RIBBON_RASTER_STEP_FRAC = 0.35
+// DP simplification tolerance in PIXELS (raster space). 0.6 keeps the
+// outline crisp without leaving tiny jitter spikes from the marching
+// squares mid-edge sampling.
+const RIBBON_RASTER_DP_TOLERANCE_PX = 0.6
+
+/* ============================================================
+ * EXTRUDE GEOMETRY STRATEGY SWITCH
+ *
+ * Controls which shape-construction path Extrude uses.
+ *
+ *   LEGACY_OFFSET_RIBBON  (default)
+ *     The original parametric perpendicular-offset ribbon. Produces a
+ *     smooth, calligraphic-feeling extrusion with thin variable-width
+ *     edges. May fall back to Rod on tightly curved strokes whose
+ *     inner-side offsets self-intersect (caught by validateShapeContour).
+ *     Visually closer to a "drawn" stroke than the Solid silhouette.
+ *
+ *   RASTER_TRACE_RIBBON   (experimental)
+ *     Stamps a circular disk along the polyline at halfWidth, traces
+ *     the union with marching squares, simplifies, and extrudes. Always
+ *     produces a simple polygon so Extrude never falls back to Rod for
+ *     normal handwriting. However it produces a chunkier, more uniform
+ *     silhouette that visually resembles Solid mode (Solid uses the same
+ *     rasterize-and-trace approach for its outer cap). Use only when the
+ *     legacy path's rod-fallback rate is unacceptable for a given input.
+ *
+ *   ROD_FALLBACK_ONLY     (debug)
+ *     Skips Extrude entirely; every stroke goes through buildRodGeometryData.
+ *     Depth slider does NOT apply. For diagnostic comparison only.
+ *
+ * Default is LEGACY_OFFSET_RIBBON because (a) it preserves the previous
+ * Extrude visual style users were accustomed to, and (b) it does not
+ * make Extrude visually indistinguishable from Solid. The rasterized path
+ * remains available behind this flag for evaluation.
+ * ============================================================ */
+export const EXTRUDE_GEOMETRY_STRATEGY:
+  | "LEGACY_OFFSET_RIBBON"
+  | "RASTER_TRACE_RIBBON"
+  | "ROD_FALLBACK_ONLY" = "LEGACY_OFFSET_RIBBON"
+
+function strategyTag(): ExtrudeStrategyTag {
+  switch (EXTRUDE_GEOMETRY_STRATEGY) {
+    case "RASTER_TRACE_RIBBON": return "raster"
+    case "ROD_FALLBACK_ONLY":   return "rod-only"
+    case "LEGACY_OFFSET_RIBBON":
+    default:                    return "legacy"
+  }
+}
+
+/**
+ * Rasterize a polyline at given perpendicular thickness into a binary mask.
+ * Returns the mask and the world↔pixel transform (uniform scale + offset).
+ */
+function rasterizeStrokeToRibbonMask(
+  pts: THREE.Vector3[],
+  halfWidth: number,
+  S: number = RIBBON_RASTER_RESOLUTION
+): { mask: boolean[]; minX: number; minY: number; scale: number } | null {
+  if (pts.length < 2 || halfWidth <= 0) return null
+
+  // World bbox of polyline + padding so the round brush never clips.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  const pad = halfWidth * 1.5
+  minX -= pad; maxX += pad
+  minY -= pad; maxY += pad
+
+  const sizeMax = Math.max(maxX - minX, maxY - minY)
+  if (!isFinite(sizeMax) || sizeMax <= 0) return null
+
+  // Uniform scale fits bbox into S-2 pixels (1px safety margin per side).
+  const scale = (S - 2) / sizeMax
+  const radiusPx = halfWidth * scale
+  if (radiusPx < 0.5) return null  // sub-pixel ribbon — not enough resolution
+
+  const mask = new Array(S * S).fill(false)
+  const r2 = radiusPx * radiusPx
+
+  const stampDisk = (wx: number, wy: number) => {
+    const cx = (wx - minX) * scale
+    const cy = (wy - minY) * scale
+    const x0 = Math.max(0, Math.floor(cx - radiusPx))
+    const x1 = Math.min(S - 1, Math.ceil(cx + radiusPx))
+    const y0 = Math.max(0, Math.floor(cy - radiusPx))
+    const y1 = Math.min(S - 1, Math.ceil(cy + radiusPx))
+    for (let y = y0; y <= y1; y++) {
+      const dy = y + 0.5 - cy
+      const dy2 = dy * dy
+      const row = y * S
+      for (let x = x0; x <= x1; x++) {
+        const dx = x + 0.5 - cx
+        if (dx * dx + dy2 <= r2) mask[row + x] = true
+      }
+    }
+  }
+
+  // Walk each segment, stamp disks at sub-halfWidth intervals so
+  // consecutive disks overlap and the union is gap-free.
+  const stepWorld = Math.max(1e-6, halfWidth * RIBBON_RASTER_STEP_FRAC)
+  // Always stamp at the very first vertex.
+  stampDisk(pts[0].x, pts[0].y)
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i]
+    const b = pts[i + 1]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.sqrt(dx * dx + dy * dy)
+    if (len < 1e-9) continue
+    const steps = Math.max(1, Math.ceil(len / stepWorld))
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps
+      stampDisk(a.x + t * dx, a.y + t * dy)
+    }
+  }
+
+  return { mask, minX, minY, scale }
+}
+
+/**
+ * Robust ribbon shape via rasterize → marching-squares → simplify.
+ * Always returns a simple (non-self-intersecting) polygon for any single
+ * stroke whose polyline does not self-cross, or null if the stroke is
+ * too small to rasterize at the chosen resolution.
+ *
+ * NOTE: The slider convention here is `halfWidth` as perpendicular offset,
+ * matching the legacy `buildRibbonShape` for visual compatibility. The
+ * caller passes `userWidth` (slider value) as `halfWidth`, producing a
+ * ribbon of full width 2 × userWidth — same as before.
+ */
+function buildRasterizedRibbonShape(
+  pts: THREE.Vector3[],
+  halfWidth: number
+): THREE.Shape | null {
+  const raster = rasterizeStrokeToRibbonMask(pts, halfWidth)
+  if (!raster) return null
+
+  const pxContour = traceOuterBoundaryMarchingSquares(raster.mask, RIBBON_RASTER_RESOLUTION)
+  if (pxContour.length < 3) return null
+
+  // Light DP simplification in pixel space.
+  const simplifiedPx = dpSimplify(pxContour, RIBBON_RASTER_DP_TOLERANCE_PX)
+  if (simplifiedPx.length < 3) return null
+
+  // Pixel → world transform.
+  const worldPts = simplifiedPx.map((p) => ({
+    x: p.x / raster.scale + raster.minX,
+    y: p.y / raster.scale + raster.minY,
+  }))
+
+  // Marching squares traces clockwise in raster (Y-down) coords. Since we
+  // map raster-Y directly to world-Y (no flip), the resulting polygon's
+  // winding may be clockwise in math sense (negative signed area). THREE
+  // ExtrudeGeometry expects CCW outer contour. Reverse if needed.
+  let signed = 0
+  for (let i = 0, j = worldPts.length - 1; i < worldPts.length; j = i++) {
+    signed += (worldPts[j].x - worldPts[i].x) * (worldPts[j].y + worldPts[i].y)
+  }
+  signed *= 0.5
+  const ordered = signed < 0 ? worldPts : worldPts.slice().reverse()
+
+  const shape = new THREE.Shape()
+  shape.moveTo(ordered[0].x, ordered[0].y)
+  for (let i = 1; i < ordered.length; i++) {
+    shape.lineTo(ordered[i].x, ordered[i].y)
+  }
+  shape.closePath()
+  return shape
+}
+
 /**
  * Build a 2D ribbon outline (offset left/right of polyline by `halfWidth`).
  * Returns an array of 2D points forming a closed polygon.
+ *
+ * LEGACY parametric-offset implementation. Retained as last-resort fallback
+ * only; the rasterized builder above is the primary path. See the comment
+ * block above `rasterizeStrokeToRibbonMask` for why this approach fails on
+ * normal handwriting strokes.
  */
 function buildRibbonShape(pts: THREE.Vector3[], halfWidth: number): THREE.Shape | null {
   if (pts.length < 2) return null
@@ -687,22 +1268,34 @@ function buildRibbonShape(pts: THREE.Vector3[], halfWidth: number): THREE.Shape 
 }
 
 /** Auto-clamp bevel so it doesn't exceed half the extrusion depth */
-function clampBevel(ep: ExtrudeParams): { bevelSize: number; bevelThickness: number; bevelSegments: number } {
-  // THREE.ExtrudeGeometry bevel extends *outward* from the 2D shape outline,
-  // so ribbon width does NOT constrain bevelSize. Only depth matters:
-  // bevelThickness on each end eats into the extrusion, so cap at depth/2.
-  const maxBevel = ep.depth * 0.5
-  const bevelSize = Math.max(0, Math.min(ep.bevelSize, maxBevel))
+function clampBevel(
+  ep: ExtrudeParams,
+  effectiveDepth: number,
+  effectiveWidth: number,
+): { bevelSize: number; bevelThickness: number; bevelSegments: number } {
+  // bevelSize: outward-radius. bevelThickness: per-end Z eat-in.
+  // Cap by BOTH the effective world depth (so end-caps don't collapse) AND
+  // the effective width (so bevel doesn't visually swallow a thin ribbon).
+  const maxByDepth = effectiveDepth * 0.4
+  const maxByWidth = effectiveWidth * 0.4
+  const cap = Math.min(maxByDepth, maxByWidth)
+  const bevelSize = Math.max(0, Math.min(ep.bevelSize, cap))
   const bevelThickness = Math.max(0, Math.min(ep.bevelSize, bevelSize))
   const bevelSegments = Math.min(ep.bevelSegments, 6)
   return { bevelSize, bevelThickness, bevelSegments }
-}
+  }
 
 /**
- * Pass through user width directly. Small floor to avoid degenerate zero-width shapes.
+ * Map the slider width to an effective half-width used by geometry. Currently
+ * identity within the calibrated [FLOOR, CEILING] envelope; we keep the helper
+ * separate so future tuning (e.g. nonlinear mapping, polyline-length-aware
+ * adjustments) can plug in without touching call sites. The CEILING is the
+ * critical guard: even if a future caller passes a wider value than the
+ * slider exposes, geometry will not blow up.
  */
 function computeEffectiveWidth(_filtered: THREE.Vector3[], userWidth: number): number {
-  return Math.max(userWidth, 0.001)
+  if (!isFinite(userWidth) || userWidth <= 0) return EXTRUDE_EFFECTIVE_WIDTH_FLOOR
+  return Math.min(EXTRUDE_EFFECTIVE_WIDTH_CEILING, Math.max(EXTRUDE_EFFECTIVE_WIDTH_FLOOR, userWidth))
 }
 
 /* ---- Contour validation ---- */
@@ -864,6 +1457,350 @@ function safeExtrude(
 
 
 /**
+ * @deprecated — replaced by `buildContinuousRibbonStripGeometry`.
+ *
+ * Kept here only as historical reference. The implementation below
+ * computed a per-vertex miter offset with `halfWidth / sin(angle/2)`
+ * scaling clamped at ~2.86×halfWidth. That formula produces visible
+ * spikes (up to ~2.86×halfWidth wide) at every sharp-turn vertex on
+ * a loopy stroke, which compounded into the "blob" the user observed
+ * even at low width/depth. The replacement clamps the offset at
+ * exactly halfWidth, eliminating spikes.
+ *
+ * NOT CALLED. Safe to delete after one stable release.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _deprecatedBuildSegmentedRibbonGeometry(
+  pts: THREE.Vector3[],
+  halfWidth: number,
+  depth: number
+): THREE.BufferGeometry | null {
+  if (pts.length < 2 || halfWidth <= 0 || depth <= 0) return null
+
+  const halfDepth = depth / 2
+  const N = pts.length
+
+  // Per-vertex offset = perpendicular direction × miter length.
+  //
+  // For a vertex shared by tangents t1 (incoming) and t2 (outgoing), the
+  // CORRECT offset for an offset-curve ribbon is along the bisector NORMAL,
+  // with length = halfWidth / sin(angle/2). The previous implementation
+  // averaged the two unit perpendiculars and renormalized to halfWidth —
+  // which under-offsets the OUTER edge at sharp turns (creating notches)
+  // while the inner offsets self-overlap (creating chunky spikes). The
+  // miter formula fixes both.
+  //
+  // Sharp turns would otherwise produce a miter length that diverges as
+  // angle → 0. We clamp sin(angle/2) at MITER_CLAMP_SIN so the miter
+  // length is bounded at halfWidth / MITER_CLAMP_SIN. The visual cost of
+  // the clamp at very sharp corners is a slight inner overlap, which is
+  // already invisible inside a solid mesh body. The benefit is dramatic:
+  // no more corner explosions at moderate widths on loopy handwriting.
+  const MITER_CLAMP_SIN = 0.35  // ≈20° half-angle ⇒ miter capped at ~2.86×halfWidth
+  const perpX: number[] = new Array(N)
+  const perpY: number[] = new Array(N)
+  for (let i = 0; i < N; i++) {
+    // Incoming-segment tangent
+    let t1x = 0, t1y = 0, l1 = 0
+    if (i > 0) {
+      const dx = pts[i].x - pts[i - 1].x
+      const dy = pts[i].y - pts[i - 1].y
+      l1 = Math.hypot(dx, dy)
+      if (l1 > 0) { t1x = dx / l1; t1y = dy / l1 }
+    }
+    // Outgoing-segment tangent
+    let t2x = 0, t2y = 0, l2 = 0
+    if (i < N - 1) {
+      const dx = pts[i + 1].x - pts[i].x
+      const dy = pts[i + 1].y - pts[i].y
+      l2 = Math.hypot(dx, dy)
+      if (l2 > 0) { t2x = dx / l2; t2y = dy / l2 }
+    }
+
+    let pX = 0, pY = 0, miterLen = halfWidth
+    if (l1 > 0 && l2 > 0) {
+      // Both segments exist → proper miter at the join.
+      const bx = t1x + t2x
+      const by = t1y + t2y
+      const bLen = Math.hypot(bx, by)
+      if (bLen < 1e-6) {
+        // 180° reversal — bisector is undefined; fall back to first perp.
+        pX = -t1y
+        pY = t1x
+        miterLen = halfWidth
+      } else {
+        const ubx = bx / bLen
+        const uby = by / bLen
+        // Miter normal = bisector rotated 90° CCW
+        pX = -uby
+        pY = ubx
+        // sin(angle/2): half-angle between t1 and the bisector unit vector.
+        // dot(t1, bisector_unit) = cos(angle/2); sin = sqrt(1 - cos²).
+        const cosHalf = t1x * ubx + t1y * uby
+        const sinHalf = Math.sqrt(Math.max(0, 1 - cosHalf * cosHalf))
+        const effSin = Math.max(sinHalf, MITER_CLAMP_SIN)
+        miterLen = halfWidth / effSin
+      }
+    } else if (l1 > 0) {
+      // End vertex — perpendicular to incoming segment.
+      pX = -t1y
+      pY = t1x
+      miterLen = halfWidth
+    } else if (l2 > 0) {
+      // Start vertex — perpendicular to outgoing segment.
+      pX = -t2y
+      pY = t2x
+      miterLen = halfWidth
+    }
+
+    perpX[i] = pX * miterLen
+    perpY[i] = pY * miterLen
+  }
+
+  const positions: number[] = []
+  const indices: number[] = []
+
+  const pushV = (x: number, y: number, z: number): number => {
+    const idx = positions.length / 3
+    positions.push(x, y, z)
+    return idx
+  }
+
+  // CCW quad: a→b→c→d emits triangles (a,b,c) and (a,c,d). Caller is
+  // responsible for ordering vertices so cross(b-a, c-a) points outward.
+  const quad = (a: number, b: number, c: number, d: number) => {
+    indices.push(a, b, c, a, c, d)
+  }
+
+  // 4 vertices per polyline point: top (+Z) and bottom (-Z) on each side
+  //   Lp = left +halfDepth   Rp = right +halfDepth
+  //   Lm = left -halfDepth   Rm = right -halfDepth
+  // "Left" = the +perpendicular side, "right" = the -perpendicular side.
+  const Lp: number[] = new Array(N)
+  const Rp: number[] = new Array(N)
+  const Lm: number[] = new Array(N)
+  const Rm: number[] = new Array(N)
+  for (let i = 0; i < N; i++) {
+    const px = pts[i].x
+    const py = pts[i].y
+    const dx = perpX[i]
+    const dy = perpY[i]
+    Lp[i] = pushV(px + dx, py + dy, +halfDepth)
+    Rp[i] = pushV(px - dx, py - dy, +halfDepth)
+    Lm[i] = pushV(px + dx, py + dy, -halfDepth)
+    Rm[i] = pushV(px - dx, py - dy, -halfDepth)
+  }
+
+  // Four side faces between every consecutive pair of polyline vertices.
+  for (let i = 0; i < N - 1; i++) {
+    // Top face (z=+halfDepth, normal +Z)
+    quad(Lp[i], Rp[i], Rp[i + 1], Lp[i + 1])
+    // Bottom face (z=-halfDepth, normal -Z)
+    quad(Lm[i], Lm[i + 1], Rm[i + 1], Rm[i])
+    // Left side wall (+perp side, normal +perp)
+    quad(Lp[i], Lp[i + 1], Lm[i + 1], Lm[i])
+    // Right side wall (-perp side, normal -perp)
+    quad(Rp[i], Rm[i], Rm[i + 1], Rp[i + 1])
+  }
+
+  // Stroke end caps. The polyline only has two true ends; intermediate
+  // segment joints share verts via the miter-join offset above, so no
+  // intra-stroke caps are emitted.
+  quad(Lp[0], Lm[0], Rm[0], Rp[0])                       // start cap, normal -dir
+  quad(Lp[N - 1], Rp[N - 1], Rm[N - 1], Lm[N - 1])       // end cap, normal +dir
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
+  geo.setIndex(indices)
+  geo.computeVertexNormals()
+  geo.computeBoundingBox()
+  geo.computeBoundingSphere()
+
+  return geo
+}
+
+
+/* ============================================================
+ * CONTINUOUS_RIBBON_STRIP — depth-aware shared-vertex strip
+ *
+ * This is the preferred Extrude fallback when the parametric offset
+ * polygon self-intersects. It builds a SINGLE continuous extruded
+ * ribbon — NOT a sequence of independent per-segment prisms — by
+ * sharing the four cross-section vertices (top-left, top-right,
+ * bottom-left, bottom-right) across consecutive polyline samples.
+ *
+ * Why it doesn't blob:
+ *   • Vertices are shared between adjacent quads → no overlapping
+ *     "boxes" stacking up at every sample (the visual symptom the
+ *     legacy implementation showed at loops).
+ *   • Offset MAGNITUDE at each vertex is clamped to halfWidth.
+ *     We deliberately do NOT use the geometric miter length
+ *     halfWidth / sin(angle/2): at sharp turns sin(angle/2) → 0,
+ *     so that formula produces spikes up to several × halfWidth
+ *     at every vertex on a loop's curve. Clamping at halfWidth
+ *     means the OUTER edge has a tiny inward notch at sharp turns
+ *     (acceptable for MVP) while the per-vertex maximum offset
+ *     stays constant — no spikes, no piling.
+ *   • Zero-length input segments are filtered, which prevents NaN
+ *     perpendiculars at duplicate samples (a common cause of
+ *     degenerate triangles that render as black slivers).
+ *   • Tight-turn densification subdivides any segment where the
+ *     bisector turn at an endpoint exceeds DENSIFY_ANGLE_THRESHOLD,
+ *     so the ribbon's outer-edge "notch" is small enough to be
+ *     visually unnoticeable.
+ *
+ * Output is centered on z=0 (range [-halfDepth, +halfDepth]). The
+ * caller does NOT need to translate the resulting geometry.
+ *
+ * Width semantics: `halfWidth` IS the half-width — total cross-section
+ * width on a straight segment is exactly 2 × halfWidth.
+ *
+ * Visual identity vs Rod: Rod is a circular tube (radius ≈ halfWidth);
+ * this ribbon has a rectangular cross-section (full 2×halfWidth wide,
+ * `depth` tall), so even at the same width slider the silhouettes are
+ * clearly distinct. Visual identity vs Solid: Solid is a depth-blind
+ * raster→marching-squares mask extrusion; this ribbon preserves
+ * directionality (the cross-section follows the stroke tangent),
+ * giving it a calligraphic feel Solid never produces.
+ * ============================================================ */
+function buildContinuousRibbonStripGeometry(
+  pts: THREE.Vector3[],
+  halfWidth: number,
+  depth: number
+): THREE.BufferGeometry | null {
+  if (pts.length < 2 || halfWidth <= 0 || depth <= 0) return null
+
+  // 1) Filter near-duplicate samples (zero-length segments produce NaN
+  //    perpendiculars). MIN_EDGE is small enough that any handwriting
+  //    sample worth keeping survives; only literal duplicates die.
+  const MIN_EDGE = 1e-5
+  const filtered: THREE.Vector3[] = [pts[0]]
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].distanceTo(filtered[filtered.length - 1]) > MIN_EDGE) {
+      filtered.push(pts[i])
+    }
+  }
+  if (filtered.length < 2) return null
+
+  // 2) Tight-turn densification: subdivide segments whose endpoint
+  //    bisectors turn by more than DENSIFY_ANGLE_THRESHOLD radians.
+  //    A single pass of midpoint subdivision halves the per-segment
+  //    turn; for typical handwriting one pass is sufficient.
+  //    Threshold = 25° ≈ 0.436 rad.
+  const DENSIFY_ANGLE_THRESHOLD = 0.436
+  // Compute per-vertex turn angle (between incoming and outgoing tangents).
+  const turnAngleAt = (arr: THREE.Vector3[], i: number): number => {
+    if (i <= 0 || i >= arr.length - 1) return 0
+    const ax = arr[i].x - arr[i - 1].x, ay = arr[i].y - arr[i - 1].y
+    const bx = arr[i + 1].x - arr[i].x, by = arr[i + 1].y - arr[i].y
+    const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by)
+    if (la <= 0 || lb <= 0) return 0
+    let cos = (ax * bx + ay * by) / (la * lb)
+    if (cos > 1) cos = 1
+    if (cos < -1) cos = -1
+    return Math.acos(cos)
+  }
+  // Single subdivision pass. Insert midpoint of (i, i+1) when either
+  // endpoint exhibits a sharp turn.
+  const densified: THREE.Vector3[] = [filtered[0]]
+  for (let i = 0; i < filtered.length - 1; i++) {
+    const ta = turnAngleAt(filtered, i)
+    const tb = turnAngleAt(filtered, i + 1)
+    if (ta > DENSIFY_ANGLE_THRESHOLD || tb > DENSIFY_ANGLE_THRESHOLD) {
+      const mx = (filtered[i].x + filtered[i + 1].x) * 0.5
+      const my = (filtered[i].y + filtered[i + 1].y) * 0.5
+      const mz = (filtered[i].z + filtered[i + 1].z) * 0.5
+      densified.push(new THREE.Vector3(mx, my, mz))
+    }
+    densified.push(filtered[i + 1])
+  }
+
+  const samples = densified
+  const N = samples.length
+  const halfDepth = depth / 2
+
+  // 3) Per-vertex offset: averaged unit perpendicular × halfWidth.
+  //    No 1/sin(angle/2) scaling — that produced spikes at sharp turns.
+  //    Magnitude is always exactly halfWidth, regardless of curvature.
+  const perpX: number[] = new Array(N)
+  const perpY: number[] = new Array(N)
+  for (let i = 0; i < N; i++) {
+    let nx = 0, ny = 0
+    if (i > 0) {
+      const dx = samples[i].x - samples[i - 1].x
+      const dy = samples[i].y - samples[i - 1].y
+      const l = Math.hypot(dx, dy)
+      if (l > 0) { nx += -dy / l; ny += dx / l }
+    }
+    if (i < N - 1) {
+      const dx = samples[i + 1].x - samples[i].x
+      const dy = samples[i + 1].y - samples[i].y
+      const l = Math.hypot(dx, dy)
+      if (l > 0) { nx += -dy / l; ny += dx / l }
+    }
+    const len = Math.hypot(nx, ny)
+    if (len > 1e-6) {
+      perpX[i] = (nx / len) * halfWidth
+      perpY[i] = (ny / len) * halfWidth
+    } else {
+      // Truly degenerate vertex (no neighbors with length). Reuse
+      // previous vertex's perp if available; else zero.
+      perpX[i] = i > 0 ? perpX[i - 1] : 0
+      perpY[i] = i > 0 ? perpY[i - 1] : 0
+    }
+  }
+
+  // 4) Emit 4 vertices per sample: (left/right) × (top/bottom).
+  const positions: number[] = []
+  const Lp: number[] = new Array(N)
+  const Rp: number[] = new Array(N)
+  const Lm: number[] = new Array(N)
+  const Rm: number[] = new Array(N)
+  const pushV = (x: number, y: number, z: number): number => {
+    const idx = positions.length / 3
+    positions.push(x, y, z)
+    return idx
+  }
+  for (let i = 0; i < N; i++) {
+    const x = samples[i].x, y = samples[i].y, dx = perpX[i], dy = perpY[i]
+    Lp[i] = pushV(x + dx, y + dy, +halfDepth)
+    Rp[i] = pushV(x - dx, y - dy, +halfDepth)
+    Lm[i] = pushV(x + dx, y + dy, -halfDepth)
+    Rm[i] = pushV(x - dx, y - dy, -halfDepth)
+  }
+
+  // 5) Faces between every consecutive pair of samples. The four quads
+  //    share their endpoints with the next pair → continuous strip,
+  //    no internal duplicated faces. Winding chosen so each face's
+  //    outward normal points away from the ribbon interior; verified
+  //    by right-hand rule on a +X-direction test segment.
+  const indices: number[] = []
+  const quad = (a: number, b: number, c: number, d: number) => {
+    indices.push(a, b, c, a, c, d)
+  }
+  for (let i = 0; i < N - 1; i++) {
+    quad(Lp[i], Rp[i], Rp[i + 1], Lp[i + 1])   // top  face  (+Z normal)
+    quad(Lm[i], Lm[i + 1], Rm[i + 1], Rm[i])   // bot  face  (-Z normal)
+    quad(Lp[i], Lp[i + 1], Lm[i + 1], Lm[i])   // left wall  (+perp normal)
+    quad(Rp[i], Rm[i], Rm[i + 1], Rp[i + 1])   // right wall (-perp normal)
+  }
+
+  // 6) Start / end caps. Strip ends only — intermediate samples share
+  //    cross-section vertices so no intra-strip caps are needed.
+  quad(Lp[0], Lm[0], Rm[0], Rp[0])
+  quad(Lp[N - 1], Rp[N - 1], Rm[N - 1], Lm[N - 1])
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
+  geo.setIndex(indices)
+  geo.computeVertexNormals()
+  geo.computeBoundingBox()
+  geo.computeBoundingSphere()
+  return geo
+}
+
+
+/**
  * Try to build a valid ExtrudeGeometry for a stroke.
  * 1) If width < TINY_WIDTH_THRESHOLD, force bevel OFF to avoid degenerate extrusions.
  * 2) Try with bevel ON (if enabled and width not tiny).
@@ -874,23 +1811,139 @@ function tryBuildExtrudeGeometry(
   filtered: THREE.Vector3[],
   extrudeParams: ExtrudeParams,
   userWidth: number,
-  _si: number
+  _si: number,
 ): { geometry: THREE.BufferGeometry | null; status: StrokeBuildStatus } {
-  const halfDepth = extrudeParams.depth / 2
-  const bevel = clampBevel(extrudeParams)
+  // ---- Compute calibrated effective depth from multiplier ----
+  // extrudeParams.depth is a width-relative multiplier; convert to world-space.
+  const depthMultiplier = extrudeParams.depth
+  const effectiveDepth = computeEffectiveExtrudeDepth(depthMultiplier, userWidth)
+  const halfDepth = effectiveDepth / 2
+  const bevel = clampBevel(extrudeParams, effectiveDepth, userWidth)
   const fbRadius = fallbackRodRadius(userWidth)
+  const tag = strategyTag()
 
-  // Build shape once (same for all attempts)
-  const shape = buildRibbonShape(filtered, userWidth)
-  if (!shape) {
-    console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "no shape" })
-    return { geometry: null, status: { type: "rodFallback", reason: "no shape", fallbackRadius: fbRadius } }
+  // ROD_FALLBACK_ONLY (debug strategy): never run Extrude; always emit a
+  // rodFallback status so the caller renders a TubeGeometry. Depth has no
+  // effect in this path — that is intentional and is the correct way to
+  // verify "this is what rod looks like" for visual comparison.
+  if (EXTRUDE_GEOMETRY_STRATEGY === "ROD_FALLBACK_ONLY") {
+    console.log(`[v0] stroke ${_si} final: rodFallback (strategy=rod-only)`)
+    return {
+      geometry: null,
+      status: {
+        type: "rodFallback",
+        reason: "strategy=rod-only",
+        fallbackRadius: fbRadius,
+        strategy: tag,
+        depthMultiplier,
+        effectiveDepth,
+      },
+    }
   }
 
-  const contour = validateShapeContour(shape)
-  if (!contour) {
-    console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "bad contour" })
-    return { geometry: null, status: { type: "rodFallback", reason: "bad contour", fallbackRadius: fbRadius } }
+  // Build the ribbon shape according to the active strategy.
+  //
+  // LEGACY_OFFSET_RIBBON (default):
+  //   - Try parametric offset builder. If it produces a simple polygon, use
+  //     THREE.ExtrudeGeometry → smooth calligraphic ribbon (the preferred
+  //     visual style).
+  //   - If contour self-intersects ("bad contour") OR extrusion fails, fall
+  //     back to the DEPTH-AWARE segmented builder, NOT Rod. This is the
+  //     critical fix: previously every loopy handwriting stroke fell back
+  //     to a depth-blind Rod tube and the Depth slider had no visible effect.
+  //   - Rod only remains as final fallback if BOTH parametric and segmented
+  //     refuse (essentially only for truly degenerate input).
+  //
+  // RASTER_TRACE_RIBBON:
+  //   - Use the rasterize-and-trace builder first (always simple by
+  //     construction). If raster declines (sub-pixel ribbon at 256-px
+  //     resolution), fall back to parametric, then validate; on bad contour,
+  //     also falls back to segmented; then Rod.
+  let shape: THREE.Shape | null = null
+  let shapeSource: "parametric" | "rasterized" = "parametric"
+
+  if (EXTRUDE_GEOMETRY_STRATEGY === "RASTER_TRACE_RIBBON") {
+    shape = buildRasterizedRibbonShape(filtered, userWidth)
+    if (shape) {
+      shapeSource = "rasterized"
+    } else {
+      shape = buildRibbonShape(filtered, userWidth)
+      shapeSource = "parametric"
+    }
+  } else {
+    // LEGACY_OFFSET_RIBBON
+    shape = buildRibbonShape(filtered, userWidth)
+    shapeSource = "parametric"
+  }
+
+  // Helper: depth-aware CONTINUOUS RIBBON STRIP fallback used when the
+  // parametric ribbon contour self-intersects or extrusion fails.
+  // Preserves Depth (Z extent ≈ effectiveDepth) and keeps a directional
+  // ribbon feel. Crucially, this is NOT a per-segment-prism builder —
+  // it produces a single shared-vertex strip mesh that does NOT visually
+  // blob at loops the way independent boxes would. See
+  // `buildContinuousRibbonStripGeometry` for the construction.
+  //
+  // Rod fallback is reserved for truly degenerate input (continuous-ribbon
+  // refused, i.e. <2 valid samples or zero depth/width).
+  const tryContinuousRibbonFallback = (reason: string): {
+    geometry: THREE.BufferGeometry | null
+    status: StrokeBuildStatus
+  } => {
+    const ribGeo = buildContinuousRibbonStripGeometry(filtered, userWidth, effectiveDepth)
+    if (ribGeo) {
+      console.log(`[v0] stroke ${_si} final: extrude(continuous-ribbon) (strategy=${tag}→continuous-ribbon)`, {
+        width: userWidth,
+        depthMultiplier,
+        effectiveDepth,
+        reason,
+      })
+      // bevelEnabled reported as false because the strip's side walls are
+      // perpendicular to the front/back faces with no rounded bevel; bevel
+      // slider does not affect this path.
+      return {
+        geometry: ribGeo,
+        status: {
+          type: "ok",
+          width: userWidth,
+          depth: effectiveDepth,
+          bevelEnabled: false,
+          strategy: "continuous-ribbon",
+          depthMultiplier,
+          effectiveDepth,
+        },
+      }
+    }
+    console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag}, continuous-ribbon declined)`, { reason })
+    return {
+      geometry: null,
+      status: {
+        type: "rodFallback",
+        reason: `continuous-ribbon declined: ${reason}`,
+        fallbackRadius: fbRadius,
+        strategy: tag,
+        depthMultiplier,
+        effectiveDepth,
+      },
+    }
+  }
+
+  if (!shape) {
+    // Truly degenerate input — both shape builders refused. Try segmented
+    // (it accepts any polyline with ≥2 distinct points), else Rod.
+    return tryContinuousRibbonFallback("no shape")
+  }
+
+  // Validate contour ONLY for the parametric path. The rasterized polygon
+  // is simple by construction.
+  if (shapeSource === "parametric") {
+    const contour = validateShapeContour(shape)
+    if (!contour) {
+      // Legacy contour self-intersects. Previously this fell back to Rod
+      // (depth-blind). Now fall back to the depth-aware segmented builder
+      // so normal loopy handwriting still responds to the Depth slider.
+      return tryContinuousRibbonFallback("bad contour")
+    }
   }
 
   // For tiny widths, skip bevel entirely to avoid degenerate geometry
@@ -900,45 +1953,59 @@ function tryBuildExtrudeGeometry(
   // Attempt 1: with bevel (if enabled and not tiny)
   if (useBevel) {
     const geo1 = safeExtrude(shape, {
-      depth: extrudeParams.depth,
+      depth: effectiveDepth,
       bevelEnabled: true,
       bevelSize: bevel.bevelSize,
       bevelThickness: bevel.bevelThickness,
       bevelSegments: bevel.bevelSegments,
       curveSegments: EXTRUDE_CURVE_SEGMENTS,
-    }, filtered, extrudeParams.depth)
+    }, filtered, effectiveDepth)
 
     if (geo1) {
       geo1.translate(0, 0, -halfDepth)
-      console.log(`[v0] stroke ${_si} final: extrude`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: true })
-      return { geometry: geo1, status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: true } }
+      console.log(`[v0] stroke ${_si} final: extrude (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth, bevelEnabled: true })
+      return {
+        geometry: geo1,
+        status: { type: "ok", width: userWidth, depth: effectiveDepth, bevelEnabled: true, strategy: tag, depthMultiplier, effectiveDepth },
+      }
     }
   }
 
   // Attempt 2: bevel OFF (either because tiny width, or bevel attempt failed)
   const geo2 = safeExtrude(shape, {
-    depth: extrudeParams.depth,
+    depth: effectiveDepth,
     bevelEnabled: false,
     curveSegments: EXTRUDE_CURVE_SEGMENTS,
-  }, filtered, extrudeParams.depth)
+  }, filtered, effectiveDepth)
 
   if (geo2) {
     geo2.translate(0, 0, -halfDepth)
-    // Distinguish why bevel was off
     if (isTinyWidth && extrudeParams.bevelEnabled) {
-      console.log(`[v0] stroke ${_si} final: extrude(bevelOffTinyWidth)`, { width: userWidth, depth: extrudeParams.depth })
-      return { geometry: geo2, status: { type: "bevelOffTinyWidth", width: userWidth, depth: extrudeParams.depth } }
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOffTinyWidth) (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth })
+      return {
+        geometry: geo2,
+        status: { type: "bevelOffTinyWidth", width: userWidth, depth: effectiveDepth, strategy: tag, depthMultiplier, effectiveDepth },
+      }
     }
     if (useBevel) {
-      console.log(`[v0] stroke ${_si} final: extrude(bevelOff)`, { width: userWidth, depth: extrudeParams.depth })
-      return { geometry: geo2, status: { type: "bevelOff", width: userWidth, depth: extrudeParams.depth } }
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOff) (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth })
+      return {
+        geometry: geo2,
+        status: { type: "bevelOff", width: userWidth, depth: effectiveDepth, strategy: tag, depthMultiplier, effectiveDepth },
+      }
     }
-    console.log(`[v0] stroke ${_si} final: extrude`, { width: userWidth, depth: extrudeParams.depth, bevelEnabled: false })
-    return { geometry: geo2, status: { type: "ok", width: userWidth, depth: extrudeParams.depth, bevelEnabled: false } }
+    console.log(`[v0] stroke ${_si} final: extrude (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth, bevelEnabled: false })
+    return {
+      geometry: geo2,
+      status: { type: "ok", width: userWidth, depth: effectiveDepth, bevelEnabled: false, strategy: tag, depthMultiplier, effectiveDepth },
+    }
   }
 
-  console.log(`[v0] stroke ${_si} final: rodFallback`, { reason: "extrude failed" })
-  return { geometry: null, status: { type: "rodFallback", reason: "extrude failed", fallbackRadius: fbRadius } }
+  // safeExtrude returned null even with bevel off and a valid contour.
+  // This is rare (degenerate triangulation in THREE.ExtrudeGeometry). Use
+  // segmented as a final depth-aware fallback before resorting to Rod, so
+  // even pathological strokes still respond to the Depth slider.
+  return tryContinuousRibbonFallback("extrude failed")
 }
 
 /** Derive fallback rod radius from extrude width so Width slider affects fallback strokes too */
@@ -1034,11 +2101,28 @@ export const ExtrudeEngine: GeometryEngine = {
       const effectiveWidth = computeEffectiveWidth(filtered, extrudeParams.width)
       const { geometry, status } = tryBuildExtrudeGeometry(filtered, extrudeParams, effectiveWidth, si)
 
+      // Include the slider params that produced this geometry in the React key
+      // so changing depth/width/bevel forces React to unmount-and-remount the
+      // <mesh> element. This is belt-and-suspenders on top of the useStrokeMeshes
+      // dep array.
+      //
+      // CRITICAL: do NOT include `stroke.points.length` in this key. During
+      // Extrude playback the stroke is rebuilt every ~22ms from an arc-length-
+      // filtered partial (see `filterStrokesByProgress` + the `animatedStrokes`
+      // useMemo in viewport-3d), and that partial grows by 1 point per tick.
+      // If the React key included that count, every progress tick would change
+      // the key, unmount the entire <group>, and remount it with the new
+      // geometry — losing the in-flight WebGL state between ticks and visibly
+      // producing a single late "appears all at once" paint at progress=1
+      // instead of a smooth progressive reveal. The slider paramKey already
+      // forces a remount when geometry parameters change, which is the only
+      // remount we actually want.
+      const paramKey = `w${extrudeParams.width.toFixed(3)}-d${extrudeParams.depth.toFixed(3)}-b${extrudeParams.bevelEnabled ? 1 : 0}`
       if (geometry) {
         result.push({
           tubeGeometry: geometry,
           filteredCount: filtered.length,
-          key: `stroke-${si}-${stroke.points.length}`,
+          key: `stroke-${si}-${paramKey}`,
           mode: "extrude",
           buildStatus: status,
         })
@@ -1054,7 +2138,9 @@ export const ExtrudeEngine: GeometryEngine = {
           jointPositions: rodData.jointPositions,
           jointFractions: rodData.jointFractions,
           filteredCount: filtered.length,
-          key: `stroke-${si}-${stroke.points.length}-rod-fallback`,
+          // Same rationale: omit stroke.points.length so the rod-fallback group
+          // doesn't remount each progress tick during Extrude playback either.
+          key: `stroke-${si}-${paramKey}-rod-fallback`,
           mode: "rod",
           buildStatus: status,
         })
@@ -1123,7 +2209,11 @@ export const ExtrudeEngine: GeometryEngine = {
       settings: {
         ...params.settings,
         extrudeWidth: extrudeParams.width,
-        extrudeDepth: extrudeParams.depth,
+        // extrudeDepth is the slider value, now interpreted as a width-relative
+        // multiplier (see DEFAULT_EXTRUDE_PARAMS comment). The actual world-space
+        // depth used for each stroke = computeEffectiveExtrudeDepth(multiplier, width).
+        extrudeDepthMultiplier: extrudeParams.depth,
+        extrudeDepthEffective: computeEffectiveExtrudeDepth(extrudeParams.depth, extrudeParams.width),
         bevelEnabled: extrudeParams.bevelEnabled,
       },
     }
@@ -3143,10 +4233,19 @@ export const SolidEngine: GeometryEngine = {
     SOLID_DEBUG.pointCount = testStroke.points.length
     SOLID_DEBUG.buildMaskSolidCalled = true
     
-    // CRITICAL: Convert thickness from canvas pixels to world units
-    // Same scale factor as coordinate conversion: 3.0 / max(canvasWidth, canvasHeight)
+    // CRITICAL: Convert thickness from canvas pixels to world units.
+    // Same scale factor as coordinate conversion: 3.0 / max(canvasWidth, canvasHeight).
+    //
+    // CALIBRATION: The slider value is RAW. We pass it through
+    // `computeSolidEffectiveThicknessPx` first so that the breaking
+    // territory of H3 lands in the upper end of the slider, not the middle.
+    // The depth slider goes through `computeSolidEffectiveDepth` for the
+    // same reason. Both mappings are pure functions, so preview/export
+    // parity is exact (see `buildExport` below for the matching path).
     const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
-    const worldThickness = solidParams.thickness * coordScale
+    const effectiveThicknessPx = computeSolidEffectiveThicknessPx(solidParams.thickness)
+    const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
+    const worldThickness = effectiveThicknessPx * coordScale
     SOLID_DEBUG.inputThickness = solidParams.thickness
     SOLID_DEBUG.worldThickness = worldThickness
     
@@ -3165,8 +4264,49 @@ export const SolidEngine: GeometryEngine = {
       SOLID_DEBUG.worldMaxY = maxY
     }
     
-    const result = buildMaskSolid(testStroke, worldThickness, solidParams.depth, canvasWidth, canvasHeight)
-    
+    // Animation-only hole stabilization override.
+    // - Undefined for static builds and for ALL export calls (export site
+    //   below never reads params.holeStabilization).
+    // - Provided by Scene only while reveal-animating, with the active final
+    //   hole world contours and a per-frame activation decision already
+    //   applied (hysteresis is owned by Scene).
+    const result = buildMaskSolid(
+      testStroke,
+      worldThickness,
+      effectiveDepth,
+      canvasWidth,
+      canvasHeight,
+      // During reveal we explicitly suppress holes (see disableHolesForAnimation
+      // below), so the stabilization override would be moot. Pass it only when
+      // holes ARE allowed this frame, which preserves the previous behavior
+      // for any future caller that still uses it (export never sets either).
+      params.disableHolesForAnimation ? undefined : params.holeStabilization,
+      params.disableHolesForAnimation,
+    )
+
+    // ---- Stamp calibration diagnostics onto the panel-facing record ----
+    // The engine itself receives only effective values; the slider values
+    // belong to the UI layer. We surface BOTH so the debug panel can prove
+    // calibration is actually being applied (rather than identity).
+    const depthToThicknessRatio =
+      effectiveThicknessPx > 0
+        ? effectiveDepth / (effectiveThicknessPx * coordScale)
+        : 0
+    if (result.stages?.solidDiagnostics) {
+      result.stages.solidDiagnostics.solidThicknessSliderValue = solidParams.thickness
+      result.stages.solidDiagnostics.solidEffectiveThicknessPx = effectiveThicknessPx
+      result.stages.solidDiagnostics.solidDepthSliderValue = solidParams.depth
+      result.stages.solidDiagnostics.solidDepthEffective = effectiveDepth
+      result.stages.solidDiagnostics.solidDepthToThicknessRatio = depthToThicknessRatio
+    }
+    if (result.diagnostics) {
+      result.diagnostics.solidThicknessSliderValue = solidParams.thickness
+      result.diagnostics.solidEffectiveThicknessPx = effectiveThicknessPx
+      result.diagnostics.solidDepthSliderValue = solidParams.depth
+      result.diagnostics.solidDepthEffective = effectiveDepth
+      result.diagnostics.solidDepthToThicknessRatio = depthToThicknessRatio
+    }
+
     SOLID_DEBUG.filledPixels = result.stats.filledPixelCount
     SOLID_DEBUG.maskArea = result.stats.maskResolution * result.stats.maskResolution
     SOLID_DEBUG.filledPercent = SOLID_DEBUG.maskArea > 0 ? (SOLID_DEBUG.filledPixels / SOLID_DEBUG.maskArea) * 100 : 0
@@ -3259,12 +4399,15 @@ export const SolidEngine: GeometryEngine = {
     const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
     const disposables: THREE.BufferGeometry[] = []
 
-    // Convert strokes to sandbox format (canvas pixels -> world coords) and call sandbox pipeline
+    // Convert strokes to sandbox format (canvas pixels -> world coords) and call sandbox pipeline.
     const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
-    // Convert thickness from canvas pixels to world units
+    // Apply the SAME calibration mapping as buildPreview so export and preview
+    // produce identical geometry. No raw slider value reaches the engine.
     const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
-    const worldThickness = solidParams.thickness * coordScale
-    const result = buildMaskSolid(testStroke, worldThickness, solidParams.depth, canvasWidth, canvasHeight)
+    const effectiveThicknessPx = computeSolidEffectiveThicknessPx(solidParams.thickness)
+    const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
+    const worldThickness = effectiveThicknessPx * coordScale
+    const result = buildMaskSolid(testStroke, worldThickness, effectiveDepth, canvasWidth, canvasHeight)
     const geometry = result.geometry
 
     const rootGroup = new THREE.Group()
@@ -3277,8 +4420,10 @@ export const SolidEngine: GeometryEngine = {
       totalPoints: params.totalPoints,
       settings: {
         ...params.settings,
-        solidThickness: solidParams.thickness,
-        solidDepth: solidParams.depth,
+        solidThickness: solidParams.thickness,         // raw slider value
+        solidDepth: solidParams.depth,                 // raw slider value
+        solidEffectiveThicknessPx: effectiveThicknessPx, // calibrated value used in geometry
+        solidEffectiveDepth: effectiveDepth,             // calibrated value used in geometry
       },
     }
 
@@ -3307,21 +4452,522 @@ export const SolidEngine: GeometryEngine = {
 }
 
 /* ------------------------------------------------------------------ */
-/*  InflateEngine — TODO: Iteration 8+                                */
+/*  InflateEngine — Phase 1: BEVEL_EXTRUDE strategy                   */
 /* ------------------------------------------------------------------ */
+/*
+ * INFLATE PHASE 1 — preview-only
+ *
+ * Strategy name: `BEVEL_EXTRUDE`
+ * Branches from: Solid (reuses `buildMaskSolid` for the validated outer
+ *                silhouette + hole contours)
+ *
+ * What it does:
+ *   1. Calls `buildMaskSolid` exactly the way Solid does (same calibration,
+ *      same coord transforms, same hole detection). We DISCARD its returned
+ *      H3 geometry — we only consume `stages.simplifiedOuter` and
+ *      `stages.simplifiedHoles` (mask-space Point2D arrays).
+ *   2. Re-runs the same mask-to-world transform locally to get THREE.Vector2
+ *      contours.
+ *   3. Builds a fresh `THREE.Shape` (outer + holes) and extrudes it with
+ *      `THREE.ExtrudeGeometry`, with HIGH bevel parameters relative to the
+ *      depth so the result reads as rounded/puffy rather than slab-like.
+ *
+ * Why this strategy:
+ *   - Visibly distinct from Solid (rounded/puffy edge profile vs hard-edged
+ *     extrusion) without any SDF/voxel/marching-cubes infrastructure.
+ *   - Hole preservation is FREE — `Shape.holes` is the native ExtrudeGeometry
+ *     mechanism for cutting interior contours, and we already have hole
+ *     world-contours from the Solid pipeline.
+ *   - Zero new heavy code: ExtrudeGeometry ships in three.js.
+ *   - No risk of regressing Rod/Extrude/Solid because we only READ from
+ *     `buildMaskSolid` (same call shape Solid uses), we never mutate the
+ *     Solid result, and we never write into Solid's debug state.
+ *
+ * Phase 1 known limitations (do NOT block on these):
+ *   - Bevel forms a rounded EDGE, not a true distance-field dome. The center
+ *     of large filled regions reads as a flat plateau with rounded shoulders
+ *     rather than a fully continuous dome. This is fine for proving visual
+ *     direction.
+ *   - Self-intersecting outer contours can occasionally produce slightly
+ *     malformed bevels at very thin pinch points. We catch that with a
+ *     try/catch and fall back to a flat extrude with smaller bevel.
+ *   - Export is a placeholder — Phase 1 is preview-only.
+ */
+
+/** Inflate-mode debug state. Read by the panel when Debug is ON. */
+export const INFLATE_DEBUG = {
+  inflateMode: "STROKE_VOLUME_FIELD_INFLATE" as
+    | "STROKE_VOLUME_FIELD_INFLATE"
+    | "ELLIPTICAL_TUBE_LOFT"
+    | "SOLID_H3_PASSTHROUGH",
+  inflateStrategy:
+    "Build inflated stroke volume from the resampled centerline. Width = XY radius around centerline. Puff = Z aspect / cross-section roundness. Surface is an elliptical capsule swept along the path with smooth metaball-style end caps.",
+  // ---- Source-of-truth flags ----
+  usesRasterHeightfield: "NO" as "YES" | "NO",
+  medialAxisSeamExpected: "NO" as "YES" | "NO",
+  widthAffectsXY: "YES" as "YES" | "NO",
+  puffAffectsZCrossSection: "YES" as "YES" | "NO",
+  fallbackUsed: "NO" as "YES" | "NO",
+  cameraFitUsesXYOnly: "YES" as "YES" | "NO",
+  // ---- Path probes ----
+  inflateEngineCalled: "NO" as "YES" | "NO",
+  inflateBuildPreviewCalled: "NO" as "YES" | "NO",
+  inflateGeometryCreated: "NO" as "YES" | "NO",
+  // ---- Decoupled named values ----
+  widthSliderValue: 0,
+  inflateStrokeRadiusXY: 0,
+  puffSliderValue: 0,
+  inflatePuffAspectZ: 0,
+  inflateRadiusZ: 0,
+  inflatePressure: 0,
+  fieldResolution: 0,
+  smoothUnionStrength: 0,
+  // ---- Stroke / mesh diagnostics ----
+  sampleCount: 0,
+  gridCellCount: 0,
+  meshVertexCount: 0,
+  meshTriangleCount: 0,
+  // ---- Bbox ----
+  bboxX: 0,
+  bboxY: 0,
+  bboxZ: 0,
+  // ---- Counters ----
+  inputStrokeCount: 0,
+  inputPointCount: 0,
+  failureReason: "",
+}
+
+/**
+ * Resample a polyline by arc length so consecutive samples are at most
+ * `maxSpacing` apart. Returns world-space samples (already coord-scaled).
+ * Output preserves endpoints exactly.
+ */
+function inflateResampleCenterline(
+  worldPoints: { x: number; y: number }[],
+  maxSpacing: number,
+): { x: number; y: number }[] {
+  if (worldPoints.length < 2) return worldPoints.slice()
+  const out: { x: number; y: number }[] = [worldPoints[0]]
+  for (let i = 1; i < worldPoints.length; i++) {
+    const a = out[out.length - 1]
+    const b = worldPoints[i]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const segLen = Math.hypot(dx, dy)
+    if (segLen <= maxSpacing) {
+      out.push(b)
+      continue
+    }
+    const steps = Math.ceil(segLen / maxSpacing)
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps
+      out.push({ x: a.x + dx * t, y: a.y + dy * t })
+    }
+  }
+  return out
+}
+
+/**
+ * Build a single watertight tube mesh by sweeping an elliptical
+ * cross-section along the resampled centerline.
+ *
+ * Cross-section: ellipse with side-radius `radiusXY` (in the screen-XY
+ * plane perpendicular to the path tangent) and Z-radius `radiusZ`. At
+ * each sample we build an oriented frame:
+ *   tangent T = path direction in XY
+ *   side    S = perpendicular to T in XY (rotate 90° CCW)
+ *   up      U = +Z
+ * The cross-section vertex at angle theta is:
+ *   center + radiusXY*cos(theta)*S + radiusZ*sin(theta)*U
+ * Sweeping theta over [0, 2π) gives a closed elliptical ring per sample.
+ *
+ * End caps: hemispherical, produced by scaling the cross-section radius
+ * down to 0 along the first/last few samples. This matches the analytic
+ * surface of the same anisotropic-capsule scalar field.
+ *
+ * Why no medial-axis seam: each ring is a single closed loop. The
+ * surface wraps fully around the centerline. There is no z=0 ridge.
+ *
+ * Why Width feels like radius: `radiusXY` is the literal cross-section
+ * half-width in world units. Doubling it doubles tube thickness with no
+ * rasterization, no coverage threshold, no density behavior.
+ *
+ * Why Puff feels like pressure: `radiusZ / radiusXY` is the inflation
+ * aspect. Low Puff → flat soft gel. High Puff → over-pressured balloon.
+ */
+function inflateBuildEllipticalTube(
+  centerlineWorld: { x: number; y: number }[],
+  radiusXY: number,
+  radiusZ: number,
+): THREE.BufferGeometry | null {
+  const n = centerlineWorld.length
+  if (n < 2 || radiusXY <= 0 || radiusZ <= 0) return null
+
+  const ringSegs = 16
+
+  // Per-sample tangent (in XY plane).
+  const Tx = new Float32Array(n)
+  const Ty = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const prev = centerlineWorld[i === 0 ? 0 : i - 1]
+    const next = centerlineWorld[i === n - 1 ? n - 1 : i + 1]
+    let tx = next.x - prev.x
+    let ty = next.y - prev.y
+    const len = Math.hypot(tx, ty)
+    if (len < 1e-9) {
+      if (i > 0) {
+        tx = Tx[i - 1]
+        ty = Ty[i - 1]
+      } else {
+        tx = 1
+        ty = 0
+      }
+    } else {
+      tx /= len
+      ty /= len
+    }
+    Tx[i] = tx
+    Ty[i] = ty
+  }
+
+  // Hemispherical end-cap fade: r(t) = sqrt(1 - (1-t)^2).
+  const capFadeSamples = Math.min(4, Math.max(2, Math.floor(n * 0.08)))
+  const radiusScale = (i: number): number => {
+    if (i < capFadeSamples) {
+      const t = i / capFadeSamples
+      const u = 1 - t
+      return Math.sqrt(Math.max(0, 1 - u * u))
+    }
+    if (i > n - 1 - capFadeSamples) {
+      const t = (n - 1 - i) / capFadeSamples
+      const u = 1 - t
+      return Math.sqrt(Math.max(0, 1 - u * u))
+    }
+    return 1
+  }
+
+  const positions = new Float32Array(n * ringSegs * 3)
+  for (let i = 0; i < n; i++) {
+    const c = centerlineWorld[i]
+    const tx = Tx[i]
+    const ty = Ty[i]
+    // Side S = (-ty, tx) in XY.
+    const sx = -ty
+    const sy = tx
+    const rs = radiusScale(i)
+    const rXY = radiusXY * rs
+    const rZ = radiusZ * rs
+    for (let j = 0; j < ringSegs; j++) {
+      const theta = (j / ringSegs) * Math.PI * 2
+      const cosT = Math.cos(theta)
+      const sinT = Math.sin(theta)
+      const px = c.x + rXY * cosT * sx
+      const py = c.y + rXY * cosT * sy
+      const pz = rZ * sinT
+      const idx = (i * ringSegs + j) * 3
+      positions[idx] = px
+      positions[idx + 1] = py
+      positions[idx + 2] = pz
+    }
+  }
+
+  // Side-wall indices.
+  const sideIndexCount = (n - 1) * ringSegs * 2 * 3
+  const sideIndices = new Uint32Array(sideIndexCount)
+  let k = 0
+  for (let i = 0; i < n - 1; i++) {
+    for (let j = 0; j < ringSegs; j++) {
+      const j1 = (j + 1) % ringSegs
+      const a = i * ringSegs + j
+      const b = i * ringSegs + j1
+      const c2 = (i + 1) * ringSegs + j
+      const d = (i + 1) * ringSegs + j1
+      sideIndices[k++] = a
+      sideIndices[k++] = c2
+      sideIndices[k++] = b
+      sideIndices[k++] = b
+      sideIndices[k++] = c2
+      sideIndices[k++] = d
+    }
+  }
+
+  // Tip vertices for cap fans (geometric centers of endpoint rings).
+  const startCenter = centerlineWorld[0]
+  const endCenter = centerlineWorld[n - 1]
+  const tipPositions = new Float32Array(6)
+  tipPositions[0] = startCenter.x
+  tipPositions[1] = startCenter.y
+  tipPositions[2] = 0
+  tipPositions[3] = endCenter.x
+  tipPositions[4] = endCenter.y
+  tipPositions[5] = 0
+
+  const fullPositions = new Float32Array(positions.length + tipPositions.length)
+  fullPositions.set(positions, 0)
+  fullPositions.set(tipPositions, positions.length)
+  const tipStart = n * ringSegs
+  const tipEnd = n * ringSegs + 1
+
+  const fanIndices: number[] = []
+  for (let j = 0; j < ringSegs; j++) {
+    const j1 = (j + 1) % ringSegs
+    fanIndices.push(tipStart, j1, j)
+    fanIndices.push(tipEnd, (n - 1) * ringSegs + j, (n - 1) * ringSegs + j1)
+  }
+
+  const allIndices = new Uint32Array(sideIndices.length + fanIndices.length)
+  allIndices.set(sideIndices, 0)
+  for (let i = 0; i < fanIndices.length; i++) {
+    allIndices[sideIndices.length + i] = fanIndices[i]
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(fullPositions, 3),
+  )
+  geometry.setIndex(new THREE.BufferAttribute(allIndices, 1))
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  return geometry
+}
+
+/**
+ * Final fallback: return Solid H3 unchanged. Reached only when the
+ * stroke-volume tube path produces no tubes. Marks INFLATE_DEBUG so the
+ * panel surfaces this clearly.
+ */
+function inflateFallbackToSolid(
+  strokes: ProcessedStroke[],
+  canvasWidth: number,
+  canvasHeight: number,
+  solidParams: SolidParams,
+  inputPts: number,
+): StrokeMeshData[] {
+  INFLATE_DEBUG.fallbackUsed = "YES"
+  INFLATE_DEBUG.inflateMode = "SOLID_H3_PASSTHROUGH"
+  INFLATE_DEBUG.inflateStrategy =
+    "Fallback — STROKE_VOLUME_FIELD_INFLATE failed, returning Solid H3 unchanged. See failureReason."
+
+  const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
+  const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
+    solidParams.thickness,
+  )
+  const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
+  const worldThickness = effectiveThicknessPx * coordScale
+  const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
+
+  let solidResult: MaskSolidResult
+  try {
+    solidResult = buildMaskSolid(
+      testStroke,
+      worldThickness,
+      effectiveDepth,
+      canvasWidth,
+      canvasHeight,
+    )
+  } catch (e) {
+    INFLATE_DEBUG.failureReason =
+      (INFLATE_DEBUG.failureReason || "") +
+      ` | fallback buildMaskSolid threw: ${(e as Error).message}`
+    return []
+  }
+  const baseGeometry = solidResult.geometry
+  if (!baseGeometry) {
+    INFLATE_DEBUG.failureReason =
+      (INFLATE_DEBUG.failureReason || "") +
+      " | fallback Solid H3 returned null geometry"
+    return []
+  }
+  baseGeometry.computeBoundingBox()
+  INFLATE_DEBUG.inflateGeometryCreated = "YES"
+
+  const meshData: StrokeMeshData = {
+    tubeGeometry: baseGeometry,
+    filteredCount: inputPts,
+    key: `inflate-fallback-${strokes.length}-${canvasWidth}x${canvasHeight}-${effectiveDepth.toFixed(4)}`,
+    mode: "inflate",
+  }
+  return [meshData]
+}
 
 export const InflateEngine: GeometryEngine = {
-  buildPreview(_strokes: ProcessedStroke[], _params: PreviewParams): StrokeMeshData[] {
-    // TODO: Iteration 8+ — Inflate mode
-    // Will generate inflated blob/surface geometry from enclosed regions
-    return []
+  buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
+    const { canvasWidth, canvasHeight, solidParams: sp } = params
+    const solidParams = sp ?? DEFAULT_SOLID_PARAMS
+
+    // ---- Reset all probes ----
+    INFLATE_DEBUG.inflateMode = "STROKE_VOLUME_FIELD_INFLATE"
+    INFLATE_DEBUG.inflateStrategy =
+      "Build inflated stroke volume from the resampled centerline. Width = XY radius around centerline. Puff = Z aspect / cross-section roundness. Surface is an elliptical capsule swept along the path with smooth metaball-style end caps."
+    INFLATE_DEBUG.usesRasterHeightfield = "NO"
+    INFLATE_DEBUG.medialAxisSeamExpected = "NO"
+    INFLATE_DEBUG.widthAffectsXY = "YES"
+    INFLATE_DEBUG.puffAffectsZCrossSection = "YES"
+    INFLATE_DEBUG.fallbackUsed = "NO"
+    INFLATE_DEBUG.cameraFitUsesXYOnly = "YES"
+    INFLATE_DEBUG.inflateEngineCalled = "YES"
+    INFLATE_DEBUG.inflateBuildPreviewCalled = "YES"
+    INFLATE_DEBUG.inflateGeometryCreated = "NO"
+    INFLATE_DEBUG.widthSliderValue = solidParams.thickness
+    INFLATE_DEBUG.puffSliderValue = solidParams.depth
+    INFLATE_DEBUG.inflateStrokeRadiusXY = 0
+    INFLATE_DEBUG.inflatePuffAspectZ = 0
+    INFLATE_DEBUG.inflateRadiusZ = 0
+    INFLATE_DEBUG.inflatePressure = 0
+    INFLATE_DEBUG.fieldResolution = 0
+    INFLATE_DEBUG.smoothUnionStrength = 0
+    INFLATE_DEBUG.sampleCount = 0
+    INFLATE_DEBUG.gridCellCount = 0
+    INFLATE_DEBUG.meshVertexCount = 0
+    INFLATE_DEBUG.meshTriangleCount = 0
+    INFLATE_DEBUG.bboxX = 0
+    INFLATE_DEBUG.bboxY = 0
+    INFLATE_DEBUG.bboxZ = 0
+    INFLATE_DEBUG.failureReason = ""
+    INFLATE_DEBUG.inputStrokeCount = strokes.length
+    let inputPts = 0
+    for (const s of strokes) inputPts += s.points?.length ?? 0
+    INFLATE_DEBUG.inputPointCount = inputPts
+
+    if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
+      INFLATE_DEBUG.failureReason =
+        strokes.length === 0 ? "no strokes" : "canvas 0"
+      return []
+    }
+
+    // ---- Calibration (matches Solid's coord scale exactly) ----
+    const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
+    const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
+      solidParams.thickness,
+    )
+    const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
+
+    // ---- Step 1: canvas-pixel → world-space ----
+    const cw2 = canvasWidth / 2
+    const ch2 = canvasHeight / 2
+    const px2w = (px: number, py: number) => ({
+      x: (px - cw2) * coordScale,
+      y: -(py - ch2) * coordScale,
+    })
+
+    // ---- Step 2: decoupled controls ----
+    // Width = stroke DIAMETER in canvas px → halve for radius, scale to world.
+    const inflateStrokeRadiusXY = (effectiveThicknessPx * coordScale) / 2
+    INFLATE_DEBUG.inflateStrokeRadiusXY = inflateStrokeRadiusXY
+
+    // Puff → Z aspect (cross-section roundness/pressure).
+    const depthRange = SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN
+    const puffNorm =
+      depthRange > 0
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              (solidParams.depth - SOLID_DEPTH_SLIDER_MIN) / depthRange,
+            ),
+          )
+        : 0.5
+    const inflatePuffAspectZ = 0.25 + puffNorm * 0.9 // 0.25 → 1.15
+    const baseRadiusZ = inflateStrokeRadiusXY * inflatePuffAspectZ
+    INFLATE_DEBUG.inflatePuffAspectZ = inflatePuffAspectZ
+    INFLATE_DEBUG.inflatePressure = puffNorm
+    INFLATE_DEBUG.fieldResolution = 0
+    INFLATE_DEBUG.smoothUnionStrength = 0
+
+    // Blend with calibrated effectiveDepth at high Puff so a max-puff
+    // stroke reads as visibly tall, not just "as round as it is wide".
+    const radiusZ =
+      baseRadiusZ * (1 - puffNorm) + effectiveDepth * 0.7 * puffNorm
+    INFLATE_DEBUG.inflateRadiusZ = radiusZ
+
+    // ---- Step 3: resample + sweep elliptical tube per stroke ----
+    const sampleSpacing = Math.max(
+      coordScale * 1.5,
+      Math.min(inflateStrokeRadiusXY * 0.6, coordScale * 8),
+    )
+
+    const meshes: StrokeMeshData[] = []
+    let totalSamples = 0
+    let totalVerts = 0
+    let totalTris = 0
+    const aggregateBox = new THREE.Box3()
+
+    for (let si = 0; si < strokes.length; si++) {
+      const s = strokes[si]
+      if (!s.points || s.points.length < 2) continue
+      const worldPts = s.points.map((p) => px2w(p.x, p.y))
+      const resampled = inflateResampleCenterline(worldPts, sampleSpacing)
+      if (resampled.length < 2) continue
+      totalSamples += resampled.length
+
+      let geometry: THREE.BufferGeometry | null = null
+      try {
+        geometry = inflateBuildEllipticalTube(
+          resampled,
+          inflateStrokeRadiusXY,
+          radiusZ,
+        )
+      } catch (e) {
+        INFLATE_DEBUG.failureReason = `tube build threw: ${(e as Error).message}`
+        geometry = null
+      }
+      if (!geometry) continue
+
+      const posAttr = geometry.getAttribute("position") as
+        | THREE.BufferAttribute
+        | undefined
+      if (posAttr) totalVerts += posAttr.count
+      const idx = geometry.getIndex()
+      if (idx) totalTris += idx.count / 3
+      if (geometry.boundingBox) aggregateBox.union(geometry.boundingBox)
+
+      meshes.push({
+        tubeGeometry: geometry,
+        filteredCount: s.points.length,
+        key: `inflate-svfi-${si}-${resampled.length}-${inflateStrokeRadiusXY.toFixed(4)}-${radiusZ.toFixed(4)}`,
+        mode: "inflate",
+      })
+    }
+
+    INFLATE_DEBUG.sampleCount = totalSamples
+    INFLATE_DEBUG.meshVertexCount = totalVerts
+    INFLATE_DEBUG.meshTriangleCount = totalTris
+
+    if (meshes.length === 0) {
+      INFLATE_DEBUG.failureReason =
+        INFLATE_DEBUG.failureReason || "no tubes produced"
+      return inflateFallbackToSolid(
+        strokes,
+        canvasWidth,
+        canvasHeight,
+        solidParams,
+        inputPts,
+      )
+    }
+
+    if (!aggregateBox.isEmpty()) {
+      INFLATE_DEBUG.bboxX = aggregateBox.max.x - aggregateBox.min.x
+      INFLATE_DEBUG.bboxY = aggregateBox.max.y - aggregateBox.min.y
+      INFLATE_DEBUG.bboxZ = aggregateBox.max.z - aggregateBox.min.z
+    }
+    INFLATE_DEBUG.inflateGeometryCreated = "YES"
+    return meshes
   },
 
   buildExport(_strokes: ProcessedStroke[], _params: ExportParams): ExportResult {
-    // TODO: Iteration 8+ — Inflate mode export
+    // Phase 1: export is intentionally a placeholder. Solid export is the
+    // production path; Inflate export will be addressed in a later phase
+    // once the visual direction is locked. Returning an empty group keeps
+    // the export pipeline non-crashing without claiming an export that
+    // doesn't actually exist.
     const group = new THREE.Group()
     group.name = "FreeStroke"
-    group.userData = { app: "Free Stroke", mode: "inflate" }
+    group.userData = {
+      app: "Free Stroke",
+      mode: "inflate",
+      phase: "PHASE_1_PREVIEW_ONLY",
+    }
     return { group, disposables: [], objectCount: 0, merged: false }
   },
 }

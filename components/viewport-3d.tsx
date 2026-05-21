@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useCallback, useMemo, useEffect, useState, Component, type ReactNode } from "react"
+import { useRef, useCallback, useMemo, useEffect, useLayoutEffect, useState, Component, type ReactNode } from "react"
 import { Canvas, useThree, useFrame } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
@@ -20,7 +20,9 @@ import {
   RADIAL_SEGMENTS,
   SPHERE_SEGMENTS,
   SOLID_DEBUG,
+  SOLID_ANIM_DEBUG,
   SOLID_STAGE_DEBUG,
+  extrudeWidthToSlider,
 } from "@/lib/geometry-engines"
 
 
@@ -42,19 +44,51 @@ function useStrokeMeshes(
   canvasHeight: number,
   mode: GeometryMode,
   extrudeParams?: ExtrudeParams,
-  solidParams?: SolidParams
+  solidParams?: SolidParams,
+  /**
+   * OPTIONAL Solid H3 animation hole stabilization (animation-only).
+   * Forwarded verbatim to `engine.buildPreview` for the Solid path. Static
+   * preview, Rod, Extrude, and Solid export do not read it.
+   *
+   * `holeStabilizationKey` is a cheap memo signature for the override so the
+   * useMemo doesn't have to compare deep contour arrays. Scene maintains it.
+   */
+  holeStabilization?: import("@/lib/solid-mask").SolidHoleStabilization,
+  holeStabilizationKey?: string,
+  /**
+   * OPTIONAL Solid animation-only no-holes reveal mode.
+   *
+   * When true, the Solid mesh is rebuilt as a stable filled silhouette
+   * extrusion with H2 disabled. Used by Scene during the active reveal
+   * (progress < 1) to eliminate mid-animation hole/counter topology
+   * switching. Cleared on the final frame so the mesh commits to the
+   * full static H3 geometry exactly once.
+   */
+  disableHolesForAnimation?: boolean,
 ): StrokeMeshData[] {
-  // Extract individual values to prevent object reference changes from triggering rebuilds
+  // Extract individual values to prevent object reference changes from triggering rebuilds.
+  // CRITICAL: every slider value the engine consumes must be listed here. If a value is
+  // omitted, moving its slider won't re-run the closure and preview will silently use
+  // a stale cached geometry (engine still receives the new value via the closed-over
+  // `extrudeParams` reference, but the memo never re-fires).
   const extrudeWidth = extrudeParams?.width
-  const extrudeBevel = extrudeParams?.bevel
+  const extrudeDepth = extrudeParams?.depth
+  const extrudeBevel = extrudeParams?.bevelEnabled
   const solidThickness = solidParams?.thickness
   const solidDepth = solidParams?.depth
   
   return useMemo(() => {
     const engine = getEngine(mode)
-    return engine.buildPreview(strokes, { canvasWidth, canvasHeight, extrudeParams, solidParams })
+    return engine.buildPreview(strokes, {
+      canvasWidth,
+      canvasHeight,
+      extrudeParams,
+      solidParams,
+      holeStabilization,
+      disableHolesForAnimation,
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeBevel, solidThickness, solidDepth])
+  }, [strokes, canvasWidth, canvasHeight, mode, extrudeWidth, extrudeDepth, extrudeBevel, solidThickness, solidDepth, holeStabilizationKey, disableHolesForAnimation])
 }
 
 /* ---- Shared geometries ---- */
@@ -320,8 +354,18 @@ function AnimatedStrokes({
 
       if (!mesh || !strokeMeshData) continue
 
-      // Extrude/Solid meshes are always fully visible (static, no animation)
-      if (strokeMeshData.mode === "extrude" || strokeMeshData.mode === "solid") {
+      // Solid AND Extrude both animate by REBUILDING geometry from
+      // progress-filtered strokes (see `animatedStrokes` useMemo +
+      // `SolidAnimationTick`). The mesh itself is always fully visible
+      // every frame; the partial reveal lives inside the geometry that
+      // `useStrokeMeshes` produces. Per-stroke visibility gating and
+      // per-segment drawRange are NEVER applied to these modes — they
+      // would either pop entire strokes (gating) or interleave cap and
+      // wall triangles incorrectly (drawRange on ExtrudeGeometry).
+      if (
+        strokeMeshData.mode === "solid" ||
+        strokeMeshData.mode === "extrude"
+      ) {
         mesh.visible = true
         continue
       }
@@ -557,31 +601,36 @@ function PlaybackController({
 /* ---- SolidAnimationTick: forces React re-render while playheadRef advances ----
  *
  * Why this exists:
- *   The Solid mesh is rebuilt from a `useMemo` that depends on a React state
- *   value (`solidAnimProgress`). The actual playback source-of-truth is
- *   `playheadRef.current`, which is a ref and does NOT trigger re-renders when
- *   mutated by `PlaybackController`. Without this tick, the Solid mesh never
- *   rebuilds during playback and appears static.
+ *   The Solid and Extrude meshes both rebuild from a `useMemo` that depends on
+ *   a React state value (`solidAnimProgress`). The actual playback source-of-
+ *   truth is `playheadRef.current`, which is a ref and does NOT trigger React
+ *   re-renders when mutated by `PlaybackController`. Without this tick, those
+ *   meshes never rebuild during playback and appear static.
+ *
+ *   The component name retains the `Solid` prefix because Solid was the first
+ *   consumer of this tick, but it now also drives the Extrude partial-stroke
+ *   rebuild path. Rod animation continues to be driven directly off
+ *   `playheadRef.current` inside `AnimatedStrokes` (drawRange), so this tick
+ *   has no effect on Rod and pays zero cost in Rod mode.
  *
  * Behavior:
  *   - Runs on every frame inside the Canvas (must be a child of <Canvas>).
- *   - Throttles updates lightly so Solid rebuilds at a smooth cadence without
- *     spamming raster/contour/extrude work every single frame:
- *       * minimum interval: ~24ms (~40 Hz) between state updates
- *       * minimum delta:    0.003 (0.3%) between state updates
- *     This yields up to ~330 reveal steps over a full playback, vs ~100 in the
- *     previous 80ms / 1% throttle that produced visibly chunky reveals.
+ *   - Throttles updates lightly so partial-rebuild modes don't spam raster
+ *     / contour / extrude work every single frame:
+ *       * minimum interval: ~22ms (~45 Hz) between state updates
+ *       * minimum delta:    1e-5 (just enough to skip exact-equal frames)
  *   - Always forces an update at the boundaries (progress 0 and progress 1)
  *     so the final frame matches the static preview exactly and replay starts
  *     from empty.
- *   - Active for Solid mode only; other modes early-out and pay zero cost.
+ *   - Active for partial-rebuild modes only (Solid, Extrude). Rod and any
+ *     other mode early-out and pay zero cost.
  */
 function SolidAnimationTick({
-  isSolid,
+  enabled,
   playheadRef,
   setSolidAnimProgress,
 }: {
-  isSolid: boolean
+  enabled: boolean
   playheadRef: React.MutableRefObject<number>
   setSolidAnimProgress: React.Dispatch<React.SetStateAction<number>>
 }) {
@@ -589,21 +638,15 @@ function SolidAnimationTick({
   const lastSyncTimeRef = useRef<number>(0)
 
   useFrame(() => {
-    if (!isSolid) return
+    if (!enabled) return
     const current = playheadRef.current
     const last = lastSyncedRef.current
     const now = performance.now()
     const delta = Math.abs(current - last)
 
-    // Always sync at boundaries so final frame == full static preview
-    // and replay-from-zero starts at empty geometry.
     const atBoundary = (current >= 1 && last < 1) || (current <= 0 && last > 0)
-
-    // Throttle: require both ~24ms AND 0.003 progress delta unless at a boundary.
-    // The combination caps update rate at ~40 Hz and gives ~330 max reveal steps,
-    // while preventing rebuild spam when many frames render between progress moves.
-    const timeOk = now - lastSyncTimeRef.current >= 24
-    const deltaOk = delta >= 0.003
+    const timeOk = now - lastSyncTimeRef.current >= 22
+    const deltaOk = delta > 1e-5
 
     if (atBoundary || (timeOk && deltaOk)) {
       lastSyncedRef.current = current
@@ -777,6 +820,7 @@ function Scene({
   masterControlsRef,
   meshStatusRef,
   solidStatusRef,
+  extrudeDebugRef,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
@@ -799,6 +843,27 @@ function Scene({
   masterControlsRef?: React.RefObject<OrbitControlsImpl | null>
   meshStatusRef?: React.MutableRefObject<StrokeBuildStatus[]>
   solidStatusRef?: React.MutableRefObject<SolidBuildStatus | null>
+  // Diagnostic-only ref; populated in extrude mode for the depth-trace panel.
+  extrudeDebugRef?: React.MutableRefObject<{
+    /** Raw depth-multiplier slider value (NOT a world-space depth). */
+    depthParam: number
+    buildCount: number
+    /** Max stroke geometry Z extent in the current frame (= effectiveDepth + bevel). */
+    bboxZ: number
+    activeEngine: GeometryMode
+    /** Normalized Width slider t in [0, 1]. */
+    widthSliderValue: number
+    widthSliderPercent: number
+    /** Effective half-width actually consumed by the engine (after mapping + clamping). */
+    effectiveWidthUsed: number
+    effectiveWidthPercent: number
+    /** Calibrated world-space depth actually used = multiplier × effectiveWidth clamped. */
+    effectiveDepthUsed: number
+    /** effectiveDepthUsed / effectiveWidthUsed — the visual proportion. */
+    depthToWidthRatio: number
+    strategy: string
+    buildStatus: string
+  } | null>
 }) {
   // ---- Solid draw-in animation state ----
   // playheadRef.current is the source of truth, but ref mutations don't
@@ -810,21 +875,474 @@ function Scene({
     playheadRef.current,
   )
 
-  // For Solid mode, filter strokes by current animation progress.
-  // For other modes, return strokes unchanged (Rod/Extrude animate via drawRange).
+  // -----------------------------------------------------------------
+  // Start/reset flash fix.
+  //
+  // Bug:
+  //   When the user clicks Play after a stroke is fully drawn, `handlePlayPause`
+  //   in the wrapper synchronously sets `playheadRef.current = 0` and flips
+  //   `playing -> true`. But `solidAnimProgress` is React state owned by
+  //   `Scene`; the SolidAnimationTick only syncs it on the NEXT animation
+  //   frame. Between the click commit and the next frame, React re-renders
+  //   with the new `playing` value but the OLD `solidAnimProgress = 1`,
+  //   producing one paint of the full mesh before the reveal starts. That's
+  //   the flash described in the screen recording.
+  //
+  // Fix:
+  //   Detect the playing transition `false -> true` and, if `playheadRef.current`
+  //   is well below the last animated state value, eagerly sync the state
+  //   to the playhead BEFORE the next paint. This is a layout effect so it
+  //   runs synchronously after commit and before the browser repaints.
+  //
+  //   The check is intentionally a delta threshold rather than `=== 0` so it
+  //   also handles "scrub-to-start, then press Play" and the Compare-mode
+  //   replay reset.
+  // -----------------------------------------------------------------
+  const prevPlayingRef = useRef(playing)
+  useLayoutEffect(() => {
+    const wasPlaying = prevPlayingRef.current
+    prevPlayingRef.current = playing
+    // Applies to both partial-rebuild modes. Rod animation does not use this
+    // state value, so Rod is unaffected. Other modes (none currently) are
+    // skipped to keep this fix narrowly scoped.
+    if (geometryMode !== "solid" && geometryMode !== "extrude") return
+    // Transition from paused to playing
+    if (!wasPlaying && playing) {
+      const head = playheadRef.current
+      const drop = solidAnimProgress - head
+      // If the playhead has been moved backwards (typical: full -> 0 on replay),
+      // sync state synchronously so the first frame of playback paints the
+      // empty/partial mesh, not the previously-full one.
+      if (drop > 0.01) {
+        setSolidAnimProgress(head)
+      }
+    }
+  }, [playing, geometryMode, solidAnimProgress, playheadRef])
+
+  // Filter strokes by current animation progress for partial-rebuild modes
+  // (Solid and Extrude). Rod returns strokes unchanged because Rod animates
+  // via per-segment drawRange inside `AnimatedStrokes` rather than rebuilding
+  // its geometry on every progress tick.
+  //
+  // The same `filterStrokesByProgress` helper is used for both modes — it is
+  // mode-agnostic (operates purely on `ProcessedStroke.points` arc length).
+  // For Extrude this means each ExtrudeGeometry is rebuilt from a shorter,
+  // arc-length-clipped copy of its source stroke every ~22ms, revealing the
+  // ribbon progressively along its path. No visibility gating is involved.
+  //
+  // ALSO writes animation diagnostics (rebuild count, point count, arc lengths,
+  // final-frame match) to SOLID_ANIM_DEBUG so the debug overlay can poll them.
+  const solidAnimRebuildCountRef = useRef(0)
   const animatedStrokes = useMemo(() => {
-    if (geometryMode !== "solid") return strokes
-    return filterStrokesByProgress(strokes, solidAnimProgress)
+    if (geometryMode !== "solid" && geometryMode !== "extrude") return strokes
+    const out = filterStrokesByProgress(strokes, solidAnimProgress)
+
+    // ---- Diagnostics ----
+    // Total arc length across the full strokes prop (denominator).
+    let totalLen = 0
+    for (const s of strokes) {
+      const pts = s.points
+      for (let i = 1; i < pts.length; i++) {
+        const dx = pts[i].x - pts[i - 1].x
+        const dy = pts[i].y - pts[i - 1].y
+        totalLen += Math.sqrt(dx * dx + dy * dy)
+      }
+    }
+    // Visible arc length in the filtered output (numerator).
+    let visLen = 0
+    let visPts = 0
+    for (const s of out) {
+      const pts = s.points
+      visPts += pts.length
+      for (let i = 1; i < pts.length; i++) {
+        const dx = pts[i].x - pts[i - 1].x
+        const dy = pts[i].y - pts[i - 1].y
+        visLen += Math.sqrt(dx * dx + dy * dy)
+      }
+    }
+    SOLID_ANIM_DEBUG.solidAnimationProgress = solidAnimProgress
+    SOLID_ANIM_DEBUG.solidAnimationRebuildCount = ++solidAnimRebuildCountRef.current
+    SOLID_ANIM_DEBUG.animatedStrokePointCount = visPts
+    SOLID_ANIM_DEBUG.animatedVisibleArcLength = visLen
+    SOLID_ANIM_DEBUG.animatedTotalArcLength = totalLen
+    // Constants — proves the reveal pipeline (not just the prop name).
+    SOLID_ANIM_DEBUG.solidAnimationUsesArcLength = "YES"
+    SOLID_ANIM_DEBUG.solidAnimationInterpolatedCutPoint = "YES"
+    // Final-frame match: at progress >= 1 the filter short-circuits and
+    // returns the original strokes reference, so the mesh built next is
+    // identical to the static H3 path. We mark YES; any lower progress -> NO.
+    SOLID_ANIM_DEBUG.finalFrameMatchesStatic = solidAnimProgress >= 1 ? "YES" : "NO"
+    return out
   }, [strokes, geometryMode, solidAnimProgress])
 
-  // Build meshes - for Solid mode, use animated strokes instead of full strokes
+  // Animation active flag tracked alongside `playing` so the debug overlay
+  // can distinguish "playback running" from "playback paused mid-reveal".
+  // The flag stays true for any partial-rebuild mode while playing.
+  useEffect(() => {
+    if (geometryMode !== "solid" && geometryMode !== "extrude") {
+      SOLID_ANIM_DEBUG.solidAnimationActive = false
+      return
+    }
+    SOLID_ANIM_DEBUG.solidAnimationActive = playing
+  }, [playing, geometryMode])
+
+  // Stamp the active animation strategy each render so the debug panel
+  // proves which path the build went through. "static" is reported when
+  // playback is not running OR progress is fully complete.
+  useEffect(() => {
+    if (!playing || solidAnimProgress >= 1) {
+      SOLID_ANIM_DEBUG.animationPath = "static"
+      return
+    }
+    if (geometryMode === "rod") {
+      SOLID_ANIM_DEBUG.animationPath = "drawRange"
+    } else if (geometryMode === "extrude") {
+      SOLID_ANIM_DEBUG.animationPath = "partialExtrudeRebuild"
+    } else if (geometryMode === "solid") {
+      // Sticky-final-hole-contour stabilization (current strategy).
+      SOLID_ANIM_DEBUG.animationPath = "partialSolidRebuildWithHoleStabilization"
+    } else if (geometryMode === "inflate") {
+      // Phase 1: Inflate animates by rebuilding the bevel-extrude mesh
+      // against the progressive stroke prefix — same shape as the Extrude
+      // animation. No sticky-hole logic; partial holes are accepted as
+      // detected each frame. This is a known Phase 1 simplification.
+      SOLID_ANIM_DEBUG.animationPath = "partialExtrudeRebuild"
+    } else {
+      SOLID_ANIM_DEBUG.animationPath = "static"
+    }
+  }, [geometryMode, playing, solidAnimProgress])
+
+  // -----------------------------------------------------------------
+  // Solid H3 ANIMATION_GATED hole stabilization — Scene-side state machine.
+  //
+  // Owns:
+  //   - `finalHoleRefRef`: snapshot of the final-pass hole world contours
+  //     and centroids, captured the moment playback starts. Source is
+  //     SOLID_DEBUG.lastStages.solidDiagnostics.stableHolesWorld, which the
+  //     most recent STATIC (pre-Play) build always populates. This means
+  //     the reference is built without any extra work — the static H3 mesh
+  //     the user was already looking at before they pressed Play IS the
+  //     reference.
+  //   - Per-final-hole activation streak counters (`hitStreak`, `missStreak`,
+  //     `active`). Updated AFTER each animated build by reading
+  //     SOLID_DEBUG.lastStages.solidDiagnostics.detectedPartialHoleCentroidsWorld
+  //     (the partial-frame H1/H2 detected centroids).
+  //   - `holeStabilizationKey` state: bumped on activation transitions so
+  //     useStrokeMeshes re-runs with the new active set.
+  //
+  // Behavior:
+  //   - threshold = 1 hit: as soon as partial detection sees a hole at
+  //     roughly the location of a final hole, override turns on for that
+  //     final hole.
+  //   - sticky: once activated, a final hole stays activated for the rest
+  //     of this playback session (no deactivation). The topological safety
+  //     filter inside buildMaskSolid (`centroid-inside-partial-outer`)
+  //     handles the "loop not yet enclosed" case automatically.
+  //   - All state resets to clean values on every false→true `playing`
+  //     transition, alongside the rebuild counter reset already in
+  //     handlePlayPause.
+  //
+  // Static H3 builds (playing=false, progress=1, exports) never see
+  // holeStabilization — they pass `undefined` and use partial detection.
+  // -----------------------------------------------------------------
+  type FinalHoleRef = {
+    holes: THREE.Vector2[][]
+    centroids: { x: number; y: number }[]
+    areasWorld: number[]
+    activationRadius: number[]
+  }
+  type HoleActivation = {
+    hitStreak: number
+    missStreak: number
+    active: boolean
+  }
+  const finalHoleRefRef = useRef<FinalHoleRef | null>(null)
+  const activationRef = useRef<HoleActivation[]>([])
+  const [holeStabilizationKey, setHoleStabilizationKey] = useState<string>("none")
+  const holeStabilizationRef = useRef<
+    import("@/lib/solid-mask").SolidHoleStabilization | undefined
+  >(undefined)
+  const lastSeenProgressRef = useRef<number>(playheadRef.current)
+
+  // Snapshot final hole reference on Play start.
+  // Runs at the same time the rebuild-count reset effect runs — false→true
+  // `playing` transition, BEFORE the first animated build (layout effect).
+  useLayoutEffect(() => {
+    const wasPlaying = prevPlayingRef.current
+    if (geometryMode !== "solid") return
+    if (!wasPlaying && playing) {
+      // Capture from the currently-displayed static H3's last build.
+      const stages = SOLID_DEBUG.lastStages as
+        | { solidDiagnostics?: { stableHolesWorld?: Array<Array<{ x: number; y: number }>> } }
+        | null
+      const snap = stages?.solidDiagnostics?.stableHolesWorld ?? []
+      if (snap.length > 0) {
+        const holes: THREE.Vector2[][] = snap.map((c) =>
+          c.map((p) => new THREE.Vector2(p.x, p.y)),
+        )
+        const centroids: { x: number; y: number }[] = []
+        const areasWorld: number[] = []
+        const activationRadius: number[] = []
+        for (const c of holes) {
+          let sx = 0, sy = 0
+          for (const p of c) { sx += p.x; sy += p.y }
+          const cx = sx / c.length
+          const cy = sy / c.length
+          // Signed-area magnitude in world units.
+          let area2 = 0
+          for (let i = 0; i < c.length; i++) {
+            const a = c[i]
+            const b = c[(i + 1) % c.length]
+            area2 += a.x * b.y - b.x * a.y
+          }
+          const area = Math.abs(area2) * 0.5
+          centroids.push({ x: cx, y: cy })
+          areasWorld.push(area)
+          // Tolerance: ~the hole's effective radius. Slightly generous so
+          // partial centroids that wobble around the hole still match.
+          activationRadius.push(Math.max(0.04, 0.7 * Math.sqrt(area / Math.PI)))
+        }
+        finalHoleRefRef.current = { holes, centroids, areasWorld, activationRadius }
+        activationRef.current = holes.map(() => ({
+          hitStreak: 0,
+          missStreak: 0,
+          active: false,
+        }))
+        SOLID_ANIM_DEBUG.finalHoleReferenceCount = holes.length
+        SOLID_ANIM_DEBUG.activatedFinalHoleCount = 0
+        SOLID_ANIM_DEBUG.perHoleActivationRadiusWorld = activationRadius
+        SOLID_ANIM_DEBUG.perHoleHitStreaks = activationRef.current.map(() => 0)
+        SOLID_ANIM_DEBUG.perHoleMissStreaks = activationRef.current.map(() => 0)
+      } else {
+        finalHoleRefRef.current = null
+        activationRef.current = []
+        SOLID_ANIM_DEBUG.finalHoleReferenceCount = 0
+        SOLID_ANIM_DEBUG.activatedFinalHoleCount = 0
+        SOLID_ANIM_DEBUG.perHoleActivationRadiusWorld = []
+        SOLID_ANIM_DEBUG.perHoleHitStreaks = []
+        SOLID_ANIM_DEBUG.perHoleMissStreaks = []
+      }
+      // Start the animation with an EMPTY-active override (mode is
+      // ANIMATION_GATED, activeFinalHolesWorld is []). Previously this
+      // was set to `undefined`, which meant buildMaskSolid took the
+      // unstabilized partial-detection path until the first hole
+      // activated — and the partial frames in between produced visible
+      // hole flicker (counter labels switching, holes blinking on/off,
+      // shape mid-stroke briefly punching a hole where the loop hadn't
+      // closed yet). With the empty override in place, the override
+      // block inside buildMaskSolid runs every frame and unconditionally
+      // REPLACES any partial-detection holes with the activated set
+      // (which is empty until a real hole genuinely activates). Net
+      // effect: zero holes from frame 0 through "no hole has activated
+      // yet", then once a hole activates it appears and sticks until
+      // playback ends. No flicker. Static H1/H2/H3 path is untouched
+      // (it never receives `holeStabilization`).
+      holeStabilizationRef.current = {
+        mode: "ANIMATION_GATED",
+        activeFinalHolesWorld: [],
+      }
+      setHoleStabilizationKey(`play-${Date.now()}-empty`)
+    }
+  }, [playing, geometryMode, playheadRef])
+
+  // After each animated mesh build, update activation state from the
+  // partial-frame detected centroids (which the build just stamped into
+  // SOLID_DEBUG.lastStages.solidDiagnostics.detectedPartialHoleCentroidsWorld).
+  // If activation flips for any hole, bump `holeStabilizationKey` so the
+  // next animated build picks up the new active set.
+  useEffect(() => {
+    if (geometryMode !== "solid" || !playing) return
+    const ref = finalHoleRefRef.current
+    if (!ref || ref.holes.length === 0) return
+
+    const stages = SOLID_DEBUG.lastStages as
+      | {
+          solidDiagnostics?: {
+            detectedPartialHoleCentroidsWorld?: Array<{ x: number; y: number; areaPx: number }>
+          }
+        }
+      | null
+    const partial = stages?.solidDiagnostics?.detectedPartialHoleCentroidsWorld ?? []
+    SOLID_ANIM_DEBUG.lastPartialCentroidCount = partial.length
+
+    // Activation rule (STICKY_FINAL_HOLE_CONTOURS strategy):
+    //   - Require ACTIVATION_HIT_STREAK consecutive positive centroid matches
+    //     before flipping `active = true`. This filters out single-frame
+    //     false positives (e.g. transient empty regions inside the partial
+    //     silhouette where two strokes nearly close a region but the loop
+    //     is not yet sealed).
+    //   - Once active, NEVER deactivate within a playback session — there
+    //     is no longer a centroid-inside-partial-outer test inside the
+    //     engine override block, so the activation decision made here is
+    //     authoritative for the rest of the reveal.
+    //   - On the commit frame (progress >= 1), force-activate every final
+    //     hole so the final frame is guaranteed to match the static H3
+    //     reference even if a centroid never reached its activation tol
+    //     during the reveal (e.g. very fast stroke speed).
+    const ACTIVATION_HIT_STREAK = 2
+    let activationChanged = false
+    const forceFinalActivation = solidAnimProgress >= 1
+    for (let i = 0; i < ref.holes.length; i++) {
+      const fc = ref.centroids[i]
+      const tol = ref.activationRadius[i]
+      let matched = false
+      for (const p of partial) {
+        const dx = p.x - fc.x
+        const dy = p.y - fc.y
+        if (dx * dx + dy * dy <= tol * tol) {
+          matched = true
+          break
+        }
+      }
+      const state = activationRef.current[i]
+      if (matched) {
+        state.hitStreak += 1
+        state.missStreak = 0
+      } else {
+        // Hits must be CONSECUTIVE — reset the streak on any miss so a
+        // single noisy partial frame can't accumulate matches over a
+        // long reveal.
+        state.hitStreak = 0
+        state.missStreak += 1
+      }
+      if (
+        !state.active &&
+        (state.hitStreak >= ACTIVATION_HIT_STREAK || forceFinalActivation)
+      ) {
+        state.active = true
+        activationChanged = true
+      }
+    }
+
+    // Mirror per-hole streaks for the panel.
+    SOLID_ANIM_DEBUG.perHoleHitStreaks = activationRef.current.map((s) => s.hitStreak)
+    SOLID_ANIM_DEBUG.perHoleMissStreaks = activationRef.current.map((s) => s.missStreak)
+    const activeCount = activationRef.current.filter((s) => s.active).length
+    SOLID_ANIM_DEBUG.activatedFinalHoleCount = activeCount
+
+    // Sticky-strategy mirrors owned by THIS effect (the activation state
+    // machine is the single source of truth for these values).
+    const activeIds: number[] = []
+    let pending = 0
+    for (let i = 0; i < activationRef.current.length; i++) {
+      const s = activationRef.current[i]
+      if (s.active) activeIds.push(i)
+      else if (s.hitStreak > 0) pending += 1
+    }
+    SOLID_ANIM_DEBUG.activeHoleIds = activeIds
+    SOLID_ANIM_DEBUG.pendingHoleCount = pending
+    SOLID_ANIM_DEBUG.usingFinalHoleContoursForAnimation =
+      activeCount > 0 ? "YES" : "NO"
+    SOLID_ANIM_DEBUG.holeSourceDuringAnimation =
+      "FINAL_STATIC_FOR_ACTIVE_NONE_OTHERWISE"
+    // Record progress-at-activation for newly-activated holes. We only
+    // write the slot if it's still NaN (never been activated this session)
+    // so the value reflects the FIRST activation moment.
+    if (
+      SOLID_ANIM_DEBUG.holeActivationProgress.length !==
+      activationRef.current.length
+    ) {
+      SOLID_ANIM_DEBUG.holeActivationProgress = activationRef.current.map(
+        () => Number.NaN,
+      )
+    }
+    for (let i = 0; i < activationRef.current.length; i++) {
+      if (
+        activationRef.current[i].active &&
+        Number.isNaN(SOLID_ANIM_DEBUG.holeActivationProgress[i])
+      ) {
+        SOLID_ANIM_DEBUG.holeActivationProgress[i] = solidAnimProgress
+      }
+    }
+    SOLID_ANIM_DEBUG.finalStaticHoleCount = ref.holes.length
+
+    if (activationChanged) {
+      // Build the new override and a stable key signature.
+      const activeFinalHolesWorld: THREE.Vector2[][] = []
+      const sig: number[] = []
+      for (let i = 0; i < ref.holes.length; i++) {
+        if (activationRef.current[i].active) {
+          activeFinalHolesWorld.push(ref.holes[i])
+          sig.push(i)
+        }
+      }
+      // ALWAYS keep the override in ANIMATION_GATED mode during playback.
+      // Even with zero activated holes the override must be present so
+      // the buildMaskSolid override block wipes any partial-detection
+      // holes. Falling back to `undefined` here was a previous source
+      // of mid-playback hole flicker the moment an `activationChanged`
+      // event landed with no active holes left.
+      holeStabilizationRef.current = {
+        mode: "ANIMATION_GATED",
+        activeFinalHolesWorld,
+      }
+      setHoleStabilizationKey(`active-${sig.join(",")}-of-${ref.holes.length}`)
+    }
+  }, [geometryMode, playing, solidAnimProgress])
+
+  // When playback stops or progress reaches the end, clear the override so
+  // the final/static build runs the standard (unstabilized) path.
+  useEffect(() => {
+    if (geometryMode !== "solid") return
+    if (!playing || solidAnimProgress >= 1) {
+      if (holeStabilizationRef.current !== undefined) {
+        holeStabilizationRef.current = undefined
+        setHoleStabilizationKey("none")
+      }
+    }
+    lastSeenProgressRef.current = solidAnimProgress
+  }, [playing, solidAnimProgress, geometryMode])
+
+  // Build meshes.
+  //
+  //  - Solid and Extrude both consume `animatedStrokes` (arc-length-filtered
+  //    partial copy of the source strokes for the current progress). At
+  //    progress >= 1 the filter short-circuits and returns the original
+  //    `strokes` reference, so the final-frame mesh is byte-identical to the
+  //    static preview that was rendered before Play was pressed.
+  //  - Rod consumes the full `strokes` because Rod animation is driven by
+  //    per-segment drawRange inside AnimatedStrokes, not by geometry rebuilds.
+  //  - `holeStabilization` is Solid-only by construction: only the Solid
+  //    H3 hole pipeline reads it. Extrude passes `undefined` so its geometry
+  //    path is untouched.
+  const useAnimatedStrokes =
+    geometryMode === "solid" ||
+    geometryMode === "extrude" ||
+    geometryMode === "inflate"
+  // ---- Solid animation: sticky-final-hole-contour stabilization ----------
+  //
+  // ABANDONED STRATEGY (do NOT reintroduce):
+  //   `FILLED_DURING_REVEAL_COMMIT_AT_END` — i.e. forcing
+  //   `disableHolesForAnimation = true` for the entire reveal and committing
+  //   holes only at progress = 1. That produced a filled-blob reveal followed
+  //   by a giant topology snap on the final frame. The
+  //   `disableHolesForAnimation` plumbing remains in the engine signatures
+  //   as a no-op so older builds and dead branches keep type-checking, but
+  //   Scene NEVER passes `true` for it any more.
+  //
+  // ACTIVE STRATEGY (this code path):
+  //   `STICKY_FINAL_HOLE_CONTOURS`. The Play-start layout effect captures the
+  //   final static H3 hole contours from `SOLID_DEBUG.lastStages` BEFORE any
+  //   animation frame paints. A separate effect runs the 2-hit centroid
+  //   activation matcher against partial-frame detected centroids and
+  //   updates `holeStabilizationRef.current.activeFinalHolesWorld`. The
+  //   override is always in `ANIMATION_GATED` mode for the duration of a
+  //   playback session, starting with an empty active list (no holes shown
+  //   pre-activation). `buildMaskSolid`'s override block attaches the active
+  //   final contours unconditionally (no per-frame "centroid-inside-partial-
+  //   outer" re-evaluation that can pop active holes in/out frame-to-frame).
   const meshes = useStrokeMeshes(
-    geometryMode === "solid" ? animatedStrokes : strokes,
+    useAnimatedStrokes ? animatedStrokes : strokes,
     canvasWidth,
     canvasHeight,
     geometryMode,
     extrudeParams,
-    solidParams
+    solidParams,
+    geometryMode === "solid" ? holeStabilizationRef.current : undefined,
+    geometryMode === "solid" ? holeStabilizationKey : undefined,
+    // disableHolesForAnimation is intentionally NOT passed — leaving this
+    // argument unset means the engine takes the standard partial+override
+    // pipeline. Setting it to true is the abandoned strategy above.
   )
   const meshBounds = useStrokeBounds(meshes)
 
@@ -833,23 +1351,156 @@ function Scene({
   // during draw-in animation. For other modes we keep mesh-derived bounds.
   const stableBounds = useStableStrokesBounds(strokes, canvasWidth, canvasHeight)
 
-  const bounds = geometryMode === "solid" ? stableBounds ?? meshBounds : meshBounds
+  const bounds = geometryMode === "solid" || geometryMode === "inflate" ? stableBounds ?? meshBounds : meshBounds
 
   // Populate meshStatusRef for debug overlay (extrude mode)
   useEffect(() => {
     if (meshStatusRef) {
-      meshStatusRef.current = meshes.map((m) => m.buildStatus ?? { type: "ok" })
+      // Placeholder status for non-extrude meshes (rod, solid, inflate). The
+      // extrude debug panel only renders when geometryMode === "extrude", so
+      // this fallback is only consumed for safety; the strategy tag here is
+      // never displayed.
+      meshStatusRef.current = meshes.map(
+        (m) =>
+          m.buildStatus ?? {
+            type: "ok",
+            width: 0,
+            depth: 0,
+            bevelEnabled: false,
+            strategy: "legacy",
+            depthMultiplier: 0,
+            effectiveDepth: 0,
+          },
+      )
     }
   }, [meshes, meshStatusRef])
 
   // Populate solidStatusRef for debug overlay (solid mode)
+  // Also tracks per-build validHoleCount churn so the animation panel can
+  // report `topologyChangeCount` (counters/holes appearing/disappearing as
+  // the partial reveal crosses closure thresholds). This is observation-
+  // only — we do NOT change static H3 hole detection or apply hysteresis.
+  const prevValidHoleCountRef = useRef<number | null>(null)
   useEffect(() => {
     if (solidStatusRef) {
       // Find the first mesh with solidStatus (Solid mode produces a single mesh)
       const solidMesh = meshes.find((m) => m.solidStatus)
       solidStatusRef.current = solidMesh?.solidStatus ?? null
     }
-  }, [meshes, solidStatusRef])
+    if (geometryMode === "solid") {
+      const stages = SOLID_DEBUG.lastStages as
+        | {
+            solidDiagnostics?: {
+              validHoleCount?: number
+              holeStabilizationActive?: "YES" | "NO"
+              holeOverrideRejectReasons?: string[]
+              h3ShapeHoleCount?: number
+              h2ShapeHoleCount?: number
+            }
+          }
+        | null
+      const sd = stages?.solidDiagnostics
+      const current = sd?.validHoleCount ?? 0
+      const prev = prevValidHoleCountRef.current
+
+      // Topology change counter is now a strict invariant: any non-zero
+      // value reported during the active reveal indicates the
+      // sticky-final-hole-contour strategy was bypassed somewhere.
+      if (
+        prev !== null &&
+        prev !== current &&
+        SOLID_ANIM_DEBUG.solidAnimationActive
+      ) {
+        SOLID_ANIM_DEBUG.topologyChangeCount += 1
+      }
+      prevValidHoleCountRef.current = current
+      SOLID_ANIM_DEBUG.validHoleCount = current
+      SOLID_ANIM_DEBUG.holeStabilizationActive =
+        sd?.holeStabilizationActive ?? "NO"
+      SOLID_ANIM_DEBUG.holeStabilizationLastReasons =
+        sd?.holeOverrideRejectReasons ?? []
+
+      // Sticky-strategy mirrors. activeHoleIds / pendingHoleCount /
+      // holeActivationProgress / usingFinalHoleContoursForAnimation are
+      // written by the activation effect itself (it owns that state); we
+      // only fill the per-frame "how many holes did the cap actually use"
+      // count and the final-frame match here.
+      SOLID_ANIM_DEBUG.animatedActiveHoleCount =
+        sd?.h3ShapeHoleCount ?? sd?.h2ShapeHoleCount ?? 0
+      const atOrPastCommit = SOLID_ANIM_DEBUG.solidAnimationProgress >= 1
+      if (atOrPastCommit) {
+        SOLID_ANIM_DEBUG.finalStaticHoleCount =
+          SOLID_ANIM_DEBUG.finalHoleReferenceCount
+        SOLID_ANIM_DEBUG.finalFrameHoleMatch =
+          current === SOLID_ANIM_DEBUG.finalHoleReferenceCount ? "YES" : "NO"
+      }
+    }
+  }, [meshes, solidStatusRef, geometryMode])
+  
+  // ---- Extrude depth-trace diagnostic ----
+  // Populates extrudeDebugRef whenever the meshes array (output of useStrokeMeshes
+  // useMemo) changes. If the memo doesn't re-fire on a depth-slider move, this
+  // effect doesn't fire either and `buildCount` stays flat — that's the proof
+  // the rebuild path is broken. If it does fire and `bboxZ` matches the new
+  // depth, the rebuild path is correct and any visible-staleness is downstream
+  // (camera angle / material / R3F prop swap).
+  const extrudeBuildCountRef = useRef(0)
+  useEffect(() => {
+    if (!extrudeDebugRef) return
+    extrudeBuildCountRef.current += 1
+    let bboxZ = 0
+    for (const m of meshes) {
+      const g = m.tubeGeometry
+      g.computeBoundingBox()
+      const bb = g.boundingBox
+      if (bb) {
+        const dz = bb.max.z - bb.min.z
+        if (dz > bboxZ) bboxZ = dz
+      }
+    }
+    // Pull the calibrated effective depth/width from the first stroke's
+    // build status — the engine writes the actual values it used there.
+    // The Width slider is now a normalized t in [0, 1]; the EFFECTIVE
+    // half-width is what extrudeParams.width carries (already mapped by
+    // app/page.tsx). Reconstruct the slider t from the effective width
+    // so both readings are visible in the debug panel even if a future
+    // caller bypasses the mapping helper.
+    const rawWidthParam = extrudeParams?.width ?? 0
+    let effectiveWidthUsed = rawWidthParam
+    let effectiveDepthUsed = 0
+    let strategy = ""
+    let buildStatus = ""
+    for (const m of meshes) {
+      const s = m.buildStatus
+      if (!s) continue
+      buildStatus = s.type
+      strategy = s.strategy
+      // Only non-rodFallback variants carry the engine-resolved width;
+      // rodFallback's effective half-width is implicit via fallbackRadius.
+      if (s.type !== "rodFallback") {
+        effectiveWidthUsed = s.width
+      }
+      if (s.effectiveDepth > 0) effectiveDepthUsed = s.effectiveDepth
+      if (effectiveDepthUsed > 0) break
+    }
+    const depthToWidthRatio = effectiveWidthUsed > 0 ? effectiveDepthUsed / effectiveWidthUsed : 0
+    const widthSliderValue = extrudeWidthToSlider(effectiveWidthUsed)
+
+    extrudeDebugRef.current = {
+      depthParam: extrudeParams?.depth ?? 0,
+      buildCount: extrudeBuildCountRef.current,
+      bboxZ,
+      activeEngine: geometryMode,
+      widthSliderValue,
+      widthSliderPercent: Math.round(widthSliderValue * 100),
+      effectiveWidthUsed,
+      effectiveWidthPercent: Math.round(extrudeWidthToSlider(effectiveWidthUsed) * 100),
+      effectiveDepthUsed,
+      depthToWidthRatio,
+      strategy: strategy || "unknown",
+      buildStatus: buildStatus || "unknown",
+    }
+  }, [meshes, extrudeParams?.depth, extrudeParams?.width, geometryMode, extrudeDebugRef])
   const { timelines, totalDuration: computedDuration } = useTimeline(rawStrokes)
 
   useEffect(() => {
@@ -891,8 +1542,8 @@ function Scene({
 
       {/* Solid-only animation tick: forces React re-render of Solid mesh
           while playheadRef advances. No-op for other modes. */}
-      <SolidAnimationTick
-        isSolid={geometryMode === "solid"}
+        <SolidAnimationTick
+          enabled={geometryMode === "solid" || geometryMode === "extrude" || geometryMode === "inflate"}
         playheadRef={playheadRef}
         setSolidAnimProgress={setSolidAnimProgress}
       />
@@ -982,6 +1633,26 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const [showDebug, setShowDebug] = useState(false)
   const meshStatusRef = useRef<StrokeBuildStatus[]>([])
   const solidStatusRef = useRef<SolidBuildStatus | null>(null)
+  const extrudeDebugRef = useRef<{
+    depthParam: number
+    buildCount: number
+    bboxZ: number
+    activeEngine: GeometryMode
+    /** Raw normalized slider t in [0, 1] — what the Width slider currently shows. */
+    widthSliderValue: number
+    /** Slider value expressed as a 0–100% reading. */
+    widthSliderPercent: number
+    /** Effective half-width actually consumed by the engine (after mapping + clamp). */
+    effectiveWidthUsed: number
+    /** Effective width expressed as a 0–100% reading of the slider envelope. */
+    effectiveWidthPercent: number
+    effectiveDepthUsed: number
+    depthToWidthRatio: number
+    /** Strategy reported by the first non-degenerate build status (proves which path ran). */
+    strategy: string
+    /** Build status type of the first stroke ("ok", "bevelOff", "rodFallback", ...). */
+    buildStatus: string
+  } | null>(null)
 
   const { totalDuration } = useTimeline(rawStrokes)
 
@@ -1074,6 +1745,26 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
           playheadRef.current = 0
           setProgress(0)
         }
+        // Reset Solid animation debug counters at the start of every
+        // playback session so the panel reflects THIS reveal, not the
+        // accumulated total since page load.
+      SOLID_ANIM_DEBUG.topologyChangeCount = 0
+      SOLID_ANIM_DEBUG.solidAnimationRebuildCount = 0
+      // Sticky-final-hole-contour strategy: reset per-session state so the
+      // panel reflects THIS reveal, not the accumulated total since page load.
+      SOLID_ANIM_DEBUG.finalFrameHoleMatch = "NO"
+      SOLID_ANIM_DEBUG.usingFinalHoleContoursForAnimation = "NO"
+      SOLID_ANIM_DEBUG.activeHoleIds = []
+      SOLID_ANIM_DEBUG.pendingHoleCount = 0
+      SOLID_ANIM_DEBUG.holeActivationProgress = []
+      SOLID_ANIM_DEBUG.animatedActiveHoleCount = 0
+      SOLID_ANIM_DEBUG.solidAnimationHoleMode = "STICKY_FINAL_HOLE_CONTOURS"
+      SOLID_ANIM_DEBUG.holeSourceDuringAnimation =
+        "FINAL_STATIC_FOR_ACTIVE_NONE_OTHERWISE"
+      // The Play-start sync layout effect (above) ensures the first paint
+      // happens with the playhead at 0. Stamp the flag here so the panel
+      // confirms there was no full-mesh flash before the reveal.
+      SOLID_ANIM_DEBUG.firstFrameResetClean = "YES"
         return true
       }
       return false
@@ -1293,6 +1984,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                       masterControlsRef={isMaster ? undefined : controlsRef}
                       meshStatusRef={meshStatusRef}
                       solidStatusRef={solidStatusRef}
+                      extrudeDebugRef={isMaster ? extrudeDebugRef : undefined}
                     />
                   </Canvas>
                 </ViewportErrorBoundary>
@@ -1344,6 +2036,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 onProgressUpdate={onProgressUpdate}
                 meshStatusRef={meshStatusRef}
                 solidStatusRef={solidStatusRef}
+                extrudeDebugRef={extrudeDebugRef}
               />
             </Canvas>
           </ViewportErrorBoundary>
@@ -1361,6 +2054,30 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
           {comparing && compareLabel && (
             <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
           )}
+          {/* Extrude depth-trace diagnostic (extrude mode only).
+              Proves whether the depth-slider rebuild path is alive end-to-end:
+              if buildCount stays flat as you move the Depth slider, the memo
+              isn't re-firing; if buildCount increments AND bboxZ changes, the
+              rebuild is correct and any remaining staleness is downstream
+              (camera angle / R3F prop swap / material). */}
+          {geometryMode === "extrude" && extrudeDebugRef.current && (
+            <div className="mt-1 border-t border-border/50 pt-1">
+              <div className="font-semibold text-foreground">Extrude trace:</div>
+              <div>widthSliderValue: {extrudeDebugRef.current.widthSliderValue.toFixed(3)}</div>
+              <div>widthSliderPercent: {extrudeDebugRef.current.widthSliderPercent}%</div>
+              <div>effectiveWidthUsed: {extrudeDebugRef.current.effectiveWidthUsed.toFixed(3)}</div>
+              <div>effectiveWidthPercent: {extrudeDebugRef.current.effectiveWidthPercent}%</div>
+              <div>strategy: {extrudeDebugRef.current.strategy}</div>
+              <div>buildStatus: {extrudeDebugRef.current.buildStatus}</div>
+              <div>depthMultiplierSliderValue: {extrudeDebugRef.current.depthParam.toFixed(2)}×</div>
+              <div>effectiveDepthUsed: {extrudeDebugRef.current.effectiveDepthUsed.toFixed(3)}</div>
+              <div>depthToWidthRatio: {extrudeDebugRef.current.depthToWidthRatio.toFixed(2)}</div>
+              <div>previewBuildCount: {extrudeDebugRef.current.buildCount}</div>
+              <div>geometryBBoxZ: {extrudeDebugRef.current.bboxZ.toFixed(3)}</div>
+              <div>activeEngine: {extrudeDebugRef.current.activeEngine}</div>
+            </div>
+          )}
+          
           {/* Per-stroke extrude build status (extrude mode only) */}
           {geometryMode === "extrude" && (meshStatusRef.current?.length ?? 0) > 0 && (
             <div className="mt-1 border-t border-border/50 pt-1">
@@ -1373,12 +2090,12 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                     : "text-red-500"
                 }>
                   {i}: {s.type === "ok"
-                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=${s.bevelEnabled}`
+                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} mult=${s.depthMultiplier.toFixed(2)}× eff=${s.effectiveDepth.toFixed(3)} bevel=${s.bevelEnabled}`
                     : s.type === "bevelOff"
-                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(retry)`
+                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} mult=${s.depthMultiplier.toFixed(2)}× eff=${s.effectiveDepth.toFixed(3)} bevel=off(retry)`
                     : s.type === "bevelOffTinyWidth"
-                    ? `extrude w=${s.width.toFixed(3)} d=${s.depth.toFixed(3)} bevel=off(tiny)`
-                    : `rod r=${s.fallbackRadius.toFixed(3)} (${s.reason}) depth=n/a bevel=n/a`}
+                    ? `extrude strategy=${s.strategy} w=${s.width.toFixed(3)} mult=${s.depthMultiplier.toFixed(2)}× eff=${s.effectiveDepth.toFixed(3)} bevel=off(tiny)`
+                    : `rod fallback strategy=${s.strategy} r=${s.fallbackRadius.toFixed(3)} (${s.reason}) mult=${s.depthMultiplier.toFixed(2)}× eff=${s.effectiveDepth.toFixed(3)}`}
                 </div>
               ))}
             </div>
@@ -1766,10 +2483,519 @@ function SolidDebugOverlay() {
                 </>
               )}
             </div>
+
+            {/* H1 Hole Detection (DIAGNOSTIC ONLY - geometry unchanged) */}
+            <div className="mt-1 border-t border-pink-500/30 pt-1">
+              <div className="mb-0.5 text-[9px] font-bold text-pink-400">HOLE DETECTION (H1)</div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                <span className="text-gray-400">holeDetectionEnabled:</span>
+                <span className={s.holeDetectionEnabled === "YES" ? "text-green-400" : "text-yellow-400"}>
+                  {s.holeDetectionEnabled ?? "NO"}
+                </span>
+
+                <span className="text-gray-400">detectedHoleCount:</span>
+                <span>{s.detectedHoleCount ?? 0}</span>
+
+                <span className="text-gray-400">validHoleCount:</span>
+                <span className={(s.validHoleCount ?? 0) > 0 ? "text-green-400" : "text-gray-300"}>
+                  {s.validHoleCount ?? 0}
+                </span>
+
+                <span className="text-gray-400">rejectedHoleCount:</span>
+                <span>{s.rejectedHoleCount ?? 0}</span>
+
+                <span className="text-gray-400">largestHoleArea:</span>
+                <span>{s.largestHoleArea ?? 0}</span>
+
+                <span className="text-gray-400">holeAreas:</span>
+                <span className="text-[8px]">
+                  [{(s.holeAreas ?? []).join(", ")}]
+                </span>
+
+                <span className="text-gray-400">rejectedHoleAreas:</span>
+                <span className="text-[8px] text-yellow-300">
+                  [{(s.rejectedHoleAreas ?? []).join(", ")}]
+                </span>
+
+                <span className="text-gray-400">borderTouchingEmpties:</span>
+                <span className="text-[8px]">{s.borderTouchingEmptyCount ?? 0}</span>
+
+                <span className="text-gray-400">holeRejectReasons:</span>
+                <span className="text-[8px] text-yellow-300">
+                  {(s.holeRejectReasons ?? []).length > 0
+                    ? (s.holeRejectReasons ?? []).join(" | ")
+                    : "-"}
+                </span>
+              </div>
+              <div className="mt-1 text-[8px] text-gray-500">
+                H1 detection only — geometry, caps, walls, export unchanged.
+              </div>
+            </div>
+
+            {/* H2 Flat Cap With Holes (DIAGNOSTIC ONLY - flat cap proof) */}
+            <div className="mt-1 border-t border-orange-500/30 pt-1">
+              <div className="mb-0.5 text-[9px] font-bold text-orange-400">FLAT CAP WITH HOLES (H2)</div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                <span className="text-gray-400">h2FlatCapWithHolesBuilt:</span>
+                <span className={s.h2FlatCapWithHolesBuilt === "YES" ? "text-green-400" : "text-yellow-400"}>
+                  {s.h2FlatCapWithHolesBuilt ?? "NO"}
+                </span>
+
+                <span className="text-gray-400">h2HoleContoursUsed:</span>
+                <span className={(s.h2HoleContoursUsed ?? 0) > 0 ? "text-green-400" : "text-gray-300"}>
+                  {s.h2HoleContoursUsed ?? 0}
+                </span>
+
+                <span className="text-gray-400">h2HoleContourAreas:</span>
+                <span className="text-[8px]">
+                  [{(s.h2HoleContourAreas ?? []).join(", ")}]
+                </span>
+
+                <span className="text-gray-400">h2ShapeHoleCount:</span>
+                <span className={(s.h2ShapeHoleCount ?? 0) > 0 ? "text-green-400" : "text-gray-300"}>
+                  {s.h2ShapeHoleCount ?? 0}
+                </span>
+
+                <span className="text-gray-400">h2HoleContourRejectReasons:</span>
+                <span className="text-[8px] text-yellow-300">
+                  {(s.h2HoleContourRejectReasons ?? []).length > 0
+                    ? (s.h2HoleContourRejectReasons ?? []).join(" | ")
+                    : "-"}
+                </span>
+
+                <span className="text-gray-400">frontCapTris:</span>
+                <span>{s.h2FrontCapTris ?? s.frontCapTriCount ?? 0}</span>
+
+                <span className="text-gray-400">flatCapTrisBaseline:</span>
+                <span>{s.h2FlatCapTrisBaseline ?? 0}</span>
+
+                <span className="text-gray-400">triDelta:</span>
+                <span className={(s.h2TriDelta ?? 0) > 0 ? "text-green-400" : "text-yellow-400"}>
+                  {s.h2TriDelta ?? 0}{" "}
+                  {(s.h2TriDelta ?? 0) > 0 ? "(holes cut)" : "(no change)"}
+                </span>
+              </div>
+
+              {/* Counter-preserving detection (thinner mask used to find counters
+                  that thick strokes painted over) */}
+              <div className="mt-1 border-t border-orange-500/20 pt-1 text-[8px]">
+                <div className="mb-0.5 font-bold text-orange-300">
+                  COUNTER-PRESERVING DETECTION
+                </div>
+                <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                  <span className="text-gray-400">enabled:</span>
+                  <span
+                    className={
+                      s.counterDetectionEnabled === "YES"
+                        ? "text-green-400"
+                        : "text-gray-400"
+                    }
+                  >
+                    {s.counterDetectionEnabled ?? "NO"}
+                  </span>
+
+                  <span className="text-gray-400">actualThicknessPx:</span>
+                  <span>{((s.actualThicknessPx ?? 0) as number).toFixed(2)}</span>
+
+                  <span className="text-gray-400">counterThicknessPx:</span>
+                  <span>
+                    {((s.counterDetectionThicknessPx ?? 0) as number).toFixed(2)}
+                  </span>
+
+                  <span className="text-gray-400">counterDetectedHoleCount:</span>
+                  <span>{s.counterDetectedHoleCount ?? 0}</span>
+
+                  <span className="text-gray-400">counterValidHoleCount:</span>
+                  <span
+                    className={
+                      (s.counterValidHoleCount ?? 0) > 0
+                        ? "text-green-400"
+                        : "text-gray-400"
+                    }
+                  >
+                    {s.counterValidHoleCount ?? 0}
+                  </span>
+
+                  <span className="text-gray-400">counterHoleAreas:</span>
+                  <span>[{(s.counterHoleAreas ?? []).join(", ")}]</span>
+
+                  <span className="text-gray-400">holeSource:</span>
+                  <span
+                    className={
+                      s.counterHoleSource === "COUNTER_MASK"
+                        ? "text-green-400 font-bold"
+                        : "text-gray-300"
+                    }
+                  >
+                    {s.counterHoleSource ?? "ACTUAL_MASK"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Compact small-counter viability — pinpoints tight cursive counters */}
+              <div className="mt-1 border-t border-orange-500/20 pt-1 text-[8px]">
+                <div className="mb-0.5 font-bold text-orange-300">
+                  COUNTER VIABILITY (smallest valid hole)
+                </div>
+                <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                  <span className="text-gray-400">area:</span>
+                  <span>{s.smallestValidHoleArea ?? 0} px</span>
+
+                  <span className="text-gray-400">bbox:</span>
+                  <span>
+                    {(s.smallestValidHoleBboxW ?? 0)} × {(s.smallestValidHoleBboxH ?? 0)} px
+                  </span>
+
+                  <span className="text-gray-400">area/bbox:</span>
+                  <span>
+                    {((s.smallestValidHoleAreaToBboxRatio ?? 0) as number).toFixed(3)}
+                  </span>
+
+                  <span className="text-gray-400">usedByH2:</span>
+                  <span
+                    className={
+                      s.smallestValidHoleUsedByH2 === "YES"
+                        ? "text-green-400 font-bold"
+                        : s.smallestValidHoleUsedByH2 === "NO"
+                          ? "text-red-400 font-bold"
+                          : "text-gray-400"
+                    }
+                  >
+                    {s.smallestValidHoleUsedByH2 ?? "N/A"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-1 text-[8px] text-gray-500">
+                H2 flat-cap proof — no extrusion, no walls, export untouched.
+              </div>
+            </div>
+
+            {/* H3: EXTRUDE_FROM_FLAT_CAP_WITH_HOLES — production extrusion */}
+            <div className="mt-1 border-t border-emerald-500/40 pt-1">
+              <div className="mb-0.5 text-[9px] font-bold text-emerald-400">
+                EXTRUDE FROM FLAT CAP WITH HOLES (H3)
+              </div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                <span className="text-gray-400">h3Built:</span>
+                <span
+                  className={
+                    s.h3Built === "YES"
+                      ? "text-green-400 font-bold"
+                      : s.h3Built === "NO"
+                        ? "text-red-400 font-bold"
+                        : "text-gray-400"
+                  }
+                >
+                  {s.h3Built ?? "—"}
+                </span>
+
+                {/* ---- Solid H3 control calibration (proves UI value is mapped before geometry) ---- */}
+                <span className="text-gray-400">thickness slider:</span>
+                <span className="font-mono">
+                  {(s.solidThicknessSliderValue ?? 0) as number}px
+                </span>
+
+                <span className="text-gray-400">thickness effective:</span>
+                <span
+                  className={
+                    (s.solidEffectiveThicknessPx ?? 0) !== (s.solidThicknessSliderValue ?? 0)
+                      ? "font-mono text-emerald-400"
+                      : "font-mono text-yellow-400"
+                  }
+                >
+                  {((s.solidEffectiveThicknessPx ?? 0) as number).toFixed(1)}px
+                </span>
+
+                <span className="text-gray-400">depth slider:</span>
+                <span className="font-mono">
+                  {((s.solidDepthSliderValue ?? s.solidDepthParam ?? 0) as number).toFixed(3)}
+                </span>
+
+                <span className="text-gray-400">depth effective:</span>
+                <span
+                  className={
+                    (s.solidDepthEffective ?? 0) !== (s.solidDepthSliderValue ?? 0)
+                      ? "font-mono text-emerald-400"
+                      : "font-mono text-yellow-400"
+                  }
+                >
+                  {((s.solidDepthEffective ?? 0) as number).toFixed(3)}
+                </span>
+
+                <span className="text-gray-400">depth/thick ratio:</span>
+                <span className="font-mono">
+                  {((s.solidDepthToThicknessRatio ?? 0) as number).toFixed(3)}
+                </span>
+
+                <span className="text-gray-400">bbox Z:</span>
+                <span
+                  className={
+                    (s.geometryBBoxZ ?? 0) > 0
+                      ? "font-mono text-green-400"
+                      : "font-mono text-red-400"
+                  }
+                >
+                  {((s.geometryBBoxZ ?? 0) as number).toFixed(4)}
+                </span>
+
+                <span className="text-gray-400">frontCapTris:</span>
+                <span>{s.h3FrontCapTris ?? 0}</span>
+
+                <span className="text-gray-400">backCapTris:</span>
+                <span>{s.h3BackCapTris ?? 0}</span>
+
+                <span className="text-gray-400">outerWallSegs:</span>
+                <span
+                  className={
+                    (s.h3OuterWallSegments ?? 0) > 0 ? "text-green-400" : "text-red-400"
+                  }
+                >
+                  {s.h3OuterWallSegments ?? 0}
+                  {(s.h3SkippedOuterWallSegments ?? 0) > 0
+                    ? ` (skipped ${s.h3SkippedOuterWallSegments})`
+                    : ""}
+                </span>
+
+                <span className="text-gray-400">innerWallLoops:</span>
+                <span
+                  className={
+                    (s.h3InnerWallCount ?? 0) > 0 ? "text-green-400" : "text-gray-300"
+                  }
+                >
+                  {s.h3InnerWallCount ?? 0}
+                </span>
+
+                <span className="text-gray-400">innerWallSegs:</span>
+                <span
+                  className={
+                    (s.h3InnerWallSegments ?? 0) > 0 ? "text-green-400" : "text-gray-300"
+                  }
+                >
+                  {s.h3InnerWallSegments ?? 0}
+                  {(s.h3SkippedInnerWallSegments ?? 0) > 0
+                    ? ` (skipped ${s.h3SkippedInnerWallSegments})`
+                    : ""}
+                </span>
+
+                <span className="text-gray-400">totalVerts:</span>
+                <span>{s.h3TotalVerts ?? 0}</span>
+
+                <span className="text-gray-400">totalTris:</span>
+                <span>{s.h3TotalTris ?? 0}</span>
+
+                <span className="text-gray-400">exportSamePath:</span>
+                <span
+                  className={
+                    s.exportUsesSamePath === "YES"
+                      ? "text-green-400 font-bold"
+                      : "text-yellow-400"
+                  }
+                >
+                  {s.exportUsesSamePath ?? "—"}
+                </span>
+              </div>
+              <div className="mt-1 text-[8px] text-gray-500">
+                H3 production: cap + back cap + outer walls + inner walls. Depth
+                slider drives bbox Z. Export path identical to preview.
+              </div>
+            </div>
           </div>
         )
       })()}
-      
+
+      {/* ---- Solid H3 ANIMATION CLEANUP diagnostics ----
+          Surfaced only in Solid mode. Reads SOLID_ANIM_DEBUG (written from
+          Scene during partial-reveal rebuilds). Proves arc-length reveal,
+          shows rebuild cadence, and exposes topology-popping count. */}
+      {(() => {
+        const a = SOLID_ANIM_DEBUG
+        const arcRatio =
+          a.animatedTotalArcLength > 0
+            ? a.animatedVisibleArcLength / a.animatedTotalArcLength
+            : 0
+        return (
+          <div className="mt-1 border-t border-cyan-500/40 pt-1">
+            <div className="mb-0.5 text-[9px] font-bold text-cyan-400">
+              SOLID H3 ANIMATION
+            </div>
+            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+              <span className="text-gray-400">animationPath:</span>
+              <span
+                className={
+                  a.animationPath ===
+                  "partialSolidRebuildWithHoleStabilization"
+                    ? "text-green-400 font-bold"
+                    : a.animationPath === "partialExtrudeRebuild"
+                      ? "text-cyan-300 font-bold"
+                      : a.animationPath === "drawRange"
+                        ? "text-blue-300"
+                        : "text-gray-400"
+                }
+              >
+                {a.animationPath}
+              </span>
+
+              <span className="text-gray-400">solidAnimationActive:</span>
+              <span
+                className={
+                  a.solidAnimationActive
+                    ? "text-green-400 font-bold"
+                    : "text-gray-300"
+                }
+              >
+                {a.solidAnimationActive ? "YES" : "NO"}
+              </span>
+
+              <span className="text-gray-400">solidAnimationProgress:</span>
+              <span className="font-mono">
+                {a.solidAnimationProgress.toFixed(4)}
+              </span>
+
+              <span className="text-gray-400">solidAnimationRebuildCount:</span>
+              <span>{a.solidAnimationRebuildCount}</span>
+
+              <span className="text-gray-400">animatedStrokePointCount:</span>
+              <span>{a.animatedStrokePointCount}</span>
+
+              <span className="text-gray-400">animatedVisibleArcLength:</span>
+              <span className="font-mono">
+                {a.animatedVisibleArcLength.toFixed(2)}
+              </span>
+
+              <span className="text-gray-400">animatedTotalArcLength:</span>
+              <span className="font-mono">
+                {a.animatedTotalArcLength.toFixed(2)}
+              </span>
+
+              <span className="text-gray-400">arcLengthRatio:</span>
+              <span className="font-mono">
+                {arcRatio.toFixed(4)}
+              </span>
+
+              <span className="text-gray-400">solidAnimationUsesArcLength:</span>
+              <span
+                className={
+                  a.solidAnimationUsesArcLength === "YES"
+                    ? "text-green-400 font-bold"
+                    : "text-red-400"
+                }
+              >
+                {a.solidAnimationUsesArcLength}
+              </span>
+
+              <span className="text-gray-400">
+                solidAnimationInterpolatedCutPoint:
+              </span>
+              <span
+                className={
+                  a.solidAnimationInterpolatedCutPoint === "YES"
+                    ? "text-green-400 font-bold"
+                    : "text-red-400"
+                }
+              >
+                {a.solidAnimationInterpolatedCutPoint}
+              </span>
+
+              <span className="text-gray-400">finalFrameMatchesStatic:</span>
+              <span
+                className={
+                  a.finalFrameMatchesStatic === "YES"
+                    ? "text-green-400 font-bold"
+                    : "text-gray-300"
+                }
+              >
+                {a.finalFrameMatchesStatic}
+              </span>
+
+              <span className="text-gray-400">validHoleCount (anim):</span>
+              <span>{a.validHoleCount}</span>
+
+              <span className="text-gray-400">topologyChangeCount:</span>
+              <span
+                className={
+                  a.topologyChangeCount > 0 ? "text-yellow-400" : "text-gray-300"
+                }
+              >
+                {a.topologyChangeCount}
+              </span>
+            </div>
+            <div className="mt-1 text-[8px] text-gray-500">
+              Reveal is arc-length based with sub-segment interpolated cut.
+              Rebuild count resets each Play. Topology pops classified — not faked early.
+            </div>
+
+            {/* ---- Hole stabilization sub-block ---- */}
+            <div className="mt-1 border-t border-cyan-500/20 pt-1">
+              <div className="mb-0.5 text-[9px] font-bold text-cyan-300">
+                HOLE STABILIZATION
+              </div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                <span className="text-gray-400">holeStabilizationActive:</span>
+                <span
+                  className={
+                    a.holeStabilizationActive === "YES"
+                      ? "text-green-400 font-bold"
+                      : "text-gray-300"
+                  }
+                >
+                  {a.holeStabilizationActive}
+                </span>
+
+                <span className="text-gray-400">finalHoleReferenceCount:</span>
+                <span>{a.finalHoleReferenceCount}</span>
+
+                <span className="text-gray-400">activatedFinalHoleCount:</span>
+                <span
+                  className={
+                    a.activatedFinalHoleCount > 0
+                      ? "text-green-400 font-bold"
+                      : "text-gray-300"
+                  }
+                >
+                  {a.activatedFinalHoleCount}
+                </span>
+
+                <span className="text-gray-400">lastPartialCentroidCount:</span>
+                <span>{a.lastPartialCentroidCount}</span>
+
+                <span className="text-gray-400">perHoleHitStreaks:</span>
+                <span className="font-mono">
+                  [{a.perHoleHitStreaks.join(", ")}]
+                </span>
+
+                <span className="text-gray-400">perHoleMissStreaks:</span>
+                <span className="font-mono">
+                  [{a.perHoleMissStreaks.join(", ")}]
+                </span>
+
+                <span className="text-gray-400">perHoleActivationRadius:</span>
+                <span className="font-mono">
+                  [{a.perHoleActivationRadiusWorld
+                    .map((r) => r.toFixed(3))
+                    .join(", ")}]
+                </span>
+
+                {a.holeStabilizationLastReasons.length > 0 && (
+                  <>
+                    <span className="text-gray-400">lastRejects:</span>
+                    <span className="text-yellow-400 text-[8px]">
+                      {a.holeStabilizationLastReasons.slice(0, 3).join("; ")}
+                    </span>
+                  </>
+                )}
+              </div>
+              <div className="mt-1 text-[8px] text-gray-500">
+                Reference snapshotted from static H3 at Play start. Activation
+                threshold = 1 partial centroid match (sticky). Topological
+                safety filter drops finals whose centroid is outside the
+                current partial outer.
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Contour Diagnostics Section */}
       <div className="mt-1 border-t border-blue-500/30 pt-1">
         <div className="mb-0.5 text-[9px] font-bold text-blue-400">CONTOUR DIAGNOSTICS</div>
@@ -1797,10 +3023,18 @@ function SolidDebugOverlay() {
           {d.holeCount > 0 && (
             <>
               <span className="text-gray-400">holeAreas:</span>
-              <span className="text-[8px]">[{d.holeAreas.map((a: number) => a.toFixed(0)).join(", ")}]</span>
+              <span className="text-[8px]">
+                [
+                {(Array.isArray(d.holeAreas) ? d.holeAreas : [])
+                  .map((a: number) => a.toFixed(0))
+                  .join(", ")}
+                ]
+              </span>
               
               <span className="text-gray-400">holeWinds:</span>
-              <span className="text-[8px]">[{d.holeWindings.join(", ")}]</span>
+              <span className="text-[8px]">
+                [{(Array.isArray(d.holeWindings) ? d.holeWindings : []).join(", ")}]
+              </span>
               
               <span className="text-gray-400">holeSelfX:</span>
               <span className={d.anyHoleSelfIntersects ? "text-red-400 font-bold" : "text-green-400"}>
