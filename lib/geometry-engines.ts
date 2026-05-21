@@ -4496,72 +4496,264 @@ export const SolidEngine: GeometryEngine = {
 
 /** Inflate-mode debug state. Read by the panel when Debug is ON. */
 export const INFLATE_DEBUG = {
-  inflateMode: "RASTER_DISTANCE_FIELD_DOME" as
-    | "RASTER_DISTANCE_FIELD_DOME"
+  inflateMode: "STROKE_VOLUME_FIELD_INFLATE" as
+    | "STROKE_VOLUME_FIELD_INFLATE"
+    | "ELLIPTICAL_TUBE_LOFT"
     | "SOLID_H3_PASSTHROUGH",
   inflateStrategy:
-    "Decoupled controls: Thickness sets footprint (rasterized stroke width), Puff sets dome height. Falloff is footprint-clamped so wide strokes never become flat plateaus.",
-  usesSolidBase: "NO" as "YES" | "NO",
-  usesRasterMask: "YES" as "YES" | "NO",
+    "Build inflated stroke volume from the resampled centerline. Width = XY radius around centerline. Puff = Z aspect / cross-section roundness. Surface is an elliptical capsule swept along the path with smooth metaball-style end caps.",
+  // ---- Source-of-truth flags ----
+  usesRasterHeightfield: "NO" as "YES" | "NO",
+  medialAxisSeamExpected: "NO" as "YES" | "NO",
+  widthAffectsXY: "YES" as "YES" | "NO",
+  puffAffectsZCrossSection: "YES" as "YES" | "NO",
   fallbackUsed: "NO" as "YES" | "NO",
-  preservesHoles: "YES" as "YES" | "NO",
   cameraFitUsesXYOnly: "YES" as "YES" | "NO",
   // ---- Path probes ----
   inflateEngineCalled: "NO" as "YES" | "NO",
   inflateBuildPreviewCalled: "NO" as "YES" | "NO",
   inflateGeometryCreated: "NO" as "YES" | "NO",
-  // ---- Decoupled named values (footprint vs height vs falloff) ----
-  thicknessSliderValue: 0,
-  inflateFootprintPx: 0,
+  // ---- Decoupled named values ----
+  widthSliderValue: 0,
+  inflateStrokeRadiusXY: 0,
   puffSliderValue: 0,
-  inflatePuffHeightWorld: 0,
-  inflateDomeFalloffPx: 0,
-  inflateSoftness: 0,
-  // ---- Raster diagnostics ----
-  maskResolution: "0x0",
-  filledPixelCount: 0,
-  maxDistanceToEdge: 0,
-  // ---- Mesh diagnostics ----
-  vertexCount: 0,
-  triangleCount: 0,
-  sideWallSegmentCount: 0,
-  // ---- Bbox + cross-control diff ----
+  inflatePuffAspectZ: 0,
+  inflateRadiusZ: 0,
+  inflatePressure: 0,
+  fieldResolution: 0,
+  smoothUnionStrength: 0,
+  // ---- Stroke / mesh diagnostics ----
+  sampleCount: 0,
+  gridCellCount: 0,
+  meshVertexCount: 0,
+  meshTriangleCount: 0,
+  // ---- Bbox ----
   bboxX: 0,
   bboxY: 0,
   bboxZ: 0,
-  differsFromSolidBase: "NO" as "YES" | "NO",
-  // ---- Stroke counters ----
+  // ---- Counters ----
   inputStrokeCount: 0,
   inputPointCount: 0,
   failureReason: "",
 }
 
 /**
- * Fallback used when distance-field dome construction fails. Returns the
- * Solid H3 geometry unchanged so the viewport is never empty for a valid
- * stroke. Sets the appropriate `INFLATE_DEBUG` fields so this path is
- * fully diagnosable from the panel.
+ * Resample a polyline by arc length so consecutive samples are at most
+ * `maxSpacing` apart. Returns world-space samples (already coord-scaled).
+ * Output preserves endpoints exactly.
+ */
+function inflateResampleCenterline(
+  worldPoints: { x: number; y: number }[],
+  maxSpacing: number,
+): { x: number; y: number }[] {
+  if (worldPoints.length < 2) return worldPoints.slice()
+  const out: { x: number; y: number }[] = [worldPoints[0]]
+  for (let i = 1; i < worldPoints.length; i++) {
+    const a = out[out.length - 1]
+    const b = worldPoints[i]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const segLen = Math.hypot(dx, dy)
+    if (segLen <= maxSpacing) {
+      out.push(b)
+      continue
+    }
+    const steps = Math.ceil(segLen / maxSpacing)
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps
+      out.push({ x: a.x + dx * t, y: a.y + dy * t })
+    }
+  }
+  return out
+}
+
+/**
+ * Build a single watertight tube mesh by sweeping an elliptical
+ * cross-section along the resampled centerline.
+ *
+ * Cross-section: ellipse with side-radius `radiusXY` (in the screen-XY
+ * plane perpendicular to the path tangent) and Z-radius `radiusZ`. At
+ * each sample we build an oriented frame:
+ *   tangent T = path direction in XY
+ *   side    S = perpendicular to T in XY (rotate 90° CCW)
+ *   up      U = +Z
+ * The cross-section vertex at angle theta is:
+ *   center + radiusXY*cos(theta)*S + radiusZ*sin(theta)*U
+ * Sweeping theta over [0, 2π) gives a closed elliptical ring per sample.
+ *
+ * End caps: hemispherical, produced by scaling the cross-section radius
+ * down to 0 along the first/last few samples. This matches the analytic
+ * surface of the same anisotropic-capsule scalar field.
+ *
+ * Why no medial-axis seam: each ring is a single closed loop. The
+ * surface wraps fully around the centerline. There is no z=0 ridge.
+ *
+ * Why Width feels like radius: `radiusXY` is the literal cross-section
+ * half-width in world units. Doubling it doubles tube thickness with no
+ * rasterization, no coverage threshold, no density behavior.
+ *
+ * Why Puff feels like pressure: `radiusZ / radiusXY` is the inflation
+ * aspect. Low Puff → flat soft gel. High Puff → over-pressured balloon.
+ */
+function inflateBuildEllipticalTube(
+  centerlineWorld: { x: number; y: number }[],
+  radiusXY: number,
+  radiusZ: number,
+): THREE.BufferGeometry | null {
+  const n = centerlineWorld.length
+  if (n < 2 || radiusXY <= 0 || radiusZ <= 0) return null
+
+  const ringSegs = 16
+
+  // Per-sample tangent (in XY plane).
+  const Tx = new Float32Array(n)
+  const Ty = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const prev = centerlineWorld[i === 0 ? 0 : i - 1]
+    const next = centerlineWorld[i === n - 1 ? n - 1 : i + 1]
+    let tx = next.x - prev.x
+    let ty = next.y - prev.y
+    const len = Math.hypot(tx, ty)
+    if (len < 1e-9) {
+      if (i > 0) {
+        tx = Tx[i - 1]
+        ty = Ty[i - 1]
+      } else {
+        tx = 1
+        ty = 0
+      }
+    } else {
+      tx /= len
+      ty /= len
+    }
+    Tx[i] = tx
+    Ty[i] = ty
+  }
+
+  // Hemispherical end-cap fade: r(t) = sqrt(1 - (1-t)^2).
+  const capFadeSamples = Math.min(4, Math.max(2, Math.floor(n * 0.08)))
+  const radiusScale = (i: number): number => {
+    if (i < capFadeSamples) {
+      const t = i / capFadeSamples
+      const u = 1 - t
+      return Math.sqrt(Math.max(0, 1 - u * u))
+    }
+    if (i > n - 1 - capFadeSamples) {
+      const t = (n - 1 - i) / capFadeSamples
+      const u = 1 - t
+      return Math.sqrt(Math.max(0, 1 - u * u))
+    }
+    return 1
+  }
+
+  const positions = new Float32Array(n * ringSegs * 3)
+  for (let i = 0; i < n; i++) {
+    const c = centerlineWorld[i]
+    const tx = Tx[i]
+    const ty = Ty[i]
+    // Side S = (-ty, tx) in XY.
+    const sx = -ty
+    const sy = tx
+    const rs = radiusScale(i)
+    const rXY = radiusXY * rs
+    const rZ = radiusZ * rs
+    for (let j = 0; j < ringSegs; j++) {
+      const theta = (j / ringSegs) * Math.PI * 2
+      const cosT = Math.cos(theta)
+      const sinT = Math.sin(theta)
+      const px = c.x + rXY * cosT * sx
+      const py = c.y + rXY * cosT * sy
+      const pz = rZ * sinT
+      const idx = (i * ringSegs + j) * 3
+      positions[idx] = px
+      positions[idx + 1] = py
+      positions[idx + 2] = pz
+    }
+  }
+
+  // Side-wall indices.
+  const sideIndexCount = (n - 1) * ringSegs * 2 * 3
+  const sideIndices = new Uint32Array(sideIndexCount)
+  let k = 0
+  for (let i = 0; i < n - 1; i++) {
+    for (let j = 0; j < ringSegs; j++) {
+      const j1 = (j + 1) % ringSegs
+      const a = i * ringSegs + j
+      const b = i * ringSegs + j1
+      const c2 = (i + 1) * ringSegs + j
+      const d = (i + 1) * ringSegs + j1
+      sideIndices[k++] = a
+      sideIndices[k++] = c2
+      sideIndices[k++] = b
+      sideIndices[k++] = b
+      sideIndices[k++] = c2
+      sideIndices[k++] = d
+    }
+  }
+
+  // Tip vertices for cap fans (geometric centers of endpoint rings).
+  const startCenter = centerlineWorld[0]
+  const endCenter = centerlineWorld[n - 1]
+  const tipPositions = new Float32Array(6)
+  tipPositions[0] = startCenter.x
+  tipPositions[1] = startCenter.y
+  tipPositions[2] = 0
+  tipPositions[3] = endCenter.x
+  tipPositions[4] = endCenter.y
+  tipPositions[5] = 0
+
+  const fullPositions = new Float32Array(positions.length + tipPositions.length)
+  fullPositions.set(positions, 0)
+  fullPositions.set(tipPositions, positions.length)
+  const tipStart = n * ringSegs
+  const tipEnd = n * ringSegs + 1
+
+  const fanIndices: number[] = []
+  for (let j = 0; j < ringSegs; j++) {
+    const j1 = (j + 1) % ringSegs
+    fanIndices.push(tipStart, j1, j)
+    fanIndices.push(tipEnd, (n - 1) * ringSegs + j, (n - 1) * ringSegs + j1)
+  }
+
+  const allIndices = new Uint32Array(sideIndices.length + fanIndices.length)
+  allIndices.set(sideIndices, 0)
+  for (let i = 0; i < fanIndices.length; i++) {
+    allIndices[sideIndices.length + i] = fanIndices[i]
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(fullPositions, 3),
+  )
+  geometry.setIndex(new THREE.BufferAttribute(allIndices, 1))
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  return geometry
+}
+
+/**
+ * Final fallback: return Solid H3 unchanged. Reached only when the
+ * stroke-volume tube path produces no tubes. Marks INFLATE_DEBUG so the
+ * panel surfaces this clearly.
  */
 function inflateFallbackToSolid(
   strokes: ProcessedStroke[],
   canvasWidth: number,
   canvasHeight: number,
   solidParams: SolidParams,
-  _coordScale: number,
-  _effectiveThicknessPx: number,
-  effectiveDepth: number,
   inputPts: number,
 ): StrokeMeshData[] {
   INFLATE_DEBUG.fallbackUsed = "YES"
   INFLATE_DEBUG.inflateMode = "SOLID_H3_PASSTHROUGH"
-  INFLATE_DEBUG.usesSolidBase = "YES"
   INFLATE_DEBUG.inflateStrategy =
-    "Fallback — RASTER_DISTANCE_FIELD_DOME failed, returning Solid H3 unchanged. See failureReason."
+    "Fallback — STROKE_VOLUME_FIELD_INFLATE failed, returning Solid H3 unchanged. See failureReason."
 
   const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
   const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
     solidParams.thickness,
   )
+  const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
   const worldThickness = effectiveThicknessPx * coordScale
   const testStroke = strokesToTestStroke(strokes, canvasWidth, canvasHeight)
 
@@ -4580,7 +4772,6 @@ function inflateFallbackToSolid(
       ` | fallback buildMaskSolid threw: ${(e as Error).message}`
     return []
   }
-
   const baseGeometry = solidResult.geometry
   if (!baseGeometry) {
     INFLATE_DEBUG.failureReason =
@@ -4588,12 +4779,8 @@ function inflateFallbackToSolid(
       " | fallback Solid H3 returned null geometry"
     return []
   }
-
   baseGeometry.computeBoundingBox()
   INFLATE_DEBUG.inflateGeometryCreated = "YES"
-  INFLATE_DEBUG.vertexCount =
-    baseGeometry.getAttribute("position")?.count ?? 0
-  INFLATE_DEBUG.differsFromSolidBase = "NO"
 
   const meshData: StrokeMeshData = {
     tubeGeometry: baseGeometry,
@@ -4610,33 +4797,33 @@ export const InflateEngine: GeometryEngine = {
     const solidParams = sp ?? DEFAULT_SOLID_PARAMS
 
     // ---- Reset all probes ----
-    INFLATE_DEBUG.inflateMode = "RASTER_DISTANCE_FIELD_DOME"
+    INFLATE_DEBUG.inflateMode = "STROKE_VOLUME_FIELD_INFLATE"
     INFLATE_DEBUG.inflateStrategy =
-      "Decoupled controls: Thickness sets footprint (rasterized stroke width), Puff sets dome height. Falloff is footprint-clamped so wide strokes never become flat plateaus."
-    INFLATE_DEBUG.usesSolidBase = "NO"
-    INFLATE_DEBUG.usesRasterMask = "YES"
+      "Build inflated stroke volume from the resampled centerline. Width = XY radius around centerline. Puff = Z aspect / cross-section roundness. Surface is an elliptical capsule swept along the path with smooth metaball-style end caps."
+    INFLATE_DEBUG.usesRasterHeightfield = "NO"
+    INFLATE_DEBUG.medialAxisSeamExpected = "NO"
+    INFLATE_DEBUG.widthAffectsXY = "YES"
+    INFLATE_DEBUG.puffAffectsZCrossSection = "YES"
     INFLATE_DEBUG.fallbackUsed = "NO"
-    INFLATE_DEBUG.preservesHoles = "YES"
     INFLATE_DEBUG.cameraFitUsesXYOnly = "YES"
     INFLATE_DEBUG.inflateEngineCalled = "YES"
     INFLATE_DEBUG.inflateBuildPreviewCalled = "YES"
     INFLATE_DEBUG.inflateGeometryCreated = "NO"
-    INFLATE_DEBUG.thicknessSliderValue = solidParams.thickness
+    INFLATE_DEBUG.widthSliderValue = solidParams.thickness
     INFLATE_DEBUG.puffSliderValue = solidParams.depth
-    INFLATE_DEBUG.inflateFootprintPx = 0
-    INFLATE_DEBUG.inflatePuffHeightWorld = 0
-    INFLATE_DEBUG.inflateDomeFalloffPx = 0
-    INFLATE_DEBUG.inflateSoftness = 0
-    INFLATE_DEBUG.maskResolution = "0x0"
-    INFLATE_DEBUG.filledPixelCount = 0
-    INFLATE_DEBUG.maxDistanceToEdge = 0
-    INFLATE_DEBUG.vertexCount = 0
-    INFLATE_DEBUG.triangleCount = 0
-    INFLATE_DEBUG.sideWallSegmentCount = 0
+    INFLATE_DEBUG.inflateStrokeRadiusXY = 0
+    INFLATE_DEBUG.inflatePuffAspectZ = 0
+    INFLATE_DEBUG.inflateRadiusZ = 0
+    INFLATE_DEBUG.inflatePressure = 0
+    INFLATE_DEBUG.fieldResolution = 0
+    INFLATE_DEBUG.smoothUnionStrength = 0
+    INFLATE_DEBUG.sampleCount = 0
+    INFLATE_DEBUG.gridCellCount = 0
+    INFLATE_DEBUG.meshVertexCount = 0
+    INFLATE_DEBUG.meshTriangleCount = 0
     INFLATE_DEBUG.bboxX = 0
     INFLATE_DEBUG.bboxY = 0
     INFLATE_DEBUG.bboxZ = 0
-    INFLATE_DEBUG.differsFromSolidBase = "NO"
     INFLATE_DEBUG.failureReason = ""
     INFLATE_DEBUG.inputStrokeCount = strokes.length
     let inputPts = 0
@@ -4655,227 +4842,23 @@ export const InflateEngine: GeometryEngine = {
       solidParams.thickness,
     )
     const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
-    // ---- Decoupled named values (the contract for the controls) ----
-    // 1. Footprint = rasterized stroke width in canvas pixels. Driven by
-    //    Thickness ONLY. Puff never touches this.
-    const inflateFootprintPx = effectiveThicknessPx
-    INFLATE_DEBUG.inflateFootprintPx = inflateFootprintPx
 
-    // ---- Stage 1: Re-rasterize stroke into a binary mask ----
-    // We don't reuse Solid's mask because we want our own resolution + a
-    // straight, dependency-free path that this engine fully owns.
-    //
-    // Mask resolution: 256 on the long axis. Higher than 192 to reduce
-    // thin-stroke quantization (a 1-px-wide stroke at 192 has only ~1.3
-    // mask pixels of width; at 256 it has ~1.8). This makes Thickness
-    // changes feel smooth instead of "pop in/out".
-    const longSide = Math.max(canvasWidth, canvasHeight)
-    const targetLong = 256
-    const maskScale = targetLong / longSide
-    const maskW = Math.max(8, Math.round(canvasWidth * maskScale))
-    const maskH = Math.max(8, Math.round(canvasHeight * maskScale))
-    INFLATE_DEBUG.maskResolution = `${maskW}x${maskH}`
-
-    // Convert each stroke point to mask pixel coords. Strokes come in as
-    // ProcessedStroke (canvas-pixel coords, Y-down).
-    const px2mask = (px: number, py: number): { mx: number; my: number } => ({
-      mx: px * (maskW / canvasWidth),
-      my: py * (maskH / canvasHeight),
+    // ---- Step 1: canvas-pixel → world-space ----
+    const cw2 = canvasWidth / 2
+    const ch2 = canvasHeight / 2
+    const px2w = (px: number, py: number) => ({
+      x: (px - cw2) * coordScale,
+      y: -(py - ch2) * coordScale,
     })
 
-    // Use an offscreen 2D canvas to rasterize the stroke as a fat path.
-    // This handles round caps/joins for free — same primitive Solid uses.
-    let canvas: HTMLCanvasElement
-    try {
-      canvas = document.createElement("canvas")
-    } catch (e) {
-      INFLATE_DEBUG.failureReason = `canvas create failed: ${(e as Error).message}`
-      return inflateFallbackToSolid(
-        strokes,
-        canvasWidth,
-        canvasHeight,
-        solidParams,
-        coordScale,
-        effectiveThicknessPx,
-        effectiveDepth,
-        inputPts,
-      )
-    }
-    canvas.width = maskW
-    canvas.height = maskH
-    const ctx = canvas.getContext("2d")
-    if (!ctx) {
-      INFLATE_DEBUG.failureReason = "2d context unavailable"
-      return inflateFallbackToSolid(
-        strokes,
-        canvasWidth,
-        canvasHeight,
-        solidParams,
-        coordScale,
-        effectiveThicknessPx,
-        effectiveDepth,
-        inputPts,
-      )
-    }
-    ctx.fillStyle = "black"
-    ctx.fillRect(0, 0, maskW, maskH)
-    ctx.strokeStyle = "white"
-    ctx.lineCap = "round"
-    ctx.lineJoin = "round"
-    // Stroke width in mask pixels = canvas-pixel thickness * mask scale.
-    ctx.lineWidth = Math.max(1, effectiveThicknessPx * maskScale)
-    ctx.beginPath()
-    for (const s of strokes) {
-      if (!s.points || s.points.length === 0) continue
-      const first = px2mask(s.points[0].x, s.points[0].y)
-      ctx.moveTo(first.mx, first.my)
-      for (let i = 1; i < s.points.length; i++) {
-        const p = px2mask(s.points[i].x, s.points[i].y)
-        ctx.lineTo(p.mx, p.my)
-      }
-    }
-    ctx.stroke()
+    // ---- Step 2: decoupled controls ----
+    // Width = stroke DIAMETER in canvas px → halve for radius, scale to world.
+    const inflateStrokeRadiusXY = (effectiveThicknessPx * coordScale) / 2
+    INFLATE_DEBUG.inflateStrokeRadiusXY = inflateStrokeRadiusXY
 
-    // Read back into a binary boolean array.
-    let img: ImageData
-    try {
-      img = ctx.getImageData(0, 0, maskW, maskH)
-    } catch (e) {
-      INFLATE_DEBUG.failureReason = `getImageData failed: ${(e as Error).message}`
-      return inflateFallbackToSolid(
-        strokes,
-        canvasWidth,
-        canvasHeight,
-        solidParams,
-        coordScale,
-        effectiveThicknessPx,
-        effectiveDepth,
-        inputPts,
-      )
-    }
-    const filled = new Uint8Array(maskW * maskH)
-    let filledCount = 0
-    for (let i = 0; i < maskW * maskH; i++) {
-      // Threshold any non-black pixel as filled.
-      if (img.data[i * 4] > 32) {
-        filled[i] = 1
-        filledCount++
-      }
-    }
-    INFLATE_DEBUG.filledPixelCount = filledCount
-
-    if (filledCount < 4) {
-      INFLATE_DEBUG.failureReason = `too few filled pixels (${filledCount})`
-      return inflateFallbackToSolid(
-        strokes,
-        canvasWidth,
-        canvasHeight,
-        solidParams,
-        coordScale,
-        effectiveThicknessPx,
-        effectiveDepth,
-        inputPts,
-      )
-    }
-
-    // ---- Stage 2: Cell coverage + corner interiority ----
-    //
-    // CRITICAL fix from the previous iteration: the old code derived
-    // `cornerInside = all-4-neighboring-pixels-filled` and then derived
-    // `cellFilled = all-4-corners-inside`. That double-erosion stripped
-    // ~2 pixels off the silhouette in every direction, which made
-    // Thickness behave like density: small thickness changes flipped
-    // entire bands of cells in/out at once (the "meatball" feel).
-    //
-    // New rule (no erosion of footprint):
-    //   - `cellFilled[x,y] = filled[x,y]` directly. The 3D footprint is
-    //     EXACTLY the rasterized 2D footprint. So Thickness moves the
-    //     silhouette smoothly, one rasterized pixel at a time.
-    //   - `cornerInterior[cx,cy] = all-4-neighboring-cells-filled`. This
-    //     is used only for height: corners that touch any boundary cell
-    //     get height 0 (so caps and side walls meet seamlessly), but
-    //     cells themselves are still emitted at the boundary.
-    const gW = maskW + 1
-    const gH = maskH + 1
-    const cellW = maskW
-    const cellH = maskH
-    const cellFilled = filled // 1:1 — no erosion. Footprint == raster.
-
-    const cornerInterior = new Uint8Array(gW * gH)
-    for (let cy = 0; cy < gH; cy++) {
-      for (let cx = 0; cx < gW; cx++) {
-        // Corners are "interior" only when ALL 4 adjacent cells are
-        // filled. Boundary corners get height 0 → caps meet at silhouette.
-        const tl = cx > 0 && cy > 0 ? cellFilled[(cy - 1) * cellW + (cx - 1)] : 0
-        const tr =
-          cx < cellW && cy > 0 ? cellFilled[(cy - 1) * cellW + cx] : 0
-        const bl =
-          cx > 0 && cy < cellH ? cellFilled[cy * cellW + (cx - 1)] : 0
-        const br =
-          cx < cellW && cy < cellH ? cellFilled[cy * cellW + cx] : 0
-        cornerInterior[cy * gW + cx] = tl && tr && bl && br ? 1 : 0
-      }
-    }
-
-    // ---- Stage 3: Distance-to-boundary on the corner grid ----
-    // Distance is measured from interior corners outward to the nearest
-    // non-interior corner. Drives dome height. Distance is in mask units
-    // (1 unit = 1 mask pixel).
-    const INF = 1e9
-    const dist = new Float32Array(gW * gH)
-    for (let i = 0; i < gW * gH; i++) {
-      dist[i] = cornerInterior[i] ? INF : 0
-    }
-    // Forward chamfer (3,4) pass.
-    for (let y = 0; y < gH; y++) {
-      for (let x = 0; x < gW; x++) {
-        const i = y * gW + x
-        if (!cornerInterior[i]) continue
-        let d = dist[i]
-        if (x > 0) d = Math.min(d, dist[i - 1] + 3)
-        if (y > 0) d = Math.min(d, dist[i - gW] + 3)
-        if (x > 0 && y > 0) d = Math.min(d, dist[i - gW - 1] + 4)
-        if (x < gW - 1 && y > 0) d = Math.min(d, dist[i - gW + 1] + 4)
-        dist[i] = d
-      }
-    }
-    // Backward pass.
-    for (let y = gH - 1; y >= 0; y--) {
-      for (let x = gW - 1; x >= 0; x--) {
-        const i = y * gW + x
-        if (!cornerInterior[i]) continue
-        let d = dist[i]
-        if (x < gW - 1) d = Math.min(d, dist[i + 1] + 3)
-        if (y < gH - 1) d = Math.min(d, dist[i + gW] + 3)
-        if (x < gW - 1 && y < gH - 1) d = Math.min(d, dist[i + gW + 1] + 4)
-        if (x > 0 && y < gH - 1) d = Math.min(d, dist[i + gW - 1] + 4)
-        dist[i] = d
-      }
-    }
-    let maxDist = 0
-    for (let i = 0; i < gW * gH; i++) {
-      if (cornerInterior[i]) {
-        dist[i] = dist[i] / 3 // chamfer (3,4) → ~Euclidean
-        if (dist[i] > maxDist) maxDist = dist[i]
-      }
-    }
-    INFLATE_DEBUG.maxDistanceToEdge = maxDist
-    if (maxDist < 0.25) {
-      // No interior corners exist — stroke is too thin for a dome. We
-      // still emit the cap mesh (footprint preserved), but with zero
-      // height everywhere. This produces a flat gel sheet at the exact
-      // raster footprint — visible, never empty, never blobs.
-      INFLATE_DEBUG.failureReason = `no interior corners (max=${maxDist.toFixed(2)}); flat gel sheet emitted`
-      // Don't fall back — proceed with maxDist=0 so the cap is flat.
-    }
-
-    // ---- Stage 4: Decoupled height + falloff ----
-    //
-    // PUFF controls dome HEIGHT only. Mapped from the slider linearly to
-    // a world-space Z magnitude. Does NOT touch the mask, footprint,
-    // distance field, or coverage.
+    // Puff → Z aspect (cross-section roundness/pressure).
     const depthRange = SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN
-    const depthNorm =
+    const puffNorm =
       depthRange > 0
         ? Math.min(
             1,
@@ -4885,249 +4868,91 @@ export const InflateEngine: GeometryEngine = {
             ),
           )
         : 0.5
-    // Puff height: 0.6× → 1.6× of effectiveDepth as Puff sweeps low→high.
-    // Half goes above z=0, half below (mirror), so total Z bbox is 2× this.
-    const inflatePuffHeightWorld = effectiveDepth * (0.6 + depthNorm * 1.0)
-    INFLATE_DEBUG.inflatePuffHeightWorld = inflatePuffHeightWorld
+    const inflatePuffAspectZ = 0.25 + puffNorm * 0.9 // 0.25 → 1.15
+    const baseRadiusZ = inflateStrokeRadiusXY * inflatePuffAspectZ
+    INFLATE_DEBUG.inflatePuffAspectZ = inflatePuffAspectZ
+    INFLATE_DEBUG.inflatePressure = puffNorm
+    INFLATE_DEBUG.fieldResolution = 0
+    INFLATE_DEBUG.smoothUnionStrength = 0
 
-    // FALLOFF (dome rolloff distance) is decoupled from both Puff AND
-    // raw Thickness. It scales with footprint but is CLAMPED so:
-    //   - Wide strokes don't get giant flat plateaus (clamped above).
-    //   - Thin strokes don't get a sub-pixel falloff (clamped below).
-    // This is what kills the "meatball density" feel: changing thickness
-    // moves footprint smoothly, but the dome shape stays consistently
-    // rounded across the whole thickness range.
-    const footprintMaskPx = inflateFootprintPx * maskScale
-    const inflateDomeFalloffPx = Math.max(
-      4,
-      Math.min(18, footprintMaskPx * 0.35),
+    // Blend with calibrated effectiveDepth at high Puff so a max-puff
+    // stroke reads as visibly tall, not just "as round as it is wide".
+    const radiusZ =
+      baseRadiusZ * (1 - puffNorm) + effectiveDepth * 0.7 * puffNorm
+    INFLATE_DEBUG.inflateRadiusZ = radiusZ
+
+    // ---- Step 3: resample + sweep elliptical tube per stroke ----
+    const sampleSpacing = Math.max(
+      coordScale * 1.5,
+      Math.min(inflateStrokeRadiusXY * 0.6, coordScale * 8),
     )
-    INFLATE_DEBUG.inflateDomeFalloffPx = inflateDomeFalloffPx
 
-    // SOFTNESS: smoothstep exponent. Constant for now — exposes a clean
-    // hook for a future "softness" control without coupling to thickness.
-    const inflateSoftness = 1.0
-    INFLATE_DEBUG.inflateSoftness = inflateSoftness
+    const meshes: StrokeMeshData[] = []
+    let totalSamples = 0
+    let totalVerts = 0
+    let totalTris = 0
+    const aggregateBox = new THREE.Box3()
 
-    // Per-corner height: 0 outside interior, smoothstep ramp inside up
-    // to inflatePuffHeightWorld. Driven by `dist / inflateDomeFalloffPx`
-    // — completely independent of Puff slider.
-    const cornerHeight = new Float32Array(gW * gH)
-    for (let i = 0; i < gW * gH; i++) {
-      if (!cornerInterior[i]) {
-        cornerHeight[i] = 0
-        continue
+    for (let si = 0; si < strokes.length; si++) {
+      const s = strokes[si]
+      if (!s.points || s.points.length < 2) continue
+      const worldPts = s.points.map((p) => px2w(p.x, p.y))
+      const resampled = inflateResampleCenterline(worldPts, sampleSpacing)
+      if (resampled.length < 2) continue
+      totalSamples += resampled.length
+
+      let geometry: THREE.BufferGeometry | null = null
+      try {
+        geometry = inflateBuildEllipticalTube(
+          resampled,
+          inflateStrokeRadiusXY,
+          radiusZ,
+        )
+      } catch (e) {
+        INFLATE_DEBUG.failureReason = `tube build threw: ${(e as Error).message}`
+        geometry = null
       }
-      const t = Math.min(1, dist[i] / inflateDomeFalloffPx)
-      const s = t * t * (3 - 2 * t) // smoothstep
-      cornerHeight[i] = s * inflatePuffHeightWorld
+      if (!geometry) continue
+
+      const posAttr = geometry.getAttribute("position") as
+        | THREE.BufferAttribute
+        | undefined
+      if (posAttr) totalVerts += posAttr.count
+      const idx = geometry.getIndex()
+      if (idx) totalTris += idx.count / 3
+      if (geometry.boundingBox) aggregateBox.union(geometry.boundingBox)
+
+      meshes.push({
+        tubeGeometry: geometry,
+        filteredCount: s.points.length,
+        key: `inflate-svfi-${si}-${resampled.length}-${inflateStrokeRadiusXY.toFixed(4)}-${radiusZ.toFixed(4)}`,
+        mode: "inflate",
+      })
     }
 
-    // ---- Stage 4: Build the heightfield mesh ----
-    // We construct a SINGLE BufferGeometry containing:
-    //   - Top cap: one quad per "filled cell" (cell = 4 corners all
-    //     `cornerInside`). Top vertex z = +cornerHeight.
-    //   - Bottom cap: same cells, mirrored, z = -cornerHeight (the bottom
-    //     mirrors the top so the silhouette is symmetric — reads as fully
-    //     puffy from any angle).
-    //   - Side walls: for every "boundary edge" (an edge where one side
-    //     is a filled cell and the other is NOT), emit a vertical quad
-    //     between (top corner z = +cornerHeight) and (bottom corner z =
-    //     -cornerHeight). Because cornerHeight is 0 at boundary corners,
-    //     the wall collapses to zero height at the silhouette → top and
-    //     bottom caps meet seamlessly. This is what makes the mesh
-    //     watertight without any vertex welding.
-    //
-    // Coordinate system: mask pixel (cx, cy) -> world (wx, wy).
-    //   pixelX = cx * (canvasWidth / maskW)
-    //   pixelY = cy * (canvasHeight / maskH)
-    //   worldX = (pixelX - canvasWidth/2) * coordScale
-    //   worldY = -(pixelY - canvasHeight/2) * coordScale  // flip Y
-    const cw2 = canvasWidth / 2
-    const ch2 = canvasHeight / 2
-    const px2wX = (cx: number) =>
-      (cx * (canvasWidth / maskW) - cw2) * coordScale
-    const px2wY = (cy: number) =>
-      -(cy * (canvasHeight / maskH) - ch2) * coordScale
+    INFLATE_DEBUG.sampleCount = totalSamples
+    INFLATE_DEBUG.meshVertexCount = totalVerts
+    INFLATE_DEBUG.meshTriangleCount = totalTris
 
-    // Identify "filled cells" — already set in Stage 2 to the raw raster
-    // (no erosion). cellW/cellH already declared in Stage 2.
-
-    // We will build positions/indices using PER-CORNER vertex IDs for the
-    // top cap and PER-CORNER vertex IDs for the bottom cap. Sharing
-    // corners across cells is the key to a smooth-shaded heightfield with
-    // a low triangle count.
-    //
-    // Map each corner index used by ANY filled cell to a "compact" vertex
-    // ID for top and bottom.
-    const topVertId = new Int32Array(gW * gH)
-    const botVertId = new Int32Array(gW * gH)
-    topVertId.fill(-1)
-    botVertId.fill(-1)
-    const positions: number[] = []
-    let nextId = 0
-
-    const ensureTop = (cx: number, cy: number): number => {
-      const ci = cy * gW + cx
-      if (topVertId[ci] !== -1) return topVertId[ci]
-      const id = nextId++
-      topVertId[ci] = id
-      positions.push(px2wX(cx), px2wY(cy), cornerHeight[ci])
-      return id
-    }
-    const ensureBot = (cx: number, cy: number): number => {
-      const ci = cy * gW + cx
-      if (botVertId[ci] !== -1) return botVertId[ci]
-      const id = nextId++
-      botVertId[ci] = id
-      positions.push(px2wX(cx), px2wY(cy), -cornerHeight[ci])
-      return id
-    }
-
-    const indices: number[] = []
-    let triangleCount = 0
-    let cellsBuilt = 0
-
-    for (let y = 0; y < cellH; y++) {
-      for (let x = 0; x < cellW; x++) {
-        if (!cellFilled[y * cellW + x]) continue
-        cellsBuilt++
-
-        // Top cap (CCW when viewed from +Z).
-        const tA = ensureTop(x, y)
-        const tB = ensureTop(x + 1, y)
-        const tC = ensureTop(x + 1, y + 1)
-        const tD = ensureTop(x, y + 1)
-        // Note: world Y flips, so a +y mask cell is -y world. To keep top
-        // faces facing +Z (camera looks down -Z), we wind the indices so
-        // the cross product points +Z. With mask Y flipped, going
-        // (x,y)→(x+1,y)→(x+1,y+1)→(x,y+1) is CCW in world.
-        indices.push(tA, tD, tC)
-        indices.push(tA, tC, tB)
-        triangleCount += 2
-
-        // Bottom cap (CCW when viewed from -Z, i.e. reversed winding).
-        const bA = ensureBot(x, y)
-        const bB = ensureBot(x + 1, y)
-        const bC = ensureBot(x + 1, y + 1)
-        const bD = ensureBot(x, y + 1)
-        indices.push(bA, bB, bC)
-        indices.push(bA, bC, bD)
-        triangleCount += 2
-      }
-    }
-
-    if (cellsBuilt === 0) {
-      INFLATE_DEBUG.failureReason = "no filled cells after corner test"
+    if (meshes.length === 0) {
+      INFLATE_DEBUG.failureReason =
+        INFLATE_DEBUG.failureReason || "no tubes produced"
       return inflateFallbackToSolid(
         strokes,
         canvasWidth,
         canvasHeight,
         solidParams,
-        coordScale,
-        effectiveThicknessPx,
-        effectiveDepth,
         inputPts,
       )
     }
 
-    // ---- Stage 5: Side walls along boundary edges ----
-    // For each filled cell, look at its 4 edges. An edge is a "boundary
-    // edge" if the adjacent cell is NOT filled (or is out of bounds). For
-    // each boundary edge, emit a vertical quad from top corners to bottom
-    // corners. Because cornerHeight is 0 at boundary corners, this quad
-    // collapses to a degenerate strip exactly at the silhouette — which is
-    // what we want: the cap meets the wall at z=0 with no gap.
-    let sideWallSegmentCount = 0
-    const isFilled = (x: number, y: number): boolean =>
-      x >= 0 && x < cellW && y >= 0 && y < cellH
-        ? cellFilled[y * cellW + x] === 1
-        : false
-
-    for (let y = 0; y < cellH; y++) {
-      for (let x = 0; x < cellW; x++) {
-        if (!cellFilled[y * cellW + x]) continue
-
-        // TOP edge (y direction -1): boundary if cell (x, y-1) not filled.
-        if (!isFilled(x, y - 1)) {
-          const t1 = ensureTop(x, y)
-          const t2 = ensureTop(x + 1, y)
-          const b1 = ensureBot(x, y)
-          const b2 = ensureBot(x + 1, y)
-          // Outward normal points -Y in mask = +Y in world (Y flipped).
-          // CCW from outside: t1 → t2 → b2 → b1.
-          indices.push(t1, t2, b2)
-          indices.push(t1, b2, b1)
-          triangleCount += 2
-          sideWallSegmentCount++
-        }
-        // BOTTOM edge (y direction +1).
-        if (!isFilled(x, y + 1)) {
-          const t1 = ensureTop(x + 1, y + 1)
-          const t2 = ensureTop(x, y + 1)
-          const b1 = ensureBot(x + 1, y + 1)
-          const b2 = ensureBot(x, y + 1)
-          indices.push(t1, t2, b2)
-          indices.push(t1, b2, b1)
-          triangleCount += 2
-          sideWallSegmentCount++
-        }
-        // LEFT edge (x direction -1).
-        if (!isFilled(x - 1, y)) {
-          const t1 = ensureTop(x, y + 1)
-          const t2 = ensureTop(x, y)
-          const b1 = ensureBot(x, y + 1)
-          const b2 = ensureBot(x, y)
-          indices.push(t1, t2, b2)
-          indices.push(t1, b2, b1)
-          triangleCount += 2
-          sideWallSegmentCount++
-        }
-        // RIGHT edge (x direction +1).
-        if (!isFilled(x + 1, y)) {
-          const t1 = ensureTop(x + 1, y)
-          const t2 = ensureTop(x + 1, y + 1)
-          const b1 = ensureBot(x + 1, y)
-          const b2 = ensureBot(x + 1, y + 1)
-          indices.push(t1, t2, b2)
-          indices.push(t1, b2, b1)
-          triangleCount += 2
-          sideWallSegmentCount++
-        }
-      }
+    if (!aggregateBox.isEmpty()) {
+      INFLATE_DEBUG.bboxX = aggregateBox.max.x - aggregateBox.min.x
+      INFLATE_DEBUG.bboxY = aggregateBox.max.y - aggregateBox.min.y
+      INFLATE_DEBUG.bboxZ = aggregateBox.max.z - aggregateBox.min.z
     }
-    INFLATE_DEBUG.sideWallSegmentCount = sideWallSegmentCount
-    INFLATE_DEBUG.triangleCount = triangleCount
-    INFLATE_DEBUG.vertexCount = positions.length / 3
-
-    // ---- Stage 6: Build the BufferGeometry ----
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(positions, 3),
-    )
-    geometry.setIndex(indices)
-    geometry.computeVertexNormals()
-    geometry.computeBoundingBox()
-
-    // Record bbox diagnostics so the debug panel can report XY/Z stability.
-    const bb = geometry.boundingBox
-    if (bb) {
-      INFLATE_DEBUG.bboxX = bb.max.x - bb.min.x
-      INFLATE_DEBUG.bboxY = bb.max.y - bb.min.y
-      INFLATE_DEBUG.bboxZ = bb.max.z - bb.min.z
-    }
-
     INFLATE_DEBUG.inflateGeometryCreated = "YES"
-    INFLATE_DEBUG.differsFromSolidBase = "YES" // structurally distinct from H3
-
-    const meshData: StrokeMeshData = {
-      tubeGeometry: geometry,
-      filteredCount: inputPts,
-      key: `inflate-rdfd2-${strokes.length}-${maskW}x${maskH}-${effectiveThicknessPx}-${inflatePuffHeightWorld.toFixed(4)}-${inflateDomeFalloffPx.toFixed(2)}-${INFLATE_DEBUG.fallbackUsed}`,
-      mode: "inflate",
-    }
-    return [meshData]
+    return meshes
   },
 
   buildExport(_strokes: ProcessedStroke[], _params: ExportParams): ExportResult {
