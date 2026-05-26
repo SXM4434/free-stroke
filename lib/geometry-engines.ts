@@ -4526,6 +4526,10 @@ export const INFLATE_DEBUG = {
   inflatePuffAspectZ: 0,
   inflateRadiusZ: 0,
   inflatePressure: 0,
+  crossSectionBulge: 0,
+  profileExponent: 0,
+  ringSampleCount: 0,
+  capRoundness: 0,
   fieldResolution: 0,
   smoothUnionStrength: 0,
   // ---- Stroke / mesh diagnostics ----
@@ -4607,15 +4611,25 @@ function inflateBuildEllipticalTube(
   centerlineWorld: { x: number; y: number }[],
   radiusXY: number,
   radiusZ: number,
+  opts?: {
+    ringSegs?: number
+    profileExponent?: number // 2 = ellipse; <2 squashed; >2 squircle/balloon
+    crossSectionBulge?: number // 0..0.4 radial bulge (pressurized fullness)
+    capRoundness?: number // 0..1 controls cap fade length & roundness
+  },
 ): THREE.BufferGeometry | null {
   const n = centerlineWorld.length
   if (n < 2 || radiusXY <= 0 || radiusZ <= 0) return null
 
-  const ringSegs = 16
+  const ringSegs = Math.max(8, opts?.ringSegs ?? 24)
+  const profileExponent = Math.max(0.6, opts?.profileExponent ?? 2)
+  const bulge = Math.max(0, Math.min(0.5, opts?.crossSectionBulge ?? 0))
+  const capRoundness = Math.max(0, Math.min(1, opts?.capRoundness ?? 0.6))
 
-  // Per-sample tangent (in XY plane).
-  const Tx = new Float32Array(n)
-  const Ty = new Float32Array(n)
+  // Per-sample tangent (in XY plane). Smoothed with a 3-tap pass to avoid
+  // visible segmenting at sample joins on cursive / loopy strokes.
+  const TxRaw = new Float32Array(n)
+  const TyRaw = new Float32Array(n)
   for (let i = 0; i < n; i++) {
     const prev = centerlineWorld[i === 0 ? 0 : i - 1]
     const next = centerlineWorld[i === n - 1 ? n - 1 : i + 1]
@@ -4624,8 +4638,8 @@ function inflateBuildEllipticalTube(
     const len = Math.hypot(tx, ty)
     if (len < 1e-9) {
       if (i > 0) {
-        tx = Tx[i - 1]
-        ty = Ty[i - 1]
+        tx = TxRaw[i - 1]
+        ty = TyRaw[i - 1]
       } else {
         tx = 1
         ty = 0
@@ -4634,24 +4648,75 @@ function inflateBuildEllipticalTube(
       tx /= len
       ty /= len
     }
+    TxRaw[i] = tx
+    TyRaw[i] = ty
+  }
+  const Tx = new Float32Array(n)
+  const Ty = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const i0 = Math.max(0, i - 1)
+    const i1 = Math.min(n - 1, i + 1)
+    let tx = TxRaw[i0] * 0.25 + TxRaw[i] * 0.5 + TxRaw[i1] * 0.25
+    let ty = TyRaw[i0] * 0.25 + TyRaw[i] * 0.5 + TyRaw[i1] * 0.25
+    const L = Math.hypot(tx, ty)
+    if (L > 1e-9) {
+      tx /= L
+      ty /= L
+    } else {
+      tx = TxRaw[i]
+      ty = TyRaw[i]
+    }
     Tx[i] = tx
     Ty[i] = ty
   }
 
-  // Hemispherical end-cap fade: r(t) = sqrt(1 - (1-t)^2).
-  const capFadeSamples = Math.min(4, Math.max(2, Math.floor(n * 0.08)))
+  // Hemispherical end-cap fade. Cap length scales with capRoundness:
+  // capRoundness=0 → minimum (2 samples), capRoundness=1 → up to ~14% of n.
+  const minCap = 2
+  const maxCap = Math.max(minCap, Math.floor(n * 0.14))
+  const capFadeSamples = Math.max(
+    minCap,
+    Math.min(maxCap, Math.floor(minCap + (maxCap - minCap) * capRoundness)),
+  )
   const radiusScale = (i: number): number => {
+    let t = 1
     if (i < capFadeSamples) {
-      const t = i / capFadeSamples
-      const u = 1 - t
-      return Math.sqrt(Math.max(0, 1 - u * u))
+      t = i / capFadeSamples
+    } else if (i > n - 1 - capFadeSamples) {
+      t = (n - 1 - i) / capFadeSamples
+    } else {
+      return 1
     }
-    if (i > n - 1 - capFadeSamples) {
-      const t = (n - 1 - i) / capFadeSamples
-      const u = 1 - t
-      return Math.sqrt(Math.max(0, 1 - u * u))
-    }
-    return 1
+    // Hemispherical core: r = sqrt(1 - (1-t)^2). Blend toward smoothstep at
+    // low capRoundness so caps don't get pinched on short strokes.
+    const u = 1 - t
+    const hemi = Math.sqrt(Math.max(0, 1 - u * u))
+    const smooth = t * t * (3 - 2 * t)
+    return hemi * capRoundness + smooth * (1 - capRoundness)
+  }
+
+  // Precompute the cross-section profile (one normalized ring shared by
+  // every sample). Superellipse with a small radial bulge term.
+  // Plain ellipse: |x|^2 + |z|^2 = 1 (exponent = 2).
+  // profileExponent < 2 → diamond / soft squash (low Puff).
+  // profileExponent > 2 → squircle / balloon (high Puff).
+  // bulge pushes the surface outward radially (fuller / pressurized).
+  const profCosX = new Float32Array(ringSegs)
+  const profSinZ = new Float32Array(ringSegs)
+  const e = profileExponent
+  for (let j = 0; j < ringSegs; j++) {
+    const theta = (j / ringSegs) * Math.PI * 2
+    const cT = Math.cos(theta)
+    const sT = Math.sin(theta)
+    // Superellipse (signed power):
+    //   x = sign(cos)*|cos|^(2/e), z = sign(sin)*|sin|^(2/e)
+    const k = 2 / e
+    const xUnit = Math.sign(cT) * Math.pow(Math.abs(cT), k)
+    const zUnit = Math.sign(sT) * Math.pow(Math.abs(sT), k)
+    // Apply isotropic bulge: scale the unit by (1 + bulge).
+    const scale = 1 + bulge
+    profCosX[j] = xUnit * scale
+    profSinZ[j] = zUnit * scale
   }
 
   const positions = new Float32Array(n * ringSegs * 3)
@@ -4666,12 +4731,11 @@ function inflateBuildEllipticalTube(
     const rXY = radiusXY * rs
     const rZ = radiusZ * rs
     for (let j = 0; j < ringSegs; j++) {
-      const theta = (j / ringSegs) * Math.PI * 2
-      const cosT = Math.cos(theta)
-      const sinT = Math.sin(theta)
-      const px = c.x + rXY * cosT * sx
-      const py = c.y + rXY * cosT * sy
-      const pz = rZ * sinT
+      const ux = profCosX[j]
+      const uz = profSinZ[j]
+      const px = c.x + rXY * ux * sx
+      const py = c.y + rXY * ux * sy
+      const pz = rZ * uz
       const idx = (i * ringSegs + j) * 3
       positions[idx] = px
       positions[idx + 1] = py
@@ -4827,6 +4891,10 @@ export const InflateEngine: GeometryEngine = {
     INFLATE_DEBUG.inflatePuffAspectZ = 0
     INFLATE_DEBUG.inflateRadiusZ = 0
     INFLATE_DEBUG.inflatePressure = 0
+    INFLATE_DEBUG.crossSectionBulge = 0
+    INFLATE_DEBUG.profileExponent = 0
+    INFLATE_DEBUG.ringSampleCount = 0
+    INFLATE_DEBUG.capRoundness = 0
     INFLATE_DEBUG.fieldResolution = 0
     INFLATE_DEBUG.smoothUnionStrength = 0
     INFLATE_DEBUG.sampleCount = 0
@@ -4882,18 +4950,28 @@ export const InflateEngine: GeometryEngine = {
             ),
           )
         : 0.5
-    const inflatePuffAspectZ = 0.25 + puffNorm * 0.9 // 0.25 → 1.15
-    const baseRadiusZ = inflateStrokeRadiusXY * inflatePuffAspectZ
+    // Wider aspect range: low Puff = visibly flatter gel; high Puff = full balloon.
+    // 0.18 → 1.35 (was 0.25 → 1.15)
+    const inflatePuffAspectZ = 0.18 + puffNorm * 1.17
+    const radiusZ = inflateStrokeRadiusXY * inflatePuffAspectZ
     INFLATE_DEBUG.inflatePuffAspectZ = inflatePuffAspectZ
     INFLATE_DEBUG.inflatePressure = puffNorm
     INFLATE_DEBUG.fieldResolution = 0
     INFLATE_DEBUG.smoothUnionStrength = 0
-
-    // Blend with calibrated effectiveDepth at high Puff so a max-puff
-    // stroke reads as visibly tall, not just "as round as it is wide".
-    const radiusZ =
-      baseRadiusZ * (1 - puffNorm) + effectiveDepth * 0.7 * puffNorm
     INFLATE_DEBUG.inflateRadiusZ = radiusZ
+
+    // Profile shaping. Drives the FEEL of Puff (pressure/fullness), not its size.
+    //   exponent: < 2 = soft / squashed (gel), 2 = ellipse, > 2 = squircle / balloon
+    //   bulge:    0 at low puff, up to ~0.18 at high puff (radial pressure)
+    //   capRoundness: longer + rounder caps as Puff increases
+    const profileExponent = 1.4 + puffNorm * 1.4 // 1.4 → 2.8
+    const crossSectionBulge = puffNorm * 0.18
+    const capRoundness = 0.45 + puffNorm * 0.5 // 0.45 → 0.95
+    const ringSampleCount = 24
+    INFLATE_DEBUG.profileExponent = profileExponent
+    INFLATE_DEBUG.crossSectionBulge = crossSectionBulge
+    INFLATE_DEBUG.capRoundness = capRoundness
+    INFLATE_DEBUG.ringSampleCount = ringSampleCount
 
     // ---- Step 3: resample + sweep elliptical tube per stroke ----
     const sampleSpacing = Math.max(
@@ -4921,6 +4999,12 @@ export const InflateEngine: GeometryEngine = {
           resampled,
           inflateStrokeRadiusXY,
           radiusZ,
+          {
+            ringSegs: ringSampleCount,
+            profileExponent,
+            crossSectionBulge,
+            capRoundness,
+          },
         )
       } catch (e) {
         INFLATE_DEBUG.failureReason = `tube build threw: ${(e as Error).message}`
@@ -4939,7 +5023,7 @@ export const InflateEngine: GeometryEngine = {
       meshes.push({
         tubeGeometry: geometry,
         filteredCount: s.points.length,
-        key: `inflate-svfi-${si}-${resampled.length}-${inflateStrokeRadiusXY.toFixed(4)}-${radiusZ.toFixed(4)}`,
+        key: `inflate-svfi-${si}-${resampled.length}-${inflateStrokeRadiusXY.toFixed(4)}-${radiusZ.toFixed(4)}-${profileExponent.toFixed(2)}-${crossSectionBulge.toFixed(2)}-${capRoundness.toFixed(2)}`,
         mode: "inflate",
       })
     }
