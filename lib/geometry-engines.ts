@@ -4503,6 +4503,12 @@ export const INFLATE_DEBUG = {
   inflateStrategy:
     "Build inflated stroke volume from the resampled centerline. Width = XY radius around centerline. Puff = Z aspect / cross-section roundness. Surface is an elliptical capsule swept along the path with smooth metaball-style end caps.",
   // ---- Source-of-truth flags ----
+  spikeStrategyActive: "ELLIPTICAL_TUBE_LOFT_SPIKE" as
+    | "STROKE_VOLUME_FIELD_SPIKE"
+    | "ELLIPTICAL_TUBE_LOFT_SPIKE"
+    | "RASTER_DISTANCE_FIELD_DOME"
+    | "SOLID_H3_PASSTHROUGH",
+  usesStrokeCenterline: "YES" as "YES" | "NO",
   usesRasterHeightfield: "NO" as "YES" | "NO",
   medialAxisSeamExpected: "NO" as "YES" | "NO",
   widthAffectsXY: "YES" as "YES" | "NO",
@@ -4524,6 +4530,8 @@ export const INFLATE_DEBUG = {
   smoothUnionStrength: 0,
   // ---- Stroke / mesh diagnostics ----
   sampleCount: 0,
+  strokeSampleCount: 0,
+  fieldSampleCount: 0,
   gridCellCount: 0,
   meshVertexCount: 0,
   meshTriangleCount: 0,
@@ -4746,6 +4754,8 @@ function inflateFallbackToSolid(
 ): StrokeMeshData[] {
   INFLATE_DEBUG.fallbackUsed = "YES"
   INFLATE_DEBUG.inflateMode = "SOLID_H3_PASSTHROUGH"
+  INFLATE_DEBUG.spikeStrategyActive = "SOLID_H3_PASSTHROUGH"
+  INFLATE_DEBUG.usesStrokeCenterline = "NO"
   INFLATE_DEBUG.inflateStrategy =
     "Fallback — STROKE_VOLUME_FIELD_INFLATE failed, returning Solid H3 unchanged. See failureReason."
 
@@ -4798,6 +4808,8 @@ export const InflateEngine: GeometryEngine = {
 
     // ---- Reset all probes ----
     INFLATE_DEBUG.inflateMode = "STROKE_VOLUME_FIELD_INFLATE"
+    INFLATE_DEBUG.spikeStrategyActive = "ELLIPTICAL_TUBE_LOFT_SPIKE"
+    INFLATE_DEBUG.usesStrokeCenterline = "YES"
     INFLATE_DEBUG.inflateStrategy =
       "Build inflated stroke volume from the resampled centerline. Width = XY radius around centerline. Puff = Z aspect / cross-section roundness. Surface is an elliptical capsule swept along the path with smooth metaball-style end caps."
     INFLATE_DEBUG.usesRasterHeightfield = "NO"
@@ -4818,6 +4830,8 @@ export const InflateEngine: GeometryEngine = {
     INFLATE_DEBUG.fieldResolution = 0
     INFLATE_DEBUG.smoothUnionStrength = 0
     INFLATE_DEBUG.sampleCount = 0
+    INFLATE_DEBUG.strokeSampleCount = 0
+    INFLATE_DEBUG.fieldSampleCount = 0
     INFLATE_DEBUG.gridCellCount = 0
     INFLATE_DEBUG.meshVertexCount = 0
     INFLATE_DEBUG.meshTriangleCount = 0
@@ -4931,6 +4945,9 @@ export const InflateEngine: GeometryEngine = {
     }
 
     INFLATE_DEBUG.sampleCount = totalSamples
+    INFLATE_DEBUG.strokeSampleCount = totalSamples
+    // Tube-loft spike has no 3D field — fieldSampleCount stays 0.
+    INFLATE_DEBUG.fieldSampleCount = 0
     INFLATE_DEBUG.meshVertexCount = totalVerts
     INFLATE_DEBUG.meshTriangleCount = totalTris
 
