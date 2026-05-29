@@ -456,12 +456,23 @@ function AnimatedStrokes({
       }
 
       // --- DrawRange: snap to full tube rings ---
-      const tubularSegments = (geo.parameters as any).tubularSegments as number || 64
+      // Only TubeGeometry exposes `parameters.tubularSegments`. The Inflate
+      // engine emits a plain BufferGeometry, so guard the access and fall
+      // back to a full-reveal draw range.
+      const geoParams = (geo as any).parameters as
+        | { tubularSegments?: number }
+        | undefined
+      const tubularSegments = geoParams?.tubularSegments ?? 64
       const indicesPerRing = RADIAL_SEGMENTS * 6
       const ringIndex = Math.floor(tParam * tubularSegments)
       const visibleRings = Math.min(ringIndex + 1, tubularSegments + 1)
       const drawRangeCount = Math.min(visibleRings * indicesPerRing, totalIndices)
-      geo.setDrawRange(0, drawRangeCount)
+      if (geoParams?.tubularSegments != null) {
+        geo.setDrawRange(0, drawRangeCount)
+      } else {
+        // Non-tube geometry (e.g. Inflate's elliptical loft): reveal whole mesh.
+        geo.setDrawRange(0, totalIndices)
+      }
 
       const hasVisibleSegment = visibleRings >= MIN_REVEAL_RINGS + 1
 
