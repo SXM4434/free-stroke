@@ -4530,6 +4530,10 @@ export const INFLATE_DEBUG = {
   profileExponent: 0,
   ringSampleCount: 0,
   capRoundness: 0,
+  joinSoftness: 0,
+  tangentSmoothing: 0,
+  materialRoughness: 0,
+  materialMetalness: 0,
   fieldResolution: 0,
   smoothUnionStrength: 0,
   // ---- Stroke / mesh diagnostics ----
@@ -4616,6 +4620,8 @@ function inflateBuildEllipticalTube(
     profileExponent?: number // 2 = ellipse; <2 squashed; >2 squircle/balloon
     crossSectionBulge?: number // 0..0.4 radial bulge (pressurized fullness)
     capRoundness?: number // 0..1 controls cap fade length & roundness
+    tangentSmoothingPasses?: number // # of 3-tap smoothing passes on tangents
+    joinSoftness?: number // 0..1 local radial bulge at high-curvature joins
   },
 ): THREE.BufferGeometry | null {
   const n = centerlineWorld.length
@@ -4625,6 +4631,11 @@ function inflateBuildEllipticalTube(
   const profileExponent = Math.max(0.6, opts?.profileExponent ?? 2)
   const bulge = Math.max(0, Math.min(0.5, opts?.crossSectionBulge ?? 0))
   const capRoundness = Math.max(0, Math.min(1, opts?.capRoundness ?? 0.6))
+  const tangentSmoothingPasses = Math.max(
+    1,
+    Math.min(4, Math.round(opts?.tangentSmoothingPasses ?? 1)),
+  )
+  const joinSoftness = Math.max(0, Math.min(1, opts?.joinSoftness ?? 0))
 
   // Per-sample tangent (in XY plane). Smoothed with a 3-tap pass to avoid
   // visible segmenting at sample joins on cursive / loopy strokes.
@@ -4651,23 +4662,45 @@ function inflateBuildEllipticalTube(
     TxRaw[i] = tx
     TyRaw[i] = ty
   }
-  const Tx = new Float32Array(n)
-  const Ty = new Float32Array(n)
+  // Run the 3-tap smoothing kernel `tangentSmoothingPasses` times. More
+  // passes = softer, more organic joins (less mechanical sweep) — Inflate
+  // uses more passes than the generic tube to read as a relaxed, pressurized
+  // body rather than a rigid hose.
+  let Tx = new Float32Array(TxRaw)
+  let Ty = new Float32Array(TyRaw)
+  for (let pass = 0; pass < tangentSmoothingPasses; pass++) {
+    const nx = new Float32Array(n)
+    const ny = new Float32Array(n)
+    for (let i = 0; i < n; i++) {
+      const i0 = Math.max(0, i - 1)
+      const i1 = Math.min(n - 1, i + 1)
+      let tx = Tx[i0] * 0.25 + Tx[i] * 0.5 + Tx[i1] * 0.25
+      let ty = Ty[i0] * 0.25 + Ty[i] * 0.5 + Ty[i1] * 0.25
+      const L = Math.hypot(tx, ty)
+      if (L > 1e-9) {
+        tx /= L
+        ty /= L
+      } else {
+        tx = Tx[i]
+        ty = Ty[i]
+      }
+      nx[i] = tx
+      ny[i] = ty
+    }
+    Tx = nx
+    Ty = ny
+  }
+
+  // Per-sample curvature from the turn between RAW adjacent tangents. A
+  // sharp corner (dot << 1) gets a local radial bulge so joins read full and
+  // organic instead of creased — the soft-tissue "puff at the bend" feel.
+  // curvature in [0,1]: 0 = straight, 1 = ~90deg+ turn.
+  const curvature = new Float32Array(n)
   for (let i = 0; i < n; i++) {
     const i0 = Math.max(0, i - 1)
     const i1 = Math.min(n - 1, i + 1)
-    let tx = TxRaw[i0] * 0.25 + TxRaw[i] * 0.5 + TxRaw[i1] * 0.25
-    let ty = TyRaw[i0] * 0.25 + TyRaw[i] * 0.5 + TyRaw[i1] * 0.25
-    const L = Math.hypot(tx, ty)
-    if (L > 1e-9) {
-      tx /= L
-      ty /= L
-    } else {
-      tx = TxRaw[i]
-      ty = TyRaw[i]
-    }
-    Tx[i] = tx
-    Ty[i] = ty
+    const dot = TxRaw[i0] * TxRaw[i1] + TyRaw[i0] * TyRaw[i1]
+    curvature[i] = Math.max(0, Math.min(1, 1 - dot))
   }
 
   // Hemispherical end-cap fade. Cap length scales with capRoundness:
@@ -4728,8 +4761,11 @@ function inflateBuildEllipticalTube(
     const sx = -ty
     const sy = tx
     const rs = radiusScale(i)
-    const rXY = radiusXY * rs
-    const rZ = radiusZ * rs
+    // Local join bulge: fuller cross-section where the path bends. Subtle —
+    // capped at joinSoftness * 0.3 extra radius at the sharpest corners.
+    const joinScale = 1 + joinSoftness * 0.3 * curvature[i]
+    const rXY = radiusXY * rs * joinScale
+    const rZ = radiusZ * rs * joinScale
     for (let j = 0; j < ringSegs; j++) {
       const ux = profCosX[j]
       const uz = profSinZ[j]
@@ -4895,6 +4931,10 @@ export const InflateEngine: GeometryEngine = {
     INFLATE_DEBUG.profileExponent = 0
     INFLATE_DEBUG.ringSampleCount = 0
     INFLATE_DEBUG.capRoundness = 0
+    INFLATE_DEBUG.joinSoftness = 0
+    INFLATE_DEBUG.tangentSmoothing = 0
+    INFLATE_DEBUG.materialRoughness = 0
+    INFLATE_DEBUG.materialMetalness = 0
     INFLATE_DEBUG.fieldResolution = 0
     INFLATE_DEBUG.smoothUnionStrength = 0
     INFLATE_DEBUG.sampleCount = 0
@@ -4950,9 +4990,15 @@ export const InflateEngine: GeometryEngine = {
             ),
           )
         : 0.5
-    // Wider aspect range: low Puff = visibly flatter gel; high Puff = full balloon.
-    // 0.18 → 1.35 (was 0.25 → 1.15)
-    const inflatePuffAspectZ = 0.18 + puffNorm * 1.17
+    // Aspect range tuned so Inflate ALWAYS reads as a volume, never a flat
+    // ribbon (the Extrude identity). Floor raised so even min Puff is a
+    // plump gel; default sits clearly inflated; max balloons.
+    //   low Puff   ≈ 0.34 aspect (flatter but still rounded gel)
+    //   default    ≈ 0.9+ aspect (clearly inflated)
+    //   high Puff  ≈ 1.55 aspect (over-pressured balloon)
+    // Ease puffNorm so the mid/default range lands fuller (sqrt lifts middle).
+    const puffEased = Math.sqrt(puffNorm)
+    const inflatePuffAspectZ = 0.34 + puffEased * 1.21 // 0.34 → 1.55
     const radiusZ = inflateStrokeRadiusXY * inflatePuffAspectZ
     INFLATE_DEBUG.inflatePuffAspectZ = inflatePuffAspectZ
     INFLATE_DEBUG.inflatePressure = puffNorm
@@ -4961,17 +5007,27 @@ export const InflateEngine: GeometryEngine = {
     INFLATE_DEBUG.inflateRadiusZ = radiusZ
 
     // Profile shaping. Drives the FEEL of Puff (pressure/fullness), not its size.
-    //   exponent: < 2 = soft / squashed (gel), 2 = ellipse, > 2 = squircle / balloon
-    //   bulge:    0 at low puff, up to ~0.18 at high puff (radial pressure)
-    //   capRoundness: longer + rounder caps as Puff increases
-    const profileExponent = 1.4 + puffNorm * 1.4 // 1.4 → 2.8
-    const crossSectionBulge = puffNorm * 0.18
-    const capRoundness = 0.45 + puffNorm * 0.5 // 0.45 → 0.95
-    const ringSampleCount = 24
+    //   exponent: > 2 = squircle / balloon (fuller). We START above 2 so even
+    //     low Puff is fuller-than-ellipse — distinct from Extrude's flat strip.
+    //   bulge:    small floor (always a little pressurized), grows with Puff.
+    //   capRoundness: caps always sealed/rounded; longer + rounder as Puff↑.
+    const profileExponent = 2.1 + puffEased * 1.3 // 2.1 → 3.4
+    const crossSectionBulge = 0.07 + puffEased * 0.21 // 0.07 → 0.28
+    const capRoundness = 0.6 + puffEased * 0.4 // 0.6 → 1.0
+    const ringSampleCount = 28
+    // Softer, more organic joins than Extrude: more smoothing passes + a
+    // curvature-driven join bulge that grows a touch with Puff.
+    const tangentSmoothingPasses = 3
+    const joinSoftness = 0.45 + puffEased * 0.4 // 0.45 → 0.85
     INFLATE_DEBUG.profileExponent = profileExponent
     INFLATE_DEBUG.crossSectionBulge = crossSectionBulge
     INFLATE_DEBUG.capRoundness = capRoundness
     INFLATE_DEBUG.ringSampleCount = ringSampleCount
+    INFLATE_DEBUG.joinSoftness = joinSoftness
+    INFLATE_DEBUG.tangentSmoothing = tangentSmoothingPasses
+    // Material is a soft, low-spec gel/balloon (set in viewport-3d.tsx).
+    INFLATE_DEBUG.materialRoughness = 0.62
+    INFLATE_DEBUG.materialMetalness = 0.0
 
     // ---- Step 3: resample + sweep elliptical tube per stroke ----
     const sampleSpacing = Math.max(
@@ -5004,6 +5060,8 @@ export const InflateEngine: GeometryEngine = {
             profileExponent,
             crossSectionBulge,
             capRoundness,
+            tangentSmoothingPasses,
+            joinSoftness,
           },
         )
       } catch (e) {
@@ -5023,7 +5081,7 @@ export const InflateEngine: GeometryEngine = {
       meshes.push({
         tubeGeometry: geometry,
         filteredCount: s.points.length,
-        key: `inflate-svfi-${si}-${resampled.length}-${inflateStrokeRadiusXY.toFixed(4)}-${radiusZ.toFixed(4)}-${profileExponent.toFixed(2)}-${crossSectionBulge.toFixed(2)}-${capRoundness.toFixed(2)}`,
+        key: `inflate-svfi-${si}-${resampled.length}-${inflateStrokeRadiusXY.toFixed(4)}-${radiusZ.toFixed(4)}-${profileExponent.toFixed(2)}-${crossSectionBulge.toFixed(2)}-${capRoundness.toFixed(2)}-${joinSoftness.toFixed(2)}`,
         mode: "inflate",
       })
     }

@@ -94,6 +94,7 @@ function useStrokeMeshes(
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
 // Gel-ink material: preview-only (export uses its own lightweight MeshStandardMaterial)
+// Used by Rod / Extrude / Solid — hard glossy clearcoat, sharp specular.
 const strokeMaterial = new THREE.MeshPhysicalMaterial({
   color: "#1a1a1a",
   clearcoat: 0.8,
@@ -101,6 +102,22 @@ const strokeMaterial = new THREE.MeshPhysicalMaterial({
   roughness: 0.35,
   metalness: 0.0,
   reflectivity: 0.6,
+})
+
+// Inflate-only material: softer, fuller, balloon/gel feel. Deliberately
+// distinct from `strokeMaterial` so Inflate doesn't read like a glossy
+// Extrude strip — higher roughness + a faint, diffuse sheen instead of a
+// hard plastic clearcoat highlight. Still black / on-brand.
+const inflateMaterial = new THREE.MeshPhysicalMaterial({
+  color: "#1c1c1c",
+  clearcoat: 0.18,
+  clearcoatRoughness: 0.6,
+  roughness: 0.62,
+  metalness: 0.0,
+  reflectivity: 0.32,
+  sheen: 0.5,
+  sheenRoughness: 0.8,
+  sheenColor: new THREE.Color("#3a3a3a"),
 })
 
 /* ---- Bounding box ---- */
@@ -508,8 +525,10 @@ function AnimatedStrokes({
       {/* Export group: tubes/extrude meshes + caps + joints */}
       <group ref={exportGroupRef}>
         {meshes.map((data, si) => {
-          // Use standard material for all modes
-          const useMaterial = strokeMaterial
+          // Inflate gets its own soft balloon/gel material; all other modes
+          // share the glossy gel-ink material.
+          const useMaterial =
+            data.mode === "inflate" ? inflateMaterial : strokeMaterial
           
           return (
           <group key={data.key}>
