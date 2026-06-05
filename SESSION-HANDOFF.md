@@ -366,8 +366,64 @@ These are non-negotiable for this checkpoint:
 - Export still exports the full static model, not animated partial strokes.
 - If smoke test passes, move to `INFLATE_MODE_PHASE_1`.
 
+## Inflate Phase 2 preview lock checkpoint
+
+- **name:** Inflate Phase 2 Preview Locked for MVP
+- **label:** `INFLATE_PHASE_2_PREVIEW_LOCKED_FOR_MVP`
+- **status:** locked / accepted for MVP preview — do not reopen Inflate geometry unless a major regression appears
+
+### What this checkpoint records
+
+- Inflate preview is accepted for MVP.
+- Remaining Inflate visual polish (true balloon physics, metaball joins, export) is post-MVP.
+- Do not reopen Inflate geometry/material tuning unless a major regression appears.
+- Next branch is `INFLATE_EXPORT_AND_FINAL_PROJECT_QA`.
+
+### Final cross-mode QA results (verified in-browser)
+
+QA method: drew one loopy S-curve stroke (41 raw → 275 processed pts) and exercised every mode live in the running preview (Chromium via agent-browser). Zero JS console errors and zero server runtime errors across all mode switches and slider interactions (only cosmetic `/icon*.png` + `/icon.svg` 404s, out of scope).
+
+- **Rod QA — PASS**
+  - Preview renders a thin 3D tube.
+  - Play button + speed controls (0.5x / 1x / 2x) present and toggle correctly.
+  - Reveal completes and returns to the full static frame (reset/replay behavior intact).
+  - Export GLB enabled.
+- **Extrude QA — PASS**
+  - Preview renders a flat continuous ribbon.
+  - Width / Depth / Bevel controls present and functional.
+  - Progressive reveal + replay/reset behavior intact.
+  - Export GLB enabled.
+  - Remains visually distinct from Inflate (flat ribbon vs rounded volume).
+- **Solid QA — PASS**
+  - Preview renders the filled extruded silhouette.
+  - Thickness / Depth controls present and functional.
+  - H3 holes/counters path intact (static H3 unchanged by this QA).
+  - Animation acceptable for MVP; final frame matches static.
+  - Export GLB enabled (full static geometry).
+- **Inflate QA — PASS**
+  - Preview renders a rounded, soft volumetric body (no empty viewport).
+  - Width (Thickness) changes stroke thickness — verified 38px → 64px visibly thicker.
+  - Puff changes fullness/roundness — verified 0.18 → 0.50 visibly fuller/rounder.
+  - No shredded Solid-normal bands, no old raster dome seam.
+  - Soft matte-with-sheen material is visibly distinct from the glossy Rod/Extrude/Solid material.
+  - Export is intentionally disabled with a clear "Phase 1 preview · export disabled" label (Phase-2 export is the next branch).
+
+### Visual distinction Inflate vs Extrude
+
+- **CONFIRMED distinct enough for MVP.** Extrude reads as a flat directional ribbon/strip; Inflate reads as a soft, rounded, pressure-filled tube with a diffuse sheen. Silhouettes and materials differ clearly at default and across the Puff/Thickness sweep.
+
+### Blockers
+
+- None.
+
+### Untouched (no implementation code changed by this QA pass)
+
+- Rod / Extrude / Solid / Inflate geometry, animation logic, export logic, and UI styling were all left unchanged. Only this `SESSION-HANDOFF.md` was updated.
+
+## Next branch — `INFLATE_EXPORT_AND_FINAL_PROJECT_QA`
+
 ## Final saved checkpoint label
 
-`SOLID_H3_ANIMATION_HOLE_STABILIZATION_RESTORED_PASS`
+`INFLATE_PHASE_2_PREVIEW_LOCKED_FOR_MVP`
 
-(supersedes `SOLID_H3_ANIMATION_HOLE_STABILIZATION`; all prior checkpoints remain in effect as underlying layers)
+(supersedes `SOLID_H3_ANIMATION_HOLE_STABILIZATION_RESTORED_PASS`; all prior checkpoints remain in effect as underlying layers)
