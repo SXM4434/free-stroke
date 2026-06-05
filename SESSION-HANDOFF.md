@@ -481,3 +481,45 @@ QA method: drew one loopy S-curve stroke (41 raw → 275 processed pts) and exer
 `INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`
 
 (supersedes `INFLATE_PHASE_2_PREVIEW_LOCKED_FOR_MVP`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`
+
+**Status: MVP-stable. Locked.** The project is now stable enough to move into cleanup / polish / demo work.
+
+### What is now true
+
+- Inflate preview is accepted for MVP.
+- Inflate export works and looks good (user-confirmed).
+- Inflate export uses the **full static Inflate model**, not animated partial geometry.
+- Inflate is visually distinct enough from Extrude.
+- **Width** maps to stroke thickness / XY radius.
+- **Puff** maps to cross-section fullness / pressure-like roundness.
+- Rod, Extrude, Solid, and Inflate all render.
+- Cross-mode smoke test passed.
+- Supported exports work (Rod, Extrude, Solid, Inflate all produce non-empty GLBs with correct mode tags).
+- Remaining geometry/style issues are **post-MVP polish**.
+
+### Frozen subsystems — DO NOT REOPEN
+
+- Do **not** reopen Rod geometry.
+- Do **not** reopen Extrude geometry/calibration.
+- Do **not** reopen Solid H3 geometry/animation.
+- Do **not** reopen Inflate visual tuning unless a major regression appears.
+
+### Next branch — `MVP_UI_POLISH_AND_DEMO_CAPTURE`
+
+Focus:
+
+- remove temporary debug logs
+- keep Debug panel behind Debug toggle only
+- clean mode labels and helper text
+- verify disabled/enabled export states are accurate
+- capture short demo clips for Rod / Extrude / Solid / Inflate
+- document known limitations
+- prepare project for portfolio/demo use
+
+### Final locked checkpoint label
+
+`INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`
