@@ -523,3 +523,48 @@ Focus:
 ### Final locked checkpoint label
 
 `INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`
+
+---
+
+## LOCKED CHECKPOINT — `INFLATE_ANIMATION_PROGRESSIVE_REVEAL_PASS`
+
+**Status: MVP-ready. Locked.** Inflate animation is accepted; all four modes are now ready to move into cleanup and demo prep.
+
+### What is now true
+
+- Inflate preview works.
+- Inflate export works and looks good.
+- Inflate animation now plays acceptably.
+- Inflate reveals progressively along the drawn stroke path (arc-length partial rebuild — not all-at-once pop-in).
+- **Width** still controls stroke thickness / XY radius.
+- **Puff** still controls cross-section fullness / pressure-like roundness.
+- Inflate remains visually distinct enough from Extrude.
+- Rod, Extrude, and Solid remain accepted.
+- All four modes are now MVP-ready enough to move into cleanup and demo prep.
+
+### Important notes
+
+- Do **not** reopen Inflate geometry.
+- Do **not** reopen Inflate visual tuning.
+- Do **not** reopen Solid animation.
+- Do **not** reopen Extrude calibration.
+- Remaining visual issues are **post-MVP polish** unless a major regression appears.
+
+### Next branch — `MVP_UI_POLISH_AND_DEMO_CAPTURE`
+
+Focus:
+
+- remove temporary debug logs
+- verify Debug panel only appears when Debug is ON
+- clean helper text / mode labels
+- verify export button states
+- verify playback controls across all modes
+- verify camera / framing / reset / top view
+- create a demo capture checklist
+- document known limitations for MVP
+
+### Final locked checkpoint label
+
+`INFLATE_ANIMATION_PROGRESSIVE_REVEAL_PASS`
+
+(supersedes `INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`; all prior checkpoints remain in effect as underlying layers)
