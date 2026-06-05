@@ -371,17 +371,20 @@ function AnimatedStrokes({
 
       if (!mesh || !strokeMeshData) continue
 
-      // Solid AND Extrude both animate by REBUILDING geometry from
+      // Solid, Extrude AND Inflate all animate by REBUILDING geometry from
       // progress-filtered strokes (see `animatedStrokes` useMemo +
       // `SolidAnimationTick`). The mesh itself is always fully visible
       // every frame; the partial reveal lives inside the geometry that
       // `useStrokeMeshes` produces. Per-stroke visibility gating and
       // per-segment drawRange are NEVER applied to these modes — they
       // would either pop entire strokes (gating) or interleave cap and
-      // wall triangles incorrectly (drawRange on ExtrudeGeometry).
+      // wall triangles incorrectly (drawRange on a non-Rod geometry).
+      // Inflate MUST be here: its elliptical-tube loft is rebuilt per frame
+      // and must not be driven through Rod's TubeGeometry drawRange path.
       if (
         strokeMeshData.mode === "solid" ||
-        strokeMeshData.mode === "extrude"
+        strokeMeshData.mode === "extrude" ||
+        strokeMeshData.mode === "inflate"
       ) {
         mesh.visible = true
         continue
@@ -932,10 +935,16 @@ function Scene({
   useLayoutEffect(() => {
     const wasPlaying = prevPlayingRef.current
     prevPlayingRef.current = playing
-    // Applies to both partial-rebuild modes. Rod animation does not use this
-    // state value, so Rod is unaffected. Other modes (none currently) are
-    // skipped to keep this fix narrowly scoped.
-    if (geometryMode !== "solid" && geometryMode !== "extrude") return
+    // Applies to all partial-rebuild modes (Solid, Extrude, Inflate). Rod
+    // animation does not use this state value, so Rod is unaffected. This
+    // ensures the first frame after Play paints the empty/partial mesh rather
+    // than the previously-full one (no full-mesh flash on replay).
+    if (
+      geometryMode !== "solid" &&
+      geometryMode !== "extrude" &&
+      geometryMode !== "inflate"
+    )
+      return
     // Transition from paused to playing
     if (!wasPlaying && playing) {
       const head = playheadRef.current
@@ -964,7 +973,15 @@ function Scene({
   // final-frame match) to SOLID_ANIM_DEBUG so the debug overlay can poll them.
   const solidAnimRebuildCountRef = useRef(0)
   const animatedStrokes = useMemo(() => {
-    if (geometryMode !== "solid" && geometryMode !== "extrude") return strokes
+    // Solid, Extrude AND Inflate all animate by rebuilding their geometry from
+    // an arc-length-filtered partial copy of the strokes. (Rod animates via
+    // drawRange inside AnimatedStrokes, so it keeps the full strokes here.)
+    if (
+      geometryMode !== "solid" &&
+      geometryMode !== "extrude" &&
+      geometryMode !== "inflate"
+    )
+      return strokes
     const out = filterStrokesByProgress(strokes, solidAnimProgress)
 
     // ---- Diagnostics ----
@@ -1009,7 +1026,11 @@ function Scene({
   // can distinguish "playback running" from "playback paused mid-reveal".
   // The flag stays true for any partial-rebuild mode while playing.
   useEffect(() => {
-    if (geometryMode !== "solid" && geometryMode !== "extrude") {
+    if (
+      geometryMode !== "solid" &&
+      geometryMode !== "extrude" &&
+      geometryMode !== "inflate"
+    ) {
       SOLID_ANIM_DEBUG.solidAnimationActive = false
       return
     }
@@ -1032,11 +1053,10 @@ function Scene({
       // Sticky-final-hole-contour stabilization (current strategy).
       SOLID_ANIM_DEBUG.animationPath = "partialSolidRebuildWithHoleStabilization"
     } else if (geometryMode === "inflate") {
-      // Phase 1: Inflate animates by rebuilding the bevel-extrude mesh
-      // against the progressive stroke prefix — same shape as the Extrude
-      // animation. No sticky-hole logic; partial holes are accepted as
-      // detected each frame. This is a known Phase 1 simplification.
-      SOLID_ANIM_DEBUG.animationPath = "partialExtrudeRebuild"
+      // Inflate animates by rebuilding its elliptical-tube loft from the
+      // arc-length-filtered progressive stroke prefix (same partial-rebuild
+      // family as Extrude/Solid, but its own geometry path). No drawRange.
+      SOLID_ANIM_DEBUG.animationPath = "partialInflateRebuild"
     } else {
       SOLID_ANIM_DEBUG.animationPath = "static"
     }

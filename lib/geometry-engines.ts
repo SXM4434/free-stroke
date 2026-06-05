@@ -98,7 +98,8 @@ export const SOLID_ANIM_DEBUG = {
       | "static"
       | "drawRange"
       | "partialExtrudeRebuild"
-      | "partialSolidRebuildWithHoleStabilization",
+      | "partialSolidRebuildWithHoleStabilization"
+      | "partialInflateRebuild",
   /** True while `playing === true` in Solid or Extrude mode, or while a boundary sync is in flight. */
   solidAnimationActive: false,
   /** Last value pushed to `solidAnimProgress` (0..1). Tracks the rebuild input. */
