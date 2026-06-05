@@ -203,12 +203,10 @@ export default function Home() {
         </div>
       )}
 
-      {/* Inflate mode controls (Phase 1 — BEVEL_EXTRUDE strategy)
-          Reuses the Solid Thickness + Depth state intentionally. Thickness
-          informs the bevel-inset cap so puffy edges don't blow past the
-          silhouette in narrow regions; Depth becomes the puff amount
-          (extrude depth + bevel thickness). Phase 1 is preview-only —
-          export is a placeholder until a later phase. */}
+      {/* Inflate mode controls — soft inflated stroke (stroke-volume tube loft).
+          Reuses the Solid Thickness + Depth state intentionally: Thickness sets
+          the stroke's XY radius, and Depth ("Puff") sets cross-section fullness.
+          Preview, animation, and GLB export all share one geometry path. */}
       {geometryMode === "inflate" && (
         <div className="flex h-10 shrink-0 items-center gap-4 border-b border-border bg-muted/30 px-4">
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -248,7 +246,7 @@ export default function Home() {
           <div className="h-4 w-px bg-border" />
 
           <span className="select-none font-mono text-[10px] text-muted-foreground">
-            Width · Puff · GLB export enabled
+            Soft inflated stroke · GLB export enabled
           </span>
         </div>
       )}

@@ -568,3 +568,81 @@ Focus:
 `INFLATE_ANIMATION_PROGRESSIVE_REVEAL_PASS`
 
 (supersedes `INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `MVP_UI_POLISH_AND_DEMO_CAPTURE_PASS`
+
+**Status: Demo-ready. Locked.** UI cleanup, debug gating, and demo prep complete. No geometry, animation, or export logic was touched.
+
+### What was changed (cleanup only)
+
+- Removed two temporary export status `console.log`s in `components/viewport-3d.tsx`
+  (the dev-only `[FreeStroke Export] mode=...` status line and the ungated
+  `[FreeStroke] Exported ...` line). Kept the dev-only integrity `console.warn`
+  assertions and the `console.error` failure handler.
+- Updated the stale Inflate controls comment in `app/page.tsx`
+  (was "Phase 1 — BEVEL_EXTRUDE strategy / export is a placeholder";
+  now describes the active stroke-volume tube loft with preview + animation + export sharing one path).
+- Aligned the Inflate status helper text in `app/page.tsx` to
+  "Soft inflated stroke · GLB export enabled" (was "Width · Puff ...", which
+  conflicted with the visible "Thickness"/"Puff" slider labels).
+- Gated the always-on drawing-canvas dev telemetry overlay
+  (`raw N pts | processed N pts | ... draw: Xms | procOne: ... | lastTrigger: ...`)
+  behind `process.env.NODE_ENV === "development"` in `components/drawing-canvas.tsx`,
+  so it stays for dev work but is hidden in the demo/production build.
+
+### Verified state
+
+- **Debug panel:** hidden by default; the 3D viewport Debug overlays render only when Debug is ON, and only for the mode that owns them (Extrude metrics / Solid metrics). Inflate shows no stale strategy string. Overlays do not block playback/export/canvas controls.
+- **Mode labels:** Rod / Extrude / Solid / Inflate all enabled and clearly labeled. Extrude = Width/Depth, Solid = Thickness/Depth, Inflate = Thickness/Puff. No stale "Phase 1 / export disabled" copy anywhere in the DOM.
+- **Export:** Export GLB enabled for all four modes when a stroke exists; disabled only while exporting or with zero strokes. Consistent label ("Export GLB" / "Exporting..."). Mode-specific, timestamped filenames. Verified export emits no temporary console logs.
+- **Playback:** Play/Pause, scrubber, Natural/Authentic, and 0.5x/1x/2x speed all present and mode-agnostic (gated by stroke count). Not blocked by overlays.
+- **Camera:** Top view and Reset camera buttons present and working; orbit controls intact; per-mode framing locks to final geometry size.
+
+### Demo capture checklist
+
+**Clip 1 — Rod**
+- draw a loopy stroke
+- play animation (watch progressive reveal)
+- orbit to show the round tube cross-section
+- export GLB (optional)
+
+**Clip 2 — Extrude**
+- switch to Extrude (same stroke)
+- adjust Width, then Depth
+- play animation
+- export GLB
+
+**Clip 3 — Solid**
+- switch to Solid; if the stroke has a loop, show the filled silhouette / counter
+- adjust Thickness, then Depth
+- play animation
+- export GLB
+
+**Clip 4 — Inflate**
+- switch to Inflate
+- adjust Thickness, then Puff
+- play animation (soft inflated reveal)
+- export GLB
+
+**Clip 5 — Mode comparison**
+- keep one stroke
+- cycle Rod → Extrude → Solid → Inflate
+- narrate why each mode exists (ink line → ribbon → filled solid → soft inflated volume)
+
+### Known limitations (MVP)
+
+- Inflate is an MVP stroke-volume preview/export (tube loft), not a final physical balloon simulation.
+- Solid animation may still show tiny topology artifacts at loop-closure frames — acceptable for MVP.
+- Extrude is usable but not final aesthetic polish.
+- Materials and lighting are still basic.
+- UI is demo-ready, not final product UX.
+- Debug panels (3D viewport overlays + canvas telemetry) are development-only and hidden in the demo build.
+- Future polish: improved materials, parameter presets, export metadata, mesh smoothing, and post-export object cleanup.
+
+### Final locked checkpoint label
+
+`MVP_UI_POLISH_AND_DEMO_CAPTURE_PASS`
+
+(supersedes `INFLATE_ANIMATION_PROGRESSIVE_REVEAL_PASS`; all prior checkpoints remain in effect as underlying layers)

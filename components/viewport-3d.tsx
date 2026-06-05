@@ -1921,8 +1921,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         if (exportScene.children.length !== 1 || exportScene.children[0].name !== "FreeStroke") {
           console.warn("[FreeStroke Export] ASSERTION: root is not a single group named FreeStroke")
         }
-
-        console.log(`[FreeStroke Export] mode=${geometryMode}, meshes=${meshCount}, strokes=${exportResult.objectCount}, merged=${exportResult.merged}`)
+        void meshCount
       }
 
       // Export to GLB
@@ -1952,8 +1951,6 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
       const safeName = exportName.trim().replace(/[^a-zA-Z0-9_-]/g, "-")
       const prefix = safeName ? `${safeName}_` : "free-stroke_"
       const filename = `${prefix}${ts}.glb`
-
-      console.log(`[FreeStroke] Exported "${filename}" — ${exportResult.objectCount} strokes (${geometryMode}), ${exportResult.merged ? "merged" : "unmerged"}`)
 
       // Download
       const blob = new Blob([result], { type: "application/octet-stream" })
