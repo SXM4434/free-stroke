@@ -427,3 +427,57 @@ QA method: drew one loopy S-curve stroke (41 raw → 275 processed pts) and exer
 `INFLATE_PHASE_2_PREVIEW_LOCKED_FOR_MVP`
 
 (supersedes `SOLID_H3_ANIMATION_HOLE_STABILIZATION_RESTORED_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## Branch — `INFLATE_EXPORT_AND_FINAL_PROJECT_QA`
+
+### Outcome: **INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS**
+
+- Inflate preview accepted for MVP (no visual tuning reopened).
+- Inflate export implemented. Export is the **full static Inflate model only** — never animated/partial geometry.
+- Preview and export now share ONE geometry builder: `inflateBuildStaticGeometries(...)` in `lib/geometry-engines.ts`. Both `InflateEngine.buildPreview` and `InflateEngine.buildExport` call it with the FULL processed strokes, so the exported GLB matches the static preview 1:1.
+- Export centers the aggregate bbox at the origin (same convention as Solid), names meshes `inflate_000…`, and writes metadata: `mode: "inflate"`, `inflateThickness` (Width), `inflatePuff` (Puff), `inflateStrategy`, `vertexCount`, `triangleCount`, `fallbackUsed`, plus calibrated `inflateStrokeRadiusXY` / `inflatePuffAspectZ` / `inflateRadiusZ`. Empty-loft fallback exports the Solid silhouette with `fallbackUsed: true`.
+- UI: removed the "Phase 1 preview · export disabled" label (now "Width · Puff · GLB export enabled") and the Inflate tab's "no export yet" tooltip. Export GLB button already gated only on `strokeCount === 0`.
+
+### All four modes render and export
+
+| Mode | Export | Bytes (loopy stroke) | Log mode tag |
+| --- | --- | --- | --- |
+| Rod | ✅ | ~3.4 MB | `mode=rod, merged=true` |
+| Extrude | ✅ | ~38 KB | `mode=extrude, merged=true` |
+| Solid | ✅ | ~409 KB | `mode=solid, merged=true` |
+| Inflate | ✅ | ~346 KB | `mode=inflate, merged=false` |
+
+### Inflate export test results (validated GLB header = glTF v2, node `inflate_000` under `FreeStroke`)
+
+- Simple line — PASS (~90 KB, non-empty).
+- Loopy cursive — PASS (~346 KB, non-empty).
+- Big O / loop — PASS (~359 KB, non-empty).
+- Each exported GLB is non-empty and visually matches the static Inflate preview; uses full strokes, not animated partial state; Width/Puff reflected in geometry + metadata.
+
+### Animation + controls sanity
+
+- Inflate animation still plays acceptably (reveal path untouched — animation reuses the same preview meshes).
+- Rod / Extrude / Solid animation untouched.
+- Inflate Width/Puff verified live: Puff 0.18 → 0.50 visibly fuller/rounder; Width unchanged in behavior. Extrude/Solid controls untouched.
+
+### Untouched
+
+- Rod / Extrude / Solid geometry, animation, and export logic unchanged.
+- Inflate **visual tuning untouched** — the shared builder uses the exact same calibration constants the locked preview used; the refactor only relocated the deterministic math so preview and export can share it.
+
+### Files
+
+- Inspected: `lib/geometry-engines.ts`, `components/viewport-3d.tsx`, `app/page.tsx`.
+- Changed: `lib/geometry-engines.ts` (added `inflateBuildStaticGeometries`, refactored `InflateEngine.buildPreview` to use it, implemented `InflateEngine.buildExport`), `app/page.tsx` (UI text/tooltip), `SESSION-HANDOFF.md`.
+
+### Blockers
+
+- None.
+
+## Final saved checkpoint label (updated)
+
+`INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`
+
+(supersedes `INFLATE_PHASE_2_PREVIEW_LOCKED_FOR_MVP`; all prior checkpoints remain in effect as underlying layers)

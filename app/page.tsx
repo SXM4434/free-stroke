@@ -30,7 +30,7 @@ const GEOMETRY_MODES: { value: GeometryMode; label: string; disabled: boolean; t
   { value: "rod", label: "Rod", disabled: false },
   { value: "extrude", label: "Extrude", disabled: false },
   { value: "solid", label: "Solid", disabled: false },
-  { value: "inflate", label: "Inflate", disabled: false, tooltip: "Phase 1 preview (no export yet)" },
+  { value: "inflate", label: "Inflate", disabled: false },
 ]
 
 export default function Home() {
@@ -248,7 +248,7 @@ export default function Home() {
           <div className="h-4 w-px bg-border" />
 
           <span className="select-none font-mono text-[10px] text-muted-foreground">
-            Phase 1 preview · export disabled
+            Width · Puff · GLB export enabled
           </span>
         </div>
       )}
