@@ -646,3 +646,54 @@ Focus:
 `MVP_UI_POLISH_AND_DEMO_CAPTURE_PASS`
 
 (supersedes `INFLATE_ANIMATION_PROGRESSIVE_REVEAL_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_STYLE_SUBSTRATE_PHASE_1_PASS`
+
+**Status: Substrate added. Locked.** Infrastructure-only phase for the future visual style system. No visual effects implemented; geometry, animation, and export untouched.
+
+### What was added (infrastructure only)
+
+- **New file `lib/style-system.ts`** — the clean style state model + preset id shells:
+  - Unions: `MaterialPreset`, `TextureMode`, `TextureLockMode`, `StyleSyncMode`, `StyleAnimationType`, `DitherType`/`DitherDirection`, `AsciiCharset`/`AsciiDirection`, `FusionPreset`, `StackAnimationType`.
+  - `StyleState` interface with the full field set (material / texture / dither / ascii / layer stack / fusion / global sync + clock).
+  - `DEFAULT_STYLE_STATE` — conservative defaults (material `ink`, `textureMode` `none`, all visual layers + animated systems OFF, `syncMode` `independent`).
+  - Preset definition shells (IDs + labels only, no behavior): `MATERIAL_PRESETS`, `TEXTURE_MODES`, `DITHER_PRESETS`, `ASCII_PRESETS`, `FUSION_PRESETS`.
+- **`app/page.tsx`** — added `styleState`/`setStyleState` (`DEFAULT_STYLE_STATE`); added a compact **Style** panel shell (Material select, Texture select, Dither/ASCII/Animate/Sync Reveal toggles) that updates state immediately; passes `styleState` to the viewport.
+- **`components/viewport-3d-wrapper.tsx`** — threads the optional `styleState` prop through to `Viewport3D`.
+- **`components/viewport-3d.tsx`** — added optional `styleState` prop; added a **Style substrate** readout inside the existing `showDebug` panel (Debug-only). `styleState` is referenced ONLY in debug JSX — it is in no geometry/animation/export dependency array.
+
+### Default style values
+
+`materialPreset: "ink"`, `textureMode: "none"`, all of `textureEnabled / textureAnimated / ditherEnabled / ditherAnimated / asciiEnabled / asciiAnimated / layerStackEnabled / stackAnimationEnabled / fusionAnimationEnabled / syncToReveal = false`, `fusionPreset: "none"`, `syncMode: "independent"`, `textureLockMode: "object"`, `globalStyleTime: 0`.
+
+### Does style change rebuild geometry?
+
+**No.** Verified via Extrude `previewBuildCount`: toggling style controls produced zero build-count increments (stayed flat). Style state is not in any geometry memo dependency.
+
+### Test results
+
+- State updates — PASS (Material→softGel, Texture→procedural, Dither/ASCII/Animate/Sync Reveal toggles all reflected in debug readout).
+- Rod — PASS (renders with style state active).
+- Extrude — PASS (renders; export 23.7 KB GLB with style state active).
+- Solid — PASS (renders).
+- Inflate — PASS (renders).
+- Animation unchanged — PASS (no animation logic touched).
+- Export unchanged — PASS (GLB export still works; no export logic touched).
+- Debug gating — PASS (Style substrate readout visible only when Debug ON; hidden when OFF).
+
+### Confirmations
+
+- Geometry untouched (no edits to `lib/geometry-engines.ts` / `lib/solid-*.ts`).
+- Animation logic untouched.
+- Export engine logic untouched.
+- No dither / ASCII / fusion rendering implemented (rails only).
+
+### Next branch — `POST_MVP_INITIAL_PRESET_RAILS_PHASE_1`
+
+### Final locked checkpoint label
+
+`POST_MVP_STYLE_SUBSTRATE_PHASE_1_PASS`
+
+(supersedes `MVP_UI_POLISH_AND_DEMO_CAPTURE_PASS`; all prior checkpoints remain in effect as underlying layers)

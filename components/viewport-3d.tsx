@@ -24,6 +24,7 @@ import {
   SOLID_STAGE_DEBUG,
   extrudeWidthToSlider,
 } from "@/lib/geometry-engines"
+import type { StyleState } from "@/lib/style-system"
 
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
@@ -1658,10 +1659,14 @@ interface Viewport3DProps {
   geometryMode: GeometryMode
   extrudeParams?: ExtrudeParams
   solidParams?: SolidParams
+  /** POST-MVP style substrate (Phase 1). Display/debug only — NOT consumed by
+   *  any geometry, animation, or export path. Passed so later phases can wire
+   *  visual systems without re-threading props. */
+  styleState?: StyleState
   settingsRef?: React.MutableRefObject<ExportSettings>
 }
 
-export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode, extrudeParams, solidParams, settingsRef }: Viewport3DProps) {
+export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode, extrudeParams, solidParams, styleState, settingsRef }: Viewport3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const boundsRef = useRef<StrokeBounds | null>(null)
@@ -2100,6 +2105,29 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
           {compare3Up && <div className="font-semibold text-foreground">3-Up Compare</div>}
           {comparing && compareLabel && (
             <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
+          )}
+          {/* Style substrate readout (Phase 1). Debug-only. Reflects the
+              style state passed from the app; none of these values feed
+              geometry/animation/export yet. */}
+          {styleState && (
+            <div className="mt-1 border-t border-border/50 pt-1">
+              <div className="font-semibold text-foreground">Style substrate:</div>
+              <div>activeMaterialPreset: {styleState.materialPreset}</div>
+              <div>textureMode: {styleState.textureMode}</div>
+              <div>textureEnabled: {String(styleState.textureEnabled)}</div>
+              <div>textureAnimated: {String(styleState.textureAnimated)}</div>
+              <div>ditherEnabled: {String(styleState.ditherEnabled)}</div>
+              <div>ditherAnimated: {String(styleState.ditherAnimated)}</div>
+              <div>asciiEnabled: {String(styleState.asciiEnabled)}</div>
+              <div>asciiAnimated: {String(styleState.asciiAnimated)}</div>
+              <div>layerStackEnabled: {String(styleState.layerStackEnabled)}</div>
+              <div>stackAnimationEnabled: {String(styleState.stackAnimationEnabled)}</div>
+              <div>fusionPreset: {styleState.fusionPreset}</div>
+              <div>fusionAnimationEnabled: {String(styleState.fusionAnimationEnabled)}</div>
+              <div>syncMode: {styleState.syncMode}</div>
+              <div>syncToReveal: {String(styleState.syncToReveal)}</div>
+              <div>globalStyleTime: {styleState.globalStyleTime.toFixed(2)}</div>
+            </div>
           )}
           {/* Extrude depth-trace diagnostic (extrude mode only).
               Proves whether the depth-slider rebuild path is alive end-to-end:

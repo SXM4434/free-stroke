@@ -25,6 +25,12 @@ import {
   SOLID_DEPTH_SLIDER_MAX,
   SOLID_DEPTH_SLIDER_STEP,
 } from "@/lib/geometry-engines"
+import {
+  type StyleState,
+  DEFAULT_STYLE_STATE,
+  MATERIAL_PRESETS,
+  TEXTURE_MODES,
+} from "@/lib/style-system"
 
 const GEOMETRY_MODES: { value: GeometryMode; label: string; disabled: boolean; tooltip?: string }[] = [
   { value: "rod", label: "Rod", disabled: false },
@@ -51,6 +57,10 @@ export default function Home() {
     extrudeWidthToSlider(DEFAULT_EXTRUDE_PARAMS.width),
   )
   const [solidParams, setSolidParams] = useState<SolidParams>(DEFAULT_SOLID_PARAMS)
+  // POST-MVP visual style substrate (Phase 1: rails only). This state is NOT
+  // read by any geometry build path — it is display/debug only for now, so
+  // updating it never rebuilds geometry, breaks animation, or affects export.
+  const [styleState, setStyleState] = useState<StyleState>(DEFAULT_STYLE_STATE)
   const settingsRef = useRef<ExportSettings>({
     spacing: 4,
     smoothing: true,
@@ -251,6 +261,77 @@ export default function Home() {
         </div>
       )}
 
+      {/* Style panel shell (POST-MVP substrate, Phase 1).
+          Compact, safe controls only. These update style state immediately but
+          DO NOT yet drive any visual effect or rebuild geometry — the rails for
+          material / texture / dither / ASCII / sync systems that land later. */}
+      <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-muted/20 px-4">
+        <span className="select-none text-[11px] font-semibold tracking-tight text-foreground">
+          Style
+        </span>
+
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="select-none">Material</span>
+          <select
+            value={styleState.materialPreset}
+            onChange={(e) =>
+              setStyleState((s) => ({ ...s, materialPreset: e.target.value as StyleState["materialPreset"] }))
+            }
+            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
+          >
+            {MATERIAL_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="select-none">Texture</span>
+          <select
+            value={styleState.textureMode}
+            onChange={(e) =>
+              setStyleState((s) => ({ ...s, textureMode: e.target.value as StyleState["textureMode"] }))
+            }
+            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
+          >
+            {TEXTURE_MODES.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="h-4 w-px bg-border" />
+
+        {(
+          [
+            { key: "ditherEnabled", label: "Dither" },
+            { key: "asciiEnabled", label: "ASCII" },
+            { key: "textureAnimated", label: "Animate" },
+            { key: "syncToReveal", label: "Sync Reveal" },
+          ] as const
+        ).map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setStyleState((s) => ({ ...s, [key]: !s[key] }))}
+            className={`rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+              styleState[key]
+                ? "border-foreground/20 bg-foreground text-background"
+                : "border-border bg-background text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+
+        <span className="ml-auto select-none font-mono text-[10px] text-muted-foreground">
+          substrate · effects land in a later phase
+        </span>
+      </div>
+
       {/* Two-column layout */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left column: drawing canvas */}
@@ -266,7 +347,7 @@ export default function Home() {
 
         {/* Right column: 3D viewport */}
         <div className="flex-1">
-          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} settingsRef={settingsRef} />
+          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} styleState={styleState} settingsRef={settingsRef} />
         </div>
       </div>
     </div>
