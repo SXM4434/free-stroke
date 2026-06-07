@@ -30,6 +30,10 @@ import {
   DEFAULT_STYLE_STATE,
   MATERIAL_PRESETS,
   TEXTURE_MODES,
+  type PresetFamily,
+  PRESET_FAMILY_OPTIONS,
+  PRESET_REGISTRY,
+  findPreset,
 } from "@/lib/style-system"
 
 const GEOMETRY_MODES: { value: GeometryMode; label: string; disabled: boolean; tooltip?: string }[] = [
@@ -61,6 +65,22 @@ export default function Home() {
   // read by any geometry build path — it is display/debug only for now, so
   // updating it never rebuilds geometry, breaks animation, or affects export.
   const [styleState, setStyleState] = useState<StyleState>(DEFAULT_STYLE_STATE)
+
+  // Select a preset by id within the active family. Records the active/last-
+  // applied preset and applies only the preset's safe `applies` patch. This
+  // never rebuilds geometry and never runs an effect renderer. Unimplemented
+  // presets still record selection (so the UI + debug reflect intent) but
+  // apply nothing visual.
+  const handleSelectPreset = (family: PresetFamily, id: string) => {
+    const preset = findPreset(id)
+    setStyleState((s) => ({
+      ...s,
+      ...(preset?.implemented && preset.applies ? preset.applies : {}),
+      activePresetFamily: family,
+      activePresetId: id,
+      lastAppliedPresetId: preset?.implemented ? id : s.lastAppliedPresetId,
+    }))
+  }
   const settingsRef = useRef<ExportSettings>({
     spacing: 4,
     smoothing: true,
@@ -326,6 +346,66 @@ export default function Home() {
             {label}
           </button>
         ))}
+
+        <div className="h-4 w-px bg-border" />
+
+        {/* Preset rail (Phase 1). Family selector + preset selector. Material
+            presets apply through existing style state; all other families are
+            definition-only and clearly marked "renderer later". */}
+        {(() => {
+          const family = styleState.activePresetFamily
+          const presets = (PRESET_REGISTRY[family] ?? []).filter((p) => p.enabled)
+          const active = findPreset(styleState.activePresetId)
+          const activeInFamily = active && active.family === family ? active : undefined
+          return (
+            <>
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="select-none">Preset</span>
+                <select
+                  value={family}
+                  onChange={(e) =>
+                    setStyleState((s) => ({ ...s, activePresetFamily: e.target.value as PresetFamily }))
+                  }
+                  className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
+                >
+                  {PRESET_FAMILY_OPTIONS.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <select
+                value={activeInFamily?.id ?? ""}
+                onChange={(e) => e.target.value && handleSelectPreset(family, e.target.value)}
+                className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
+              >
+                <option value="" disabled>
+                  Select…
+                </option>
+                {presets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                    {p.implemented ? "" : " (soon)"}
+                  </option>
+                ))}
+              </select>
+
+              {activeInFamily && (
+                <span
+                  className={`select-none rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                    activeInFamily.implemented
+                      ? "bg-foreground/10 text-foreground"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {activeInFamily.implemented ? "active" : "defined · renderer later"}
+                </span>
+              )}
+            </>
+          )
+        })()}
 
         <span className="ml-auto select-none font-mono text-[10px] text-muted-foreground">
           substrate · effects land in a later phase

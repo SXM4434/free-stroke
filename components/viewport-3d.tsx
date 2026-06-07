@@ -25,6 +25,7 @@ import {
   extrudeWidthToSlider,
 } from "@/lib/geometry-engines"
 import type { StyleState } from "@/lib/style-system"
+import { findPreset } from "@/lib/style-system"
 
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
@@ -2127,6 +2128,21 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               <div>syncMode: {styleState.syncMode}</div>
               <div>syncToReveal: {String(styleState.syncToReveal)}</div>
               <div>globalStyleTime: {styleState.globalStyleTime.toFixed(2)}</div>
+              {(() => {
+                const ap = findPreset(styleState.activePresetId)
+                return (
+                  <div className="mt-1 border-t border-border/30 pt-1">
+                    <div className="font-semibold text-foreground">Active preset:</div>
+                    <div>activePresetFamily: {styleState.activePresetFamily}</div>
+                    <div>activePresetId: {styleState.activePresetId ?? "—"}</div>
+                    <div>activePresetImplemented: {String(ap?.implemented ?? false)}</div>
+                    <div>activePresetPreviewOnly: {String(ap?.previewOnly ?? false)}</div>
+                    <div>activePresetBestModes: {ap?.bestModes?.join(", ") || "—"}</div>
+                    <div>presetAppliesState: {ap?.applies ? Object.keys(ap.applies).join(", ") || "—" : "—"}</div>
+                    <div>presetDoesNotTouchGeometry: YES</div>
+                  </div>
+                )
+              })()}
             </div>
           )}
           {/* Extrude depth-trace diagnostic (extrude mode only).

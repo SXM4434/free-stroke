@@ -697,3 +697,69 @@ Focus:
 `POST_MVP_STYLE_SUBSTRATE_PHASE_1_PASS`
 
 (supersedes `MVP_UI_POLISH_AND_DEMO_CAPTURE_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_INITIAL_PRESET_RAILS_PHASE_1_PASS`
+
+**Status: Preset rails added. Locked.** Preset infrastructure only — no visual effect renderers. Geometry, animation, and export untouched.
+
+### What was added (preset infrastructure only)
+
+- **Preset family model** in `lib/style-system.ts`: `PresetFamily` union (geometry, material, animatedMaterial, texture, animatedTexture, dither, animatedDither, ascii, animatedAscii, layerStack, stackAnimation, fusion, animatedFusion, geometryAnimation) and the `StylePreset` shape (`id`, `label`, `family`, `description?`, `bestModes?`, `enabled`, `implemented`, `previewOnly?`, `applies?`).
+- **Initial preset definitions** (69 total, 0 duplicate IDs, all have family + label):
+  - material (6, IMPLEMENTED): ink, softGel, matteClay, glossyPlastic, rubber, signal
+  - texture (5): fineGrain, scanlines, contourBands, scratchedInk, gelBubbles
+  - animatedTexture (5): grainDrift, scanlineScroll, rippleFlow, bandCrawl, bubbleDrift
+  - dither (5): bayerClassic, dotMatrix, hardThreshold, softDither, pixelSignal
+  - animatedDither (5): ditherCrawl, thresholdSweep, revealDither, completionPulseDither, diagonalMatrixDrift
+  - ascii (5): terminalShade, binarySkin, blockGlyph, codeMarks, sparseGlyph
+  - animatedAscii (6): glyphScroll, asciiRain, characterCycle, revealGlyphs, terminalFlicker, slowCodeCrawl
+  - layerStack (5): cleanInkStack, ditheredGelStack, terminalStack, graphicSlabStack, softSignalStack
+  - stackAnimation (6): stackFadeIn, stackCompletionPulse, stackDrift, stackFreezeOnComplete, stackLoopCrawl, stackDelay
+  - fusion (8): terminalGel, ditherBloom, signalInk, asciiRubber, scanlineBalloon, pixelClay, codeBloom, glitchRibbon
+  - animatedFusion (7): terminalGelRevealBuild, ditherBloomThresholdOpen, signalInkDataFlow, asciiRubberSlowdown, scanlineBalloonSoftPulse, glitchRibbonControlledBreak, codeBloomCharacterReveal
+  - geometryAnimation (6): authenticDraw, smoothReveal, snappyDraw, slowGel, loopingStroke, completionPulse
+  - `PRESET_REGISTRY` (family → presets), `PRESET_FAMILY_OPTIONS`, `ALL_PRESETS`, and `findPreset()`.
+- **Style state fields** added to `StyleState` + `DEFAULT_STYLE_STATE`: `activePresetFamily` (default `material`), `activePresetId` (default `null`), `lastAppliedPresetId` (default `null`).
+- **Preset rail UI** in `app/page.tsx`: a family selector + a preset selector in the Style bar, with a selected-preset status chip ("active" vs "defined · renderer later"). Unimplemented presets are labeled "(soon)". A `handleSelectPreset(family, id)` records the active preset and applies only the preset's safe `applies` patch.
+- **Debug readout** in `components/viewport-3d.tsx` (Debug-only): activePresetFamily, activePresetId, activePresetImplemented, activePresetPreviewOnly, activePresetBestModes, presetAppliesState, presetDoesNotTouchGeometry: YES.
+
+### Material preset behavior
+
+Material presets are `implemented: true` and carry `applies: { materialPreset: ... }`. Selecting one updates the existing `materialPreset` style state through the shared style state path (no geometry rebuild).
+
+### Unimplemented preset behavior
+
+All non-material presets are `implemented: false` with no `applies` patch. Selecting one records `activePresetFamily`/`activePresetId` (and the UI shows "defined · renderer later") but applies nothing visual, does not change material, and does not break the preview. They never pretend to work.
+
+### Does preset selection rebuild geometry?
+
+**No.** Verified via Extrude `previewBuildCount`: selecting multiple unimplemented presets produced zero build-count increments. Style/preset state is in no geometry memo dependency.
+
+### Test results
+
+- Preset data — PASS (69 presets, 0 dupes, 0 missing label/family, only 6 material marked implemented, family counts match spec).
+- UI — PASS (family selector switches the preset list; selecting material `rubber`/`matteClay` updates `materialPreset`; selecting unimplemented `bayerClassic`/ascii presets records selection, shows "(soon)"/"defined · renderer later", leaves material untouched, preview intact).
+- Rod — PASS (renders).
+- Extrude — PASS (renders; export 23.7 KB GLB with presets active).
+- Solid — PASS (renders).
+- Inflate — PASS (renders).
+- Animation unchanged — PASS.
+- Export unchanged — PASS.
+- Debug gating — PASS (preset + substrate readouts visible only when Debug ON; hidden when OFF).
+
+### Confirmations
+
+- Geometry untouched (no edits to `lib/geometry-engines.ts` / `lib/solid-*.ts`).
+- Animation logic untouched.
+- Export engine logic untouched.
+- No dither / ASCII / texture / fusion rendering implemented (rails + definitions only).
+
+### Next branch — `POST_MVP_MATERIAL_AND_ANIMATED_MATERIAL_PHASE_1`
+
+### Final locked checkpoint label
+
+`POST_MVP_INITIAL_PRESET_RAILS_PHASE_1_PASS`
+
+(supersedes `POST_MVP_STYLE_SUBSTRATE_PHASE_1_PASS`; all prior checkpoints remain in effect as underlying layers)

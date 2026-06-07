@@ -131,6 +131,15 @@ export interface StyleState {
   syncMode: StyleSyncMode
   syncToReveal: boolean
   globalStyleTime: number
+
+  /* --- preset rails (Phase 1) ---
+   * Tracks which preset family/preset is currently selected in the UI. These
+   * are metadata only: selecting a preset records the IDs here and applies the
+   * preset's safe `applies` patch, but never rebuilds geometry or runs an
+   * effect renderer (most renderers do not exist yet). */
+  activePresetFamily: PresetFamily
+  activePresetId: string | null
+  lastAppliedPresetId: string | null
 }
 
 /**
@@ -191,6 +200,10 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   syncMode: "independent",
   syncToReveal: false,
   globalStyleTime: 0,
+
+  activePresetFamily: "material",
+  activePresetId: null,
+  lastAppliedPresetId: null,
 }
 
 /* --------------------------- preset id shells ---------------------------- */
@@ -246,3 +259,216 @@ export const FUSION_PRESETS: PresetShell<FusionPreset>[] = [
   { id: "claySinter", label: "Clay Sinter" },
   { id: "signalGlitch", label: "Signal Glitch" },
 ]
+
+/* ====================================================================== */
+/* PRESET RAILS (Phase 1) — product structure for future style systems.   */
+/* ---------------------------------------------------------------------- */
+/* These declare the full preset catalog as DATA. Each preset says which   */
+/* family it belongs to, whether it shows in the UI (`enabled`), and       */
+/* whether its renderer actually exists yet (`implemented`). Right now only */
+/* the material family is `implemented` — it maps to the existing          */
+/* `materialPreset` state. Everything else is a definition shell so the     */
+/* product surface is in place before the renderers land.                  */
+/* ====================================================================== */
+
+export type PresetFamily =
+  | "geometry"
+  | "material"
+  | "animatedMaterial"
+  | "texture"
+  | "animatedTexture"
+  | "dither"
+  | "animatedDither"
+  | "ascii"
+  | "animatedAscii"
+  | "layerStack"
+  | "stackAnimation"
+  | "fusion"
+  | "animatedFusion"
+  | "geometryAnimation"
+
+export type GeometryModeId = "rod" | "extrude" | "solid" | "inflate"
+
+export interface StylePreset {
+  id: string
+  label: string
+  family: PresetFamily
+  description?: string
+  bestModes?: GeometryModeId[]
+  /** Appears in the UI list. */
+  enabled: boolean
+  /** Actually changes rendered behavior. When false, selecting it only records
+   *  metadata + applies safe state fields; it must NOT pretend to work. */
+  implemented: boolean
+  /** Reserved: preset that only affects preview, never export. */
+  previewOnly?: boolean
+  /** Safe partial StyleState patch applied on selection. Must never include
+   *  fields that trigger geometry rebuilds (there are none of those here). */
+  applies?: Partial<StyleState>
+}
+
+/* --- material (IMPLEMENTED: maps to existing materialPreset state) --- */
+export const MATERIAL_PRESET_DEFS: StylePreset[] = [
+  { id: "ink", label: "Ink", family: "material", enabled: true, implemented: true, applies: { materialPreset: "ink" } },
+  { id: "softGel", label: "Soft Gel", family: "material", enabled: true, implemented: true, applies: { materialPreset: "softGel" }, bestModes: ["inflate", "solid"] },
+  { id: "matteClay", label: "Matte Clay", family: "material", enabled: true, implemented: true, applies: { materialPreset: "matteClay" }, bestModes: ["solid", "extrude"] },
+  { id: "glossyPlastic", label: "Glossy Plastic", family: "material", enabled: true, implemented: true, applies: { materialPreset: "glossyPlastic" }, bestModes: ["inflate"] },
+  { id: "rubber", label: "Rubber", family: "material", enabled: true, implemented: true, applies: { materialPreset: "rubber" }, bestModes: ["inflate", "rod"] },
+  { id: "signal", label: "Signal", family: "material", enabled: true, implemented: true, applies: { materialPreset: "signal" }, bestModes: ["rod", "extrude"] },
+]
+
+/* --- dither (definitions only) --- */
+export const DITHER_PRESET_DEFS: StylePreset[] = [
+  { id: "bayerClassic", label: "Bayer Classic", family: "dither", enabled: true, implemented: false },
+  { id: "dotMatrix", label: "Dot Matrix", family: "dither", enabled: true, implemented: false },
+  { id: "hardThreshold", label: "Hard Threshold", family: "dither", enabled: true, implemented: false },
+  { id: "softDither", label: "Soft Dither", family: "dither", enabled: true, implemented: false },
+  { id: "pixelSignal", label: "Pixel Signal", family: "dither", enabled: true, implemented: false },
+]
+
+/* --- animated dither (definitions only) --- */
+export const ANIMATED_DITHER_PRESET_DEFS: StylePreset[] = [
+  { id: "ditherCrawl", label: "Dither Crawl", family: "animatedDither", enabled: true, implemented: false },
+  { id: "thresholdSweep", label: "Threshold Sweep", family: "animatedDither", enabled: true, implemented: false },
+  { id: "revealDither", label: "Reveal Dither", family: "animatedDither", enabled: true, implemented: false },
+  { id: "completionPulseDither", label: "Completion Pulse Dither", family: "animatedDither", enabled: true, implemented: false },
+  { id: "diagonalMatrixDrift", label: "Diagonal Matrix Drift", family: "animatedDither", enabled: true, implemented: false },
+]
+
+/* --- ascii (definitions only) --- */
+export const ASCII_PRESET_DEFS: StylePreset[] = [
+  { id: "terminalShade", label: "Terminal Shade", family: "ascii", enabled: true, implemented: false },
+  { id: "binarySkin", label: "Binary Skin", family: "ascii", enabled: true, implemented: false },
+  { id: "blockGlyph", label: "Block Glyph", family: "ascii", enabled: true, implemented: false },
+  { id: "codeMarks", label: "Code Marks", family: "ascii", enabled: true, implemented: false },
+  { id: "sparseGlyph", label: "Sparse Glyph", family: "ascii", enabled: true, implemented: false },
+]
+
+/* --- animated ascii (definitions only) --- */
+export const ANIMATED_ASCII_PRESET_DEFS: StylePreset[] = [
+  { id: "glyphScroll", label: "Glyph Scroll", family: "animatedAscii", enabled: true, implemented: false },
+  { id: "asciiRain", label: "ASCII Rain", family: "animatedAscii", enabled: true, implemented: false },
+  { id: "characterCycle", label: "Character Cycle", family: "animatedAscii", enabled: true, implemented: false },
+  { id: "revealGlyphs", label: "Reveal Glyphs", family: "animatedAscii", enabled: true, implemented: false },
+  { id: "terminalFlicker", label: "Terminal Flicker", family: "animatedAscii", enabled: true, implemented: false },
+  { id: "slowCodeCrawl", label: "Slow Code Crawl", family: "animatedAscii", enabled: true, implemented: false },
+]
+
+/* --- texture (definitions only) --- */
+export const TEXTURE_PRESET_DEFS: StylePreset[] = [
+  { id: "fineGrain", label: "Fine Grain", family: "texture", enabled: true, implemented: false },
+  { id: "scanlines", label: "Scanlines", family: "texture", enabled: true, implemented: false },
+  { id: "contourBands", label: "Contour Bands", family: "texture", enabled: true, implemented: false },
+  { id: "scratchedInk", label: "Scratched Ink", family: "texture", enabled: true, implemented: false },
+  { id: "gelBubbles", label: "Gel Bubbles", family: "texture", enabled: true, implemented: false },
+]
+
+/* --- animated texture (definitions only) --- */
+export const ANIMATED_TEXTURE_PRESET_DEFS: StylePreset[] = [
+  { id: "grainDrift", label: "Grain Drift", family: "animatedTexture", enabled: true, implemented: false },
+  { id: "scanlineScroll", label: "Scanline Scroll", family: "animatedTexture", enabled: true, implemented: false },
+  { id: "rippleFlow", label: "Ripple Flow", family: "animatedTexture", enabled: true, implemented: false },
+  { id: "bandCrawl", label: "Band Crawl", family: "animatedTexture", enabled: true, implemented: false },
+  { id: "bubbleDrift", label: "Bubble Drift", family: "animatedTexture", enabled: true, implemented: false },
+]
+
+/* --- layer stack (definitions only) --- */
+export const LAYER_STACK_PRESET_DEFS: StylePreset[] = [
+  { id: "cleanInkStack", label: "Clean Ink Stack", family: "layerStack", enabled: true, implemented: false },
+  { id: "ditheredGelStack", label: "Dithered Gel Stack", family: "layerStack", enabled: true, implemented: false },
+  { id: "terminalStack", label: "Terminal Stack", family: "layerStack", enabled: true, implemented: false },
+  { id: "graphicSlabStack", label: "Graphic Slab Stack", family: "layerStack", enabled: true, implemented: false },
+  { id: "softSignalStack", label: "Soft Signal Stack", family: "layerStack", enabled: true, implemented: false },
+]
+
+/* --- stack animation (definitions only) --- */
+export const STACK_ANIMATION_PRESET_DEFS: StylePreset[] = [
+  { id: "stackFadeIn", label: "Stack Fade In", family: "stackAnimation", enabled: true, implemented: false },
+  { id: "stackCompletionPulse", label: "Stack Completion Pulse", family: "stackAnimation", enabled: true, implemented: false },
+  { id: "stackDrift", label: "Stack Drift", family: "stackAnimation", enabled: true, implemented: false },
+  { id: "stackFreezeOnComplete", label: "Stack Freeze On Complete", family: "stackAnimation", enabled: true, implemented: false },
+  { id: "stackLoopCrawl", label: "Stack Loop Crawl", family: "stackAnimation", enabled: true, implemented: false },
+  { id: "stackDelay", label: "Stack Delay", family: "stackAnimation", enabled: true, implemented: false },
+]
+
+/* --- fusion (definitions only) --- */
+export const FUSION_PRESET_DEFS: StylePreset[] = [
+  { id: "terminalGel", label: "Terminal Gel", family: "fusion", enabled: true, implemented: false },
+  { id: "ditherBloom", label: "Dither Bloom", family: "fusion", enabled: true, implemented: false },
+  { id: "signalInk", label: "Signal Ink", family: "fusion", enabled: true, implemented: false },
+  { id: "asciiRubber", label: "ASCII Rubber", family: "fusion", enabled: true, implemented: false },
+  { id: "scanlineBalloon", label: "Scanline Balloon", family: "fusion", enabled: true, implemented: false },
+  { id: "pixelClay", label: "Pixel Clay", family: "fusion", enabled: true, implemented: false },
+  { id: "codeBloom", label: "Code Bloom", family: "fusion", enabled: true, implemented: false },
+  { id: "glitchRibbon", label: "Glitch Ribbon", family: "fusion", enabled: true, implemented: false },
+]
+
+/* --- animated fusion (definitions only) --- */
+export const ANIMATED_FUSION_PRESET_DEFS: StylePreset[] = [
+  { id: "terminalGelRevealBuild", label: "Terminal Gel Reveal Build", family: "animatedFusion", enabled: true, implemented: false },
+  { id: "ditherBloomThresholdOpen", label: "Dither Bloom Threshold Open", family: "animatedFusion", enabled: true, implemented: false },
+  { id: "signalInkDataFlow", label: "Signal Ink Data Flow", family: "animatedFusion", enabled: true, implemented: false },
+  { id: "asciiRubberSlowdown", label: "ASCII Rubber Slowdown", family: "animatedFusion", enabled: true, implemented: false },
+  { id: "scanlineBalloonSoftPulse", label: "Scanline Balloon Soft Pulse", family: "animatedFusion", enabled: true, implemented: false },
+  { id: "glitchRibbonControlledBreak", label: "Glitch Ribbon Controlled Break", family: "animatedFusion", enabled: true, implemented: false },
+  { id: "codeBloomCharacterReveal", label: "Code Bloom Character Reveal", family: "animatedFusion", enabled: true, implemented: false },
+]
+
+/* --- geometry animation (definitions only) --- */
+export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
+  { id: "authenticDraw", label: "Authentic Draw", family: "geometryAnimation", enabled: true, implemented: false },
+  { id: "smoothReveal", label: "Smooth Reveal", family: "geometryAnimation", enabled: true, implemented: false },
+  { id: "snappyDraw", label: "Snappy Draw", family: "geometryAnimation", enabled: true, implemented: false },
+  { id: "slowGel", label: "Slow Gel", family: "geometryAnimation", enabled: true, implemented: false },
+  { id: "loopingStroke", label: "Looping Stroke", family: "geometryAnimation", enabled: true, implemented: false },
+  { id: "completionPulse", label: "Completion Pulse", family: "geometryAnimation", enabled: true, implemented: false },
+]
+
+/**
+ * PRESET_REGISTRY — single source of truth grouping every family's presets.
+ * The UI reads families/presets from here; the debug readout resolves the
+ * active preset from here too.
+ */
+export const PRESET_REGISTRY: Record<PresetFamily, StylePreset[]> = {
+  geometry: [],
+  material: MATERIAL_PRESET_DEFS,
+  animatedMaterial: [],
+  texture: TEXTURE_PRESET_DEFS,
+  animatedTexture: ANIMATED_TEXTURE_PRESET_DEFS,
+  dither: DITHER_PRESET_DEFS,
+  animatedDither: ANIMATED_DITHER_PRESET_DEFS,
+  ascii: ASCII_PRESET_DEFS,
+  animatedAscii: ANIMATED_ASCII_PRESET_DEFS,
+  layerStack: LAYER_STACK_PRESET_DEFS,
+  stackAnimation: STACK_ANIMATION_PRESET_DEFS,
+  fusion: FUSION_PRESET_DEFS,
+  animatedFusion: ANIMATED_FUSION_PRESET_DEFS,
+  geometryAnimation: GEOMETRY_ANIMATION_PRESET_DEFS,
+}
+
+/** Families that actually have presets to show (non-empty), in UI order. */
+export const PRESET_FAMILY_OPTIONS: { id: PresetFamily; label: string }[] = [
+  { id: "material", label: "Material" },
+  { id: "texture", label: "Texture" },
+  { id: "animatedTexture", label: "Animated Texture" },
+  { id: "dither", label: "Dither" },
+  { id: "animatedDither", label: "Animated Dither" },
+  { id: "ascii", label: "ASCII" },
+  { id: "animatedAscii", label: "Animated ASCII" },
+  { id: "layerStack", label: "Layer Stack" },
+  { id: "stackAnimation", label: "Stack Animation" },
+  { id: "fusion", label: "Fusion" },
+  { id: "animatedFusion", label: "Animated Fusion" },
+  { id: "geometryAnimation", label: "Geometry Animation" },
+]
+
+/** Flat list of every preset across families (for data integrity checks). */
+export const ALL_PRESETS: StylePreset[] = PRESET_FAMILY_OPTIONS.flatMap(
+  (f) => PRESET_REGISTRY[f.id],
+)
+
+/** Resolve a preset by id (searches all families). */
+export function findPreset(id: string | null): StylePreset | undefined {
+  if (!id) return undefined
+  return ALL_PRESETS.find((p) => p.id === id)
+}
