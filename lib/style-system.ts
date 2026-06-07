@@ -27,13 +27,19 @@ export type MaterialPreset =
   | "rubber"
   | "signal"
 
+/**
+ * TextureMode = procedural PATTERNING only. Dither and ASCII are deliberately
+ * NOT texture modes — they are separate sibling systems with their own state
+ * (`dither*` / `ascii*`). Never add "dither" or "ascii" here.
+ */
 export type TextureMode =
   | "none"
   | "procedural"
-  | "dither"
-  | "ascii"
-  | "layered"
-  | "fusion"
+  | "grain"
+  | "noise"
+  | "scanlines"
+  | "bands"
+  | "contour"
 
 /** How a texture/effect is anchored as the camera or geometry moves. */
 export type TextureLockMode = "screen" | "object" | "surface" | "stroke"
@@ -230,10 +236,11 @@ export const MATERIAL_PRESETS: PresetShell<MaterialPreset>[] = [
 export const TEXTURE_MODES: PresetShell<TextureMode>[] = [
   { id: "none", label: "None" },
   { id: "procedural", label: "Procedural" },
-  { id: "dither", label: "Dither" },
-  { id: "ascii", label: "ASCII" },
-  { id: "layered", label: "Layered" },
-  { id: "fusion", label: "Fusion" },
+  { id: "grain", label: "Grain" },
+  { id: "noise", label: "Noise" },
+  { id: "scanlines", label: "Scanlines" },
+  { id: "bands", label: "Bands" },
+  { id: "contour", label: "Contour" },
 ]
 
 export const DITHER_PRESETS: PresetShell<DitherType>[] = [
@@ -317,13 +324,13 @@ export const MATERIAL_PRESET_DEFS: StylePreset[] = [
   { id: "signal", label: "Signal", family: "material", enabled: true, implemented: true, applies: { materialPreset: "signal" }, bestModes: ["rod", "extrude"] },
 ]
 
-/* --- dither (definitions only) --- */
+/* --- dither (definitions only; applies set dither* state, never textureMode) --- */
 export const DITHER_PRESET_DEFS: StylePreset[] = [
-  { id: "bayerClassic", label: "Bayer Classic", family: "dither", enabled: true, implemented: false },
-  { id: "dotMatrix", label: "Dot Matrix", family: "dither", enabled: true, implemented: false },
-  { id: "hardThreshold", label: "Hard Threshold", family: "dither", enabled: true, implemented: false },
-  { id: "softDither", label: "Soft Dither", family: "dither", enabled: true, implemented: false },
-  { id: "pixelSignal", label: "Pixel Signal", family: "dither", enabled: true, implemented: false },
+  { id: "bayerClassic", label: "Bayer Classic", family: "dither", enabled: true, implemented: false, applies: { ditherEnabled: true, ditherType: "bayer4" } },
+  { id: "dotMatrix", label: "Dot Matrix", family: "dither", enabled: true, implemented: false, applies: { ditherEnabled: true, ditherType: "halftone" } },
+  { id: "hardThreshold", label: "Hard Threshold", family: "dither", enabled: true, implemented: false, applies: { ditherEnabled: true, ditherType: "lines" } },
+  { id: "softDither", label: "Soft Dither", family: "dither", enabled: true, implemented: false, applies: { ditherEnabled: true, ditherType: "blueNoise" } },
+  { id: "pixelSignal", label: "Pixel Signal", family: "dither", enabled: true, implemented: false, applies: { ditherEnabled: true, ditherType: "bayer8" } },
 ]
 
 /* --- animated dither (definitions only) --- */
@@ -335,13 +342,13 @@ export const ANIMATED_DITHER_PRESET_DEFS: StylePreset[] = [
   { id: "diagonalMatrixDrift", label: "Diagonal Matrix Drift", family: "animatedDither", enabled: true, implemented: false },
 ]
 
-/* --- ascii (definitions only) --- */
+/* --- ascii (definitions only; applies set ascii* state, never textureMode) --- */
 export const ASCII_PRESET_DEFS: StylePreset[] = [
-  { id: "terminalShade", label: "Terminal Shade", family: "ascii", enabled: true, implemented: false },
-  { id: "binarySkin", label: "Binary Skin", family: "ascii", enabled: true, implemented: false },
-  { id: "blockGlyph", label: "Block Glyph", family: "ascii", enabled: true, implemented: false },
-  { id: "codeMarks", label: "Code Marks", family: "ascii", enabled: true, implemented: false },
-  { id: "sparseGlyph", label: "Sparse Glyph", family: "ascii", enabled: true, implemented: false },
+  { id: "terminalShade", label: "Terminal Shade", family: "ascii", enabled: true, implemented: false, applies: { asciiEnabled: true, asciiCharset: "classic" } },
+  { id: "binarySkin", label: "Binary Skin", family: "ascii", enabled: true, implemented: false, applies: { asciiEnabled: true, asciiCharset: "minimal" } },
+  { id: "blockGlyph", label: "Block Glyph", family: "ascii", enabled: true, implemented: false, applies: { asciiEnabled: true, asciiCharset: "blocks" } },
+  { id: "codeMarks", label: "Code Marks", family: "ascii", enabled: true, implemented: false, applies: { asciiEnabled: true, asciiCharset: "custom" } },
+  { id: "sparseGlyph", label: "Sparse Glyph", family: "ascii", enabled: true, implemented: false, applies: { asciiEnabled: true, asciiCharset: "dots" } },
 ]
 
 /* --- animated ascii (definitions only) --- */

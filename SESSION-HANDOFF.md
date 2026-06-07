@@ -763,3 +763,82 @@ All non-material presets are `implemented: false` with no `applies` patch. Selec
 `POST_MVP_INITIAL_PRESET_RAILS_PHASE_1_PASS`
 
 (supersedes `POST_MVP_STYLE_SUBSTRATE_PHASE_1_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `STYLE_TAXONOMY_UI_CORRECTION_PASS`
+
+**Status: Taxonomy corrected. Locked.** State/UI-only correction — no renderers added; geometry, animation, and export untouched.
+
+### What was corrected
+
+- **Texture, Dither, and ASCII are now separate sibling systems.** Previously the UI placed Dither and ASCII under the Texture selector (conceptually wrong). They are now independent controls with independent state paths.
+- `textureMode` no longer contains `dither` or `ascii` (nor the old umbrella `layered`/`fusion`).
+
+### Old incorrect taxonomy
+
+- Material
+- Texture: None / Procedural / **Dither** / **ASCII** / Layered / Fusion
+- Dither toggle (boolean)
+- ASCII toggle (boolean)
+
+### Corrected taxonomy
+
+- Material: Ink / Soft Gel / Matte Clay / Glossy Plastic / Rubber / Signal
+- Texture (procedural patterning only): None / Procedural / Grain / Noise / Scanlines / Bands / Contour
+- Dither (own system): Off / Bayer 4x4 / Bayer 8x8 / Blue Noise / Halftone / Lines
+- ASCII (own system): Off / Blocks / Classic / Minimal / Dots / Custom
+- Animate + Sync Reveal toggles
+- Preset: family + preset (families stay separate)
+
+### State model changes (`lib/style-system.ts`)
+
+- `TextureMode` = `"none" | "procedural" | "grain" | "noise" | "scanlines" | "bands" | "contour"` (no `dither`/`ascii`/`layered`/`fusion`).
+- `TEXTURE_MODES` shell list updated to match (no Dither/ASCII entries).
+- Dither retains its independent fields (`ditherEnabled`, `ditherAnimated`, `ditherType`, `ditherScale`, `ditherThreshold`, `ditherContrast`, `ditherSpeed`, `ditherDirection`).
+- ASCII retains its independent fields (`asciiEnabled`, `asciiAnimated`, `asciiCharset`, `asciiCellSize`, `asciiDensity`, `asciiContrast`, `asciiScrollSpeed`, `asciiDirection`).
+- Dither/ASCII preset defs now carry safe `applies` patches that set their OWN state (`ditherEnabled`+`ditherType` / `asciiEnabled`+`asciiCharset`) — never `textureMode`.
+
+### UI changes (`app/page.tsx`)
+
+- Replaced the Dither/ASCII boolean toggle chips with two separate selects: **Dither** (Off + dither types) and **ASCII** (Off + charsets), siblings of the Texture select.
+- Animate + Sync Reveal toggles retained.
+- `handleSelectPreset` now applies a preset's safe `applies` patch for any family (the patches only touch inert style fields), so dither/ASCII presets record their own sibling state; `implemented` still governs the "active" vs "renderer later" label.
+
+### Preset behavior changes
+
+- Texture / animatedTexture / dither / animatedDither / ascii / animatedAscii / fusion families remain separate in `PRESET_REGISTRY`.
+- Selecting a dither preset sets `ditherEnabled = true` + `ditherType` (verified `presetAppliesState: ditherEnabled, ditherType`); it does NOT set `textureMode`.
+- Selecting an ASCII preset sets `asciiEnabled = true` + `asciiCharset`; it does NOT set `textureMode`.
+- All non-material presets remain `implemented: false` ("(soon)" / "defined · renderer later"). No renderer is falsely claimed implemented.
+
+### Debug changes (`components/viewport-3d.tsx`)
+
+- Style substrate readout regrouped into labeled sections: **Texture (procedural patterning only)** (textureMode, textureEnabled, textureAnimated), **Dither (separate system)** (ditherEnabled, ditherAnimated, ditherType), **ASCII (separate system)** (asciiEnabled, asciiAnimated, asciiCharset), **Composite** (layerStack/stack/fusion/sync). Active preset block (activePresetFamily, activePresetId, …) retained. Debug no longer implies Dither/ASCII are texture modes.
+
+### Test results
+
+- UI taxonomy — PASS (Texture options = None/Procedural/Grain/Noise/Scanlines/Bands/Contour; no Dither, no ASCII. Dither + ASCII are own selects. Selecting Dither/ASCII left `textureMode` unchanged. Selecting Texture=scanlines left Dither/ASCII state unchanged.)
+- Preset taxonomy — PASS (dither preset `dotMatrix` set `ditherType=halftone` + `presetAppliesState: ditherEnabled, ditherType`, `textureMode` unchanged; families separate; fusion separate).
+- Rod — PASS (renders).
+- Extrude — PASS (renders).
+- Solid — PASS (renders).
+- Inflate — PASS (renders; export 208 KB GLB with taxonomy state active).
+- Material preset regression — PASS (material presets still apply via `materialPreset`).
+
+### Confirmations
+
+- No dither renderer implemented.
+- No ASCII renderer implemented.
+- No procedural texture renderer implemented.
+- Geometry untouched (no edits to `lib/geometry-engines.ts` / `lib/solid-*.ts`).
+- Animation logic untouched.
+- Export engine logic untouched.
+
+### Next branch — `POST_MVP_MATERIAL_AND_ANIMATED_MATERIAL_PHASE_1`
+
+### Final locked checkpoint label
+
+`STYLE_TAXONOMY_UI_CORRECTION_PASS`
+
+(supersedes `POST_MVP_INITIAL_PRESET_RAILS_PHASE_1_PASS`; all prior checkpoints remain in effect as underlying layers)

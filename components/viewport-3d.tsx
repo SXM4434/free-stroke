@@ -2114,13 +2114,19 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
             <div className="mt-1 border-t border-border/50 pt-1">
               <div className="font-semibold text-foreground">Style substrate:</div>
               <div>activeMaterialPreset: {styleState.materialPreset}</div>
+              <div className="mt-0.5 text-foreground/80">— Texture (procedural patterning only) —</div>
               <div>textureMode: {styleState.textureMode}</div>
               <div>textureEnabled: {String(styleState.textureEnabled)}</div>
               <div>textureAnimated: {String(styleState.textureAnimated)}</div>
+              <div className="mt-0.5 text-foreground/80">— Dither (separate system) —</div>
               <div>ditherEnabled: {String(styleState.ditherEnabled)}</div>
               <div>ditherAnimated: {String(styleState.ditherAnimated)}</div>
+              <div>ditherType: {styleState.ditherType}</div>
+              <div className="mt-0.5 text-foreground/80">— ASCII (separate system) —</div>
               <div>asciiEnabled: {String(styleState.asciiEnabled)}</div>
               <div>asciiAnimated: {String(styleState.asciiAnimated)}</div>
+              <div>asciiCharset: {styleState.asciiCharset}</div>
+              <div className="mt-0.5 text-foreground/80">— Composite —</div>
               <div>layerStackEnabled: {String(styleState.layerStackEnabled)}</div>
               <div>stackAnimationEnabled: {String(styleState.stackAnimationEnabled)}</div>
               <div>fusionPreset: {styleState.fusionPreset}</div>

@@ -30,6 +30,8 @@ import {
   DEFAULT_STYLE_STATE,
   MATERIAL_PRESETS,
   TEXTURE_MODES,
+  DITHER_PRESETS,
+  ASCII_PRESETS,
   type PresetFamily,
   PRESET_FAMILY_OPTIONS,
   PRESET_REGISTRY,
@@ -67,15 +69,17 @@ export default function Home() {
   const [styleState, setStyleState] = useState<StyleState>(DEFAULT_STYLE_STATE)
 
   // Select a preset by id within the active family. Records the active/last-
-  // applied preset and applies only the preset's safe `applies` patch. This
-  // never rebuilds geometry and never runs an effect renderer. Unimplemented
-  // presets still record selection (so the UI + debug reflect intent) but
-  // apply nothing visual.
+  // applied preset and applies the preset's safe `applies` patch. The patch
+  // only ever touches INERT style fields (material/texture/dither/ascii state
+  // flags) — never geometry, animation, or export — so it is safe to apply for
+  // both implemented (material) and not-yet-implemented presets. `implemented`
+  // still governs whether a real renderer exists; unimplemented presets only
+  // record their sibling state + are clearly labeled "renderer later".
   const handleSelectPreset = (family: PresetFamily, id: string) => {
     const preset = findPreset(id)
     setStyleState((s) => ({
       ...s,
-      ...(preset?.implemented && preset.applies ? preset.applies : {}),
+      ...(preset?.applies ?? {}),
       activePresetFamily: family,
       activePresetId: id,
       lastAppliedPresetId: preset?.implemented ? id : s.lastAppliedPresetId,
@@ -324,12 +328,60 @@ export default function Home() {
           </select>
         </label>
 
+        {/* Dither — its own sibling system (NOT a texture mode). The select
+            sets ditherEnabled + ditherType; "Off" disables dither only. */}
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="select-none">Dither</span>
+          <select
+            value={styleState.ditherEnabled ? styleState.ditherType : "off"}
+            onChange={(e) => {
+              const v = e.target.value
+              setStyleState((s) =>
+                v === "off"
+                  ? { ...s, ditherEnabled: false }
+                  : { ...s, ditherEnabled: true, ditherType: v as StyleState["ditherType"] },
+              )
+            }}
+            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
+          >
+            <option value="off">Off</option>
+            {DITHER_PRESETS.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {/* ASCII — its own sibling system (NOT a texture mode). The select
+            sets asciiEnabled + asciiCharset; "Off" disables ASCII only. */}
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="select-none">ASCII</span>
+          <select
+            value={styleState.asciiEnabled ? styleState.asciiCharset : "off"}
+            onChange={(e) => {
+              const v = e.target.value
+              setStyleState((s) =>
+                v === "off"
+                  ? { ...s, asciiEnabled: false }
+                  : { ...s, asciiEnabled: true, asciiCharset: v as StyleState["asciiCharset"] },
+              )
+            }}
+            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
+          >
+            <option value="off">Off</option>
+            {ASCII_PRESETS.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <div className="h-4 w-px bg-border" />
 
         {(
           [
-            { key: "ditherEnabled", label: "Dither" },
-            { key: "asciiEnabled", label: "ASCII" },
             { key: "textureAnimated", label: "Animate" },
             { key: "syncToReveal", label: "Sync Reveal" },
           ] as const
