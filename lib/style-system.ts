@@ -28,6 +28,20 @@ export type MaterialPreset =
   | "signal"
 
 /**
+ * MaterialAnimationType — ANIMATED MATERIAL v1.
+ * Preview-only surface-response animations. Each one modulates only highlight /
+ * roughness / sheen / emissive (never geometry, the reveal clock, or export).
+ * See `evaluateMaterialAnimation`.
+ */
+export type MaterialAnimationType =
+  | "none"
+  | "shineSweep"
+  | "gelShimmer"
+  | "roughnessPulse"
+  | "completionFlash"
+  | "signalFlicker"
+
+/**
  * TextureMode = procedural PATTERNING only. Dither and ASCII are deliberately
  * NOT texture modes — they are separate sibling systems with their own state
  * (`dither*` / `ascii*`). Never add "dither" or "ascii" here.
@@ -92,10 +106,17 @@ export type StackAnimationType = "none" | "offset" | "cascade" | "shuffle" | "pu
 /* ------------------------------ style state ------------------------------ */
 
 export interface StyleState {
-  /* --- material --- */
+  /* --- material (IMPLEMENTED v1) ---
+   * `materialPreset` drives the visible surface (color / roughness / metalness /
+   * clearcoat / sheen / emissive) in the 3D preview. `materialAnimation*`
+   * drives ANIMATED MATERIAL v1 — a preview-only, surface-response animation
+   * that never touches geometry, the geometry reveal clock, or export. */
   materialPreset: MaterialPreset
+  /** When true the user explicitly chose a material; mode switches must NOT
+   *  overwrite it with the per-mode default. False = follow mode default. */
+  materialUserOverride: boolean
   materialAnimationEnabled: boolean
-  materialAnimationType: StyleAnimationType
+  materialAnimationType: MaterialAnimationType
   materialAnimationSpeed: number
   materialAnimationIntensity: number
 
@@ -171,6 +192,7 @@ export interface StyleState {
  */
 export const DEFAULT_STYLE_STATE: StyleState = {
   materialPreset: "ink",
+  materialUserOverride: false,
   materialAnimationEnabled: false,
   materialAnimationType: "none",
   materialAnimationSpeed: 1,
@@ -394,6 +416,8 @@ export const MATERIAL_ANIMATION_TYPES: PresetShell<MaterialAnimationType>[] = [
 export function resolveMaterialParams(preset: MaterialPreset): MaterialParams {
   return { ...MATERIAL_PARAMS[preset] }
 }
+
+export const TEXTURE_MODES: PresetShell<TextureMode>[] = [
   { id: "none", label: "None" },
   { id: "procedural", label: "Procedural" },
   { id: "grain", label: "Grain" },
@@ -638,4 +662,97 @@ export const ALL_PRESETS: StylePreset[] = PRESET_FAMILY_OPTIONS.flatMap(
 export function findPreset(id: string | null): StylePreset | undefined {
   if (!id) return undefined
   return ALL_PRESETS.find((p) => p.id === id)
+}
+
+/* ====================================================================== */
+/* ANIMATED MATERIAL v1 — surface-response evaluation.                     */
+/* ---------------------------------------------------------------------- */
+/* `evaluateMaterialAnimation` takes the static base params plus a clock   */
+/* and returns the params to apply THIS FRAME. It only ever modulates      */
+/* surface response (emissive / clearcoat / roughness / sheen). It never   */
+/* returns geometry, reveal-clock, or export-affecting values.             */
+/*                                                                          */
+/* `completion` is the stroke draw-in progress (0..1). It is read ONLY to  */
+/* drive "completionFlash" as an accent; the geometry reveal itself is     */
+/* unaffected — Animated Material is preview decoration on top.            */
+/* ====================================================================== */
+
+export interface MaterialAnimationInput {
+  base: MaterialParams
+  type: MaterialAnimationType
+  /** Seconds (already scaled by the caller's clock; speed applied here). */
+  time: number
+  speed: number
+  /** 0..1 intensity from the panel. */
+  intensity: number
+  /** Stroke draw-in progress 0..1 (for completionFlash). */
+  completion: number
+}
+
+const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
+const TAU = Math.PI * 2
+
+export function evaluateMaterialAnimation(input: MaterialAnimationInput): MaterialParams {
+  const { base, type, intensity, completion } = input
+  const t = input.time * input.speed
+  const k = clamp01(intensity)
+  const p: MaterialParams = { ...base }
+
+  switch (type) {
+    case "none":
+      return p
+
+    // Moving specular highlight: ramp clearcoat + reflectivity sinusoidally so
+    // a glossy "shine" travels across the surface as lighting changes.
+    case "shineSweep": {
+      const s = (Math.sin(t * 1.6) + 1) / 2 // 0..1
+      p.clearcoat = clamp01(base.clearcoat + s * 0.6 * k)
+      p.clearcoatRoughness = Math.max(0.02, base.clearcoatRoughness * (1 - s * 0.5 * k))
+      p.reflectivity = clamp01(base.reflectivity + s * 0.3 * k)
+      return p
+    }
+
+    // Soft breathing sheen for gel/soft materials.
+    case "gelShimmer": {
+      const s = (Math.sin(t * 2.2) + 1) / 2
+      p.sheen = clamp01(Math.max(base.sheen, 0.3) + s * 0.5 * k)
+      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.3 * k))
+      p.clearcoat = clamp01(base.clearcoat + s * 0.15 * k)
+      return p
+    }
+
+    // Matte <-> slightly-less-matte pulse via roughness.
+    case "roughnessPulse": {
+      const s = (Math.sin(t * 1.8) + 1) / 2
+      p.roughness = clamp01(base.roughness - s * 0.35 * k)
+      return p
+    }
+
+    // Accent that follows stroke completion: a brief emissive/clearcoat flash
+    // as draw-in approaches 100%, then settles. Reads `completion` only.
+    case "completionFlash": {
+      // Bell curve peaking near completion ~0.85..1.0.
+      const d = 1 - clamp01(Math.abs(completion - 0.92) / 0.18)
+      const flash = d * d
+      p.emissive = "#9fb4c4"
+      p.emissiveIntensity = base.emissiveIntensity + flash * 0.9 * k
+      p.clearcoat = clamp01(base.clearcoat + flash * 0.4 * k)
+      return p
+    }
+
+    // Digital flicker for the Signal material: small high-frequency emissive
+    // jitter layered on a slow drift.
+    case "signalFlicker": {
+      const slow = (Math.sin(t * 3) + 1) / 2
+      const fast = (Math.sin(t * 21.3) + Math.sin(t * 13.7)) / 2 // -1..1-ish
+      const flick = clamp01(0.5 + 0.5 * fast)
+      const baseEm = Math.max(base.emissiveIntensity, 0.2)
+      p.emissive = base.emissive === "#000000" ? "#1d3a4a" : base.emissive
+      p.emissiveIntensity = baseEm + (slow * 0.3 + flick * 0.5) * k
+      return p
+    }
+
+    default:
+      return p
+  }
 }

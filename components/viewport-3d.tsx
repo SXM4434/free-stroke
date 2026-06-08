@@ -25,7 +25,7 @@ import {
   extrudeWidthToSlider,
 } from "@/lib/geometry-engines"
 import type { StyleState } from "@/lib/style-system"
-import { findPreset } from "@/lib/style-system"
+import { findPreset, resolveMaterialParams, evaluateMaterialAnimation } from "@/lib/style-system"
 
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
@@ -95,32 +95,12 @@ function useStrokeMeshes(
 
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-// Gel-ink material: preview-only (export uses its own lightweight MeshStandardMaterial)
-// Used by Rod / Extrude / Solid — hard glossy clearcoat, sharp specular.
-const strokeMaterial = new THREE.MeshPhysicalMaterial({
-  color: "#1a1a1a",
-  clearcoat: 0.8,
-  clearcoatRoughness: 0.15,
-  roughness: 0.35,
-  metalness: 0.0,
-  reflectivity: 0.6,
-})
 
-// Inflate-only material: softer, fuller, balloon/gel feel. Deliberately
-// distinct from `strokeMaterial` so Inflate doesn't read like a glossy
-// Extrude strip — higher roughness + a faint, diffuse sheen instead of a
-// hard plastic clearcoat highlight. Still black / on-brand.
-const inflateMaterial = new THREE.MeshPhysicalMaterial({
-  color: "#1c1c1c",
-  clearcoat: 0.18,
-  clearcoatRoughness: 0.6,
-  roughness: 0.62,
-  metalness: 0.0,
-  reflectivity: 0.32,
-  sheen: 0.5,
-  sheenRoughness: 0.8,
-  sheenColor: new THREE.Color("#3a3a3a"),
-})
+/* Stroke materials are no longer module-level singletons. As of the
+ * POST_MVP material work, the preview material is created inside
+ * <AnimatedStrokes> from styleState.materialPreset (see `liveMaterial`) so the
+ * Material panel actually drives the surface. Export still builds its own
+ * lightweight material at export time. */
 
 /* ---- Bounding box ---- */
 interface StrokeBounds {
@@ -345,6 +325,7 @@ function AnimatedStrokes({
   revealMode,
   hybridBlend,
   exportGroupRef,
+  styleState,
 }: {
   meshes: StrokeMeshData[]
   timelines: StrokeTimeline[]
@@ -353,6 +334,7 @@ function AnimatedStrokes({
   revealMode: RevealMode
   hybridBlend: number
   exportGroupRef: React.RefObject<THREE.Group | null>
+  styleState?: StyleState
 }) {
   // Refs to all tube meshes for drawRange updates
   const tubeMeshRefs = useRef<(THREE.Mesh | null)[]>([])
@@ -363,7 +345,80 @@ function AnimatedStrokes({
   // Refs to joint groups (one group per stroke)
   const jointGroupRefs = useRef<(THREE.Group | null)[]>([])
 
-  useFrame(() => {
+  // ---- Material (IMPLEMENTED v1) ----------------------------------------
+  // A single live MeshPhysicalMaterial driven by styleState.materialPreset.
+  // Replaces the old static module-level `strokeMaterial`/`inflateMaterial`:
+  // the preset (incl. per-mode defaults chosen in the app) now decides the
+  // surface, so every mesh in this component shares one preset-driven material.
+  const materialPreset = styleState?.materialPreset ?? "ink"
+  const liveMaterial = useMemo(() => {
+    const base = resolveMaterialParams(materialPreset)
+    return new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(base.color),
+      roughness: base.roughness,
+      metalness: base.metalness,
+      clearcoat: base.clearcoat,
+      clearcoatRoughness: base.clearcoatRoughness,
+      reflectivity: base.reflectivity,
+      sheen: base.sheen,
+      sheenRoughness: base.sheenRoughness,
+      sheenColor: new THREE.Color(base.sheenColor),
+      emissive: new THREE.Color(base.emissive),
+      emissiveIntensity: base.emissiveIntensity,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [materialPreset])
+
+  // Dispose the material when the preset changes / on unmount to avoid GPU leaks.
+  useEffect(() => {
+    return () => {
+      liveMaterial.dispose()
+    }
+  }, [liveMaterial])
+
+  // Re-apply the static base whenever the preset changes (covers the case where
+  // animation was running and left the material modulated, then preset switches).
+  const baseParams = useMemo(() => resolveMaterialParams(materialPreset), [materialPreset])
+
+  useFrame((state) => {
+    // ---- Animated Material v1 (surface response only) -------------------
+    // PREVIEW-ONLY: this modulates highlight/roughness/sheen/emissive each
+    // frame. It NEVER touches geometry, the reveal clock, or export. When the
+    // animation is off we keep the material pinned to its static base.
+    if (styleState) {
+      const animOn =
+        styleState.materialAnimationEnabled && styleState.materialAnimationType !== "none"
+      if (animOn) {
+        // Motion clock: "syncToDraw" ties the phase to draw-in progress so the
+        // surface animation reads as part of the same gesture; otherwise it
+        // runs on the renderer's own elapsed-time clock (independent).
+        const completion = playheadRef.current
+        const time =
+          styleState.motionMode === "syncToDraw"
+            ? completion * 6 // map 0..1 progress into a usable phase range
+            : state.clock.elapsedTime
+        const next = evaluateMaterialAnimation({
+          base: baseParams,
+          type: styleState.materialAnimationType,
+          time,
+          speed: styleState.materialAnimationSpeed,
+          intensity: styleState.materialAnimationIntensity,
+          completion,
+        })
+        liveMaterial.color.set(next.color)
+        liveMaterial.roughness = next.roughness
+        liveMaterial.metalness = next.metalness
+        liveMaterial.clearcoat = next.clearcoat
+        liveMaterial.clearcoatRoughness = next.clearcoatRoughness
+        liveMaterial.reflectivity = next.reflectivity
+        liveMaterial.sheen = next.sheen
+        liveMaterial.sheenRoughness = next.sheenRoughness
+        liveMaterial.sheenColor.set(next.sheenColor)
+        liveMaterial.emissive.set(next.emissive)
+        liveMaterial.emissiveIntensity = next.emissiveIntensity
+      }
+    }
+
     const progress = playheadRef.current
     const currentTimeMs = progress * totalDuration
 
@@ -530,18 +585,13 @@ function AnimatedStrokes({
       {/* Export group: tubes/extrude meshes + caps + joints */}
       <group ref={exportGroupRef}>
         {meshes.map((data, si) => {
-          // Inflate gets its own soft balloon/gel material; all other modes
-          // share the glossy gel-ink material.
-          const useMaterial =
-            data.mode === "inflate" ? inflateMaterial : strokeMaterial
-          
           return (
           <group key={data.key}>
             {/* Main geometry (tube, extrude, or solid) */}
             <mesh
               ref={(el) => { tubeMeshRefs.current[si] = el }}
               geometry={data.tubeGeometry}
-              material={useMaterial}
+              material={liveMaterial}
             />
             {/* Rod-mode only: caps + joints (fallback may use custom radius from Width slider) */}
             {data.mode === "rod" && data.capPositions && (() => {
@@ -552,13 +602,13 @@ function AnimatedStrokes({
                   <mesh
                     ref={(el) => { startCapRefs.current[si] = el }}
                     geometry={capGeo}
-                    material={strokeMaterial}
+                    material={liveMaterial}
                     position={data.capPositions[0]}
                   />
                   <mesh
                     ref={(el) => { endCapRefs.current[si] = el }}
                     geometry={capGeo}
-                    material={strokeMaterial}
+                    material={liveMaterial}
                     position={data.capPositions[1]}
                   />
                 </>
@@ -573,7 +623,7 @@ function AnimatedStrokes({
                     <mesh
                       key={`${data.key}-joint-${ji}`}
                       geometry={jointGeo}
-                      material={strokeMaterial}
+                      material={liveMaterial}
                       position={pos}
                     />
                   ))}
@@ -856,6 +906,7 @@ function Scene({
   meshStatusRef,
   solidStatusRef,
   extrudeDebugRef,
+  styleState,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
@@ -899,6 +950,7 @@ function Scene({
     strategy: string
     buildStatus: string
   } | null>
+  styleState?: StyleState
 }) {
   // ---- Solid draw-in animation state ----
   // playheadRef.current is the source of truth, but ref mutations don't
@@ -1574,15 +1626,16 @@ function Scene({
         </mesh>
       )}
 
-      <AnimatedStrokes
-        meshes={meshes}
-        timelines={timelines}
-        totalDuration={computedDuration}
-        playheadRef={playheadRef}
-        revealMode={revealMode}
-        hybridBlend={hybridBlend}
-        exportGroupRef={exportGroupRef}
-      />
+          <AnimatedStrokes
+            meshes={meshes}
+            timelines={timelines}
+            totalDuration={computedDuration}
+            playheadRef={playheadRef}
+            revealMode={revealMode}
+            hybridBlend={hybridBlend}
+            exportGroupRef={exportGroupRef}
+            styleState={styleState}
+          />
 
       <PlaybackController
         playheadRef={playheadRef}
@@ -2038,6 +2091,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                       meshStatusRef={meshStatusRef}
                       solidStatusRef={solidStatusRef}
                       extrudeDebugRef={isMaster ? extrudeDebugRef : undefined}
+                      styleState={styleState}
                     />
                   </Canvas>
                 </ViewportErrorBoundary>
@@ -2090,6 +2144,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 meshStatusRef={meshStatusRef}
                 solidStatusRef={solidStatusRef}
                 extrudeDebugRef={extrudeDebugRef}
+                styleState={styleState}
               />
             </Canvas>
           </ViewportErrorBoundary>
