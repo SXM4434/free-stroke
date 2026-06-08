@@ -3,6 +3,7 @@
 import { useState, useRef } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 import DrawingCanvas, { type ExportSettings } from "@/components/drawing-canvas"
+import { StylePanelScaffold } from "@/components/style-panel-scaffold"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import {
   type GeometryMode,
@@ -476,6 +477,10 @@ export default function Home() {
         </span>
         <span>Texture, Dither, ASCII, Motion — no visual effect yet (renderers land later)</span>
       </div>
+
+      {/* Dedicated per-system control panels. The top strip is quick-access;
+          these panels are the detailed home for each system's full controls. */}
+      <StylePanelScaffold />
 
       {/* Two-column layout */}
       <div className="flex flex-1 overflow-hidden">
