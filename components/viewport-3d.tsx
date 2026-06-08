@@ -2126,13 +2126,15 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               <div>asciiEnabled: {String(styleState.asciiEnabled)}</div>
               <div>asciiAnimated: {String(styleState.asciiAnimated)}</div>
               <div>asciiCharset: {styleState.asciiCharset}</div>
-              <div className="mt-0.5 text-foreground/80">— Composite —</div>
+              <div className="mt-0.5 text-foreground/80">— Motion (style animation) —</div>
+              <div>motionMode: {styleState.motionMode}</div>
+              <div>syncMode: {styleState.syncMode}</div>
+              <div>syncToReveal: {String(styleState.syncToReveal)}</div>
+              <div className="mt-0.5 text-foreground/80">— Composite (renderers later) —</div>
               <div>layerStackEnabled: {String(styleState.layerStackEnabled)}</div>
               <div>stackAnimationEnabled: {String(styleState.stackAnimationEnabled)}</div>
               <div>fusionPreset: {styleState.fusionPreset}</div>
               <div>fusionAnimationEnabled: {String(styleState.fusionAnimationEnabled)}</div>
-              <div>syncMode: {styleState.syncMode}</div>
-              <div>syncToReveal: {String(styleState.syncToReveal)}</div>
               <div>globalStyleTime: {styleState.globalStyleTime.toFixed(2)}</div>
               {(() => {
                 const ap = findPreset(styleState.activePresetId)

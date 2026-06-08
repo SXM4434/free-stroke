@@ -3,6 +3,7 @@
 import { useState, useRef } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 import DrawingCanvas, { type ExportSettings } from "@/components/drawing-canvas"
+import { StylePanelScaffold } from "@/components/style-panel-scaffold"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import {
   type GeometryMode,
@@ -380,24 +381,27 @@ export default function Home() {
 
         <div className="h-4 w-px bg-border" />
 
-        {(
-          [
-            { key: "textureAnimated", label: "Animate" },
-            { key: "syncToReveal", label: "Sync Reveal" },
-          ] as const
-        ).map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setStyleState((s) => ({ ...s, [key]: !s[key] }))}
-            className={`rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors ${
-              styleState[key]
-                ? "border-foreground/20 bg-foreground text-background"
-                : "border-border bg-background text-muted-foreground hover:text-foreground"
-            }`}
+        {/* Motion — coarse, clear style-animation control. Replaces the old
+            ambiguous "Animate" + "Sync Reveal" toggles.
+              Off          → style layers static
+              Independent  → style animates on its own clock
+              Sync to Draw → style timing follows stroke draw-in progress
+            Substrate only: no renderer reads motionMode yet. */}
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="select-none">Motion</span>
+          <select
+            value={styleState.motionMode}
+            onChange={(e) =>
+              setStyleState((s) => ({ ...s, motionMode: e.target.value as StyleState["motionMode"] }))
+            }
+            title="Link style animation timing. Sync to Draw uses stroke draw-in progress as the clock."
+            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
           >
-            {label}
-          </button>
-        ))}
+            <option value="off">Off</option>
+            <option value="independent">Independent</option>
+            <option value="syncToDraw">Sync to Draw</option>
+          </select>
+        </label>
 
         <div className="h-4 w-px bg-border" />
 
@@ -460,9 +464,17 @@ export default function Home() {
         })()}
 
         <span className="ml-auto select-none font-mono text-[10px] text-muted-foreground">
-          substrate · effects land in a later phase
+          summary strip · full controls land in dedicated panels later
         </span>
       </div>
+
+      {/* Panel IA scaffolding (Option B — inline placeholder sections).
+          Establishes the long-term home for each style system's controls. The
+          top row above is a COMPACT SUMMARY/QUICK-CONTROL STRIP, not the final
+          control surface. Each panel below is a placeholder shell only — no
+          renderer or advanced control is implemented yet. Future controls per
+          panel are documented in comments so the IA is unambiguous. */}
+      <StylePanelScaffold />
 
       {/* Two-column layout */}
       <div className="flex flex-1 overflow-hidden">

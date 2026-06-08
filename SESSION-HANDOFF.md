@@ -842,3 +842,89 @@ All non-material presets are `implemented: false` with no `applies` patch. Selec
 `STYLE_TAXONOMY_UI_CORRECTION_PASS`
 
 (supersedes `POST_MVP_INITIAL_PRESET_RAILS_PHASE_1_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `STYLE_TAXONOMY_AND_PANEL_IA_CORRECTION_PASS`
+
+**Status: Taxonomy + information architecture corrected. Locked.** UI/state clarity + panel scaffolding only — no renderers added; geometry, animation, and export untouched.
+
+### Builds on the prior taxonomy pass
+
+The texture/dither/ASCII sibling split was already done in `STYLE_TAXONOMY_UI_CORRECTION_PASS`. This pass finishes the IA work: clarifies the ambiguous Motion/Sync controls, treats the top row as a compact summary strip, and adds the dedicated-panel scaffolding.
+
+### Files changed
+
+- `lib/style-system.ts` — added `MotionMode` type + `motionMode` state field/default.
+- `app/page.tsx` — replaced Animate/Sync Reveal toggles with a Motion select; updated helper copy; mounted `StylePanelScaffold`.
+- `components/style-panel-scaffold.tsx` — NEW. Panel IA shell.
+- `components/viewport-3d.tsx` — debug readout: added Motion section (motionMode/syncMode/syncToReveal); relabeled Composite.
+- `SESSION-HANDOFF.md` — this checkpoint.
+
+### Old incorrect / ambiguous taxonomy
+
+- Texture selector listed Dither + ASCII (already fixed last pass).
+- `Animate` (mapped to `textureAnimated`) — unclear what was being animated.
+- `Sync Reveal` (boolean) — vague; didn't communicate "style timing follows stroke draw-in".
+- Top row presented as if it were the full/final control surface.
+
+### Corrected taxonomy + IA
+
+- **Sibling systems (top summary strip):** Material · Texture · Dither · ASCII · Motion · Preset.
+- **Motion** select: `Off` / `Independent` / `Sync to Draw` (replaces Animate + Sync Reveal). Tooltip: "Link style animation timing. Sync to Draw uses stroke draw-in progress as the clock."
+- **Top row is a compact summary/quick-control strip** — helper copy now reads "summary strip · full controls land in dedicated panels later".
+- **Panel scaffolding** (`StylePanelScaffold`): expandable "Style panels" drawer with tabs Material / Texture / Dither / ASCII / Motion / Presets / Layers (later) / Fusion (later). Each panel shows an honest status chip ("substrate active" vs "renderer later"), a placeholder note, and a list of documented FUTURE controls.
+
+### State model changes (`lib/style-system.ts`)
+
+- New `MotionMode = "off" | "independent" | "syncToDraw"` (coarse, user-facing).
+- New `StyleState.motionMode: MotionMode` (default `"off"`).
+- Existing fine-grained flags (`textureAnimated`, `ditherAnimated`, `asciiAnimated`) and `syncMode`/`syncToReveal` retained for future panels. `motionMode` is the single clear control surfaced today.
+
+### UI label changes (`app/page.tsx`)
+
+- `Animate` toggle → removed; superseded by `Motion` select.
+- `Sync Reveal` toggle → removed; concept surfaced via Motion's `Sync to Draw` option.
+- Helper microcopy updated to communicate "summary strip / dedicated panels later".
+
+### Panel IA / scaffolding changes
+
+- Added `components/style-panel-scaffold.tsx` (Option B: inline expandable placeholder panels). Documents per-panel future control inventories (Material, Texture, Dither, ASCII, Motion, Layers, Fusion) in code. No advanced control or renderer implemented; placeholder copy never claims a renderer exists.
+
+### Preset behavior changes
+
+- None this pass. Preset families remain separate (texture / animatedTexture / dither / animatedDither / ascii / animatedAscii / layerStack / stackAnimation / fusion / animatedFusion). Dither presets still set `ditherEnabled`+`ditherType`, ASCII presets set `asciiEnabled`+`asciiCharset`, never `textureMode`. Non-material presets remain `implemented:false`.
+
+### Debug changes (`components/viewport-3d.tsx`)
+
+- Added "— Motion (style animation) —" section: `motionMode`, `syncMode`, `syncToReveal`.
+- Composite section relabeled "— Composite (renderers later) —".
+- Readout no longer implies Dither/ASCII are texture modes or that Motion means only texture animation.
+
+### Test results
+
+- UI taxonomy — PASS (labels: Material/Texture/Dither/ASCII/Motion/Preset; Texture has no Dither/ASCII; old Animate/Sync Reveal buttons gone; Motion = Off/Independent/Sync to Draw; selecting Motion=Sync to Draw sets `motionMode` only).
+- Panel IA — PASS (Style panels drawer expands; 8 tabs present; Dither panel shows "Dither renderer not implemented yet" + future-control chips; honest status chips).
+- Preset taxonomy — PASS (families separate; dither/ASCII presets set their own state, not textureMode).
+- Rod — PASS (renders).
+- Extrude — PASS (renders).
+- Solid — PASS (renders).
+- Inflate — PASS (renders; export 90 KB GLB).
+- Material preset regression — PASS (material presets still apply via `materialPreset`).
+
+### Confirmations
+
+- No dither renderer implemented.
+- No ASCII renderer implemented.
+- No procedural texture renderer implemented.
+- Geometry untouched (no edits to `lib/geometry-engines.ts` / `lib/solid-*.ts`).
+- Animation logic untouched.
+- Export engine logic untouched.
+
+### Next branch — `POST_MVP_MATERIAL_AND_ANIMATED_MATERIAL_PHASE_1`
+
+### Final locked checkpoint label
+
+`STYLE_TAXONOMY_AND_PANEL_IA_CORRECTION_PASS`
+
+(supersedes `STYLE_TAXONOMY_UI_CORRECTION_PASS`; all prior checkpoints remain in effect as underlying layers)

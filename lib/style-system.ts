@@ -52,6 +52,19 @@ export type StyleSyncMode =
   | "completionPulse"
   | "loopSynced"
 
+/**
+ * MotionMode = the substrate-level "is style allowed to animate, and against
+ * which clock" control. This is a USER-FACING summary of style motion (shown
+ * in the top bar as "Motion"). It is intentionally coarse:
+ *   - "off"        → style layers are static
+ *   - "independent" → style layers animate on their own clock
+ *   - "syncToDraw"  → style animation timing is driven by stroke draw-in progress
+ * The fine-grained per-system flags (textureAnimated, ditherAnimated, …) and
+ * the detailed `syncMode` remain in state for future panels; `motionMode` is
+ * the single clear control the user sees today. No renderer reads it yet.
+ */
+export type MotionMode = "off" | "independent" | "syncToDraw"
+
 /** Generic animation curve identifier reused by several style systems. */
 export type StyleAnimationType =
   | "none"
@@ -134,6 +147,8 @@ export interface StyleState {
 
   /* --- global sync / clock --- */
   textureLockMode: TextureLockMode
+  /** Coarse user-facing motion control (top bar). See MotionMode. */
+  motionMode: MotionMode
   syncMode: StyleSyncMode
   syncToReveal: boolean
   globalStyleTime: number
@@ -203,6 +218,7 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   fusionIntensity: 0.5,
 
   textureLockMode: "object",
+  motionMode: "off",
   syncMode: "independent",
   syncToReveal: false,
   globalStyleTime: 0,
