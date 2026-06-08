@@ -249,7 +249,151 @@ export const MATERIAL_PRESETS: PresetShell<MaterialPreset>[] = [
   { id: "signal", label: "Signal" },
 ]
 
-export const TEXTURE_MODES: PresetShell<TextureMode>[] = [
+/* ====================================================================== */
+/* MATERIAL PARAMS (IMPLEMENTED v1) — real surface values per preset.      */
+/* ---------------------------------------------------------------------- */
+/* These are the actual numbers the 3D preview applies to a               */
+/* MeshPhysicalMaterial. They are intentionally on-brand (dark family),   */
+/* differentiated through highlight / roughness / sheen / emissive rather */
+/* than loud color. The renderer (components/viewport-3d.tsx) reads these  */
+/* through `resolveMaterialParams`. Geometry never reads them.            */
+/* ====================================================================== */
+
+export interface MaterialParams {
+  /** Base albedo color (hex). */
+  color: string
+  roughness: number
+  metalness: number
+  /** Physical clearcoat layer (0 disables the second specular lobe). */
+  clearcoat: number
+  clearcoatRoughness: number
+  reflectivity: number
+  /** Soft diffuse sheen (good for gel/rubber); 0 disables. */
+  sheen: number
+  sheenRoughness: number
+  sheenColor: string
+  /** Faint self-illumination for "Signal"; "#000000" disables. */
+  emissive: string
+  emissiveIntensity: number
+}
+
+export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
+  // Dark glossy gel-ink: the original brand default (hard clearcoat, sharp spec).
+  ink: {
+    color: "#1a1a1a",
+    roughness: 0.35,
+    metalness: 0.0,
+    clearcoat: 0.8,
+    clearcoatRoughness: 0.15,
+    reflectivity: 0.6,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+  },
+  // Softer, fuller, balloon/gel feel: higher roughness + diffuse sheen, gentle
+  // clearcoat. Best for Inflate / Solid.
+  softGel: {
+    color: "#1c1c1c",
+    roughness: 0.62,
+    metalness: 0.0,
+    clearcoat: 0.18,
+    clearcoatRoughness: 0.6,
+    reflectivity: 0.32,
+    sheen: 0.5,
+    sheenRoughness: 0.8,
+    sheenColor: "#3a3a3a",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+  },
+  // Matte, dry, low-spec clay: high roughness, no clearcoat, no sheen.
+  matteClay: {
+    color: "#202020",
+    roughness: 0.92,
+    metalness: 0.0,
+    clearcoat: 0.0,
+    clearcoatRoughness: 1.0,
+    reflectivity: 0.18,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+  },
+  // Smooth shiny plastic: low roughness, strong clearcoat, crisp highlight.
+  glossyPlastic: {
+    color: "#161616",
+    roughness: 0.18,
+    metalness: 0.0,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.08,
+    reflectivity: 0.75,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+  },
+  // Soft rubber: mid-high roughness, no hard clearcoat, faint warm sheen so it
+  // reads softer/less hard-specular than ink.
+  rubber: {
+    color: "#1a1a1a",
+    roughness: 0.78,
+    metalness: 0.0,
+    clearcoat: 0.05,
+    clearcoatRoughness: 0.9,
+    reflectivity: 0.25,
+    sheen: 0.35,
+    sheenRoughness: 0.95,
+    sheenColor: "#2a2a2a",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+  },
+  // Digital "signal": higher contrast, smoother, with a faint cool emissive so
+  // it reads slightly screen-lit / digital without being neon.
+  signal: {
+    color: "#141414",
+    roughness: 0.28,
+    metalness: 0.1,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.2,
+    reflectivity: 0.7,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#1d3a4a",
+    emissiveIntensity: 0.35,
+  },
+}
+
+/**
+ * MODE_MATERIAL_DEFAULTS — sensible per-mode default material. Applied only
+ * when the user has NOT explicitly chosen a material (`materialUserOverride`
+ * false). Switching modes uses these; a user override always wins. Geometry is
+ * never touched by this map.
+ */
+export const MODE_MATERIAL_DEFAULTS: Record<GeometryModeId, MaterialPreset> = {
+  rod: "ink",
+  extrude: "glossyPlastic",
+  solid: "matteClay",
+  inflate: "softGel",
+}
+
+/** UI list of animated-material v1 types (POST_MVP_MATERIAL_AND_ANIMATION). */
+export const MATERIAL_ANIMATION_TYPES: PresetShell<MaterialAnimationType>[] = [
+  { id: "none", label: "None" },
+  { id: "shineSweep", label: "Shine Sweep" },
+  { id: "gelShimmer", label: "Gel Shimmer" },
+  { id: "roughnessPulse", label: "Roughness Pulse" },
+  { id: "completionFlash", label: "Completion Flash" },
+  { id: "signalFlicker", label: "Signal Flicker" },
+]
+
+/** Resolve the static base params for a preset (clone so callers can mutate). */
+export function resolveMaterialParams(preset: MaterialPreset): MaterialParams {
+  return { ...MATERIAL_PARAMS[preset] }
+}
   { id: "none", label: "None" },
   { id: "procedural", label: "Procedural" },
   { id: "grain", label: "Grain" },
