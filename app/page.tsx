@@ -3,7 +3,6 @@
 import { useState, useRef } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 import DrawingCanvas, { type ExportSettings } from "@/components/drawing-canvas"
-import { StylePanelScaffold } from "@/components/style-panel-scaffold"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import {
   type GeometryMode,
@@ -477,14 +476,6 @@ export default function Home() {
         </span>
         <span>Texture, Dither, ASCII, Motion — no visual effect yet (renderers land later)</span>
       </div>
-
-      {/* Panel IA scaffolding (Option B — inline placeholder sections).
-          Establishes the long-term home for each style system's controls. The
-          top row above is a COMPACT SUMMARY/QUICK-CONTROL STRIP, not the final
-          control surface. Each panel below is a placeholder shell only — no
-          renderer or advanced control is implemented yet. Future controls per
-          panel are documented in comments so the IA is unambiguous. */}
-      <StylePanelScaffold />
 
       {/* Two-column layout */}
       <div className="flex flex-1 overflow-hidden">
