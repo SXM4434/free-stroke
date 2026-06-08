@@ -1,7 +1,5 @@
 "use client"
 
-import { useState } from "react"
-
 /**
  * StylePanelScaffold
  * ------------------
@@ -9,6 +7,10 @@ import { useState } from "react"
  * "Style" strip in page.tsx is a QUICK-ACCESS summary (pick the active option
  * fast); these panels are where the FULL, fine-grained controls for each
  * system will live as their renderers are built.
+ *
+ * Open/active state is CONTROLLED by page.tsx so that clicking a system in the
+ * top strip opens its matching panel here — making the strip and the panels
+ * read as ONE linked system at two depths, not two parallel control surfaces.
  *
  * Today every panel is a documented placeholder: it shows an honest status
  * chip, a one-line note, and the inventory of FUTURE controls planned for that
@@ -18,8 +20,19 @@ import { useState } from "react"
 
 type PanelStatus = "substrate active" | "renderer later"
 
+/** Stable ids shared with the top strip so it can open a matching panel. */
+export type StylePanelId =
+  | "material"
+  | "texture"
+  | "dither"
+  | "ascii"
+  | "motion"
+  | "presets"
+  | "layers"
+  | "fusion"
+
 type PanelDef = {
-  id: string
+  id: StylePanelId
   label: string
   status: PanelStatus
   note: string
@@ -85,9 +98,17 @@ const PANELS: PanelDef[] = [
   },
 ]
 
-export function StylePanelScaffold() {
-  const [open, setOpen] = useState(false)
-  const [activeId, setActiveId] = useState(PANELS[0].id)
+export function StylePanelScaffold({
+  open,
+  activeId,
+  onOpenChange,
+  onActiveIdChange,
+}: {
+  open: boolean
+  activeId: StylePanelId
+  onOpenChange: (open: boolean) => void
+  onActiveIdChange: (id: StylePanelId) => void
+}) {
   const active = PANELS.find((p) => p.id === activeId) ?? PANELS[0]
 
   return (
@@ -97,7 +118,7 @@ export function StylePanelScaffold() {
         <span className="font-semibold tracking-tight text-foreground">Style panels</span>
         <span className="text-muted-foreground">detailed controls per system</span>
         <button
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => onOpenChange(!open)}
           aria-expanded={open}
           className="ml-auto rounded-md border border-border bg-background px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
         >
@@ -112,7 +133,7 @@ export function StylePanelScaffold() {
             {PANELS.map((p) => (
               <button
                 key={p.id}
-                onClick={() => setActiveId(p.id)}
+                onClick={() => onActiveIdChange(p.id)}
                 className={`rounded-md px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
                   p.id === activeId
                     ? "bg-foreground text-background"

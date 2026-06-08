@@ -3,7 +3,7 @@
 import { useState, useRef } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 import DrawingCanvas, { type ExportSettings } from "@/components/drawing-canvas"
-import { StylePanelScaffold } from "@/components/style-panel-scaffold"
+import { StylePanelScaffold, type StylePanelId } from "@/components/style-panel-scaffold"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import {
   type GeometryMode,
@@ -68,6 +68,14 @@ export default function Home() {
   // read by any geometry build path — it is display/debug only for now, so
   // updating it never rebuilds geometry, breaks animation, or affects export.
   const [styleState, setStyleState] = useState<StyleState>(DEFAULT_STYLE_STATE)
+
+  // Style panels drawer: controlled so the top strip can open a matching panel.
+  const [panelsOpen, setPanelsOpen] = useState(false)
+  const [activePanelId, setActivePanelId] = useState<StylePanelId>("material")
+  const openPanel = (id: StylePanelId) => {
+    setActivePanelId(id)
+    setPanelsOpen(true)
+  }
 
   // Select a preset by id within the active family. Records the active/last-
   // applied preset and applies the preset's safe `applies` patch. The patch
@@ -295,8 +303,15 @@ export default function Home() {
           Style
         </span>
 
-        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="select-none">Material</span>
+        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => openPanel("material")}
+            className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
+            title="Open Material panel"
+          >
+            Material
+          </button>
           <select
             value={styleState.materialPreset}
             onChange={(e) =>
@@ -310,10 +325,17 @@ export default function Home() {
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
-        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="select-none">Texture</span>
+        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => openPanel("texture")}
+            className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
+            title="Open Texture panel"
+          >
+            Texture
+          </button>
           <select
             value={styleState.textureMode}
             onChange={(e) =>
@@ -327,12 +349,19 @@ export default function Home() {
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
         {/* Dither — its own sibling system (NOT a texture mode). The select
             sets ditherEnabled + ditherType; "Off" disables dither only. */}
-        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="select-none">Dither</span>
+        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => openPanel("dither")}
+            className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
+            title="Open Dither panel"
+          >
+            Dither
+          </button>
           <select
             value={styleState.ditherEnabled ? styleState.ditherType : "off"}
             onChange={(e) => {
@@ -352,12 +381,19 @@ export default function Home() {
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
         {/* ASCII — its own sibling system (NOT a texture mode). The select
             sets asciiEnabled + asciiCharset; "Off" disables ASCII only. */}
-        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="select-none">ASCII</span>
+        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => openPanel("ascii")}
+            className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
+            title="Open ASCII panel"
+          >
+            ASCII
+          </button>
           <select
             value={styleState.asciiEnabled ? styleState.asciiCharset : "off"}
             onChange={(e) => {
@@ -377,7 +413,7 @@ export default function Home() {
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
         <div className="h-4 w-px shrink-0 bg-border" />
 
@@ -387,8 +423,15 @@ export default function Home() {
               Independent  → style animates on its own clock
               Sync to Draw → style timing follows stroke draw-in progress
             Substrate only: no renderer reads motionMode yet. */}
-        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="select-none">Motion</span>
+        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => openPanel("motion")}
+            className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
+            title="Open Motion panel"
+          >
+            Motion
+          </button>
           <select
             value={styleState.motionMode}
             onChange={(e) =>
@@ -400,7 +443,7 @@ export default function Home() {
             <option value="independent">Independent clock</option>
             <option value="syncToDraw">Sync to Draw</option>
           </select>
-        </label>
+        </div>
 
         <div className="h-4 w-px shrink-0 bg-border" />
 
@@ -414,8 +457,15 @@ export default function Home() {
           const activeInFamily = active && active.family === family ? active : undefined
           return (
             <>
-              <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="select-none">Preset</span>
+              <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                <button
+                  type="button"
+                  onClick={() => openPanel("presets")}
+                  className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
+                  title="Open Presets panel"
+                >
+                  Preset
+                </button>
                 <select
                   value={family}
                   onChange={(e) =>
@@ -429,7 +479,7 @@ export default function Home() {
                     </option>
                   ))}
                 </select>
-              </label>
+              </div>
 
               <select
                 value={activeInFamily?.id ?? ""}
@@ -476,11 +526,17 @@ export default function Home() {
           Preview only
         </span>
         <span>Texture, Dither, ASCII, Motion — no visual effect yet (renderers land later)</span>
+        <span className="ml-auto italic text-muted-foreground/70">click a name above for its detailed panel</span>
       </div>
 
       {/* Dedicated per-system control panels. The top strip is quick-access;
-          these panels are the detailed home for each system's full controls. */}
-      <StylePanelScaffold />
+          clicking a system name there opens its detailed panel here. */}
+      <StylePanelScaffold
+        open={panelsOpen}
+        activeId={activePanelId}
+        onOpenChange={setPanelsOpen}
+        onActiveIdChange={setActivePanelId}
+      />
 
       {/* Two-column layout */}
       <div className="flex flex-1 overflow-hidden">
