@@ -928,3 +928,47 @@ The texture/dither/ASCII sibling split was already done in `STYLE_TAXONOMY_UI_CO
 `STYLE_TAXONOMY_AND_PANEL_IA_CORRECTION_PASS`
 
 (supersedes `STYLE_TAXONOMY_UI_CORRECTION_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_MATERIAL_AND_ANIMATED_MATERIAL_PHASE_1_PASS`
+
+**Status: First IMPLEMENTED style renderer.** The Material system now actually
+drives the 3D surface, and Animated Material v1 animates the surface response in
+the preview. This is the first style system that is real (not substrate-only).
+Geometry, the reveal/draw-in clock, and export remain untouched.
+
+### What changed
+
+- **`lib/style-system.ts`**
+  - `MaterialAnimationType` union (separate from the generic `StyleAnimationType`): `none`, `shineSweep`, `gelShimmer`, `roughnessPulse`, `completionFlash`, `signalFlicker`.
+  - `MaterialParams` interface + `MATERIAL_PARAMS` — real `MeshPhysicalMaterial` values per preset (color / roughness / metalness / clearcoat / clearcoatRoughness / reflectivity / sheen / sheenRoughness / sheenColor / emissive / emissiveIntensity). On-brand dark family; differentiated by highlight / roughness / sheen / emissive rather than loud color.
+  - `MODE_MATERIAL_DEFAULTS` — per-mode default material (rod→ink, extrude→glossyPlastic, solid→matteClay, inflate→softGel).
+  - `MATERIAL_ANIMATION_TYPES` (UI list), `resolveMaterialParams(preset)`, and `evaluateMaterialAnimation(input)` (per-frame surface-response evaluator).
+  - `StyleState` gained `materialUserOverride` (pin flag) and retyped `materialAnimationType` to `MaterialAnimationType`. Defaults: `materialUserOverride:false`, `materialAnimationType:"none"`.
+
+- **`components/viewport-3d.tsx`**
+  - Removed the two static module-level materials (`strokeMaterial`/`inflateMaterial`).
+  - `<AnimatedStrokes>` now builds one live `MeshPhysicalMaterial` from `styleState.materialPreset` (`liveMaterial`, memoized on preset, disposed on change/unmount) and applies it to all tube/cap/joint meshes.
+  - In `useFrame`, when `materialAnimationEnabled` and type ≠ `none`, the material is modulated each frame via `evaluateMaterialAnimation`. Clock = stroke draw-in progress when `motionMode === "syncToDraw"`, else the renderer's elapsed-time clock.
+  - `styleState` is threaded through `Scene` to `<AnimatedStrokes>` at both Canvas render sites.
+  - Debug overlay expanded: `materialUserOverride`, `materialAnimationEnabled/Type/Speed/Intensity`.
+
+- **`components/style-panel-scaffold.tsx`** — Material panel is now a real control surface: surface-preset select (sets `materialUserOverride:true`), a "Reset to mode default" button, an "Animated Material (preview only)" toggle, and animation type / speed / intensity controls. Marked **substrate active**.
+
+- **`app/page.tsx`** — new `handleModeChange(mode)`: switching geometry mode applies `MODE_MATERIAL_DEFAULTS[mode]` UNLESS the user pinned a material (`materialUserOverride`). A user override always wins.
+
+### Hard guarantees (do not regress)
+
+- Animated Material is **preview-only**: it modulates ONLY surface response (highlight / roughness / sheen / emissive). It never touches geometry, the reveal/draw-in clock, or export.
+- `completion` (draw-in progress) is READ ONLY to drive `completionFlash`/`syncToDraw` phase; the geometry reveal itself is unaffected.
+- No edits to `lib/geometry-engines.ts` / `lib/solid-*.ts`. Geometry rebuild is not triggered by material or animation state (neither is in any geometry memo dependency).
+- Export engine logic untouched (export still builds its own lightweight material).
+
+### Next branch — `POST_MVP_ANIMATED_TEXTURE_OR_DITHER_PHASE_1` (first overlay renderer)
+
+### Final locked checkpoint label
+
+`POST_MVP_MATERIAL_AND_ANIMATED_MATERIAL_PHASE_1_PASS`
+
+(supersedes `STYLE_TAXONOMY_AND_PANEL_IA_CORRECTION_PASS`; all prior checkpoints remain in effect as underlying layers)

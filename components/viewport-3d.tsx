@@ -2167,8 +2167,14 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               geometry/animation/export yet. */}
           {styleState && (
             <div className="mt-1 border-t border-border/50 pt-1">
-              <div className="font-semibold text-foreground">Style substrate:</div>
-              <div>activeMaterialPreset: {styleState.materialPreset}</div>
+                <div className="font-semibold text-foreground">Style substrate:</div>
+                <div className="mt-0.5 text-foreground/80">— Material (IMPLEMENTED v1) —</div>
+                <div>activeMaterialPreset: {styleState.materialPreset}</div>
+                <div>materialUserOverride: {String(styleState.materialUserOverride)}</div>
+                <div>materialAnimationEnabled: {String(styleState.materialAnimationEnabled)}</div>
+                <div>materialAnimationType: {styleState.materialAnimationType}</div>
+                <div>materialAnimationSpeed: {styleState.materialAnimationSpeed.toFixed(2)}</div>
+                <div>materialAnimationIntensity: {styleState.materialAnimationIntensity.toFixed(2)}</div>
               <div className="mt-0.5 text-foreground/80">— Texture (procedural patterning only) —</div>
               <div>textureMode: {styleState.textureMode}</div>
               <div>textureEnabled: {String(styleState.textureEnabled)}</div>

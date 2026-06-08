@@ -30,6 +30,7 @@ import {
   type StyleState,
   DEFAULT_STYLE_STATE,
   MATERIAL_PRESETS,
+  MODE_MATERIAL_DEFAULTS,
   TEXTURE_MODES,
   DITHER_PRESETS,
   ASCII_PRESETS,
@@ -50,6 +51,17 @@ export default function Home() {
     []
   )
   const [geometryMode, setGeometryMode] = useState<GeometryMode>("rod")
+
+  // Switch geometry mode. If the user hasn't explicitly pinned a material
+  // (materialUserOverride === false), follow the per-mode default material so
+  // each mode reads with a sensible surface out of the box. A user override
+  // always wins and is left untouched. Geometry params are unaffected.
+  const handleModeChange = (mode: GeometryMode) => {
+    setGeometryMode(mode)
+    setStyleState((s) =>
+      s.materialUserOverride ? s : { ...s, materialPreset: MODE_MATERIAL_DEFAULTS[mode] },
+    )
+  }
   const [extrudeParams, setExtrudeParams] = useState<ExtrudeParams>(DEFAULT_EXTRUDE_PARAMS)
   // Width slider is a normalized t in [0, 1]. The effective half-width
   // stored in `extrudeParams.width` is derived from t via
@@ -111,7 +123,7 @@ export default function Home() {
           {GEOMETRY_MODES.map((mode) => (
             <button
               key={mode.value}
-              onClick={() => !mode.disabled && setGeometryMode(mode.value)}
+              onClick={() => !mode.disabled && handleModeChange(mode.value)}
               disabled={mode.disabled}
               title={mode.tooltip}
               className={`relative rounded-md px-3 py-1 text-xs font-medium transition-colors ${

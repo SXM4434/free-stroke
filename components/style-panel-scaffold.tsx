@@ -3,6 +3,7 @@
 import {
   type StyleState,
   MATERIAL_PRESETS,
+  MATERIAL_ANIMATION_TYPES,
   TEXTURE_MODES,
   DITHER_PRESETS,
   ASCII_PRESETS,
@@ -53,8 +54,8 @@ const PANELS: PanelDef[] = [
     id: "material",
     label: "Material",
     status: "substrate active",
-    note: "Material presets are active (surface response). Detailed controls land here.",
-    futureControls: ["color", "roughness", "metalness", "clearcoat", "animated material toggle", "shimmer / pulse / sweep"],
+    note: "Material surface + Animated Material are live in the 3D preview. Animated Material is preview-only — it never changes geometry or export.",
+    futureControls: ["custom color", "roughness slider", "metalness slider", "clearcoat slider", "save custom material"],
   },
   {
     id: "texture",
@@ -124,25 +125,139 @@ function PanelControl({
   onSelectPreset: (family: PresetFamily, id: string) => void
 }) {
   switch (id) {
-    case "material":
+    case "material": {
+      const animOn = styleState.materialAnimationEnabled
       return (
-        <label className="flex flex-col gap-1">
-          <span className={fieldLabelClass}>Surface preset</span>
-          <select
-            value={styleState.materialPreset}
-            onChange={(e) =>
-              setStyleState((s) => ({ ...s, materialPreset: e.target.value as StyleState["materialPreset"] }))
-            }
-            className={selectClass}
-          >
-            {MATERIAL_PRESETS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1">
+              <span className={fieldLabelClass}>Surface preset</span>
+              <select
+                value={styleState.materialPreset}
+                onChange={(e) =>
+                  setStyleState((s) => ({
+                    ...s,
+                    materialPreset: e.target.value as StyleState["materialPreset"],
+                    // An explicit pick pins the material so mode switches won't
+                    // override it with their per-mode default.
+                    materialUserOverride: true,
+                  }))
+                }
+                className={selectClass}
+              >
+                {MATERIAL_PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {styleState.materialUserOverride && (
+              <button
+                type="button"
+                onClick={() => setStyleState((s) => ({ ...s, materialUserOverride: false }))}
+                className="mb-0.5 rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title="Stop pinning; follow the per-mode default material again"
+              >
+                Reset to mode default
+              </button>
+            )}
+          </div>
+
+          {/* Animated Material v1 — preview-only surface animation. */}
+          <div className="rounded-md border border-border bg-muted/20 p-3">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={animOn}
+                onChange={(e) =>
+                  setStyleState((s) => ({
+                    ...s,
+                    materialAnimationEnabled: e.target.checked,
+                    // First enable with "none" selected → bump to a default so
+                    // the user sees something move.
+                    materialAnimationType:
+                      e.target.checked && s.materialAnimationType === "none"
+                        ? "shineSweep"
+                        : s.materialAnimationType,
+                  }))
+                }
+                className="h-3.5 w-3.5 accent-foreground"
+              />
+              <span className="text-xs font-medium text-foreground">Animated Material</span>
+              <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+                preview only
+              </span>
+            </label>
+
+            <div className={`mt-3 flex flex-col gap-3 ${animOn ? "" : "pointer-events-none opacity-50"}`}>
+              <label className="flex flex-col gap-1">
+                <span className={fieldLabelClass}>Animation</span>
+                <select
+                  value={styleState.materialAnimationType}
+                  onChange={(e) =>
+                    setStyleState((s) => ({
+                      ...s,
+                      materialAnimationType: e.target.value as StyleState["materialAnimationType"],
+                    }))
+                  }
+                  className={selectClass}
+                  disabled={!animOn}
+                >
+                  {MATERIAL_ANIMATION_TYPES.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className={fieldLabelClass}>
+                  Speed <span className="text-foreground">{styleState.materialAnimationSpeed.toFixed(2)}×</span>
+                </span>
+                <input
+                  type="range"
+                  min={0.1}
+                  max={3}
+                  step={0.05}
+                  value={styleState.materialAnimationSpeed}
+                  onChange={(e) =>
+                    setStyleState((s) => ({ ...s, materialAnimationSpeed: Number(e.target.value) }))
+                  }
+                  className="w-48 accent-foreground"
+                  disabled={!animOn}
+                />
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className={fieldLabelClass}>
+                  Intensity{" "}
+                  <span className="text-foreground">{Math.round(styleState.materialAnimationIntensity * 100)}%</span>
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={styleState.materialAnimationIntensity}
+                  onChange={(e) =>
+                    setStyleState((s) => ({ ...s, materialAnimationIntensity: Number(e.target.value) }))
+                  }
+                  className="w-48 accent-foreground"
+                  disabled={!animOn}
+                />
+              </label>
+
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
+                Timing follows the <span className="font-medium text-foreground">Motion</span> panel: &ldquo;Sync to
+                Draw&rdquo; ties it to the stroke draw-in; otherwise it runs on its own clock.
+              </p>
+            </div>
+          </div>
+        </div>
       )
+    }
     case "texture":
       return (
         <label className="flex flex-col gap-1">
