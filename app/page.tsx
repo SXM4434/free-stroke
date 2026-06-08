@@ -156,7 +156,7 @@ export default function Home() {
             </span>
           </label>
 
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px shrink-0 bg-border" />
 
           {/* Depth — slider value is a width-relative MULTIPLIER (effective
               depth = multiplier × width, clamped). See computeEffectiveExtrudeDepth. */}
@@ -176,7 +176,7 @@ export default function Home() {
             </span>
           </label>
 
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px shrink-0 bg-border" />
 
           {/* Bevel toggle */}
           <button
@@ -216,7 +216,7 @@ export default function Home() {
             </span>
           </label>
 
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px shrink-0 bg-border" />
 
           {/* Depth — slider value is RAW world depth. Calibrated through
               computeSolidEffectiveDepth before being used as the H3 Z extent. */}
@@ -260,7 +260,7 @@ export default function Home() {
             </span>
           </label>
 
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px shrink-0 bg-border" />
 
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="select-none font-medium">Puff</span>
@@ -278,7 +278,7 @@ export default function Home() {
             </span>
           </label>
 
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px shrink-0 bg-border" />
 
           <span className="select-none font-mono text-[10px] text-muted-foreground">
             Soft inflated stroke · GLB export enabled
@@ -290,12 +290,12 @@ export default function Home() {
           Compact, safe controls only. These update style state immediately but
           DO NOT yet drive any visual effect or rebuild geometry — the rails for
           material / texture / dither / ASCII / sync systems that land later. */}
-      <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-muted/20 px-4">
-        <span className="select-none text-[11px] font-semibold tracking-tight text-foreground">
+      <div className="flex h-10 shrink-0 items-center gap-3 overflow-x-auto border-b border-border bg-muted/20 px-4">
+        <span className="shrink-0 select-none text-[11px] font-semibold tracking-tight text-foreground">
           Style
         </span>
 
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span className="select-none">Material</span>
           <select
             value={styleState.materialPreset}
@@ -312,7 +312,7 @@ export default function Home() {
           </select>
         </label>
 
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span className="select-none">Texture</span>
           <select
             value={styleState.textureMode}
@@ -331,7 +331,7 @@ export default function Home() {
 
         {/* Dither — its own sibling system (NOT a texture mode). The select
             sets ditherEnabled + ditherType; "Off" disables dither only. */}
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span className="select-none">Dither</span>
           <select
             value={styleState.ditherEnabled ? styleState.ditherType : "off"}
@@ -356,7 +356,7 @@ export default function Home() {
 
         {/* ASCII — its own sibling system (NOT a texture mode). The select
             sets asciiEnabled + asciiCharset; "Off" disables ASCII only. */}
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span className="select-none">ASCII</span>
           <select
             value={styleState.asciiEnabled ? styleState.asciiCharset : "off"}
@@ -379,7 +379,7 @@ export default function Home() {
           </select>
         </label>
 
-        <div className="h-4 w-px bg-border" />
+        <div className="h-4 w-px shrink-0 bg-border" />
 
         {/* Motion — coarse, clear style-animation control. Replaces the old
             ambiguous "Animate" + "Sync Reveal" toggles.
@@ -387,7 +387,7 @@ export default function Home() {
               Independent  → style animates on its own clock
               Sync to Draw → style timing follows stroke draw-in progress
             Substrate only: no renderer reads motionMode yet. */}
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span className="select-none">Motion</span>
           <select
             value={styleState.motionMode}
@@ -400,12 +400,9 @@ export default function Home() {
             <option value="independent">Independent clock</option>
             <option value="syncToDraw">Sync to Draw</option>
           </select>
-          <span className="select-none rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-            preview · no visual effect yet
-          </span>
         </label>
 
-        <div className="h-4 w-px bg-border" />
+        <div className="h-4 w-px shrink-0 bg-border" />
 
         {/* Preset rail (Phase 1). Family selector + preset selector. Material
             presets apply through existing style state; all other families are
@@ -417,7 +414,7 @@ export default function Home() {
           const activeInFamily = active && active.family === family ? active : undefined
           return (
             <>
-              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="select-none">Preset</span>
                 <select
                   value={family}
@@ -464,10 +461,21 @@ export default function Home() {
             </>
           )
         })()}
+      </div>
 
-        <span className="ml-auto select-none text-right font-mono text-[10px] leading-tight text-muted-foreground">
-          live: Material + Presets · preview only (no render yet): Texture / Dither / ASCII / Motion
+      {/* Honest status line on its own row (keeps the control strip uncluttered). */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/10 px-4 py-1 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 font-medium text-foreground">
+          <span className="h-1.5 w-1.5 rounded-full bg-foreground" aria-hidden />
+          Live
         </span>
+        <span>Material + Presets</span>
+        <span className="mx-1 text-border">|</span>
+        <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-medium">
+          <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" aria-hidden />
+          Preview only
+        </span>
+        <span>Texture, Dither, ASCII, Motion — no visual effect yet (renderers land later)</span>
       </div>
 
       {/* Panel IA scaffolding (Option B — inline placeholder sections).
