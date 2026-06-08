@@ -394,13 +394,15 @@ export default function Home() {
             onChange={(e) =>
               setStyleState((s) => ({ ...s, motionMode: e.target.value as StyleState["motionMode"] }))
             }
-            title="Link style animation timing. Sync to Draw uses stroke draw-in progress as the clock."
             className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
           >
-            <option value="off">Off</option>
-            <option value="independent">Independent</option>
+            <option value="off">Off (static)</option>
+            <option value="independent">Independent clock</option>
             <option value="syncToDraw">Sync to Draw</option>
           </select>
+          <span className="select-none rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            preview · no visual effect yet
+          </span>
         </label>
 
         <div className="h-4 w-px bg-border" />
@@ -463,8 +465,8 @@ export default function Home() {
           )
         })()}
 
-        <span className="ml-auto select-none font-mono text-[10px] text-muted-foreground">
-          summary strip · full controls land in dedicated panels later
+        <span className="ml-auto select-none text-right font-mono text-[10px] leading-tight text-muted-foreground">
+          live: Material + Presets · preview only (no render yet): Texture / Dither / ASCII / Motion
         </span>
       </div>
 
