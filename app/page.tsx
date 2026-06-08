@@ -34,8 +34,6 @@ import {
   DITHER_PRESETS,
   ASCII_PRESETS,
   type PresetFamily,
-  PRESET_FAMILY_OPTIONS,
-  PRESET_REGISTRY,
   findPreset,
 } from "@/lib/style-system"
 
@@ -70,7 +68,7 @@ export default function Home() {
   const [styleState, setStyleState] = useState<StyleState>(DEFAULT_STYLE_STATE)
 
   // Style panels drawer: controlled so the top strip can open a matching panel.
-  const [panelsOpen, setPanelsOpen] = useState(false)
+  const [panelsOpen, setPanelsOpen] = useState(true)
   const [activePanelId, setActivePanelId] = useState<StylePanelId>("material")
   const openPanel = (id: StylePanelId) => {
     setActivePanelId(id)
@@ -294,246 +292,100 @@ export default function Home() {
         </div>
       )}
 
-      {/* Style panel shell (POST-MVP substrate, Phase 1).
-          Compact, safe controls only. These update style state immediately but
-          DO NOT yet drive any visual effect or rebuild geometry — the rails for
-          material / texture / dither / ASCII / sync systems that land later. */}
-      <div className="flex h-10 shrink-0 items-center gap-3 overflow-x-auto border-b border-border bg-muted/20 px-4">
-        <span className="shrink-0 select-none text-[11px] font-semibold tracking-tight text-foreground">
-          Style
-        </span>
-
-        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <button
-            type="button"
-            onClick={() => openPanel("material")}
-            className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
-            title="Open Material panel"
-          >
-            Material
-          </button>
-          <select
-            value={styleState.materialPreset}
-            onChange={(e) =>
-              setStyleState((s) => ({ ...s, materialPreset: e.target.value as StyleState["materialPreset"] }))
-            }
-            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
-          >
-            {MATERIAL_PRESETS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <button
-            type="button"
-            onClick={() => openPanel("texture")}
-            className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
-            title="Open Texture panel"
-          >
-            Texture
-          </button>
-          <select
-            value={styleState.textureMode}
-            onChange={(e) =>
-              setStyleState((s) => ({ ...s, textureMode: e.target.value as StyleState["textureMode"] }))
-            }
-            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
-          >
-            {TEXTURE_MODES.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Dither — its own sibling system (NOT a texture mode). The select
-            sets ditherEnabled + ditherType; "Off" disables dither only. */}
-        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <button
-            type="button"
-            onClick={() => openPanel("dither")}
-            className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
-            title="Open Dither panel"
-          >
-            Dither
-          </button>
-          <select
-            value={styleState.ditherEnabled ? styleState.ditherType : "off"}
-            onChange={(e) => {
-              const v = e.target.value
-              setStyleState((s) =>
-                v === "off"
-                  ? { ...s, ditherEnabled: false }
-                  : { ...s, ditherEnabled: true, ditherType: v as StyleState["ditherType"] },
-              )
-            }}
-            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
-          >
-            <option value="off">Off</option>
-            {DITHER_PRESETS.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* ASCII — its own sibling system (NOT a texture mode). The select
-            sets asciiEnabled + asciiCharset; "Off" disables ASCII only. */}
-        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <button
-            type="button"
-            onClick={() => openPanel("ascii")}
-            className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
-            title="Open ASCII panel"
-          >
-            ASCII
-          </button>
-          <select
-            value={styleState.asciiEnabled ? styleState.asciiCharset : "off"}
-            onChange={(e) => {
-              const v = e.target.value
-              setStyleState((s) =>
-                v === "off"
-                  ? { ...s, asciiEnabled: false }
-                  : { ...s, asciiEnabled: true, asciiCharset: v as StyleState["asciiCharset"] },
-              )
-            }}
-            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
-          >
-            <option value="off">Off</option>
-            {ASCII_PRESETS.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="h-4 w-px shrink-0 bg-border" />
-
-        {/* Motion — coarse, clear style-animation control. Replaces the old
-            ambiguous "Animate" + "Sync Reveal" toggles.
-              Off          → style layers static
-              Independent  → style animates on its own clock
-              Sync to Draw → style timing follows stroke draw-in progress
-            Substrate only: no renderer reads motionMode yet. */}
-        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <button
-            type="button"
-            onClick={() => openPanel("motion")}
-            className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
-            title="Open Motion panel"
-          >
-            Motion
-          </button>
-          <select
-            value={styleState.motionMode}
-            onChange={(e) =>
-              setStyleState((s) => ({ ...s, motionMode: e.target.value as StyleState["motionMode"] }))
-            }
-            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
-          >
-            <option value="off">Off (static)</option>
-            <option value="independent">Independent clock</option>
-            <option value="syncToDraw">Sync to Draw</option>
-          </select>
-        </div>
-
-        <div className="h-4 w-px shrink-0 bg-border" />
-
-        {/* Preset rail (Phase 1). Family selector + preset selector. Material
-            presets apply through existing style state; all other families are
-            definition-only and clearly marked "renderer later". */}
-        {(() => {
-          const family = styleState.activePresetFamily
-          const presets = (PRESET_REGISTRY[family] ?? []).filter((p) => p.enabled)
-          const active = findPreset(styleState.activePresetId)
-          const activeInFamily = active && active.family === family ? active : undefined
-          return (
-            <>
-              <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                <button
-                  type="button"
-                  onClick={() => openPanel("presets")}
-                  className="select-none rounded underline-offset-2 hover:text-foreground hover:underline"
-                  title="Open Presets panel"
-                >
-                  Preset
-                </button>
-                <select
-                  value={family}
-                  onChange={(e) =>
-                    setStyleState((s) => ({ ...s, activePresetFamily: e.target.value as PresetFamily }))
-                  }
-                  className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
-                >
-                  {PRESET_FAMILY_OPTIONS.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <select
-                value={activeInFamily?.id ?? ""}
-                onChange={(e) => e.target.value && handleSelectPreset(family, e.target.value)}
-                className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground"
+      {/* Style summary strip (read-only). Shows the current selection for each
+          system as a chip; clicking a chip opens that system's panel where the
+          live control lives. This is status/navigation only — no controls here,
+          so each system has exactly ONE control surface (its panel). */}
+      {(() => {
+        const activePreset = findPreset(styleState.activePresetId)
+        const summary: { id: StylePanelId; label: string; value: string; live: boolean }[] = [
+          {
+            id: "material",
+            label: "Material",
+            value: MATERIAL_PRESETS.find((p) => p.id === styleState.materialPreset)?.label ?? "—",
+            live: true,
+          },
+          {
+            id: "texture",
+            label: "Texture",
+            value: TEXTURE_MODES.find((t) => t.id === styleState.textureMode)?.label ?? "—",
+            live: false,
+          },
+          {
+            id: "dither",
+            label: "Dither",
+            value: styleState.ditherEnabled
+              ? DITHER_PRESETS.find((d) => d.id === styleState.ditherType)?.label ?? "On"
+              : "Off",
+            live: false,
+          },
+          {
+            id: "ascii",
+            label: "ASCII",
+            value: styleState.asciiEnabled
+              ? ASCII_PRESETS.find((a) => a.id === styleState.asciiCharset)?.label ?? "On"
+              : "Off",
+            live: false,
+          },
+          {
+            id: "motion",
+            label: "Motion",
+            value:
+              styleState.motionMode === "off"
+                ? "Off"
+                : styleState.motionMode === "independent"
+                  ? "Independent"
+                  : "Sync to Draw",
+            live: false,
+          },
+          {
+            id: "presets",
+            label: "Preset",
+            value: activePreset?.label ?? "None",
+            live: true,
+          },
+        ]
+        return (
+          <div className="flex h-11 shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-muted/20 px-4">
+            <span className="shrink-0 select-none text-[11px] font-semibold tracking-tight text-foreground">
+              Style
+            </span>
+            {summary.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => openPanel(item.id)}
+                title={`Open ${item.label} panel`}
+                className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors ${
+                  activePanelId === item.id && panelsOpen
+                    ? "border-foreground/30 bg-foreground/10"
+                    : "border-border bg-background hover:bg-muted"
+                }`}
               >
-                <option value="" disabled>
-                  Select…
-                </option>
-                {presets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                    {p.implemented ? "" : " (soon)"}
-                  </option>
-                ))}
-              </select>
+                <span className="font-medium text-muted-foreground">{item.label}</span>
+                <span className="font-semibold text-foreground">{item.value}</span>
+                {!item.live && (
+                  <span className="rounded bg-muted px-1 py-0.5 text-[9px] font-medium text-muted-foreground">
+                    preview
+                  </span>
+                )}
+              </button>
+            ))}
+            <span className="ml-auto shrink-0 select-none text-[10px] italic text-muted-foreground/70">
+              click a chip to edit · &ldquo;preview&rdquo; = no visual effect yet
+            </span>
+          </div>
+        )
+      })()}
 
-              {activeInFamily && (
-                <span
-                  className={`select-none rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                    activeInFamily.implemented
-                      ? "bg-foreground/10 text-foreground"
-                      : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  {activeInFamily.implemented ? "active" : "defined · renderer later"}
-                </span>
-              )}
-            </>
-          )
-        })()}
-      </div>
-
-      {/* Honest status line on its own row (keeps the control strip uncluttered). */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/10 px-4 py-1 text-[11px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 font-medium text-foreground">
-          <span className="h-1.5 w-1.5 rounded-full bg-foreground" aria-hidden />
-          Live
-        </span>
-        <span>Material + Presets</span>
-        <span className="mx-1 text-border">|</span>
-        <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-medium">
-          <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" aria-hidden />
-          Preview only
-        </span>
-        <span>Texture, Dither, ASCII, Motion — no visual effect yet (renderers land later)</span>
-        <span className="ml-auto italic text-muted-foreground/70">click a name above for its detailed panel</span>
-      </div>
-
-      {/* Dedicated per-system control panels. The top strip is quick-access;
-          clicking a system name there opens its detailed panel here. */}
+      {/* Dedicated per-system control panels. Each system's live control lives
+          in its own panel; the summary strip above opens the matching panel. */}
       <StylePanelScaffold
         open={panelsOpen}
         activeId={activePanelId}
+        styleState={styleState}
+        setStyleState={setStyleState}
+        onSelectPreset={handleSelectPreset}
         onOpenChange={setPanelsOpen}
         onActiveIdChange={setActivePanelId}
       />
