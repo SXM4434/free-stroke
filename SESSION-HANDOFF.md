@@ -985,3 +985,66 @@ The texture/dither/ASCII sibling split was already done in `STYLE_TAXONOMY_UI_CO
   controls.
 
 ### Next branch — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1`
+
+## LOCKED CHECKPOINT — `MATERIAL_READABILITY_ENV_AND_CUSTOM_PASS`
+
+### Problem this branch fixed
+
+Material presets looked nearly identical and the surface read as flat/near-black
+because the scene had **no environment map** — `MeshPhysicalMaterial` highlights,
+clearcoat, and metalness need reflections to be visible. Presets only varied
+roughness/metalness, which is invisible without something to reflect.
+
+### What changed
+
+- **Studio environment map added** in `components/viewport-3d.tsx`. A neutral
+  multi-`Lightformer` studio rig inside drei's `<Environment resolution={256}
+  frames={1} background={false}>` bakes a reflection environment **once**
+  (`frames={1}`, not a live scene background) onto `scene.environment`. This
+  lights every mode's shared `liveMaterial`, so highlights, clearcoat streaks,
+  and reflections are now visible. The 2D background and grid are unchanged; the
+  env map is reflection-only (`background={false}`).
+- **`envMapIntensity` added to the material model** in `lib/style-system.ts`
+  (`MaterialParams.envMapIntensity`). Each preset now sets a deliberate value so
+  reflections differ per preset (e.g. glossyPlastic high, matteClay low). The
+  per-frame animation and the static `liveMaterial` both apply it.
+- **Presets retuned for clear visual distinction** under the env map. Verified
+  in-browser: Glossy Plastic shows crisp white + amber + blue specular streaks;
+  Matte Clay shows a soft diffuse gradient with no sharp highlight.
+- **Custom material added.** New `"custom"` member of `MaterialPreset` plus a
+  `CustomMaterial` interface and `DEFAULT_CUSTOM_MATERIAL` in
+  `lib/style-system.ts`. `resolveMaterialParams(preset, custom)` returns the
+  custom params when preset === "custom". `styleState.customMaterial` holds the
+  live values. The Material panel renders a **Custom material editor** (color /
+  sheen color / emissive pickers + roughness / metalness / clearcoat / sheen /
+  emissive / reflection sliders) only when the Custom preset is selected; edits
+  update the 3D preview live.
+- **Animation off now snaps the surface back to its static base** (added `else`
+  branch in the `useFrame` material block) instead of freezing on the last
+  animated frame.
+- **Debug fields added** (Debug ON): materialSheen, materialEnvMapIntensity,
+  isCustomMaterial, envMapPresent, materialAppliedToAllModes. The material
+  readout and debug panel now use `resolveMaterialParams` so they reflect custom
+  edits.
+
+### Files touched
+
+- `lib/style-system.ts` — `envMapIntensity`, `"custom"` preset, `CustomMaterial`,
+  `DEFAULT_CUSTOM_MATERIAL`, `resolveMaterialParams(preset, custom)` signature,
+  retuned preset params.
+- `components/viewport-3d.tsx` — studio `<Environment>` + `Lightformer` rig on
+  `scene.environment`, `envMapIntensity` applied in static + animated paths,
+  anim-off reset branch, debug fields, removed unused `MATERIAL_PARAMS` import.
+- `components/style-panel-scaffold.tsx` — Custom material editor, readout uses
+  `resolveMaterialParams`.
+- `SESSION-HANDOFF.md` — this checkpoint.
+
+### Scope / limitations
+
+- Env map is **reflection lighting only** — it is not drawn as a visible
+  background and does not change the 2D canvas, grid, or geometry.
+- Animated material remains **preview-only**; static material (including custom)
+  follows the existing GLB material path, animated material is not baked.
+- Geometry, draw-in clock, and export geometry untouched.
+
+### Next branch — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1`
