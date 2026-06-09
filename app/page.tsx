@@ -51,17 +51,6 @@ export default function Home() {
     []
   )
   const [geometryMode, setGeometryMode] = useState<GeometryMode>("rod")
-
-  // Switch geometry mode. If the user hasn't explicitly pinned a material
-  // (materialUserOverride === false), follow the per-mode default material so
-  // each mode reads with a sensible surface out of the box. A user override
-  // always wins and is left untouched. Geometry params are unaffected.
-  const handleModeChange = (mode: GeometryMode) => {
-    setGeometryMode(mode)
-    setStyleState((s) =>
-      s.materialUserOverride ? s : { ...s, materialPreset: MODE_MATERIAL_DEFAULTS[mode] },
-    )
-  }
   const [extrudeParams, setExtrudeParams] = useState<ExtrudeParams>(DEFAULT_EXTRUDE_PARAMS)
   // Width slider is a normalized t in [0, 1]. The effective half-width
   // stored in `extrudeParams.width` is derived from t via
@@ -103,6 +92,17 @@ export default function Home() {
       activePresetId: id,
       lastAppliedPresetId: preset?.implemented ? id : s.lastAppliedPresetId,
     }))
+  }
+
+  // Switch geometry mode. If the user has NOT explicitly pinned a material
+  // (materialUserOverride === false), follow the per-mode default material so
+  // each mode reads with a sensible surface out of the box. A user override
+  // always wins. Geometry params are never touched here.
+  const handleModeChange = (mode: GeometryMode) => {
+    setGeometryMode(mode)
+    setStyleState((s) =>
+      s.materialUserOverride ? s : { ...s, materialPreset: MODE_MATERIAL_DEFAULTS[mode] },
+    )
   }
   const settingsRef = useRef<ExportSettings>({
     spacing: 4,
@@ -340,15 +340,17 @@ export default function Home() {
             live: false,
           },
           {
-            id: "motion",
-            label: "Motion",
+            id: "animation",
+            label: "Animation",
             value:
-              styleState.motionMode === "off"
-                ? "Off"
-                : styleState.motionMode === "independent"
-                  ? "Independent"
-                  : "Sync to Draw",
-            live: false,
+              styleState.materialAnimationEnabled && styleState.materialAnimationType !== "none"
+                ? `Material: ${styleState.materialAnimationType}`
+                : styleState.motionMode === "off"
+                  ? "Static"
+                  : styleState.motionMode === "independent"
+                    ? "Independent"
+                    : "Sync to Draw",
+            live: true,
           },
           {
             id: "presets",

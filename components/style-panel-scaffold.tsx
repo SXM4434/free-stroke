@@ -4,6 +4,7 @@ import {
   type StyleState,
   MATERIAL_PRESETS,
   MATERIAL_ANIMATION_TYPES,
+  MATERIAL_PARAMS,
   TEXTURE_MODES,
   DITHER_PRESETS,
   ASCII_PRESETS,
@@ -17,26 +18,30 @@ import {
  * StylePanelScaffold
  * ------------------
  * The single home for each style system's controls. The top strip in page.tsx
- * is now a READ-ONLY summary (it shows the current selections and opens the
- * matching panel on click); the live control for each system lives HERE, inside
- * its own panel. This removes the old duplication where every system appeared
- * both as a top dropdown and as an empty panel.
+ * is a READ-ONLY summary (it shows current selections and opens the matching
+ * panel on click); the live control for each system lives HERE, inside its own
+ * panel.
  *
- * Each panel renders its real, working control plus the inventory of FUTURE
- * fine-grained controls planned for that system. Controls that have a renderer
- * (Material, Presets) drive visuals today; the rest update style state but are
- * honestly marked "renderer later" — nothing here fakes functionality.
+ * As of POST_MVP_MATERIAL_AND_ANIMATION_IA_PHASE_1, two panels are real:
+ *   - Material  → drives the 3D surface + Animated Material v1 (preview-only).
+ *   - Animation → the top-level home for the WHOLE animation system. Only
+ *                 "Material Animation" is functional this branch; every other
+ *                 animation category (Geometry / Texture / Dither / ASCII /
+ *                 Layer / Stack / Fusion) is shown as RESERVED IA so future
+ *                 phases have a clear place to land without renaming anything.
+ *
+ * Nothing here fakes functionality: reserved rows are clearly labeled.
  */
 
-type PanelStatus = "substrate active" | "renderer later"
+type PanelStatus = "active" | "reserved"
 
 /** Stable ids shared with the top strip so it can open a matching panel. */
 export type StylePanelId =
   | "material"
+  | "animation"
   | "texture"
   | "dither"
   | "ascii"
-  | "motion"
   | "presets"
   | "layers"
   | "fusion"
@@ -53,64 +58,359 @@ const PANELS: PanelDef[] = [
   {
     id: "material",
     label: "Material",
-    status: "substrate active",
-    note: "Material surface + Animated Material are live in the 3D preview. Animated Material is preview-only — it never changes geometry or export.",
+    status: "active",
+    note: "Material surface is live in the 3D preview. Animated Material v1 (below) animates surface response only — it never changes geometry, draw-in, or export.",
     futureControls: ["custom color", "roughness slider", "metalness slider", "clearcoat slider", "save custom material"],
+  },
+  {
+    id: "animation",
+    label: "Animation",
+    status: "active",
+    note: "Top-level home for the whole animation system. Only Material Animation is functional this branch; every other category is reserved IA (renderer later).",
+    futureControls: [],
   },
   {
     id: "texture",
     label: "Texture",
-    status: "renderer later",
+    status: "reserved",
     note: "Texture controls land here. Procedural texture renderer not implemented yet.",
-    futureControls: ["scale", "strength", "rotation", "animated texture", "texture speed", "blend mode"],
+    futureControls: ["scale", "strength", "rotation", "blend mode"],
   },
   {
     id: "dither",
     label: "Dither",
-    status: "renderer later",
+    status: "reserved",
     note: "Dither controls land here. Dither renderer not implemented yet.",
-    futureControls: ["scale", "threshold", "contrast", "intensity", "animated dither", "dither speed", "dither direction", "reveal sync"],
+    futureControls: ["scale", "threshold", "contrast", "intensity", "dither direction", "reveal sync"],
   },
   {
     id: "ascii",
     label: "ASCII",
-    status: "renderer later",
+    status: "reserved",
     note: "ASCII controls land here. ASCII renderer not implemented yet.",
-    futureControls: ["cell size", "contrast", "color mode", "background", "animated ascii", "ascii speed"],
-  },
-  {
-    id: "motion",
-    label: "Motion",
-    status: "renderer later",
-    note: "Motion links style animation timing. No style renderer reads motion yet.",
-    futureControls: ["speed", "easing", "loop", "phase offset", "reveal coupling"],
+    futureControls: ["cell size", "contrast", "color mode", "background"],
   },
   {
     id: "presets",
     label: "Presets",
-    status: "substrate active",
+    status: "active",
     note: "Material presets apply today. Non-material preset families are staged for their renderers.",
     futureControls: ["save custom", "preview thumbnails"],
   },
   {
     id: "layers",
-    label: "Layers (later)",
-    status: "renderer later",
+    label: "Layers",
+    status: "reserved",
     note: "Layer stack compositing lands here. Compositor not implemented yet.",
-    futureControls: ["add / remove layer", "reorder", "per-layer opacity", "blend mode", "stack animation"],
+    futureControls: ["add / remove layer", "reorder", "per-layer opacity", "blend mode"],
   },
   {
     id: "fusion",
-    label: "Fusion (later)",
-    status: "renderer later",
+    label: "Fusion",
+    status: "reserved",
     note: "Fusion blends multiple style systems. Fusion renderer not implemented yet.",
-    futureControls: ["fusion preset", "mix weights", "animated fusion", "transition curve"],
+    futureControls: ["fusion preset", "mix weights", "transition curve"],
+  },
+]
+
+/**
+ * ANIMATION_CATEGORIES — the full, explicit Animation IA. This is the spec's
+ * required "Animation is not only animated material" correction. Only
+ * `material` is functional this branch; the rest carry the reserved future
+ * branch label so the system is honestly scoped and nothing has to be renamed
+ * when those phases land.
+ */
+const ANIMATION_CATEGORIES: {
+  key: string
+  label: string
+  state: "active" | "basic" | "reserved"
+  detail: string
+  futureBranch?: string
+}[] = [
+  {
+    key: "geometry",
+    label: "Geometry Animation",
+    state: "basic",
+    detail: "Stroke/form reveal + draw-in playback exists today via the timeline. Advanced controls (easing, loop, reverse, stroke order, settle/wobble) land later.",
+    futureBranch: "POST_MVP_ADVANCED_GEOMETRY_ANIMATION_CONTROLS_PHASE_1",
+  },
+  {
+    key: "material",
+    label: "Material Animation",
+    state: "active",
+    detail: "Active now (v1). Animates surface response only — shine sweep, gel shimmer, roughness pulse, completion flash, signal flicker. Configure it in the Material panel.",
+  },
+  {
+    key: "texture",
+    label: "Texture Animation",
+    state: "reserved",
+    detail: "Grain drift, noise movement, scanline scroll, band crawl, ripple, bubble drift.",
+    futureBranch: "POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1",
+  },
+  {
+    key: "dither",
+    label: "Dither Animation",
+    state: "reserved",
+    detail: "Threshold sweep, Bayer crawl, diagonal drift, reveal dither, controlled flicker.",
+    futureBranch: "POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1",
+  },
+  {
+    key: "ascii",
+    label: "ASCII Animation",
+    state: "reserved",
+    detail: "Glyph scroll, ASCII rain, character cycling, reveal glyphs, terminal flicker.",
+    futureBranch: "POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1",
+  },
+  {
+    key: "layer",
+    label: "Layer Animation",
+    state: "reserved",
+    detail: "Per-layer speed, phase, delay, sync, enable/disable inside the layer stack.",
+    futureBranch: "POST_MVP_LAYER_STACK_AND_LAYER_ANIMATION_PHASE_1",
+  },
+  {
+    key: "stack",
+    label: "Stack Animation",
+    state: "reserved",
+    detail: "Whole-stack fade, pulse, drift, delay, loop, freeze on complete.",
+    futureBranch: "POST_MVP_STACK_ANIMATION_PHASE_1",
+  },
+  {
+    key: "fusion",
+    label: "Fusion Animation",
+    state: "reserved",
+    detail: "Authored linked systems: Terminal Gel reveal, Dither Bloom, Signal Ink data flow, etc.",
+    futureBranch: "POST_MVP_ANIMATED_FUSION_MODES_PHASE_1",
   },
 ]
 
 const selectClass =
   "rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
 const fieldLabelClass = "text-[11px] font-medium text-muted-foreground"
+
+/* ---- Material panel control (surface + Animated Material v1) ---- */
+function MaterialControl({
+  styleState,
+  setStyleState,
+}: {
+  styleState: StyleState
+  setStyleState: (updater: (s: StyleState) => StyleState) => void
+}) {
+  const animOn = styleState.materialAnimationEnabled
+  const params = MATERIAL_PARAMS[styleState.materialPreset]
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>Surface preset</span>
+          <select
+            value={styleState.materialPreset}
+            onChange={(e) =>
+              setStyleState((s) => ({
+                ...s,
+                materialPreset: e.target.value as StyleState["materialPreset"],
+                // Explicit pick pins the material so mode switches won't override it.
+                materialUserOverride: true,
+              }))
+            }
+            className={selectClass}
+          >
+            {MATERIAL_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {styleState.materialUserOverride && (
+          <button
+            type="button"
+            onClick={() => setStyleState((s) => ({ ...s, materialUserOverride: false }))}
+            className="mb-0.5 rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Stop pinning; follow the per-mode default material again"
+          >
+            Reset to mode default
+          </button>
+        )}
+      </div>
+
+      {/* Read-only surface readout (real values applied to the preview). */}
+      <div className="flex flex-wrap gap-1.5 text-[10px]">
+        {[
+          ["roughness", params.roughness.toFixed(2)],
+          ["metalness", params.metalness.toFixed(2)],
+          ["clearcoat", params.clearcoat.toFixed(2)],
+          ["sheen", params.sheen.toFixed(2)],
+        ].map(([k, v]) => (
+          <span key={k} className="rounded border border-border bg-muted/30 px-2 py-1 text-muted-foreground">
+            {k}: <span className="text-foreground">{v}</span>
+          </span>
+        ))}
+      </div>
+
+      {/* Animated Material v1 — preview-only surface animation. */}
+      <div className="rounded-md border border-border bg-muted/20 p-3">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={animOn}
+            onChange={(e) =>
+              setStyleState((s) => ({
+                ...s,
+                materialAnimationEnabled: e.target.checked,
+                materialAnimationType:
+                  e.target.checked && s.materialAnimationType === "none"
+                    ? "shineSweep"
+                    : s.materialAnimationType,
+              }))
+            }
+            className="h-3.5 w-3.5 accent-foreground"
+          />
+          <span className="text-xs font-medium text-foreground">Material Animation</span>
+          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+            preview only
+          </span>
+        </label>
+
+        <div className={`mt-3 flex flex-col gap-3 ${animOn ? "" : "pointer-events-none opacity-50"}`}>
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>Type</span>
+            <select
+              value={styleState.materialAnimationType}
+              onChange={(e) =>
+                setStyleState((s) => ({
+                  ...s,
+                  materialAnimationType: e.target.value as StyleState["materialAnimationType"],
+                }))
+              }
+              className={selectClass}
+              disabled={!animOn}
+            >
+              {MATERIAL_ANIMATION_TYPES.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>
+              Speed <span className="text-foreground">{styleState.materialAnimationSpeed.toFixed(2)}×</span>
+            </span>
+            <input
+              type="range"
+              min={0.1}
+              max={3}
+              step={0.05}
+              value={styleState.materialAnimationSpeed}
+              onChange={(e) =>
+                setStyleState((s) => ({ ...s, materialAnimationSpeed: Number(e.target.value) }))
+              }
+              className="w-48 accent-foreground"
+              disabled={!animOn}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>
+              Intensity{" "}
+              <span className="text-foreground">{Math.round(styleState.materialAnimationIntensity * 100)}%</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={styleState.materialAnimationIntensity}
+              onChange={(e) =>
+                setStyleState((s) => ({ ...s, materialAnimationIntensity: Number(e.target.value) }))
+              }
+              className="w-48 accent-foreground"
+              disabled={!animOn}
+            />
+          </label>
+
+          <p className="text-[10px] leading-relaxed text-muted-foreground">
+            Timing follows the <span className="font-medium text-foreground">Animation</span> panel&apos;s motion
+            mode: &ldquo;Sync to Draw&rdquo; ties it to stroke draw-in; otherwise it runs on its own clock.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ---- Animation panel: full IA, only Material is functional ---- */
+function AnimationControl({
+  styleState,
+  setStyleState,
+}: {
+  styleState: StyleState
+  setStyleState: (updater: (s: StyleState) => StyleState) => void
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Global motion timing — affects which clock animated style systems use. */}
+      <label className="flex flex-col gap-1">
+        <span className={fieldLabelClass}>Motion mode (timing source)</span>
+        <select
+          value={styleState.motionMode}
+          onChange={(e) =>
+            setStyleState((s) => ({ ...s, motionMode: e.target.value as StyleState["motionMode"] }))
+          }
+          className={selectClass}
+        >
+          <option value="off">Off (static)</option>
+          <option value="independent">Independent clock</option>
+          <option value="syncToDraw">Sync to Draw</option>
+        </select>
+      </label>
+      <p className="-mt-1 text-[10px] leading-relaxed text-muted-foreground">
+        &ldquo;Sync to Draw&rdquo; lets visual (style) animation use draw/reveal progress as its timing input. It
+        does <span className="font-medium text-foreground">not</span> change geometry animation behavior.
+      </p>
+
+      {/* The animation categories. */}
+      <div className="flex flex-col gap-1.5">
+        {ANIMATION_CATEGORIES.map((c) => {
+          const badge =
+            c.state === "active"
+              ? { text: "active", cls: "bg-foreground/10 text-foreground" }
+              : c.state === "basic"
+                ? { text: "basic playback", cls: "bg-foreground/10 text-foreground" }
+                : { text: "reserved", cls: "bg-muted text-muted-foreground" }
+          return (
+            <div
+              key={c.key}
+              className={`rounded-md border border-border p-2.5 ${
+                c.state === "active" ? "bg-muted/30" : "bg-transparent"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-foreground">{c.label}</span>
+                <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${badge.cls}`}>{badge.text}</span>
+                {c.key === "material" && styleState.materialAnimationEnabled && (
+                  <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+                    on: {styleState.materialAnimationType}
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">{c.detail}</p>
+              {c.futureBranch && (
+                <p className="mt-1 font-mono text-[9px] text-muted-foreground/70">{c.futureBranch}</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <p className="text-[10px] leading-relaxed text-muted-foreground">
+        No full timeline or keyframes are implemented. Material Animation is configured in the{" "}
+        <span className="font-medium text-foreground">Material</span> panel.
+      </p>
+    </div>
+  )
+}
 
 /** Renders the real, working control(s) for a given panel. */
 function PanelControl({
@@ -125,139 +425,10 @@ function PanelControl({
   onSelectPreset: (family: PresetFamily, id: string) => void
 }) {
   switch (id) {
-    case "material": {
-      const animOn = styleState.materialAnimationEnabled
-      return (
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1">
-              <span className={fieldLabelClass}>Surface preset</span>
-              <select
-                value={styleState.materialPreset}
-                onChange={(e) =>
-                  setStyleState((s) => ({
-                    ...s,
-                    materialPreset: e.target.value as StyleState["materialPreset"],
-                    // An explicit pick pins the material so mode switches won't
-                    // override it with their per-mode default.
-                    materialUserOverride: true,
-                  }))
-                }
-                className={selectClass}
-              >
-                {MATERIAL_PRESETS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {styleState.materialUserOverride && (
-              <button
-                type="button"
-                onClick={() => setStyleState((s) => ({ ...s, materialUserOverride: false }))}
-                className="mb-0.5 rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                title="Stop pinning; follow the per-mode default material again"
-              >
-                Reset to mode default
-              </button>
-            )}
-          </div>
-
-          {/* Animated Material v1 — preview-only surface animation. */}
-          <div className="rounded-md border border-border bg-muted/20 p-3">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={animOn}
-                onChange={(e) =>
-                  setStyleState((s) => ({
-                    ...s,
-                    materialAnimationEnabled: e.target.checked,
-                    // First enable with "none" selected → bump to a default so
-                    // the user sees something move.
-                    materialAnimationType:
-                      e.target.checked && s.materialAnimationType === "none"
-                        ? "shineSweep"
-                        : s.materialAnimationType,
-                  }))
-                }
-                className="h-3.5 w-3.5 accent-foreground"
-              />
-              <span className="text-xs font-medium text-foreground">Animated Material</span>
-              <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
-                preview only
-              </span>
-            </label>
-
-            <div className={`mt-3 flex flex-col gap-3 ${animOn ? "" : "pointer-events-none opacity-50"}`}>
-              <label className="flex flex-col gap-1">
-                <span className={fieldLabelClass}>Animation</span>
-                <select
-                  value={styleState.materialAnimationType}
-                  onChange={(e) =>
-                    setStyleState((s) => ({
-                      ...s,
-                      materialAnimationType: e.target.value as StyleState["materialAnimationType"],
-                    }))
-                  }
-                  className={selectClass}
-                  disabled={!animOn}
-                >
-                  {MATERIAL_ANIMATION_TYPES.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="flex flex-col gap-1">
-                <span className={fieldLabelClass}>
-                  Speed <span className="text-foreground">{styleState.materialAnimationSpeed.toFixed(2)}×</span>
-                </span>
-                <input
-                  type="range"
-                  min={0.1}
-                  max={3}
-                  step={0.05}
-                  value={styleState.materialAnimationSpeed}
-                  onChange={(e) =>
-                    setStyleState((s) => ({ ...s, materialAnimationSpeed: Number(e.target.value) }))
-                  }
-                  className="w-48 accent-foreground"
-                  disabled={!animOn}
-                />
-              </label>
-
-              <label className="flex flex-col gap-1">
-                <span className={fieldLabelClass}>
-                  Intensity{" "}
-                  <span className="text-foreground">{Math.round(styleState.materialAnimationIntensity * 100)}%</span>
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={styleState.materialAnimationIntensity}
-                  onChange={(e) =>
-                    setStyleState((s) => ({ ...s, materialAnimationIntensity: Number(e.target.value) }))
-                  }
-                  className="w-48 accent-foreground"
-                  disabled={!animOn}
-                />
-              </label>
-
-              <p className="text-[10px] leading-relaxed text-muted-foreground">
-                Timing follows the <span className="font-medium text-foreground">Motion</span> panel: &ldquo;Sync to
-                Draw&rdquo; ties it to the stroke draw-in; otherwise it runs on its own clock.
-              </p>
-            </div>
-          </div>
-        </div>
-      )
-    }
+    case "material":
+      return <MaterialControl styleState={styleState} setStyleState={setStyleState} />
+    case "animation":
+      return <AnimationControl styleState={styleState} setStyleState={setStyleState} />
     case "texture":
       return (
         <label className="flex flex-col gap-1">
@@ -324,23 +495,6 @@ function PanelControl({
                 {a.label}
               </option>
             ))}
-          </select>
-        </label>
-      )
-    case "motion":
-      return (
-        <label className="flex flex-col gap-1">
-          <span className={fieldLabelClass}>Mode</span>
-          <select
-            value={styleState.motionMode}
-            onChange={(e) =>
-              setStyleState((s) => ({ ...s, motionMode: e.target.value as StyleState["motionMode"] }))
-            }
-            className={selectClass}
-          >
-            <option value="off">Off (static)</option>
-            <option value="independent">Independent clock</option>
-            <option value="syncToDraw">Sync to Draw</option>
           </select>
         </label>
       )
@@ -447,24 +601,32 @@ export function StylePanelScaffold({
               <button
                 key={p.id}
                 onClick={() => onActiveIdChange(p.id)}
-                className={`rounded-md px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
+                className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
                   p.id === activeId
                     ? "bg-foreground text-background"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
               >
-                {p.label}
+                <span>{p.label}</span>
+                {p.status === "active" && (
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      p.id === activeId ? "bg-background" : "bg-foreground"
+                    }`}
+                    aria-hidden
+                  />
+                )}
               </button>
             ))}
           </nav>
 
           {/* Active panel body */}
-          <div className="min-h-[14rem] flex-1 rounded-lg border border-border p-5">
+          <div className="max-h-[24rem] min-h-[14rem] flex-1 overflow-y-auto rounded-lg border border-border p-5">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold text-foreground">{active.label}</h3>
               <span
                 className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                  active.status === "substrate active"
+                  active.status === "active"
                     ? "bg-foreground/10 text-foreground"
                     : "bg-muted text-muted-foreground"
                 }`}
@@ -487,21 +649,23 @@ export function StylePanelScaffold({
               </div>
             )}
 
-            <div className="mt-5">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Future controls
-              </p>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {active.futureControls.map((c) => (
-                  <span
-                    key={c}
-                    className="rounded border border-border bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground"
-                  >
-                    {c}
-                  </span>
-                ))}
+            {active.futureControls.length > 0 && (
+              <div className="mt-5">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Future controls
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {active.futureControls.map((c) => (
+                    <span
+                      key={c}
+                      className="rounded border border-border bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground"
+                    >
+                      {c}
+                    </span>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       )}

@@ -25,7 +25,13 @@ import {
   extrudeWidthToSlider,
 } from "@/lib/geometry-engines"
 import type { StyleState } from "@/lib/style-system"
-import { findPreset, resolveMaterialParams, evaluateMaterialAnimation } from "@/lib/style-system"
+import {
+  findPreset,
+  resolveMaterialParams,
+  evaluateMaterialAnimation,
+  MATERIAL_PARAMS,
+  MODE_MATERIAL_DEFAULTS,
+} from "@/lib/style-system"
 
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
@@ -2167,14 +2173,37 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               geometry/animation/export yet. */}
           {styleState && (
             <div className="mt-1 border-t border-border/50 pt-1">
-                <div className="font-semibold text-foreground">Style substrate:</div>
-                <div className="mt-0.5 text-foreground/80">— Material (IMPLEMENTED v1) —</div>
-                <div>activeMaterialPreset: {styleState.materialPreset}</div>
-                <div>materialUserOverride: {String(styleState.materialUserOverride)}</div>
-                <div>materialAnimationEnabled: {String(styleState.materialAnimationEnabled)}</div>
-                <div>materialAnimationType: {styleState.materialAnimationType}</div>
-                <div>materialAnimationSpeed: {styleState.materialAnimationSpeed.toFixed(2)}</div>
-                <div>materialAnimationIntensity: {styleState.materialAnimationIntensity.toFixed(2)}</div>
+              <div className="font-semibold text-foreground">Style substrate:</div>
+              <div className="mt-0.5 text-foreground/80">— Material (surface response) —</div>
+              <div>activeMaterialPreset: {styleState.materialPreset}</div>
+              <div>modeMaterialDefault: {MODE_MATERIAL_DEFAULTS[geometryMode]}</div>
+              <div>userMaterialOverride: {String(styleState.materialUserOverride)}</div>
+              {(() => {
+                const p = MATERIAL_PARAMS[styleState.materialPreset]
+                return (
+                  <>
+                    <div>materialColor: {p.color}</div>
+                    <div>materialRoughness: {p.roughness.toFixed(2)}</div>
+                    <div>materialMetalness: {p.metalness.toFixed(2)}</div>
+                    <div>materialClearcoat: {p.clearcoat.toFixed(2)}</div>
+                  </>
+                )
+              })()}
+              <div>materialAnimationEnabled: {String(styleState.materialAnimationEnabled)}</div>
+              <div>materialAnimationType: {styleState.materialAnimationType}</div>
+              <div>materialAnimationSpeed: {styleState.materialAnimationSpeed.toFixed(2)}</div>
+              <div>materialAnimationIntensity: {styleState.materialAnimationIntensity.toFixed(2)}</div>
+              <div>materialAnimationPreviewOnly: YES</div>
+              <div>
+                syncToDrawAffectsMaterialAnimation: {styleState.motionMode === "syncToDraw" ? "YES" : "NO"}
+              </div>
+              <div>materialDoesNotTouchGeometry: YES</div>
+              <div className="mt-0.5 text-foreground/80">— Reserved animation IA —</div>
+              <div>futureGeometryAnimationToolsReserved: YES</div>
+              <div>futureTextureAnimationToolsReserved: YES</div>
+              <div>futureDitherAnimationToolsReserved: YES</div>
+              <div>futureAsciiAnimationToolsReserved: YES</div>
+              <div>futureLayerStackFusionAnimationReserved: YES</div>
               <div className="mt-0.5 text-foreground/80">— Texture (procedural patterning only) —</div>
               <div>textureMode: {styleState.textureMode}</div>
               <div>textureEnabled: {String(styleState.textureEnabled)}</div>
