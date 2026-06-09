@@ -2,7 +2,7 @@
 
 import { useRef, useCallback, useMemo, useEffect, useLayoutEffect, useState, Component, type ReactNode } from "react"
 import { Canvas, useThree, useFrame } from "@react-three/fiber"
-import { OrbitControls } from "@react-three/drei"
+import { OrbitControls, Environment, Lightformer } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
 import type { Stroke, ProcessedStroke, Point } from "@/lib/stroke-processing"
@@ -357,8 +357,9 @@ function AnimatedStrokes({
   // the preset (incl. per-mode defaults chosen in the app) now decides the
   // surface, so every mesh in this component shares one preset-driven material.
   const materialPreset = styleState?.materialPreset ?? "ink"
+  const customMaterial = styleState?.customMaterial
   const liveMaterial = useMemo(() => {
-    const base = resolveMaterialParams(materialPreset)
+    const base = resolveMaterialParams(materialPreset, customMaterial)
     return new THREE.MeshPhysicalMaterial({
       color: new THREE.Color(base.color),
       roughness: base.roughness,
@@ -371,9 +372,10 @@ function AnimatedStrokes({
       sheenColor: new THREE.Color(base.sheenColor),
       emissive: new THREE.Color(base.emissive),
       emissiveIntensity: base.emissiveIntensity,
+      envMapIntensity: base.envMapIntensity,
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [materialPreset])
+  }, [materialPreset, customMaterial])
 
   // Dispose the material when the preset changes / on unmount to avoid GPU leaks.
   useEffect(() => {
@@ -1625,6 +1627,52 @@ function Scene({
       <directionalLight position={[-4, 2, -2]} intensity={0.4} />
       <directionalLight position={[0, -3, -5]} intensity={0.3} />
 
+      {/* Offline studio environment (no HDR fetch). This is what makes the
+          material presets actually read: clearcoat / metalness / sheen /
+          reflectivity need something to reflect. Without an env map every
+          preset collapses to "dark + slightly different roughness", which is
+          exactly why all four modes looked identical. resolution kept small;
+          frames=1 bakes it once (static, no per-frame cost). */}
+      <Environment resolution={256} frames={1} background={false}>
+        <color attach="background" args={["#15171a"]} />
+        {/* Big soft key panel (top-front) → broad clearcoat/gloss highlight */}
+        <Lightformer
+          form="rect"
+          intensity={3}
+          color="#ffffff"
+          position={[2.5, 4, 3]}
+          rotation={[-Math.PI / 3, 0, 0]}
+          scale={[8, 6, 1]}
+        />
+        {/* Cool rim panel (back-left) → separates dark surfaces from dark bg */}
+        <Lightformer
+          form="rect"
+          intensity={1.6}
+          color="#9fc4ff"
+          position={[-4, 1.5, -3]}
+          rotation={[0, Math.PI / 2.2, 0]}
+          scale={[5, 4, 1]}
+        />
+        {/* Warm low fill (front-low) → gives sheen/rubber a soft underside glow */}
+        <Lightformer
+          form="rect"
+          intensity={1.1}
+          color="#ffd9b0"
+          position={[1, -2.5, 2]}
+          rotation={[Math.PI / 2.5, 0, 0]}
+          scale={[6, 3, 1]}
+        />
+        {/* Tight bright streak → crisp moving specular for Shine Sweep / gloss */}
+        <Lightformer
+          form="rect"
+          intensity={4}
+          color="#ffffff"
+          position={[-1.5, 3, 2.5]}
+          rotation={[-Math.PI / 4, 0, 0]}
+          scale={[0.6, 5, 1]}
+        />
+      </Environment>
+
       {strokes.length === 0 && (
         <mesh>
           <boxGeometry args={[0.6, 0.6, 0.6]} />
@@ -2157,9 +2205,26 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         </>
       )}
 
-      {/* Debug overlay (only when debug mode is on) */}
+      {/* Debug overlay (only when debug mode is on).
+          Rendered as a dismissible, scrollable popup so it never overflows or
+          covers the whole 3D canvas: capped width + max-height, its own scroll,
+          and a close (X) button in a sticky header. */}
       {showDebug && (
-        <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-muted-foreground backdrop-blur-sm">
+        <div className="pointer-events-auto absolute left-3 top-3 flex max-h-[calc(100%-1.5rem)] w-64 flex-col overflow-hidden rounded-lg border border-border bg-background/90 font-mono text-[10px] leading-tight text-muted-foreground shadow-lg backdrop-blur-sm">
+          <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-border/60 bg-background/80 px-2.5 py-1.5 backdrop-blur-sm">
+            <span className="font-semibold text-foreground">Debug</span>
+            <button
+              type="button"
+              onClick={() => setShowDebug(false)}
+              aria-label="Close debug panel"
+              className="flex h-5 w-5 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M1.5 1.5l7 7M8.5 1.5l-7 7" />
+              </svg>
+            </button>
+          </div>
+          <div className="overflow-y-auto px-2.5 py-1.5">
           <div>strokes: {strokeCount}</div>
           <div>points: {totalPoints}</div>
           <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
@@ -2289,6 +2354,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               ))}
             </div>
           )}
+          </div>
         </div>
       )}
 

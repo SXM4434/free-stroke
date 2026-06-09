@@ -26,6 +26,7 @@ export type MaterialPreset =
   | "glossyPlastic"
   | "rubber"
   | "signal"
+  | "custom"
 
 /**
  * MaterialAnimationType — ANIMATED MATERIAL v1.
@@ -40,6 +41,24 @@ export type MaterialAnimationType =
   | "roughnessPulse"
   | "completionFlash"
   | "signalFlicker"
+
+/**
+ * CustomMaterial — the user-editable surface used when materialPreset is
+ * "custom". A subset of MaterialParams that the Custom Material UI exposes as
+ * sliders / color pickers. Merged over the "custom" base in
+ * `resolveMaterialParams`, so any field omitted falls back to the base.
+ */
+export interface CustomMaterial {
+  color: string
+  roughness: number
+  metalness: number
+  clearcoat: number
+  sheen: number
+  sheenColor: string
+  emissive: string
+  emissiveIntensity: number
+  envMapIntensity: number
+}
 
 /**
  * TextureMode = procedural PATTERNING only. Dither and ASCII are deliberately
@@ -119,6 +138,8 @@ export interface StyleState {
   materialAnimationType: MaterialAnimationType
   materialAnimationSpeed: number
   materialAnimationIntensity: number
+  /** Editable surface used when materialPreset === "custom". */
+  customMaterial: CustomMaterial
 
   /* --- texture (umbrella) --- */
   textureMode: TextureMode
@@ -197,6 +218,17 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   materialAnimationType: "none",
   materialAnimationSpeed: 1,
   materialAnimationIntensity: 0.5,
+  customMaterial: {
+    color: "#2a2a2a",
+    roughness: 0.5,
+    metalness: 0.0,
+    clearcoat: 0.4,
+    sheen: 0.0,
+    sheenColor: "#000000",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+    envMapIntensity: 1.0,
+  },
 
   textureMode: "none",
   textureEnabled: false,
@@ -269,6 +301,7 @@ export const MATERIAL_PRESETS: PresetShell<MaterialPreset>[] = [
   { id: "glossyPlastic", label: "Glossy Plastic" },
   { id: "rubber", label: "Rubber" },
   { id: "signal", label: "Signal" },
+  { id: "custom", label: "Custom…" },
 ]
 
 /* ====================================================================== */
@@ -297,95 +330,123 @@ export interface MaterialParams {
   /** Faint self-illumination for "Signal"; "#000000" disables. */
   emissive: string
   emissiveIntensity: number
+  /** How strongly the environment map reflects on this surface. Higher =
+   *  glossier / more mirror-like; drives the visible difference between
+   *  matte (low) and glossy/signal (high) presets. */
+  envMapIntensity: number
 }
 
 export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
   // Dark glossy gel-ink: the original brand default (hard clearcoat, sharp spec).
   ink: {
     color: "#1a1a1a",
-    roughness: 0.35,
+    roughness: 0.32,
     metalness: 0.0,
-    clearcoat: 0.8,
-    clearcoatRoughness: 0.15,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.12,
     reflectivity: 0.6,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
     emissive: "#000000",
     emissiveIntensity: 0,
+    envMapIntensity: 1.0,
   },
-  // Softer, fuller, balloon/gel feel: higher roughness + diffuse sheen, gentle
-  // clearcoat. Best for Inflate / Solid.
+  // Softer, fuller, balloon/gel feel: higher roughness + strong diffuse sheen,
+  // gentle clearcoat, lighter so the sheen reads. Best for Inflate / Solid.
   softGel: {
-    color: "#1c1c1c",
-    roughness: 0.62,
+    color: "#2a2a2e",
+    roughness: 0.55,
     metalness: 0.0,
-    clearcoat: 0.18,
-    clearcoatRoughness: 0.6,
-    reflectivity: 0.32,
-    sheen: 0.5,
-    sheenRoughness: 0.8,
-    sheenColor: "#3a3a3a",
+    clearcoat: 0.25,
+    clearcoatRoughness: 0.55,
+    reflectivity: 0.35,
+    sheen: 1.0,
+    sheenRoughness: 0.7,
+    sheenColor: "#6a7a8a",
     emissive: "#000000",
     emissiveIntensity: 0,
+    envMapIntensity: 0.7,
   },
-  // Matte, dry, low-spec clay: high roughness, no clearcoat, no sheen.
+  // Matte, dry, low-spec clay: very high roughness, no clearcoat, no sheen, and
+  // notably lighter so it reads as a soft dry surface (not just "dark").
   matteClay: {
-    color: "#202020",
-    roughness: 0.92,
+    color: "#3a3a38",
+    roughness: 1.0,
     metalness: 0.0,
     clearcoat: 0.0,
     clearcoatRoughness: 1.0,
-    reflectivity: 0.18,
+    reflectivity: 0.1,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
     emissive: "#000000",
     emissiveIntensity: 0,
+    envMapIntensity: 0.15,
   },
-  // Smooth shiny plastic: low roughness, strong clearcoat, crisp highlight.
+  // Smooth shiny plastic: very low roughness, full clearcoat, crisp bright
+  // highlight + strong env reflection. The "wet/glossy" extreme.
   glossyPlastic: {
-    color: "#161616",
-    roughness: 0.18,
+    color: "#101013",
+    roughness: 0.08,
     metalness: 0.0,
     clearcoat: 1.0,
-    clearcoatRoughness: 0.08,
-    reflectivity: 0.75,
+    clearcoatRoughness: 0.04,
+    reflectivity: 0.85,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
     emissive: "#000000",
     emissiveIntensity: 0,
+    envMapIntensity: 1.6,
   },
-  // Soft rubber: mid-high roughness, no hard clearcoat, faint warm sheen so it
-  // reads softer/less hard-specular than ink.
+  // Soft rubber: high roughness, no hard clearcoat, warm sheen so it reads
+  // softer/matte-satin and clearly different from ink.
   rubber: {
-    color: "#1a1a1a",
-    roughness: 0.78,
+    color: "#22201e",
+    roughness: 0.85,
     metalness: 0.0,
     clearcoat: 0.05,
     clearcoatRoughness: 0.9,
-    reflectivity: 0.25,
-    sheen: 0.35,
+    reflectivity: 0.2,
+    sheen: 0.6,
     sheenRoughness: 0.95,
-    sheenColor: "#2a2a2a",
+    sheenColor: "#4a3f38",
     emissive: "#000000",
     emissiveIntensity: 0,
+    envMapIntensity: 0.4,
   },
-  // Digital "signal": higher contrast, smoother, with a faint cool emissive so
-  // it reads slightly screen-lit / digital without being neon.
+  // Digital "signal": metallic, smooth, with a clear cool emissive so it reads
+  // screen-lit / digital. The most chromatic preset while still restrained.
   signal: {
-    color: "#141414",
-    roughness: 0.28,
-    metalness: 0.1,
+    color: "#0f1418",
+    roughness: 0.22,
+    metalness: 0.55,
     clearcoat: 0.6,
-    clearcoatRoughness: 0.2,
-    reflectivity: 0.7,
+    clearcoatRoughness: 0.18,
+    reflectivity: 0.8,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
-    emissive: "#1d3a4a",
-    emissiveIntensity: 0.35,
+    emissive: "#1f5e7a",
+    emissiveIntensity: 0.55,
+    envMapIntensity: 1.3,
+  },
+  // Custom — the editable base. Starts as a neutral mid surface; the actual
+  // values come from styleState.customMaterial (merged in resolveMaterialParams).
+  custom: {
+    color: "#2a2a2a",
+    roughness: 0.5,
+    metalness: 0.0,
+    clearcoat: 0.4,
+    clearcoatRoughness: 0.3,
+    reflectivity: 0.5,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+    envMapIntensity: 1.0,
   },
 }
 
@@ -412,9 +473,31 @@ export const MATERIAL_ANIMATION_TYPES: PresetShell<MaterialAnimationType>[] = [
   { id: "signalFlicker", label: "Signal Flicker" },
 ]
 
-/** Resolve the static base params for a preset (clone so callers can mutate). */
-export function resolveMaterialParams(preset: MaterialPreset): MaterialParams {
-  return { ...MATERIAL_PARAMS[preset] }
+/**
+ * Resolve the static base params for a preset (clone so callers can mutate).
+ * When preset === "custom", the user's editable `customMaterial` is merged over
+ * the custom base so the live surface reflects the sliders.
+ */
+export function resolveMaterialParams(
+  preset: MaterialPreset,
+  custom?: CustomMaterial,
+): MaterialParams {
+  const base = { ...MATERIAL_PARAMS[preset] }
+  if (preset === "custom" && custom) {
+    return {
+      ...base,
+      color: custom.color,
+      roughness: custom.roughness,
+      metalness: custom.metalness,
+      clearcoat: custom.clearcoat,
+      sheen: custom.sheen,
+      sheenColor: custom.sheenColor,
+      emissive: custom.emissive,
+      emissiveIntensity: custom.emissiveIntensity,
+      envMapIntensity: custom.envMapIntensity,
+    }
+  }
+  return base
 }
 
 export const TEXTURE_MODES: PresetShell<TextureMode>[] = [
@@ -702,29 +785,32 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
     case "none":
       return p
 
-    // Moving specular highlight: ramp clearcoat + reflectivity sinusoidally so
-    // a glossy "shine" travels across the surface as lighting changes.
+    // Moving specular highlight: ramp clearcoat + reflectivity + env reflection
+    // sinusoidally so a glossy "shine" visibly travels across the surface.
     case "shineSweep": {
       const s = (Math.sin(t * 1.6) + 1) / 2 // 0..1
-      p.clearcoat = clamp01(base.clearcoat + s * 0.6 * k)
-      p.clearcoatRoughness = Math.max(0.02, base.clearcoatRoughness * (1 - s * 0.5 * k))
-      p.reflectivity = clamp01(base.reflectivity + s * 0.3 * k)
+      p.clearcoat = clamp01(base.clearcoat + s * 0.7 * k)
+      p.clearcoatRoughness = Math.max(0.02, base.clearcoatRoughness * (1 - s * 0.7 * k))
+      p.reflectivity = clamp01(base.reflectivity + s * 0.4 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 1.2 * k)
       return p
     }
 
     // Soft breathing sheen for gel/soft materials.
     case "gelShimmer": {
       const s = (Math.sin(t * 2.2) + 1) / 2
-      p.sheen = clamp01(Math.max(base.sheen, 0.3) + s * 0.5 * k)
-      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.3 * k))
-      p.clearcoat = clamp01(base.clearcoat + s * 0.15 * k)
+      p.sheen = clamp01(Math.max(base.sheen, 0.4) + s * 0.6 * k)
+      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.4 * k))
+      p.clearcoat = clamp01(base.clearcoat + s * 0.2 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 0.5 * k)
       return p
     }
 
-    // Matte <-> slightly-less-matte pulse via roughness.
+    // Matte <-> glossy pulse via roughness + env reflection.
     case "roughnessPulse": {
       const s = (Math.sin(t * 1.8) + 1) / 2
-      p.roughness = clamp01(base.roughness - s * 0.35 * k)
+      p.roughness = clamp01(base.roughness - s * 0.5 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 0.8 * k)
       return p
     }
 
