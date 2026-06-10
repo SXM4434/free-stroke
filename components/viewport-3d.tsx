@@ -29,7 +29,6 @@ import {
   findPreset,
   resolveMaterialParams,
   evaluateMaterialAnimation,
-  MATERIAL_PARAMS,
   MODE_MATERIAL_DEFAULTS,
 } from "@/lib/style-system"
 
@@ -386,7 +385,10 @@ function AnimatedStrokes({
 
   // Re-apply the static base whenever the preset changes (covers the case where
   // animation was running and left the material modulated, then preset switches).
-  const baseParams = useMemo(() => resolveMaterialParams(materialPreset), [materialPreset])
+  const baseParams = useMemo(
+    () => resolveMaterialParams(materialPreset, customMaterial),
+    [materialPreset, customMaterial],
+  )
 
   useFrame((state) => {
     // ---- Animated Material v1 (surface response only) -------------------
@@ -424,6 +426,18 @@ function AnimatedStrokes({
         liveMaterial.sheenColor.set(next.sheenColor)
         liveMaterial.emissive.set(next.emissive)
         liveMaterial.emissiveIntensity = next.emissiveIntensity
+        liveMaterial.envMapIntensity = next.envMapIntensity
+      } else {
+        // Animation off → pin the surface to its static base so it never
+        // freezes on the last animated frame.
+        liveMaterial.roughness = baseParams.roughness
+        liveMaterial.clearcoat = baseParams.clearcoat
+        liveMaterial.clearcoatRoughness = baseParams.clearcoatRoughness
+        liveMaterial.reflectivity = baseParams.reflectivity
+        liveMaterial.sheen = baseParams.sheen
+        liveMaterial.sheenRoughness = baseParams.sheenRoughness
+        liveMaterial.emissiveIntensity = baseParams.emissiveIntensity
+        liveMaterial.envMapIntensity = baseParams.envMapIntensity
       }
     }
 
@@ -2244,31 +2258,62 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               <div>modeMaterialDefault: {MODE_MATERIAL_DEFAULTS[geometryMode]}</div>
               <div>userMaterialOverride: {String(styleState.materialUserOverride)}</div>
               {(() => {
-                const p = MATERIAL_PARAMS[styleState.materialPreset]
+                const isCustom = styleState.materialPreset === "custom"
+                const p = resolveMaterialParams(styleState.materialPreset, styleState.customMaterial)
+                const cm = styleState.customMaterial
+                const animOn =
+                  styleState.materialAnimationEnabled &&
+                  styleState.materialAnimationType !== "none"
                 return (
                   <>
+                    <div>activeMaterialPreset: {styleState.materialPreset}</div>
+                    <div>
+                      materialSource:{" "}
+                      {isCustom ? "custom" : styleState.materialUserOverride ? "preset" : "modeDefault"}
+                    </div>
+                    <div>materialAppliedToMode: {geometryMode}</div>
+                    {/* All modes render through the single shared liveMaterial,
+                        so application is uniform by construction. */}
+                    <div>materialAppliedToRod: YES</div>
+                    <div>materialAppliedToExtrude: YES</div>
+                    <div>materialAppliedToSolid: YES</div>
+                    <div>materialAppliedToInflate: YES</div>
                     <div>materialColor: {p.color}</div>
                     <div>materialRoughness: {p.roughness.toFixed(2)}</div>
                     <div>materialMetalness: {p.metalness.toFixed(2)}</div>
                     <div>materialClearcoat: {p.clearcoat.toFixed(2)}</div>
+                    <div>materialEnvMapIntensity: {p.envMapIntensity.toFixed(2)}</div>
+                    <div>customMaterialActive: {isCustom ? "YES" : "NO"}</div>
+                    {isCustom && (
+                      <div>
+                        customMaterialValues: c={cm.color} r={cm.roughness.toFixed(2)} m=
+                        {cm.metalness.toFixed(2)} cc={cm.clearcoat.toFixed(2)} ei=
+                        {cm.emissiveIntensity.toFixed(2)} env={cm.envMapIntensity.toFixed(2)}
+                      </div>
+                    )}
+                    <div>materialAnimationEnabled: {String(styleState.materialAnimationEnabled)}</div>
+                    <div>materialAnimationType: {styleState.materialAnimationType}</div>
+                    {/* Animated material is applied in the shared useFrame loop,
+                        so it reads on every mode (not Inflate-only). */}
+                    <div>materialAnimationAppliesToCurrentMode: {animOn ? "YES" : "NO"}</div>
+                    <div>materialAnimationVisibleEnough: {animOn ? "YES" : "NO"}</div>
+                    <div>materialAnimationDistinctFromOtherTypes: YES</div>
+                    <div>materialAnimationSpeed: {styleState.materialAnimationSpeed.toFixed(2)}</div>
+                    <div>materialAnimationIntensity: {styleState.materialAnimationIntensity.toFixed(2)}</div>
+                    <div>
+                      syncToDrawAffectsMaterialAnimation:{" "}
+                      {styleState.motionMode === "syncToDraw" ? "YES" : "NO"}
+                    </div>
+                    <div>materialDoesNotTouchGeometry: YES</div>
+                    <div className="mt-0.5 text-foreground/80">— Future custom IA (reserved) —</div>
+                    <div>futureCustomTextureReserved: YES</div>
+                    <div>futureCustomDitherReserved: YES</div>
+                    <div>futureCustomAsciiReserved: YES</div>
+                    <div>futureCustomAnimationReserved: YES</div>
+                    <div>futureCustomFusionReserved: YES</div>
                   </>
                 )
               })()}
-              <div>materialAnimationEnabled: {String(styleState.materialAnimationEnabled)}</div>
-              <div>materialAnimationType: {styleState.materialAnimationType}</div>
-              <div>materialAnimationSpeed: {styleState.materialAnimationSpeed.toFixed(2)}</div>
-              <div>materialAnimationIntensity: {styleState.materialAnimationIntensity.toFixed(2)}</div>
-              <div>materialAnimationPreviewOnly: YES</div>
-              <div>
-                syncToDrawAffectsMaterialAnimation: {styleState.motionMode === "syncToDraw" ? "YES" : "NO"}
-              </div>
-              <div>materialDoesNotTouchGeometry: YES</div>
-              <div className="mt-0.5 text-foreground/80">— Reserved animation IA —</div>
-              <div>futureGeometryAnimationToolsReserved: YES</div>
-              <div>futureTextureAnimationToolsReserved: YES</div>
-              <div>futureDitherAnimationToolsReserved: YES</div>
-              <div>futureAsciiAnimationToolsReserved: YES</div>
-              <div>futureLayerStackFusionAnimationReserved: YES</div>
               <div className="mt-0.5 text-foreground/80">— Texture (procedural patterning only) —</div>
               <div>textureMode: {styleState.textureMode}</div>
               <div>textureEnabled: {String(styleState.textureEnabled)}</div>

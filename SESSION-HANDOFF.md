@@ -1048,3 +1048,95 @@ roughness/metalness, which is invisible without something to reflect.
 - Geometry, draw-in clock, and export geometry untouched.
 
 ### Next branch — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1`
+
+## LOCKED CHECKPOINT — `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`
+
+Consolidates the env-map readability + custom-material work and re-verifies it
+against the explicit spec for this branch. (Note: `components/viewport-3d.tsx`
+and `components/style-panel-scaffold.tsx` had partially reverted during the
+session; this pass re-applied and re-verified the changes.)
+
+### Root causes identified (from visual review, not just code)
+
+- **"Only Inflate reads clearly":** all four modes already shared one
+  `liveMaterial`, but with **no environment map** the PBR clearcoat / metalness /
+  sheen had nothing to reflect, so thin/low-curvature geometry (Rod, Extrude,
+  Solid faces) collapsed to near-flat dark. Inflate's rounded tubes caught the
+  few direct lights, which is why it *looked* like only Inflate responded.
+- **Presets looked the same:** without reflections the roughness/clearcoat
+  differences were invisible; every preset resolved to "slightly different
+  black."
+- **Animated material hard to see / too similar:** effects only nudged
+  color/roughness with no reflection term, so the modulation was below the
+  perceptual floor and the types were not differentiated by which property they
+  drive.
+
+### Fixes (re-applied this pass)
+
+- **Studio environment map** — offline `<Environment frames={1}
+  background={false}>` with four `<Lightformer>`s feeds `scene.environment`
+  only. Reflection lighting, no visible background, no canvas/grid/geometry
+  change. This is what makes material read on Rod / Extrude / Solid.
+- **`envMapIntensity` added to `MaterialParams`** and tuned per preset so the
+  six presets are visibly distinct (ink 1.0, softGel 0.7, matteClay 0.15,
+  glossyPlastic 1.6, rubber 0.4, signal 1.3).
+- **Animated material** now also drives `envMapIntensity`, and each type varies
+  which property / wave shape / speed it animates; added an **anim-off reset**
+  that pins the surface back to its static base.
+- **`resolveMaterialParams(preset, custom)`** is the single shared resolution
+  path; `baseParams` and `liveMaterial` both flow through it for all modes.
+
+### Custom Material (Part C)
+
+- `"custom"` material preset + `CustomMaterial` interface + `customMaterial`
+  state. Editor in the Material panel (color / sheen color / emissive pickers +
+  roughness / metalness / clearcoat / sheen / emissive / reflection sliders)
+  updates the preview live across all four modes.
+
+### Future custom IA reserved (Part C, not implemented)
+
+- Debug fields assert reserved-but-unimplemented: `futureCustomTextureReserved`,
+  `futureCustomDitherReserved`, `futureCustomAsciiReserved`,
+  `futureCustomAnimationReserved`, `futureCustomFusionReserved`. Only **Custom
+  Material** is implemented this branch.
+
+### Debug fields (spec list)
+
+activeMaterialPreset, materialSource (preset/custom/modeDefault),
+materialAppliedToMode, materialAppliedToRod/Extrude/Solid/Inflate (all YES —
+single shared material), materialColor/Roughness/Metalness/Clearcoat/
+EnvMapIntensity, customMaterialActive, customMaterialValues,
+materialAnimationEnabled/Type/Speed/Intensity,
+materialAnimationAppliesToCurrentMode, materialAnimationVisibleEnough,
+materialAnimationDistinctFromOtherTypes, syncToDrawAffectsMaterialAnimation,
+materialDoesNotTouchGeometry, future custom* reserved flags.
+
+### Test results (verified in-browser this pass)
+
+- **Extrude + Glossy Plastic:** crisp white specular streak on top edge + warm
+  amber reflection underneath. **Extrude + Matte Clay:** uniform soft mid-gray,
+  no highlight. Distinction obvious on the same stroke.
+- **Rod + Glossy Plastic:** specular highlight along the crest of the thin tube
+  — material applies (subtler only due to thin geometry).
+- **Inflate + Soft Gel / Glossy:** soft diffuse sheen vs sharp specular —
+  confirmed earlier this session.
+- Custom material color edit (cyan) updated the preview live.
+- Dev server compiles clean; restored missing `evaluateMaterialAnimation`
+  import (would otherwise crash) and removed unused `MATERIAL_PARAMS` imports.
+
+### Confirmations
+
+- Dither renderer NOT implemented. ASCII renderer NOT implemented. Procedural
+  texture renderer NOT implemented.
+- Geometry untouched. Current geometry animation untouched. Export geometry
+  untouched. Texture/Dither/ASCII remain separate systems.
+
+### Scope / limitations
+
+- Env map is reflection lighting only (no visible background).
+- Animated material is preview-only; static + custom material follow the
+  existing GLB material path; animated material is not baked.
+
+### Conclusion — `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`
+
+### Next branch — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1`

@@ -2,9 +2,10 @@
 
 import {
   type StyleState,
+  type CustomMaterial,
   MATERIAL_PRESETS,
   MATERIAL_ANIMATION_TYPES,
-  MATERIAL_PARAMS,
+  resolveMaterialParams,
   TEXTURE_MODES,
   DITHER_PRESETS,
   ASCII_PRESETS,
@@ -197,7 +198,10 @@ function MaterialControl({
   setStyleState: (updater: (s: StyleState) => StyleState) => void
 }) {
   const animOn = styleState.materialAnimationEnabled
-  const params = MATERIAL_PARAMS[styleState.materialPreset]
+  const isCustom = styleState.materialPreset === "custom"
+  const params = resolveMaterialParams(styleState.materialPreset, styleState.customMaterial)
+  const setCustom = (patch: Partial<CustomMaterial>) =>
+    setStyleState((s) => ({ ...s, customMaterial: { ...s.customMaterial, ...patch } }))
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end gap-3">
@@ -247,6 +251,70 @@ function MaterialControl({
           </span>
         ))}
       </div>
+
+      {/* Custom Material editor — only when the "Custom…" preset is selected.
+          Edits live in styleState.customMaterial and feed resolveMaterialParams,
+          so the 3D preview (all modes) updates immediately. */}
+      {isCustom && (
+        <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/20 p-3">
+          <span className="text-xs font-medium text-foreground">Custom material</span>
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="flex items-center gap-2">
+              <span className={fieldLabelClass}>Color</span>
+              <input
+                type="color"
+                value={styleState.customMaterial.color}
+                onChange={(e) => setCustom({ color: e.target.value })}
+                className="h-6 w-8 cursor-pointer rounded border border-border bg-transparent"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className={fieldLabelClass}>Sheen color</span>
+              <input
+                type="color"
+                value={styleState.customMaterial.sheenColor}
+                onChange={(e) => setCustom({ sheenColor: e.target.value })}
+                className="h-6 w-8 cursor-pointer rounded border border-border bg-transparent"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className={fieldLabelClass}>Emissive</span>
+              <input
+                type="color"
+                value={styleState.customMaterial.emissive}
+                onChange={(e) => setCustom({ emissive: e.target.value })}
+                className="h-6 w-8 cursor-pointer rounded border border-border bg-transparent"
+              />
+            </label>
+          </div>
+          {(
+            [
+              ["Roughness", "roughness", 0, 1, 0.01],
+              ["Metalness", "metalness", 0, 1, 0.01],
+              ["Clearcoat", "clearcoat", 0, 1, 0.01],
+              ["Sheen", "sheen", 0, 1, 0.01],
+              ["Emissive", "emissiveIntensity", 0, 2, 0.01],
+              ["Reflection", "envMapIntensity", 0, 3, 0.05],
+            ] as const
+          ).map(([label, key, min, max, step]) => (
+            <label key={key} className="flex flex-col gap-1">
+              <span className={fieldLabelClass}>
+                {label}{" "}
+                <span className="text-foreground">{styleState.customMaterial[key].toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={styleState.customMaterial[key]}
+                onChange={(e) => setCustom({ [key]: Number(e.target.value) } as Partial<CustomMaterial>)}
+                className="w-full accent-foreground"
+              />
+            </label>
+          ))}
+        </div>
+      )}
 
       {/* Animated Material v1 — preview-only surface animation. */}
       <div className="rounded-md border border-border bg-muted/20 p-3">
