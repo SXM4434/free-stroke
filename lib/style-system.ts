@@ -337,100 +337,101 @@ export interface MaterialParams {
 }
 
 export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
-  // Dark glossy gel-ink: the original brand default (hard clearcoat, sharp spec).
+  // Dark glossy gel-ink: the brand default. Charcoal (not pure black) so the
+  // hard clearcoat highlight has a surface to sit on and read against.
   ink: {
-    color: "#1a1a1a",
-    roughness: 0.32,
+    color: "#26262b",
+    roughness: 0.3,
     metalness: 0.0,
-    clearcoat: 0.85,
-    clearcoatRoughness: 0.12,
+    clearcoat: 0.9,
+    clearcoatRoughness: 0.1,
     reflectivity: 0.6,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 1.0,
+    envMapIntensity: 1.1,
   },
-  // Softer, fuller, balloon/gel feel: higher roughness + strong diffuse sheen,
-  // gentle clearcoat, lighter so the sheen reads. Best for Inflate / Solid.
+  // Softer, fuller balloon/gel feel: cool blue-gray, clearly lighter than ink so
+  // the broad diffuse sheen reads as a soft glow. Best for Inflate / Solid.
   softGel: {
-    color: "#2a2a2e",
-    roughness: 0.55,
+    color: "#454b57",
+    roughness: 0.5,
     metalness: 0.0,
-    clearcoat: 0.25,
-    clearcoatRoughness: 0.55,
-    reflectivity: 0.35,
+    clearcoat: 0.3,
+    clearcoatRoughness: 0.5,
+    reflectivity: 0.4,
     sheen: 1.0,
-    sheenRoughness: 0.7,
-    sheenColor: "#6a7a8a",
+    sheenRoughness: 0.65,
+    sheenColor: "#8fa6bd",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 0.7,
+    envMapIntensity: 0.8,
   },
-  // Matte, dry, low-spec clay: very high roughness, no clearcoat, no sheen, and
-  // notably lighter so it reads as a soft dry surface (not just "dark").
+  // Matte dry clay: warm, notably light, fully rough, zero clearcoat/sheen. Reads
+  // as a soft chalky surface — the clear "no highlight" opposite of glossy.
   matteClay: {
-    color: "#3a3a38",
+    color: "#6f6457",
     roughness: 1.0,
     metalness: 0.0,
     clearcoat: 0.0,
     clearcoatRoughness: 1.0,
-    reflectivity: 0.1,
+    reflectivity: 0.08,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 0.15,
+    envMapIntensity: 0.12,
   },
-  // Smooth shiny plastic: very low roughness, full clearcoat, crisp bright
-  // highlight + strong env reflection. The "wet/glossy" extreme.
+  // Smooth shiny plastic: kept deliberately dark so the mirror-sharp clearcoat
+  // highlight + strong env reflection pop hard against it. The "wet/glossy" end.
   glossyPlastic: {
-    color: "#101013",
-    roughness: 0.08,
+    color: "#1b1d24",
+    roughness: 0.06,
     metalness: 0.0,
     clearcoat: 1.0,
-    clearcoatRoughness: 0.04,
-    reflectivity: 0.85,
+    clearcoatRoughness: 0.03,
+    reflectivity: 0.9,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 1.6,
+    envMapIntensity: 1.8,
   },
-  // Soft rubber: high roughness, no hard clearcoat, warm sheen so it reads
-  // softer/matte-satin and clearly different from ink.
+  // Soft rubber: warm mid-brown, high roughness, warm sheen → satin, no hard
+  // highlight. Clearly a softer, warmer sibling of matteClay.
   rubber: {
-    color: "#22201e",
-    roughness: 0.85,
+    color: "#3d352f",
+    roughness: 0.82,
     metalness: 0.0,
-    clearcoat: 0.05,
+    clearcoat: 0.06,
     clearcoatRoughness: 0.9,
     reflectivity: 0.2,
-    sheen: 0.6,
-    sheenRoughness: 0.95,
-    sheenColor: "#4a3f38",
+    sheen: 0.7,
+    sheenRoughness: 0.9,
+    sheenColor: "#6b5849",
     emissive: "#000000",
     emissiveIntensity: 0,
     envMapIntensity: 0.4,
   },
-  // Digital "signal": metallic, smooth, with a clear cool emissive so it reads
-  // screen-lit / digital. The most chromatic preset while still restrained.
+  // Digital "signal": metallic teal with a clear cool emissive so it reads
+  // screen-lit. The most chromatic preset while still restrained.
   signal: {
-    color: "#0f1418",
-    roughness: 0.22,
-    metalness: 0.55,
+    color: "#16242c",
+    roughness: 0.2,
+    metalness: 0.6,
     clearcoat: 0.6,
-    clearcoatRoughness: 0.18,
+    clearcoatRoughness: 0.16,
     reflectivity: 0.8,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
-    emissive: "#1f5e7a",
-    emissiveIntensity: 0.55,
-    envMapIntensity: 1.3,
+    emissive: "#1f6e8c",
+    emissiveIntensity: 0.7,
+    envMapIntensity: 1.4,
   },
   // Custom — the editable base. Starts as a neutral mid surface; the actual
   // values come from styleState.customMaterial (merged in resolveMaterialParams).
@@ -775,6 +776,25 @@ export interface MaterialAnimationInput {
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
 const TAU = Math.PI * 2
 
+/* Lighten/darken a hex color toward white (amt>0) or black (amt<0) by `amt`
+ * (roughly -1..1). Used by animations to drive a LARGE, surface-wide luminance
+ * change so the motion is obvious across the whole stroke — not just in the few
+ * specular highlight pixels (which is why v1 animations were nearly invisible). */
+function shadeHex(hex: string, amt: number): string {
+  const h = hex.replace("#", "")
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h
+  const r = parseInt(full.slice(0, 2), 16)
+  const g = parseInt(full.slice(2, 4), 16)
+  const b = parseInt(full.slice(4, 6), 16)
+  const mix = (c: number) => {
+    const target = amt >= 0 ? 255 : 0
+    const v = Math.round(c + (target - c) * Math.min(1, Math.abs(amt)))
+    return Math.max(0, Math.min(255, v))
+  }
+  const to2 = (n: number) => n.toString(16).padStart(2, "0")
+  return `#${to2(mix(r))}${to2(mix(g))}${to2(mix(b))}`
+}
+
 export function evaluateMaterialAnimation(input: MaterialAnimationInput): MaterialParams {
   const { base, type, intensity, completion } = input
   const t = input.time * input.speed
@@ -785,16 +805,77 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
     case "none":
       return p
 
-    // Moving specular highlight: ramp clearcoat + reflectivity + env reflection
-    // sinusoidally so a glossy "shine" visibly travels across the surface.
+    // Moving specular "shine": a bright band sweeps across the surface. Drives
+    // clearcoat/reflection for the glint AND a strong surface-wide lightening so
+    // the sweep is unmistakable even on matte/dark presets.
     case "shineSweep": {
-      const s = (Math.sin(t * 1.6) + 1) / 2 // 0..1
+      const s = (Math.sin(t * 1.9) + 1) / 2 // 0..1
       p.clearcoat = clamp01(base.clearcoat + s * 0.7 * k)
-      p.clearcoatRoughness = Math.max(0.02, base.clearcoatRoughness * (1 - s * 0.7 * k))
+      p.clearcoatRoughness = Math.max(0.02, base.clearcoatRoughness * (1 - s * 0.8 * k))
       p.reflectivity = clamp01(base.reflectivity + s * 0.4 * k)
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 1.2 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 1.6 * k)
+      // Surface-wide: lighten up to ~45% at the peak of the sweep.
+      p.color = shadeHex(base.color, s * 0.45 * k)
+      p.emissiveIntensity = base.emissiveIntensity + s * 0.35 * k
+      if (base.emissive === "#000000" && k > 0) p.emissive = "#3a3f46"
       return p
     }
+
+    // Soft breathing sheen/glow for gel & soft materials: the whole surface
+    // gently swells brighter and dimmer like a slow pulse of light.
+    case "gelShimmer": {
+      const s = (Math.sin(t * 2.4) + 1) / 2
+      p.sheen = clamp01(Math.max(base.sheen, 0.5) + s * 0.5 * k)
+      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.4 * k))
+      p.clearcoat = clamp01(base.clearcoat + s * 0.2 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 0.7 * k)
+      // Broad gentle brightening (smaller than shineSweep, but full-surface).
+      p.color = shadeHex(base.color, s * 0.3 * k)
+      p.sheenColor = shadeHex(base.sheenColor === "#000000" ? "#8fa6bd" : base.sheenColor, s * 0.3 * k)
+      return p
+    }
+
+    // Matte <-> glossy pulse: surface visibly shifts between dull/dark and
+    // smooth/bright as roughness drops and reflection + lightness rise together.
+    case "roughnessPulse": {
+      const s = (Math.sin(t * 2.0) + 1) / 2
+      p.roughness = clamp01(base.roughness - s * 0.65 * k)
+      p.clearcoat = clamp01(base.clearcoat + s * 0.35 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 1.1 * k)
+      p.color = shadeHex(base.color, s * 0.35 * k)
+      return p
+    }
+
+    // Accent that follows stroke completion: a bright emissive/clearcoat flash
+    // as draw-in approaches 100%, then settles. Reads `completion` only.
+    case "completionFlash": {
+      const d = 1 - clamp01(Math.abs(completion - 0.92) / 0.18)
+      const flash = d * d
+      p.emissive = "#b9c6d2"
+      p.emissiveIntensity = base.emissiveIntensity + flash * 1.4 * k
+      p.clearcoat = clamp01(base.clearcoat + flash * 0.5 * k)
+      p.color = shadeHex(base.color, flash * 0.5 * k)
+      return p
+    }
+
+    // Digital flicker for Signal: high-frequency emissive jitter + surface
+    // lightness flicker on a slow drift, so it reads as an unstable screen glow.
+    case "signalFlicker": {
+      const slow = (Math.sin(t * 3) + 1) / 2
+      const fast = (Math.sin(t * 21.3) + Math.sin(t * 13.7)) / 2 // ~-1..1
+      const flick = clamp01(0.5 + 0.5 * fast)
+      const baseEm = Math.max(base.emissiveIntensity, 0.3)
+      p.emissive = base.emissive === "#000000" ? "#1f6e8c" : base.emissive
+      p.emissiveIntensity = baseEm + (slow * 0.5 + flick * 0.9) * k
+      p.color = shadeHex(base.color, (slow * 0.15 + flick * 0.25) * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + flick * 0.6 * k)
+      return p
+    }
+
+    default:
+      return p
+  }
+}
 
     // Soft breathing sheen for gel/soft materials.
     case "gelShimmer": {

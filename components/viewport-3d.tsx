@@ -2134,6 +2134,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                       ],
                       fov: 50,
                     }}
+                    gl={{ preserveDrawingBuffer: true }}
                     style={{ background: "#fafafa" }}
                   >
                     <Scene
@@ -2189,6 +2190,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 ],
                 fov: 50,
               }}
+              gl={{ preserveDrawingBuffer: true }}
               style={{ background: "#fafafa" }}
             >
               <Scene
