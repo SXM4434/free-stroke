@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 import DrawingCanvas, { type ExportSettings } from "@/components/drawing-canvas"
 import { StylePanelScaffold, type StylePanelId } from "@/components/style-panel-scaffold"
@@ -109,6 +109,43 @@ export default function Home() {
     smoothing: true,
     preserveCorners: true,
   })
+
+  // DEV-ONLY capture harness. Exposes a small imperative API on window so an
+  // automated screenshot/video script can drive the full material × animation ×
+  // intensity × mode matrix deterministically (instead of fragile DOM clicks).
+  // Guarded to non-production; it only sets the same React state the UI sets, so
+  // it can never reach geometry, the reveal clock, or export.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return
+    const w = window as unknown as Record<string, unknown>
+    w.__styleHarness = {
+      setMode: (mode: GeometryMode) => handleModeChange(mode),
+      setMaterial: (preset: string) =>
+        setStyleState((s) => ({
+          ...s,
+          materialPreset: preset as StyleState["materialPreset"],
+          materialUserOverride: true,
+        })),
+      setAnimation: (
+        type: string,
+        opts?: { intensity?: number; speed?: number },
+      ) =>
+        setStyleState((s) => ({
+          ...s,
+          materialAnimationType: type as StyleState["materialAnimationType"],
+          materialAnimationEnabled: type !== "none",
+          materialAnimationIntensity:
+            opts?.intensity ?? s.materialAnimationIntensity,
+          materialAnimationSpeed: opts?.speed ?? s.materialAnimationSpeed,
+        })),
+      setCustom: (patch: Record<string, unknown>) =>
+        setStyleState((s) => ({ ...s, customMaterial: { ...s.customMaterial, ...patch } })),
+      get: () => ({ geometryMode, styleState }),
+    }
+    return () => {
+      delete w.__styleHarness
+    }
+  }, [geometryMode, styleState])
 
   return (
     <div className="flex h-screen flex-col">
