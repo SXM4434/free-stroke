@@ -404,18 +404,18 @@ export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
   // Soft rubber: warm mid-brown, high roughness, warm sheen → satin, no hard
   // highlight. Clearly a softer, warmer sibling of matteClay.
   rubber: {
-    color: "#3d352f",
-    roughness: 0.82,
+    color: "#33312f",
+    roughness: 0.92,
     metalness: 0.0,
-    clearcoat: 0.06,
-    clearcoatRoughness: 0.9,
-    reflectivity: 0.2,
-    sheen: 0.7,
-    sheenRoughness: 0.9,
-    sheenColor: "#6b5849",
+    clearcoat: 0.04,
+    clearcoatRoughness: 0.95,
+    reflectivity: 0.15,
+    sheen: 1.0,
+    sheenRoughness: 0.8,
+    sheenColor: "#9a8a78",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 0.4,
+    envMapIntensity: 0.3,
   },
   // Digital "signal": metallic teal with a clear cool emissive so it reads
   // screen-lit. The most chromatic preset while still restrained.
@@ -826,12 +826,13 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
     case "gelShimmer": {
       const s = (Math.sin(t * 2.4) + 1) / 2
       p.sheen = clamp01(Math.max(base.sheen, 0.5) + s * 0.5 * k)
-      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.4 * k))
-      p.clearcoat = clamp01(base.clearcoat + s * 0.2 * k)
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 0.7 * k)
-      // Broad gentle brightening (smaller than shineSweep, but full-surface).
-      p.color = shadeHex(base.color, s * 0.3 * k)
-      p.sheenColor = shadeHex(base.sheenColor === "#000000" ? "#8fa6bd" : base.sheenColor, s * 0.3 * k)
+      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.5 * k))
+      p.clearcoat = clamp01(base.clearcoat + s * 0.35 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 1.0 * k)
+      // Broad full-surface breathing glow: swing luminance both darker and
+      // brighter around the base so the pulse reads clearly frame-to-frame.
+      p.color = shadeHex(base.color, (s - 0.35) * 0.5 * k)
+      p.sheenColor = shadeHex(base.sheenColor === "#000000" ? "#8fa6bd" : base.sheenColor, s * 0.45 * k)
       return p
     }
 
@@ -877,49 +878,3 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
   }
 }
 
-    // Soft breathing sheen for gel/soft materials.
-    case "gelShimmer": {
-      const s = (Math.sin(t * 2.2) + 1) / 2
-      p.sheen = clamp01(Math.max(base.sheen, 0.4) + s * 0.6 * k)
-      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.4 * k))
-      p.clearcoat = clamp01(base.clearcoat + s * 0.2 * k)
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 0.5 * k)
-      return p
-    }
-
-    // Matte <-> glossy pulse via roughness + env reflection.
-    case "roughnessPulse": {
-      const s = (Math.sin(t * 1.8) + 1) / 2
-      p.roughness = clamp01(base.roughness - s * 0.5 * k)
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 0.8 * k)
-      return p
-    }
-
-    // Accent that follows stroke completion: a brief emissive/clearcoat flash
-    // as draw-in approaches 100%, then settles. Reads `completion` only.
-    case "completionFlash": {
-      // Bell curve peaking near completion ~0.85..1.0.
-      const d = 1 - clamp01(Math.abs(completion - 0.92) / 0.18)
-      const flash = d * d
-      p.emissive = "#9fb4c4"
-      p.emissiveIntensity = base.emissiveIntensity + flash * 0.9 * k
-      p.clearcoat = clamp01(base.clearcoat + flash * 0.4 * k)
-      return p
-    }
-
-    // Digital flicker for the Signal material: small high-frequency emissive
-    // jitter layered on a slow drift.
-    case "signalFlicker": {
-      const slow = (Math.sin(t * 3) + 1) / 2
-      const fast = (Math.sin(t * 21.3) + Math.sin(t * 13.7)) / 2 // -1..1-ish
-      const flick = clamp01(0.5 + 0.5 * fast)
-      const baseEm = Math.max(base.emissiveIntensity, 0.2)
-      p.emissive = base.emissive === "#000000" ? "#1d3a4a" : base.emissive
-      p.emissiveIntensity = baseEm + (slow * 0.3 + flick * 0.5) * k
-      return p
-    }
-
-    default:
-      return p
-  }
-}
