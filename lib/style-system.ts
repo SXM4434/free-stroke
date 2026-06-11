@@ -774,27 +774,14 @@ export interface MaterialAnimationInput {
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
-const TAU = Math.PI * 2
 
-/* Lighten/darken a hex color toward white (amt>0) or black (amt<0) by `amt`
- * (roughly -1..1). Used by animations to drive a LARGE, surface-wide luminance
- * change so the motion is obvious across the whole stroke — not just in the few
- * specular highlight pixels (which is why v1 animations were nearly invisible). */
-function shadeHex(hex: string, amt: number): string {
-  const h = hex.replace("#", "")
-  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h
-  const r = parseInt(full.slice(0, 2), 16)
-  const g = parseInt(full.slice(2, 4), 16)
-  const b = parseInt(full.slice(4, 6), 16)
-  const mix = (c: number) => {
-    const target = amt >= 0 ? 255 : 0
-    const v = Math.round(c + (target - c) * Math.min(1, Math.abs(amt)))
-    return Math.max(0, Math.min(255, v))
-  }
-  const to2 = (n: number) => n.toString(16).padStart(2, "0")
-  return `#${to2(mix(r))}${to2(mix(g))}${to2(mix(b))}`
-}
-
+/* All animations below modulate ONLY physical material properties (clearcoat,
+ * roughness, clearcoatRoughness, reflectivity, envMapIntensity, sheen,
+ * metalness) — never the albedo color. The scene's studio Environment +
+ * Lightformers give those properties something to reflect, so changing how the
+ * surface interacts with light reads clearly without faking it by lightening
+ * the base color. Emissive is only used where it is the material's own behavior
+ * (the Signal preset is screen-lit) or as an explicit accent (completionFlash). */
 export function evaluateMaterialAnimation(input: MaterialAnimationInput): MaterialParams {
   const { base, type, intensity, completion } = input
   const t = input.time * input.speed
@@ -805,49 +792,48 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
     case "none":
       return p
 
-    // Moving specular "shine": a bright band sweeps across the surface. Drives
-    // clearcoat/reflection for the glint AND a strong surface-wide lightening so
-    // the sweep is unmistakable even on matte/dark presets.
+    // Gloss wave: the clearcoat layer sharpens and the environment reflection
+    // swells, so a wet specular "shine" rolls in and out. Pure reflectance —
+    // clearcoat up, clearcoat roughness toward mirror, reflectivity + env up,
+    // and the base roughness eased down so the reflection tightens.
     case "shineSweep": {
       const s = (Math.sin(t * 1.9) + 1) / 2 // 0..1
-      p.clearcoat = clamp01(base.clearcoat + s * 0.7 * k)
-      p.clearcoatRoughness = Math.max(0.02, base.clearcoatRoughness * (1 - s * 0.8 * k))
-      p.reflectivity = clamp01(base.reflectivity + s * 0.4 * k)
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 1.6 * k)
-      // Surface-wide: lighten up to ~45% at the peak of the sweep.
-      p.color = shadeHex(base.color, s * 0.45 * k)
-      p.emissiveIntensity = base.emissiveIntensity + s * 0.35 * k
-      if (base.emissive === "#000000" && k > 0) p.emissive = "#3a3f46"
+      p.clearcoat = clamp01(base.clearcoat + s * 0.85 * k)
+      p.clearcoatRoughness = clamp01(
+        base.clearcoatRoughness - (base.clearcoatRoughness - 0.02) * s * k,
+      )
+      p.reflectivity = clamp01(base.reflectivity + s * 0.5 * k)
+      p.roughness = clamp01(base.roughness * (1 - s * 0.45 * k))
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 2.6 * k)
       return p
     }
 
-    // Soft breathing sheen/glow for gel & soft materials: the whole surface
-    // gently swells brighter and dimmer like a slow pulse of light.
+    // Breathing sheen: the soft retroreflective sheen layer grows and tightens
+    // while a touch of clearcoat fades in — the velvety rim glow swells and
+    // recedes. Sheen + sheenRoughness + clearcoat + env, no color change.
     case "gelShimmer": {
       const s = (Math.sin(t * 2.4) + 1) / 2
-      p.sheen = clamp01(Math.max(base.sheen, 0.5) + s * 0.5 * k)
-      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.5 * k))
-      p.clearcoat = clamp01(base.clearcoat + s * 0.35 * k)
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 1.0 * k)
-      // Broad full-surface breathing glow: swing luminance both darker and
-      // brighter around the base so the pulse reads clearly frame-to-frame.
-      p.color = shadeHex(base.color, (s - 0.35) * 0.5 * k)
-      p.sheenColor = shadeHex(base.sheenColor === "#000000" ? "#8fa6bd" : base.sheenColor, s * 0.45 * k)
+      p.sheen = clamp01(Math.max(base.sheen, 0.4) + s * 0.6 * k)
+      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.6 * k))
+      p.clearcoat = clamp01(base.clearcoat + s * 0.45 * k)
+      p.reflectivity = clamp01(base.reflectivity + s * 0.25 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 1.4 * k)
       return p
     }
 
-    // Matte <-> glossy pulse: surface visibly shifts between dull/dark and
-    // smooth/bright as roughness drops and reflection + lightness rise together.
+    // Matte <-> glossy: roughness makes a big swing between dry/scattered and
+    // smooth/reflective, with clearcoat and env reflection rising as it
+    // smooths. This is the most purely "material property" animation.
     case "roughnessPulse": {
       const s = (Math.sin(t * 2.0) + 1) / 2
-      p.roughness = clamp01(base.roughness - s * 0.65 * k)
-      p.clearcoat = clamp01(base.clearcoat + s * 0.35 * k)
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 1.1 * k)
-      p.color = shadeHex(base.color, s * 0.35 * k)
+      p.roughness = clamp01(base.roughness - s * 0.85 * k)
+      p.clearcoat = clamp01(base.clearcoat + s * 0.4 * k)
+      p.clearcoatRoughness = clamp01(base.clearcoatRoughness * (1 - s * 0.6 * k))
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 2.0 * k)
       return p
     }
 
-    // Accent that follows stroke completion: a bright emissive/clearcoat flash
+    // Accent that follows stroke completion: a brief emissive + clearcoat flash
     // as draw-in approaches 100%, then settles. Reads `completion` only.
     case "completionFlash": {
       const d = 1 - clamp01(Math.abs(completion - 0.92) / 0.18)
@@ -855,12 +841,14 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
       p.emissive = "#b9c6d2"
       p.emissiveIntensity = base.emissiveIntensity + flash * 1.4 * k
       p.clearcoat = clamp01(base.clearcoat + flash * 0.5 * k)
-      p.color = shadeHex(base.color, flash * 0.5 * k)
+      p.clearcoatRoughness = clamp01(base.clearcoatRoughness * (1 - flash * 0.7 * k))
+      p.envMapIntensity = base.envMapIntensity * (1 + flash * 1.5 * k)
       return p
     }
 
-    // Digital flicker for Signal: high-frequency emissive jitter + surface
-    // lightness flicker on a slow drift, so it reads as an unstable screen glow.
+    // Digital flicker for Signal: the surface is screen-lit, so its own
+    // emissive output jitters; metalness + reflectivity + env flicker alongside
+    // it so the reflections strobe like an unstable display. No albedo change.
     case "signalFlicker": {
       const slow = (Math.sin(t * 3) + 1) / 2
       const fast = (Math.sin(t * 21.3) + Math.sin(t * 13.7)) / 2 // ~-1..1
@@ -868,8 +856,9 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
       const baseEm = Math.max(base.emissiveIntensity, 0.3)
       p.emissive = base.emissive === "#000000" ? "#1f6e8c" : base.emissive
       p.emissiveIntensity = baseEm + (slow * 0.5 + flick * 0.9) * k
-      p.color = shadeHex(base.color, (slow * 0.15 + flick * 0.25) * k)
-      p.envMapIntensity = base.envMapIntensity * (1 + flick * 0.6 * k)
+      p.metalness = clamp01(base.metalness + (flick - 0.5) * 0.4 * k)
+      p.reflectivity = clamp01(base.reflectivity + (flick - 0.5) * 0.4 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + flick * 0.9 * k)
       return p
     }
 
