@@ -1,8 +1,9 @@
 "use client"
 
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 import DrawingCanvas, { type ExportSettings } from "@/components/drawing-canvas"
+import { StylePanelScaffold, type StylePanelId } from "@/components/style-panel-scaffold"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import {
   type GeometryMode,
@@ -25,12 +26,23 @@ import {
   SOLID_DEPTH_SLIDER_MAX,
   SOLID_DEPTH_SLIDER_STEP,
 } from "@/lib/geometry-engines"
+import {
+  type StyleState,
+  DEFAULT_STYLE_STATE,
+  MATERIAL_PRESETS,
+  MODE_MATERIAL_DEFAULTS,
+  TEXTURE_MODES,
+  DITHER_PRESETS,
+  ASCII_PRESETS,
+  type PresetFamily,
+  findPreset,
+} from "@/lib/style-system"
 
 const GEOMETRY_MODES: { value: GeometryMode; label: string; disabled: boolean; tooltip?: string }[] = [
   { value: "rod", label: "Rod", disabled: false },
   { value: "extrude", label: "Extrude", disabled: false },
   { value: "solid", label: "Solid", disabled: false },
-  { value: "inflate", label: "Inflate", disabled: false, tooltip: "Phase 1 preview (no export yet)" },
+  { value: "inflate", label: "Inflate", disabled: false },
 ]
 
 export default function Home() {
@@ -51,11 +63,89 @@ export default function Home() {
     extrudeWidthToSlider(DEFAULT_EXTRUDE_PARAMS.width),
   )
   const [solidParams, setSolidParams] = useState<SolidParams>(DEFAULT_SOLID_PARAMS)
+  // POST-MVP visual style substrate (Phase 1: rails only). This state is NOT
+  // read by any geometry build path — it is display/debug only for now, so
+  // updating it never rebuilds geometry, breaks animation, or affects export.
+  const [styleState, setStyleState] = useState<StyleState>(DEFAULT_STYLE_STATE)
+
+  // Style panels drawer: controlled so the top strip can open a matching panel.
+  const [panelsOpen, setPanelsOpen] = useState(true)
+  const [activePanelId, setActivePanelId] = useState<StylePanelId>("material")
+  const openPanel = (id: StylePanelId) => {
+    setActivePanelId(id)
+    setPanelsOpen(true)
+  }
+
+  // Select a preset by id within the active family. Records the active/last-
+  // applied preset and applies the preset's safe `applies` patch. The patch
+  // only ever touches INERT style fields (material/texture/dither/ascii state
+  // flags) — never geometry, animation, or export — so it is safe to apply for
+  // both implemented (material) and not-yet-implemented presets. `implemented`
+  // still governs whether a real renderer exists; unimplemented presets only
+  // record their sibling state + are clearly labeled "renderer later".
+  const handleSelectPreset = (family: PresetFamily, id: string) => {
+    const preset = findPreset(id)
+    setStyleState((s) => ({
+      ...s,
+      ...(preset?.applies ?? {}),
+      activePresetFamily: family,
+      activePresetId: id,
+      lastAppliedPresetId: preset?.implemented ? id : s.lastAppliedPresetId,
+    }))
+  }
+
+  // Switch geometry mode. If the user has NOT explicitly pinned a material
+  // (materialUserOverride === false), follow the per-mode default material so
+  // each mode reads with a sensible surface out of the box. A user override
+  // always wins. Geometry params are never touched here.
+  const handleModeChange = (mode: GeometryMode) => {
+    setGeometryMode(mode)
+    setStyleState((s) =>
+      s.materialUserOverride ? s : { ...s, materialPreset: MODE_MATERIAL_DEFAULTS[mode] },
+    )
+  }
   const settingsRef = useRef<ExportSettings>({
     spacing: 4,
     smoothing: true,
     preserveCorners: true,
   })
+
+  // DEV-ONLY capture harness. Exposes a small imperative API on window so an
+  // automated screenshot/video script can drive the full material × animation ×
+  // intensity × mode matrix deterministically (instead of fragile DOM clicks).
+  // Guarded to non-production; it only sets the same React state the UI sets, so
+  // it can never reach geometry, the reveal clock, or export.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return
+    const w = window as unknown as Record<string, unknown>
+    w.__styleHarness = {
+      setMode: (mode: GeometryMode) => handleModeChange(mode),
+      setMaterial: (preset: string) =>
+        setStyleState((s) => ({
+          ...s,
+          materialPreset: preset as StyleState["materialPreset"],
+          materialUserOverride: true,
+        })),
+      setAnimation: (
+        type: string,
+        opts?: { intensity?: number; speed?: number },
+      ) =>
+        setStyleState((s) => ({
+          ...s,
+          materialAnimationType: type as StyleState["materialAnimationType"],
+          materialAnimationEnabled: type !== "none",
+          materialAnimationIntensity:
+            opts?.intensity ?? s.materialAnimationIntensity,
+          materialAnimationSpeed: opts?.speed ?? s.materialAnimationSpeed,
+        })),
+      setCustom: (patch: Record<string, unknown>) =>
+        setStyleState((s) => ({ ...s, customMaterial: { ...s.customMaterial, ...patch } })),
+      get: () => ({ geometryMode, styleState }),
+    }
+    return () => {
+      delete w.__styleHarness
+    }
+  }, [geometryMode, styleState])
 
   return (
     <div className="flex h-screen flex-col">
@@ -70,7 +160,7 @@ export default function Home() {
           {GEOMETRY_MODES.map((mode) => (
             <button
               key={mode.value}
-              onClick={() => !mode.disabled && setGeometryMode(mode.value)}
+              onClick={() => !mode.disabled && handleModeChange(mode.value)}
               disabled={mode.disabled}
               title={mode.tooltip}
               className={`relative rounded-md px-3 py-1 text-xs font-medium transition-colors ${
@@ -121,7 +211,7 @@ export default function Home() {
             </span>
           </label>
 
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px shrink-0 bg-border" />
 
           {/* Depth — slider value is a width-relative MULTIPLIER (effective
               depth = multiplier × width, clamped). See computeEffectiveExtrudeDepth. */}
@@ -141,7 +231,7 @@ export default function Home() {
             </span>
           </label>
 
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px shrink-0 bg-border" />
 
           {/* Bevel toggle */}
           <button
@@ -181,7 +271,7 @@ export default function Home() {
             </span>
           </label>
 
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px shrink-0 bg-border" />
 
           {/* Depth — slider value is RAW world depth. Calibrated through
               computeSolidEffectiveDepth before being used as the H3 Z extent. */}
@@ -203,12 +293,10 @@ export default function Home() {
         </div>
       )}
 
-      {/* Inflate mode controls (Phase 1 — BEVEL_EXTRUDE strategy)
-          Reuses the Solid Thickness + Depth state intentionally. Thickness
-          informs the bevel-inset cap so puffy edges don't blow past the
-          silhouette in narrow regions; Depth becomes the puff amount
-          (extrude depth + bevel thickness). Phase 1 is preview-only —
-          export is a placeholder until a later phase. */}
+      {/* Inflate mode controls — soft inflated stroke (stroke-volume tube loft).
+          Reuses the Solid Thickness + Depth state intentionally: Thickness sets
+          the stroke's XY radius, and Depth ("Puff") sets cross-section fullness.
+          Preview, animation, and GLB export all share one geometry path. */}
       {geometryMode === "inflate" && (
         <div className="flex h-10 shrink-0 items-center gap-4 border-b border-border bg-muted/30 px-4">
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -227,7 +315,7 @@ export default function Home() {
             </span>
           </label>
 
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px shrink-0 bg-border" />
 
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="select-none font-medium">Puff</span>
@@ -245,13 +333,113 @@ export default function Home() {
             </span>
           </label>
 
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px shrink-0 bg-border" />
 
           <span className="select-none font-mono text-[10px] text-muted-foreground">
-            Phase 1 preview · export disabled
+            Soft inflated stroke · GLB export enabled
           </span>
         </div>
       )}
+
+      {/* Style summary strip (read-only). Shows the current selection for each
+          system as a chip; clicking a chip opens that system's panel where the
+          live control lives. This is status/navigation only — no controls here,
+          so each system has exactly ONE control surface (its panel). */}
+      {(() => {
+        const activePreset = findPreset(styleState.activePresetId)
+        const summary: { id: StylePanelId; label: string; value: string; live: boolean }[] = [
+          {
+            id: "material",
+            label: "Material",
+            value: MATERIAL_PRESETS.find((p) => p.id === styleState.materialPreset)?.label ?? "—",
+            live: true,
+          },
+          {
+            id: "texture",
+            label: "Texture",
+            value: TEXTURE_MODES.find((t) => t.id === styleState.textureMode)?.label ?? "—",
+            live: false,
+          },
+          {
+            id: "dither",
+            label: "Dither",
+            value: styleState.ditherEnabled
+              ? DITHER_PRESETS.find((d) => d.id === styleState.ditherType)?.label ?? "On"
+              : "Off",
+            live: false,
+          },
+          {
+            id: "ascii",
+            label: "ASCII",
+            value: styleState.asciiEnabled
+              ? ASCII_PRESETS.find((a) => a.id === styleState.asciiCharset)?.label ?? "On"
+              : "Off",
+            live: false,
+          },
+          {
+            id: "animation",
+            label: "Animation",
+            value:
+              styleState.materialAnimationEnabled && styleState.materialAnimationType !== "none"
+                ? `Material: ${styleState.materialAnimationType}`
+                : styleState.motionMode === "off"
+                  ? "Static"
+                  : styleState.motionMode === "independent"
+                    ? "Independent"
+                    : "Sync to Draw",
+            live: true,
+          },
+          {
+            id: "presets",
+            label: "Preset",
+            value: activePreset?.label ?? "None",
+            live: true,
+          },
+        ]
+        return (
+          <div className="flex h-11 shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-muted/20 px-4">
+            <span className="shrink-0 select-none text-[11px] font-semibold tracking-tight text-foreground">
+              Style
+            </span>
+            {summary.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => openPanel(item.id)}
+                title={`Open ${item.label} panel`}
+                className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors ${
+                  activePanelId === item.id && panelsOpen
+                    ? "border-foreground/30 bg-foreground/10"
+                    : "border-border bg-background hover:bg-muted"
+                }`}
+              >
+                <span className="font-medium text-muted-foreground">{item.label}</span>
+                <span className="font-semibold text-foreground">{item.value}</span>
+                {!item.live && (
+                  <span className="rounded bg-muted px-1 py-0.5 text-[9px] font-medium text-muted-foreground">
+                    preview
+                  </span>
+                )}
+              </button>
+            ))}
+            <span className="ml-auto shrink-0 select-none text-[10px] italic text-muted-foreground/70">
+              click a chip to edit · &ldquo;preview&rdquo; = no visual effect yet
+            </span>
+          </div>
+        )
+      })()}
+
+      {/* Dedicated per-system control panels. Each system's live control lives
+          in its own panel; the summary strip above opens the matching panel. */}
+      <StylePanelScaffold
+        open={panelsOpen}
+        activeId={activePanelId}
+        styleState={styleState}
+        setStyleState={setStyleState}
+        onSelectPreset={handleSelectPreset}
+        onOpenChange={setPanelsOpen}
+        onActiveIdChange={setActivePanelId}
+      />
 
       {/* Two-column layout */}
       <div className="flex flex-1 overflow-hidden">
@@ -268,7 +456,7 @@ export default function Home() {
 
         {/* Right column: 3D viewport */}
         <div className="flex-1">
-          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} settingsRef={settingsRef} />
+          <Viewport3DWrapper processedStrokes={processedStrokes} rawStrokes={rawStrokes} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} styleState={styleState} settingsRef={settingsRef} />
         </div>
       </div>
     </div>

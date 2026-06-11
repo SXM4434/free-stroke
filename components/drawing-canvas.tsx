@@ -350,16 +350,18 @@ export default function DrawingCanvas({
         onPointerLeave={handlePointerUp}
       />
 
-      {/* Debug info */}
-      <div className="pointer-events-none absolute left-3 top-3 select-none font-mono text-[11px] text-muted-foreground">
-        <div>
-          raw {rawTotalPoints} pts | processed {processedTotalPoints} pts |
-          spacing {spacing}px | smoothing: {smoothing ? "on" : "off"} |
-          corners: {preserveCorners ? "on" : "off"} | last splits:{" "}
-          {lastCornerCount}
+      {/* Debug info (development-only telemetry; hidden in demo/production build) */}
+      {process.env.NODE_ENV === "development" && (
+        <div className="pointer-events-none absolute left-3 top-3 select-none font-mono text-[11px] text-muted-foreground">
+          <div>
+            raw {rawTotalPoints} pts | processed {processedTotalPoints} pts |
+            spacing {spacing}px | smoothing: {smoothing ? "on" : "off"} |
+            corners: {preserveCorners ? "on" : "off"} | last splits:{" "}
+            {lastCornerCount}
+          </div>
+          <div className="mt-0.5">{timingDisplay}</div>
         </div>
-        <div className="mt-0.5">{timingDisplay}</div>
-      </div>
+      )}
 
       {/* Controls bar */}
       <div className="absolute bottom-3 left-3 right-3 flex items-center gap-3">

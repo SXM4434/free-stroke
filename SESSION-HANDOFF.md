@@ -366,8 +366,777 @@ These are non-negotiable for this checkpoint:
 - Export still exports the full static model, not animated partial strokes.
 - If smoke test passes, move to `INFLATE_MODE_PHASE_1`.
 
+## Inflate Phase 2 preview lock checkpoint
+
+- **name:** Inflate Phase 2 Preview Locked for MVP
+- **label:** `INFLATE_PHASE_2_PREVIEW_LOCKED_FOR_MVP`
+- **status:** locked / accepted for MVP preview — do not reopen Inflate geometry unless a major regression appears
+
+### What this checkpoint records
+
+- Inflate preview is accepted for MVP.
+- Remaining Inflate visual polish (true balloon physics, metaball joins, export) is post-MVP.
+- Do not reopen Inflate geometry/material tuning unless a major regression appears.
+- Next branch is `INFLATE_EXPORT_AND_FINAL_PROJECT_QA`.
+
+### Final cross-mode QA results (verified in-browser)
+
+QA method: drew one loopy S-curve stroke (41 raw → 275 processed pts) and exercised every mode live in the running preview (Chromium via agent-browser). Zero JS console errors and zero server runtime errors across all mode switches and slider interactions (only cosmetic `/icon*.png` + `/icon.svg` 404s, out of scope).
+
+- **Rod QA — PASS**
+  - Preview renders a thin 3D tube.
+  - Play button + speed controls (0.5x / 1x / 2x) present and toggle correctly.
+  - Reveal completes and returns to the full static frame (reset/replay behavior intact).
+  - Export GLB enabled.
+- **Extrude QA — PASS**
+  - Preview renders a flat continuous ribbon.
+  - Width / Depth / Bevel controls present and functional.
+  - Progressive reveal + replay/reset behavior intact.
+  - Export GLB enabled.
+  - Remains visually distinct from Inflate (flat ribbon vs rounded volume).
+- **Solid QA — PASS**
+  - Preview renders the filled extruded silhouette.
+  - Thickness / Depth controls present and functional.
+  - H3 holes/counters path intact (static H3 unchanged by this QA).
+  - Animation acceptable for MVP; final frame matches static.
+  - Export GLB enabled (full static geometry).
+- **Inflate QA — PASS**
+  - Preview renders a rounded, soft volumetric body (no empty viewport).
+  - Width (Thickness) changes stroke thickness — verified 38px → 64px visibly thicker.
+  - Puff changes fullness/roundness — verified 0.18 → 0.50 visibly fuller/rounder.
+  - No shredded Solid-normal bands, no old raster dome seam.
+  - Soft matte-with-sheen material is visibly distinct from the glossy Rod/Extrude/Solid material.
+  - Export is intentionally disabled with a clear "Phase 1 preview · export disabled" label (Phase-2 export is the next branch).
+
+### Visual distinction Inflate vs Extrude
+
+- **CONFIRMED distinct enough for MVP.** Extrude reads as a flat directional ribbon/strip; Inflate reads as a soft, rounded, pressure-filled tube with a diffuse sheen. Silhouettes and materials differ clearly at default and across the Puff/Thickness sweep.
+
+### Blockers
+
+- None.
+
+### Untouched (no implementation code changed by this QA pass)
+
+- Rod / Extrude / Solid / Inflate geometry, animation logic, export logic, and UI styling were all left unchanged. Only this `SESSION-HANDOFF.md` was updated.
+
+## Next branch — `INFLATE_EXPORT_AND_FINAL_PROJECT_QA`
+
 ## Final saved checkpoint label
 
-`SOLID_H3_ANIMATION_HOLE_STABILIZATION_RESTORED_PASS`
+`INFLATE_PHASE_2_PREVIEW_LOCKED_FOR_MVP`
 
-(supersedes `SOLID_H3_ANIMATION_HOLE_STABILIZATION`; all prior checkpoints remain in effect as underlying layers)
+(supersedes `SOLID_H3_ANIMATION_HOLE_STABILIZATION_RESTORED_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## Branch — `INFLATE_EXPORT_AND_FINAL_PROJECT_QA`
+
+### Outcome: **INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS**
+
+- Inflate preview accepted for MVP (no visual tuning reopened).
+- Inflate export implemented. Export is the **full static Inflate model only** — never animated/partial geometry.
+- Preview and export now share ONE geometry builder: `inflateBuildStaticGeometries(...)` in `lib/geometry-engines.ts`. Both `InflateEngine.buildPreview` and `InflateEngine.buildExport` call it with the FULL processed strokes, so the exported GLB matches the static preview 1:1.
+- Export centers the aggregate bbox at the origin (same convention as Solid), names meshes `inflate_000…`, and writes metadata: `mode: "inflate"`, `inflateThickness` (Width), `inflatePuff` (Puff), `inflateStrategy`, `vertexCount`, `triangleCount`, `fallbackUsed`, plus calibrated `inflateStrokeRadiusXY` / `inflatePuffAspectZ` / `inflateRadiusZ`. Empty-loft fallback exports the Solid silhouette with `fallbackUsed: true`.
+- UI: removed the "Phase 1 preview · export disabled" label (now "Width · Puff · GLB export enabled") and the Inflate tab's "no export yet" tooltip. Export GLB button already gated only on `strokeCount === 0`.
+
+### All four modes render and export
+
+| Mode | Export | Bytes (loopy stroke) | Log mode tag |
+| --- | --- | --- | --- |
+| Rod | ✅ | ~3.4 MB | `mode=rod, merged=true` |
+| Extrude | ✅ | ~38 KB | `mode=extrude, merged=true` |
+| Solid | ✅ | ~409 KB | `mode=solid, merged=true` |
+| Inflate | ✅ | ~346 KB | `mode=inflate, merged=false` |
+
+### Inflate export test results (validated GLB header = glTF v2, node `inflate_000` under `FreeStroke`)
+
+- Simple line — PASS (~90 KB, non-empty).
+- Loopy cursive — PASS (~346 KB, non-empty).
+- Big O / loop — PASS (~359 KB, non-empty).
+- Each exported GLB is non-empty and visually matches the static Inflate preview; uses full strokes, not animated partial state; Width/Puff reflected in geometry + metadata.
+
+### Animation + controls sanity
+
+- Inflate animation still plays acceptably (reveal path untouched — animation reuses the same preview meshes).
+- Rod / Extrude / Solid animation untouched.
+- Inflate Width/Puff verified live: Puff 0.18 → 0.50 visibly fuller/rounder; Width unchanged in behavior. Extrude/Solid controls untouched.
+
+### Untouched
+
+- Rod / Extrude / Solid geometry, animation, and export logic unchanged.
+- Inflate **visual tuning untouched** — the shared builder uses the exact same calibration constants the locked preview used; the refactor only relocated the deterministic math so preview and export can share it.
+
+### Files
+
+- Inspected: `lib/geometry-engines.ts`, `components/viewport-3d.tsx`, `app/page.tsx`.
+- Changed: `lib/geometry-engines.ts` (added `inflateBuildStaticGeometries`, refactored `InflateEngine.buildPreview` to use it, implemented `InflateEngine.buildExport`), `app/page.tsx` (UI text/tooltip), `SESSION-HANDOFF.md`.
+
+### Blockers
+
+- None.
+
+## Final saved checkpoint label (updated)
+
+`INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`
+
+(supersedes `INFLATE_PHASE_2_PREVIEW_LOCKED_FOR_MVP`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`
+
+**Status: MVP-stable. Locked.** The project is now stable enough to move into cleanup / polish / demo work.
+
+### What is now true
+
+- Inflate preview is accepted for MVP.
+- Inflate export works and looks good (user-confirmed).
+- Inflate export uses the **full static Inflate model**, not animated partial geometry.
+- Inflate is visually distinct enough from Extrude.
+- **Width** maps to stroke thickness / XY radius.
+- **Puff** maps to cross-section fullness / pressure-like roundness.
+- Rod, Extrude, Solid, and Inflate all render.
+- Cross-mode smoke test passed.
+- Supported exports work (Rod, Extrude, Solid, Inflate all produce non-empty GLBs with correct mode tags).
+- Remaining geometry/style issues are **post-MVP polish**.
+
+### Frozen subsystems — DO NOT REOPEN
+
+- Do **not** reopen Rod geometry.
+- Do **not** reopen Extrude geometry/calibration.
+- Do **not** reopen Solid H3 geometry/animation.
+- Do **not** reopen Inflate visual tuning unless a major regression appears.
+
+### Next branch — `MVP_UI_POLISH_AND_DEMO_CAPTURE`
+
+Focus:
+
+- remove temporary debug logs
+- keep Debug panel behind Debug toggle only
+- clean mode labels and helper text
+- verify disabled/enabled export states are accurate
+- capture short demo clips for Rod / Extrude / Solid / Inflate
+- document known limitations
+- prepare project for portfolio/demo use
+
+### Final locked checkpoint label
+
+`INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`
+
+---
+
+## LOCKED CHECKPOINT — `INFLATE_ANIMATION_PROGRESSIVE_REVEAL_PASS`
+
+**Status: MVP-ready. Locked.** Inflate animation is accepted; all four modes are now ready to move into cleanup and demo prep.
+
+### What is now true
+
+- Inflate preview works.
+- Inflate export works and looks good.
+- Inflate animation now plays acceptably.
+- Inflate reveals progressively along the drawn stroke path (arc-length partial rebuild — not all-at-once pop-in).
+- **Width** still controls stroke thickness / XY radius.
+- **Puff** still controls cross-section fullness / pressure-like roundness.
+- Inflate remains visually distinct enough from Extrude.
+- Rod, Extrude, and Solid remain accepted.
+- All four modes are now MVP-ready enough to move into cleanup and demo prep.
+
+### Important notes
+
+- Do **not** reopen Inflate geometry.
+- Do **not** reopen Inflate visual tuning.
+- Do **not** reopen Solid animation.
+- Do **not** reopen Extrude calibration.
+- Remaining visual issues are **post-MVP polish** unless a major regression appears.
+
+### Next branch — `MVP_UI_POLISH_AND_DEMO_CAPTURE`
+
+Focus:
+
+- remove temporary debug logs
+- verify Debug panel only appears when Debug is ON
+- clean helper text / mode labels
+- verify export button states
+- verify playback controls across all modes
+- verify camera / framing / reset / top view
+- create a demo capture checklist
+- document known limitations for MVP
+
+### Final locked checkpoint label
+
+`INFLATE_ANIMATION_PROGRESSIVE_REVEAL_PASS`
+
+(supersedes `INFLATE_EXPORT_AND_FINAL_PROJECT_QA_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `MVP_UI_POLISH_AND_DEMO_CAPTURE_PASS`
+
+**Status: Demo-ready. Locked.** UI cleanup, debug gating, and demo prep complete. No geometry, animation, or export logic was touched.
+
+### What was changed (cleanup only)
+
+- Removed two temporary export status `console.log`s in `components/viewport-3d.tsx`
+  (the dev-only `[FreeStroke Export] mode=...` status line and the ungated
+  `[FreeStroke] Exported ...` line). Kept the dev-only integrity `console.warn`
+  assertions and the `console.error` failure handler.
+- Updated the stale Inflate controls comment in `app/page.tsx`
+  (was "Phase 1 — BEVEL_EXTRUDE strategy / export is a placeholder";
+  now describes the active stroke-volume tube loft with preview + animation + export sharing one path).
+- Aligned the Inflate status helper text in `app/page.tsx` to
+  "Soft inflated stroke · GLB export enabled" (was "Width · Puff ...", which
+  conflicted with the visible "Thickness"/"Puff" slider labels).
+- Gated the always-on drawing-canvas dev telemetry overlay
+  (`raw N pts | processed N pts | ... draw: Xms | procOne: ... | lastTrigger: ...`)
+  behind `process.env.NODE_ENV === "development"` in `components/drawing-canvas.tsx`,
+  so it stays for dev work but is hidden in the demo/production build.
+
+### Verified state
+
+- **Debug panel:** hidden by default; the 3D viewport Debug overlays render only when Debug is ON, and only for the mode that owns them (Extrude metrics / Solid metrics). Inflate shows no stale strategy string. Overlays do not block playback/export/canvas controls.
+- **Mode labels:** Rod / Extrude / Solid / Inflate all enabled and clearly labeled. Extrude = Width/Depth, Solid = Thickness/Depth, Inflate = Thickness/Puff. No stale "Phase 1 / export disabled" copy anywhere in the DOM.
+- **Export:** Export GLB enabled for all four modes when a stroke exists; disabled only while exporting or with zero strokes. Consistent label ("Export GLB" / "Exporting..."). Mode-specific, timestamped filenames. Verified export emits no temporary console logs.
+- **Playback:** Play/Pause, scrubber, Natural/Authentic, and 0.5x/1x/2x speed all present and mode-agnostic (gated by stroke count). Not blocked by overlays.
+- **Camera:** Top view and Reset camera buttons present and working; orbit controls intact; per-mode framing locks to final geometry size.
+
+### Demo capture checklist
+
+**Clip 1 — Rod**
+- draw a loopy stroke
+- play animation (watch progressive reveal)
+- orbit to show the round tube cross-section
+- export GLB (optional)
+
+**Clip 2 — Extrude**
+- switch to Extrude (same stroke)
+- adjust Width, then Depth
+- play animation
+- export GLB
+
+**Clip 3 — Solid**
+- switch to Solid; if the stroke has a loop, show the filled silhouette / counter
+- adjust Thickness, then Depth
+- play animation
+- export GLB
+
+**Clip 4 — Inflate**
+- switch to Inflate
+- adjust Thickness, then Puff
+- play animation (soft inflated reveal)
+- export GLB
+
+**Clip 5 — Mode comparison**
+- keep one stroke
+- cycle Rod → Extrude → Solid → Inflate
+- narrate why each mode exists (ink line → ribbon → filled solid → soft inflated volume)
+
+### Known limitations (MVP)
+
+- Inflate is an MVP stroke-volume preview/export (tube loft), not a final physical balloon simulation.
+- Solid animation may still show tiny topology artifacts at loop-closure frames — acceptable for MVP.
+- Extrude is usable but not final aesthetic polish.
+- Materials and lighting are still basic.
+- UI is demo-ready, not final product UX.
+- Debug panels (3D viewport overlays + canvas telemetry) are development-only and hidden in the demo build.
+- Future polish: improved materials, parameter presets, export metadata, mesh smoothing, and post-export object cleanup.
+
+### Final locked checkpoint label
+
+`MVP_UI_POLISH_AND_DEMO_CAPTURE_PASS`
+
+(supersedes `INFLATE_ANIMATION_PROGRESSIVE_REVEAL_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_STYLE_SUBSTRATE_PHASE_1_PASS`
+
+**Status: Substrate added. Locked.** Infrastructure-only phase for the future visual style system. No visual effects implemented; geometry, animation, and export untouched.
+
+### What was added (infrastructure only)
+
+- **New file `lib/style-system.ts`** — the clean style state model + preset id shells:
+  - Unions: `MaterialPreset`, `TextureMode`, `TextureLockMode`, `StyleSyncMode`, `StyleAnimationType`, `DitherType`/`DitherDirection`, `AsciiCharset`/`AsciiDirection`, `FusionPreset`, `StackAnimationType`.
+  - `StyleState` interface with the full field set (material / texture / dither / ascii / layer stack / fusion / global sync + clock).
+  - `DEFAULT_STYLE_STATE` — conservative defaults (material `ink`, `textureMode` `none`, all visual layers + animated systems OFF, `syncMode` `independent`).
+  - Preset definition shells (IDs + labels only, no behavior): `MATERIAL_PRESETS`, `TEXTURE_MODES`, `DITHER_PRESETS`, `ASCII_PRESETS`, `FUSION_PRESETS`.
+- **`app/page.tsx`** — added `styleState`/`setStyleState` (`DEFAULT_STYLE_STATE`); added a compact **Style** panel shell (Material select, Texture select, Dither/ASCII/Animate/Sync Reveal toggles) that updates state immediately; passes `styleState` to the viewport.
+- **`components/viewport-3d-wrapper.tsx`** — threads the optional `styleState` prop through to `Viewport3D`.
+- **`components/viewport-3d.tsx`** — added optional `styleState` prop; added a **Style substrate** readout inside the existing `showDebug` panel (Debug-only). `styleState` is referenced ONLY in debug JSX — it is in no geometry/animation/export dependency array.
+
+### Default style values
+
+`materialPreset: "ink"`, `textureMode: "none"`, all of `textureEnabled / textureAnimated / ditherEnabled / ditherAnimated / asciiEnabled / asciiAnimated / layerStackEnabled / stackAnimationEnabled / fusionAnimationEnabled / syncToReveal = false`, `fusionPreset: "none"`, `syncMode: "independent"`, `textureLockMode: "object"`, `globalStyleTime: 0`.
+
+### Does style change rebuild geometry?
+
+**No.** Verified via Extrude `previewBuildCount`: toggling style controls produced zero build-count increments (stayed flat). Style state is not in any geometry memo dependency.
+
+### Test results
+
+- State updates — PASS (Material→softGel, Texture→procedural, Dither/ASCII/Animate/Sync Reveal toggles all reflected in debug readout).
+- Rod — PASS (renders with style state active).
+- Extrude — PASS (renders; export 23.7 KB GLB with style state active).
+- Solid — PASS (renders).
+- Inflate — PASS (renders).
+- Animation unchanged — PASS (no animation logic touched).
+- Export unchanged — PASS (GLB export still works; no export logic touched).
+- Debug gating — PASS (Style substrate readout visible only when Debug ON; hidden when OFF).
+
+### Confirmations
+
+- Geometry untouched (no edits to `lib/geometry-engines.ts` / `lib/solid-*.ts`).
+- Animation logic untouched.
+- Export engine logic untouched.
+- No dither / ASCII / fusion rendering implemented (rails only).
+
+### Next branch — `POST_MVP_INITIAL_PRESET_RAILS_PHASE_1`
+
+### Final locked checkpoint label
+
+`POST_MVP_STYLE_SUBSTRATE_PHASE_1_PASS`
+
+(supersedes `MVP_UI_POLISH_AND_DEMO_CAPTURE_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_INITIAL_PRESET_RAILS_PHASE_1_PASS`
+
+**Status: Preset rails added. Locked.** Preset infrastructure only — no visual effect renderers. Geometry, animation, and export untouched.
+
+### What was added (preset infrastructure only)
+
+- **Preset family model** in `lib/style-system.ts`: `PresetFamily` union (geometry, material, animatedMaterial, texture, animatedTexture, dither, animatedDither, ascii, animatedAscii, layerStack, stackAnimation, fusion, animatedFusion, geometryAnimation) and the `StylePreset` shape (`id`, `label`, `family`, `description?`, `bestModes?`, `enabled`, `implemented`, `previewOnly?`, `applies?`).
+- **Initial preset definitions** (69 total, 0 duplicate IDs, all have family + label):
+  - material (6, IMPLEMENTED): ink, softGel, matteClay, glossyPlastic, rubber, signal
+  - texture (5): fineGrain, scanlines, contourBands, scratchedInk, gelBubbles
+  - animatedTexture (5): grainDrift, scanlineScroll, rippleFlow, bandCrawl, bubbleDrift
+  - dither (5): bayerClassic, dotMatrix, hardThreshold, softDither, pixelSignal
+  - animatedDither (5): ditherCrawl, thresholdSweep, revealDither, completionPulseDither, diagonalMatrixDrift
+  - ascii (5): terminalShade, binarySkin, blockGlyph, codeMarks, sparseGlyph
+  - animatedAscii (6): glyphScroll, asciiRain, characterCycle, revealGlyphs, terminalFlicker, slowCodeCrawl
+  - layerStack (5): cleanInkStack, ditheredGelStack, terminalStack, graphicSlabStack, softSignalStack
+  - stackAnimation (6): stackFadeIn, stackCompletionPulse, stackDrift, stackFreezeOnComplete, stackLoopCrawl, stackDelay
+  - fusion (8): terminalGel, ditherBloom, signalInk, asciiRubber, scanlineBalloon, pixelClay, codeBloom, glitchRibbon
+  - animatedFusion (7): terminalGelRevealBuild, ditherBloomThresholdOpen, signalInkDataFlow, asciiRubberSlowdown, scanlineBalloonSoftPulse, glitchRibbonControlledBreak, codeBloomCharacterReveal
+  - geometryAnimation (6): authenticDraw, smoothReveal, snappyDraw, slowGel, loopingStroke, completionPulse
+  - `PRESET_REGISTRY` (family → presets), `PRESET_FAMILY_OPTIONS`, `ALL_PRESETS`, and `findPreset()`.
+- **Style state fields** added to `StyleState` + `DEFAULT_STYLE_STATE`: `activePresetFamily` (default `material`), `activePresetId` (default `null`), `lastAppliedPresetId` (default `null`).
+- **Preset rail UI** in `app/page.tsx`: a family selector + a preset selector in the Style bar, with a selected-preset status chip ("active" vs "defined · renderer later"). Unimplemented presets are labeled "(soon)". A `handleSelectPreset(family, id)` records the active preset and applies only the preset's safe `applies` patch.
+- **Debug readout** in `components/viewport-3d.tsx` (Debug-only): activePresetFamily, activePresetId, activePresetImplemented, activePresetPreviewOnly, activePresetBestModes, presetAppliesState, presetDoesNotTouchGeometry: YES.
+
+### Material preset behavior
+
+Material presets are `implemented: true` and carry `applies: { materialPreset: ... }`. Selecting one updates the existing `materialPreset` style state through the shared style state path (no geometry rebuild).
+
+### Unimplemented preset behavior
+
+All non-material presets are `implemented: false` with no `applies` patch. Selecting one records `activePresetFamily`/`activePresetId` (and the UI shows "defined · renderer later") but applies nothing visual, does not change material, and does not break the preview. They never pretend to work.
+
+### Does preset selection rebuild geometry?
+
+**No.** Verified via Extrude `previewBuildCount`: selecting multiple unimplemented presets produced zero build-count increments. Style/preset state is in no geometry memo dependency.
+
+### Test results
+
+- Preset data — PASS (69 presets, 0 dupes, 0 missing label/family, only 6 material marked implemented, family counts match spec).
+- UI — PASS (family selector switches the preset list; selecting material `rubber`/`matteClay` updates `materialPreset`; selecting unimplemented `bayerClassic`/ascii presets records selection, shows "(soon)"/"defined · renderer later", leaves material untouched, preview intact).
+- Rod — PASS (renders).
+- Extrude — PASS (renders; export 23.7 KB GLB with presets active).
+- Solid — PASS (renders).
+- Inflate — PASS (renders).
+- Animation unchanged — PASS.
+- Export unchanged — PASS.
+- Debug gating — PASS (preset + substrate readouts visible only when Debug ON; hidden when OFF).
+
+### Confirmations
+
+- Geometry untouched (no edits to `lib/geometry-engines.ts` / `lib/solid-*.ts`).
+- Animation logic untouched.
+- Export engine logic untouched.
+- No dither / ASCII / texture / fusion rendering implemented (rails + definitions only).
+
+### Next branch — `POST_MVP_MATERIAL_AND_ANIMATED_MATERIAL_PHASE_1`
+
+### Final locked checkpoint label
+
+`POST_MVP_INITIAL_PRESET_RAILS_PHASE_1_PASS`
+
+(supersedes `POST_MVP_STYLE_SUBSTRATE_PHASE_1_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `STYLE_TAXONOMY_UI_CORRECTION_PASS`
+
+**Status: Taxonomy corrected. Locked.** State/UI-only correction — no renderers added; geometry, animation, and export untouched.
+
+### What was corrected
+
+- **Texture, Dither, and ASCII are now separate sibling systems.** Previously the UI placed Dither and ASCII under the Texture selector (conceptually wrong). They are now independent controls with independent state paths.
+- `textureMode` no longer contains `dither` or `ascii` (nor the old umbrella `layered`/`fusion`).
+
+### Old incorrect taxonomy
+
+- Material
+- Texture: None / Procedural / **Dither** / **ASCII** / Layered / Fusion
+- Dither toggle (boolean)
+- ASCII toggle (boolean)
+
+### Corrected taxonomy
+
+- Material: Ink / Soft Gel / Matte Clay / Glossy Plastic / Rubber / Signal
+- Texture (procedural patterning only): None / Procedural / Grain / Noise / Scanlines / Bands / Contour
+- Dither (own system): Off / Bayer 4x4 / Bayer 8x8 / Blue Noise / Halftone / Lines
+- ASCII (own system): Off / Blocks / Classic / Minimal / Dots / Custom
+- Animate + Sync Reveal toggles
+- Preset: family + preset (families stay separate)
+
+### State model changes (`lib/style-system.ts`)
+
+- `TextureMode` = `"none" | "procedural" | "grain" | "noise" | "scanlines" | "bands" | "contour"` (no `dither`/`ascii`/`layered`/`fusion`).
+- `TEXTURE_MODES` shell list updated to match (no Dither/ASCII entries).
+- Dither retains its independent fields (`ditherEnabled`, `ditherAnimated`, `ditherType`, `ditherScale`, `ditherThreshold`, `ditherContrast`, `ditherSpeed`, `ditherDirection`).
+- ASCII retains its independent fields (`asciiEnabled`, `asciiAnimated`, `asciiCharset`, `asciiCellSize`, `asciiDensity`, `asciiContrast`, `asciiScrollSpeed`, `asciiDirection`).
+- Dither/ASCII preset defs now carry safe `applies` patches that set their OWN state (`ditherEnabled`+`ditherType` / `asciiEnabled`+`asciiCharset`) — never `textureMode`.
+
+### UI changes (`app/page.tsx`)
+
+- Replaced the Dither/ASCII boolean toggle chips with two separate selects: **Dither** (Off + dither types) and **ASCII** (Off + charsets), siblings of the Texture select.
+- Animate + Sync Reveal toggles retained.
+- `handleSelectPreset` now applies a preset's safe `applies` patch for any family (the patches only touch inert style fields), so dither/ASCII presets record their own sibling state; `implemented` still governs the "active" vs "renderer later" label.
+
+### Preset behavior changes
+
+- Texture / animatedTexture / dither / animatedDither / ascii / animatedAscii / fusion families remain separate in `PRESET_REGISTRY`.
+- Selecting a dither preset sets `ditherEnabled = true` + `ditherType` (verified `presetAppliesState: ditherEnabled, ditherType`); it does NOT set `textureMode`.
+- Selecting an ASCII preset sets `asciiEnabled = true` + `asciiCharset`; it does NOT set `textureMode`.
+- All non-material presets remain `implemented: false` ("(soon)" / "defined · renderer later"). No renderer is falsely claimed implemented.
+
+### Debug changes (`components/viewport-3d.tsx`)
+
+- Style substrate readout regrouped into labeled sections: **Texture (procedural patterning only)** (textureMode, textureEnabled, textureAnimated), **Dither (separate system)** (ditherEnabled, ditherAnimated, ditherType), **ASCII (separate system)** (asciiEnabled, asciiAnimated, asciiCharset), **Composite** (layerStack/stack/fusion/sync). Active preset block (activePresetFamily, activePresetId, …) retained. Debug no longer implies Dither/ASCII are texture modes.
+
+### Test results
+
+- UI taxonomy — PASS (Texture options = None/Procedural/Grain/Noise/Scanlines/Bands/Contour; no Dither, no ASCII. Dither + ASCII are own selects. Selecting Dither/ASCII left `textureMode` unchanged. Selecting Texture=scanlines left Dither/ASCII state unchanged.)
+- Preset taxonomy — PASS (dither preset `dotMatrix` set `ditherType=halftone` + `presetAppliesState: ditherEnabled, ditherType`, `textureMode` unchanged; families separate; fusion separate).
+- Rod — PASS (renders).
+- Extrude — PASS (renders).
+- Solid — PASS (renders).
+- Inflate — PASS (renders; export 208 KB GLB with taxonomy state active).
+- Material preset regression — PASS (material presets still apply via `materialPreset`).
+
+### Confirmations
+
+- No dither renderer implemented.
+- No ASCII renderer implemented.
+- No procedural texture renderer implemented.
+- Geometry untouched (no edits to `lib/geometry-engines.ts` / `lib/solid-*.ts`).
+- Animation logic untouched.
+- Export engine logic untouched.
+
+### Next branch — `POST_MVP_MATERIAL_AND_ANIMATED_MATERIAL_PHASE_1`
+
+### Final locked checkpoint label
+
+`STYLE_TAXONOMY_UI_CORRECTION_PASS`
+
+(supersedes `POST_MVP_INITIAL_PRESET_RAILS_PHASE_1_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `STYLE_TAXONOMY_AND_PANEL_IA_CORRECTION_PASS`
+
+**Status: Taxonomy + information architecture corrected. Locked.** UI/state clarity + panel scaffolding only — no renderers added; geometry, animation, and export untouched.
+
+### Builds on the prior taxonomy pass
+
+The texture/dither/ASCII sibling split was already done in `STYLE_TAXONOMY_UI_CORRECTION_PASS`. This pass finishes the IA work: clarifies the ambiguous Motion/Sync controls, treats the top row as a compact summary strip, and adds the dedicated-panel scaffolding.
+
+### Files changed
+
+- `lib/style-system.ts` — added `MotionMode` type + `motionMode` state field/default.
+- `app/page.tsx` — replaced Animate/Sync Reveal toggles with a Motion select; updated helper copy; mounted `StylePanelScaffold`.
+- `components/style-panel-scaffold.tsx` — NEW. Panel IA shell.
+- `components/viewport-3d.tsx` — debug readout: added Motion section (motionMode/syncMode/syncToReveal); relabeled Composite.
+- `SESSION-HANDOFF.md` — this checkpoint.
+
+### Old incorrect / ambiguous taxonomy
+
+- Texture selector listed Dither + ASCII (already fixed last pass).
+- `Animate` (mapped to `textureAnimated`) — unclear what was being animated.
+- `Sync Reveal` (boolean) — vague; didn't communicate "style timing follows stroke draw-in".
+- Top row presented as if it were the full/final control surface.
+
+### Corrected taxonomy + IA
+
+- **Sibling systems (top summary strip):** Material · Texture · Dither · ASCII · Motion · Preset.
+- **Motion** select: `Off` / `Independent` / `Sync to Draw` (replaces Animate + Sync Reveal). Tooltip: "Link style animation timing. Sync to Draw uses stroke draw-in progress as the clock."
+- **Top row is a compact summary/quick-control strip** — helper copy now reads "summary strip · full controls land in dedicated panels later".
+- **Panel scaffolding** (`StylePanelScaffold`): expandable "Style panels" drawer with tabs Material / Texture / Dither / ASCII / Motion / Presets / Layers (later) / Fusion (later). Each panel shows an honest status chip ("substrate active" vs "renderer later"), a placeholder note, and a list of documented FUTURE controls.
+
+### State model changes (`lib/style-system.ts`)
+
+- New `MotionMode = "off" | "independent" | "syncToDraw"` (coarse, user-facing).
+- New `StyleState.motionMode: MotionMode` (default `"off"`).
+- Existing fine-grained flags (`textureAnimated`, `ditherAnimated`, `asciiAnimated`) and `syncMode`/`syncToReveal` retained for future panels. `motionMode` is the single clear control surfaced today.
+
+### UI label changes (`app/page.tsx`)
+
+- `Animate` toggle → removed; superseded by `Motion` select.
+- `Sync Reveal` toggle → removed; concept surfaced via Motion's `Sync to Draw` option.
+- Helper microcopy updated to communicate "summary strip / dedicated panels later".
+
+### Panel IA / scaffolding changes
+
+- Added `components/style-panel-scaffold.tsx` (Option B: inline expandable placeholder panels). Documents per-panel future control inventories (Material, Texture, Dither, ASCII, Motion, Layers, Fusion) in code. No advanced control or renderer implemented; placeholder copy never claims a renderer exists.
+
+### Preset behavior changes
+
+- None this pass. Preset families remain separate (texture / animatedTexture / dither / animatedDither / ascii / animatedAscii / layerStack / stackAnimation / fusion / animatedFusion). Dither presets still set `ditherEnabled`+`ditherType`, ASCII presets set `asciiEnabled`+`asciiCharset`, never `textureMode`. Non-material presets remain `implemented:false`.
+
+### Debug changes (`components/viewport-3d.tsx`)
+
+- Added "— Motion (style animation) —" section: `motionMode`, `syncMode`, `syncToReveal`.
+- Composite section relabeled "— Composite (renderers later) —".
+- Readout no longer implies Dither/ASCII are texture modes or that Motion means only texture animation.
+
+### Test results
+
+- UI taxonomy — PASS (labels: Material/Texture/Dither/ASCII/Motion/Preset; Texture has no Dither/ASCII; old Animate/Sync Reveal buttons gone; Motion = Off/Independent/Sync to Draw; selecting Motion=Sync to Draw sets `motionMode` only).
+- Panel IA — PASS (Style panels drawer expands; 8 tabs present; Dither panel shows "Dither renderer not implemented yet" + future-control chips; honest status chips).
+- Preset taxonomy — PASS (families separate; dither/ASCII presets set their own state, not textureMode).
+- Rod — PASS (renders).
+- Extrude — PASS (renders).
+- Solid — PASS (renders).
+- Inflate — PASS (renders; export 90 KB GLB).
+- Material preset regression — PASS (material presets still apply via `materialPreset`).
+
+### Confirmations
+
+- No dither renderer implemented.
+- No ASCII renderer implemented.
+- No procedural texture renderer implemented.
+- Geometry untouched (no edits to `lib/geometry-engines.ts` / `lib/solid-*.ts`).
+- Animation logic untouched.
+- Export engine logic untouched.
+
+### Next branch — `POST_MVP_MATERIAL_AND_ANIMATED_MATERIAL_PHASE_1`
+
+### Final locked checkpoint label
+
+`STYLE_TAXONOMY_AND_PANEL_IA_CORRECTION_PASS`
+
+(supersedes `STYLE_TAXONOMY_UI_CORRECTION_PASS`; all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## POST_MVP_MATERIAL_AND_ANIMATION_IA_PHASE_1
+
+### Checkpoint: `POST_MVP_MATERIAL_AND_ANIMATION_IA_PHASE_1_PASS`
+
+### What this branch delivered
+
+- **Material presets now visibly affect surface response.** Six presets
+  (`ink`, `softGel`, `matteClay`, `glossyPlastic`, `rubber`, `signal`) defined in
+  `MATERIAL_PARAMS` and applied to a single live `MeshPhysicalMaterial`
+  (`liveMaterial` in `viewport-3d.tsx`). Geometry is never touched.
+- **Mode-aware material defaults.** `MODE_MATERIAL_DEFAULTS`: Rod→ink,
+  Extrude→glossyPlastic, Solid→matteClay, Inflate→softGel. Applied in
+  `handleModeChange` only when `materialUserOverride === false`; an explicit user
+  pick pins the material and survives mode switches. "Reset to mode default"
+  clears the override.
+- **Animated Material v1 (preview-only).** Types: `none`, `shineSweep`,
+  `gelShimmer`, `roughnessPulse`, `completionFlash`, `signalFlicker`, evaluated by
+  `evaluateMaterialAnimation` against `globalStyleTime`. Subtle by default.
+  Configured in the Material panel (toggle + type + speed + intensity).
+- **Animation IA correction.** Animation is now a clear top-level concept, not a
+  vague "Animate" button. New **Animation** panel enumerates all categories:
+  Geometry Animation (basic playback today), Material Animation (active), and
+  reserved IA for Texture / Dither / ASCII / Layer / Stack / Fusion — each labeled
+  with its future branch name.
+- **Sync to Draw.** `motionMode` of `off | independent | syncToDraw`. When
+  `syncToDraw`, material animation may use reveal progress; geometry animation
+  behavior is unchanged.
+- **Debug fields** (Debug ON only): activeMaterialPreset, modeMaterialDefault,
+  userMaterialOverride, materialColor/Roughness/Metalness/Clearcoat,
+  materialAnimation Enabled/Type/Speed/Intensity, materialAnimationPreviewOnly,
+  syncToDrawAffectsMaterialAnimation, and the five future*Reserved flags +
+  materialDoesNotTouchGeometry.
+
+### Files changed
+
+- `lib/style-system.ts` — material params, animation types, mode defaults,
+  `resolveMaterialParams`, `evaluateMaterialAnimation`, state fields.
+- `components/viewport-3d.tsx` — live material, per-frame animation, debug fields.
+- `components/style-panel-scaffold.tsx` — Material panel controls + Animation
+  panel IA.
+- `app/page.tsx` — mode-default wiring, Animation summary chip.
+- `SESSION-HANDOFF.md` — this checkpoint.
+
+### Scope / limitations
+
+- Animated material is **preview-only**; static material may reflect in GLB via
+  the existing material path, animated material export/baking is out of scope.
+- Dither renderer **not implemented**. ASCII renderer **not implemented**.
+  Procedural texture renderer **not implemented**.
+- Geometry untouched. Current geometry animation behavior untouched. Export
+  geometry untouched. No timeline, no keyframes, no advanced stroke-animation
+  controls.
+
+### Next branch — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1`
+
+## LOCKED CHECKPOINT — `MATERIAL_READABILITY_ENV_AND_CUSTOM_PASS`
+
+### Problem this branch fixed
+
+Material presets looked nearly identical and the surface read as flat/near-black
+because the scene had **no environment map** — `MeshPhysicalMaterial` highlights,
+clearcoat, and metalness need reflections to be visible. Presets only varied
+roughness/metalness, which is invisible without something to reflect.
+
+### What changed
+
+- **Studio environment map added** in `components/viewport-3d.tsx`. A neutral
+  multi-`Lightformer` studio rig inside drei's `<Environment resolution={256}
+  frames={1} background={false}>` bakes a reflection environment **once**
+  (`frames={1}`, not a live scene background) onto `scene.environment`. This
+  lights every mode's shared `liveMaterial`, so highlights, clearcoat streaks,
+  and reflections are now visible. The 2D background and grid are unchanged; the
+  env map is reflection-only (`background={false}`).
+- **`envMapIntensity` added to the material model** in `lib/style-system.ts`
+  (`MaterialParams.envMapIntensity`). Each preset now sets a deliberate value so
+  reflections differ per preset (e.g. glossyPlastic high, matteClay low). The
+  per-frame animation and the static `liveMaterial` both apply it.
+- **Presets retuned for clear visual distinction** under the env map. Verified
+  in-browser: Glossy Plastic shows crisp white + amber + blue specular streaks;
+  Matte Clay shows a soft diffuse gradient with no sharp highlight.
+- **Custom material added.** New `"custom"` member of `MaterialPreset` plus a
+  `CustomMaterial` interface and `DEFAULT_CUSTOM_MATERIAL` in
+  `lib/style-system.ts`. `resolveMaterialParams(preset, custom)` returns the
+  custom params when preset === "custom". `styleState.customMaterial` holds the
+  live values. The Material panel renders a **Custom material editor** (color /
+  sheen color / emissive pickers + roughness / metalness / clearcoat / sheen /
+  emissive / reflection sliders) only when the Custom preset is selected; edits
+  update the 3D preview live.
+- **Animation off now snaps the surface back to its static base** (added `else`
+  branch in the `useFrame` material block) instead of freezing on the last
+  animated frame.
+- **Debug fields added** (Debug ON): materialSheen, materialEnvMapIntensity,
+  isCustomMaterial, envMapPresent, materialAppliedToAllModes. The material
+  readout and debug panel now use `resolveMaterialParams` so they reflect custom
+  edits.
+
+### Files touched
+
+- `lib/style-system.ts` — `envMapIntensity`, `"custom"` preset, `CustomMaterial`,
+  `DEFAULT_CUSTOM_MATERIAL`, `resolveMaterialParams(preset, custom)` signature,
+  retuned preset params.
+- `components/viewport-3d.tsx` — studio `<Environment>` + `Lightformer` rig on
+  `scene.environment`, `envMapIntensity` applied in static + animated paths,
+  anim-off reset branch, debug fields, removed unused `MATERIAL_PARAMS` import.
+- `components/style-panel-scaffold.tsx` — Custom material editor, readout uses
+  `resolveMaterialParams`.
+- `SESSION-HANDOFF.md` — this checkpoint.
+
+### Scope / limitations
+
+- Env map is **reflection lighting only** — it is not drawn as a visible
+  background and does not change the 2D canvas, grid, or geometry.
+- Animated material remains **preview-only**; static material (including custom)
+  follows the existing GLB material path, animated material is not baked.
+- Geometry, draw-in clock, and export geometry untouched.
+
+### Next branch — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1`
+
+## LOCKED CHECKPOINT — `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`
+
+Consolidates the env-map readability + custom-material work and re-verifies it
+against the explicit spec for this branch. (Note: `components/viewport-3d.tsx`
+and `components/style-panel-scaffold.tsx` had partially reverted during the
+session; this pass re-applied and re-verified the changes.)
+
+### Root causes identified (from visual review, not just code)
+
+- **"Only Inflate reads clearly":** all four modes already shared one
+  `liveMaterial`, but with **no environment map** the PBR clearcoat / metalness /
+  sheen had nothing to reflect, so thin/low-curvature geometry (Rod, Extrude,
+  Solid faces) collapsed to near-flat dark. Inflate's rounded tubes caught the
+  few direct lights, which is why it *looked* like only Inflate responded.
+- **Presets looked the same:** without reflections the roughness/clearcoat
+  differences were invisible; every preset resolved to "slightly different
+  black."
+- **Animated material hard to see / too similar:** effects only nudged
+  color/roughness with no reflection term, so the modulation was below the
+  perceptual floor and the types were not differentiated by which property they
+  drive.
+
+### Fixes (re-applied this pass)
+
+- **Studio environment map** — offline `<Environment frames={1}
+  background={false}>` with four `<Lightformer>`s feeds `scene.environment`
+  only. Reflection lighting, no visible background, no canvas/grid/geometry
+  change. This is what makes material read on Rod / Extrude / Solid.
+- **`envMapIntensity` added to `MaterialParams`** and tuned per preset so the
+  six presets are visibly distinct (ink 1.0, softGel 0.7, matteClay 0.15,
+  glossyPlastic 1.6, rubber 0.4, signal 1.3).
+- **Animated material** now also drives `envMapIntensity`, and each type varies
+  which property / wave shape / speed it animates; added an **anim-off reset**
+  that pins the surface back to its static base.
+- **`resolveMaterialParams(preset, custom)`** is the single shared resolution
+  path; `baseParams` and `liveMaterial` both flow through it for all modes.
+
+### Custom Material (Part C)
+
+- `"custom"` material preset + `CustomMaterial` interface + `customMaterial`
+  state. Editor in the Material panel (color / sheen color / emissive pickers +
+  roughness / metalness / clearcoat / sheen / emissive / reflection sliders)
+  updates the preview live across all four modes.
+
+### Future custom IA reserved (Part C, not implemented)
+
+- Debug fields assert reserved-but-unimplemented: `futureCustomTextureReserved`,
+  `futureCustomDitherReserved`, `futureCustomAsciiReserved`,
+  `futureCustomAnimationReserved`, `futureCustomFusionReserved`. Only **Custom
+  Material** is implemented this branch.
+
+### Debug fields (spec list)
+
+activeMaterialPreset, materialSource (preset/custom/modeDefault),
+materialAppliedToMode, materialAppliedToRod/Extrude/Solid/Inflate (all YES —
+single shared material), materialColor/Roughness/Metalness/Clearcoat/
+EnvMapIntensity, customMaterialActive, customMaterialValues,
+materialAnimationEnabled/Type/Speed/Intensity,
+materialAnimationAppliesToCurrentMode, materialAnimationVisibleEnough,
+materialAnimationDistinctFromOtherTypes, syncToDrawAffectsMaterialAnimation,
+materialDoesNotTouchGeometry, future custom* reserved flags.
+
+### Test results (verified in-browser this pass)
+
+- **Extrude + Glossy Plastic:** crisp white specular streak on top edge + warm
+  amber reflection underneath. **Extrude + Matte Clay:** uniform soft mid-gray,
+  no highlight. Distinction obvious on the same stroke.
+- **Rod + Glossy Plastic:** specular highlight along the crest of the thin tube
+  — material applies (subtler only due to thin geometry).
+- **Inflate + Soft Gel / Glossy:** soft diffuse sheen vs sharp specular —
+  confirmed earlier this session.
+- Custom material color edit (cyan) updated the preview live.
+- Dev server compiles clean; restored missing `evaluateMaterialAnimation`
+  import (would otherwise crash) and removed unused `MATERIAL_PARAMS` imports.
+
+### Confirmations
+
+- Dither renderer NOT implemented. ASCII renderer NOT implemented. Procedural
+  texture renderer NOT implemented.
+- Geometry untouched. Current geometry animation untouched. Export geometry
+  untouched. Texture/Dither/ASCII remain separate systems.
+
+### Scope / limitations
+
+- Env map is reflection lighting only (no visible background).
+- Animated material is preview-only; static + custom material follow the
+  existing GLB material path; animated material is not baked.
+
+### Conclusion — `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`
+
+### Next branch — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1`

@@ -98,7 +98,8 @@ export const SOLID_ANIM_DEBUG = {
       | "static"
       | "drawRange"
       | "partialExtrudeRebuild"
-      | "partialSolidRebuildWithHoleStabilization",
+      | "partialSolidRebuildWithHoleStabilization"
+      | "partialInflateRebuild",
   /** True while `playing === true` in Solid or Extrude mode, or while a boundary sync is in flight. */
   solidAnimationActive: false,
   /** Last value pushed to `solidAnimProgress` (0..1). Tracks the rebuild input. */
@@ -4530,6 +4531,10 @@ export const INFLATE_DEBUG = {
   profileExponent: 0,
   ringSampleCount: 0,
   capRoundness: 0,
+  joinSoftness: 0,
+  tangentSmoothing: 0,
+  materialRoughness: 0,
+  materialMetalness: 0,
   fieldResolution: 0,
   smoothUnionStrength: 0,
   // ---- Stroke / mesh diagnostics ----
@@ -4616,6 +4621,8 @@ function inflateBuildEllipticalTube(
     profileExponent?: number // 2 = ellipse; <2 squashed; >2 squircle/balloon
     crossSectionBulge?: number // 0..0.4 radial bulge (pressurized fullness)
     capRoundness?: number // 0..1 controls cap fade length & roundness
+    tangentSmoothingPasses?: number // # of 3-tap smoothing passes on tangents
+    joinSoftness?: number // 0..1 local radial bulge at high-curvature joins
   },
 ): THREE.BufferGeometry | null {
   const n = centerlineWorld.length
@@ -4625,6 +4632,11 @@ function inflateBuildEllipticalTube(
   const profileExponent = Math.max(0.6, opts?.profileExponent ?? 2)
   const bulge = Math.max(0, Math.min(0.5, opts?.crossSectionBulge ?? 0))
   const capRoundness = Math.max(0, Math.min(1, opts?.capRoundness ?? 0.6))
+  const tangentSmoothingPasses = Math.max(
+    1,
+    Math.min(4, Math.round(opts?.tangentSmoothingPasses ?? 1)),
+  )
+  const joinSoftness = Math.max(0, Math.min(1, opts?.joinSoftness ?? 0))
 
   // Per-sample tangent (in XY plane). Smoothed with a 3-tap pass to avoid
   // visible segmenting at sample joins on cursive / loopy strokes.
@@ -4651,23 +4663,45 @@ function inflateBuildEllipticalTube(
     TxRaw[i] = tx
     TyRaw[i] = ty
   }
-  const Tx = new Float32Array(n)
-  const Ty = new Float32Array(n)
+  // Run the 3-tap smoothing kernel `tangentSmoothingPasses` times. More
+  // passes = softer, more organic joins (less mechanical sweep) — Inflate
+  // uses more passes than the generic tube to read as a relaxed, pressurized
+  // body rather than a rigid hose.
+  let Tx = new Float32Array(TxRaw)
+  let Ty = new Float32Array(TyRaw)
+  for (let pass = 0; pass < tangentSmoothingPasses; pass++) {
+    const nx = new Float32Array(n)
+    const ny = new Float32Array(n)
+    for (let i = 0; i < n; i++) {
+      const i0 = Math.max(0, i - 1)
+      const i1 = Math.min(n - 1, i + 1)
+      let tx = Tx[i0] * 0.25 + Tx[i] * 0.5 + Tx[i1] * 0.25
+      let ty = Ty[i0] * 0.25 + Ty[i] * 0.5 + Ty[i1] * 0.25
+      const L = Math.hypot(tx, ty)
+      if (L > 1e-9) {
+        tx /= L
+        ty /= L
+      } else {
+        tx = Tx[i]
+        ty = Ty[i]
+      }
+      nx[i] = tx
+      ny[i] = ty
+    }
+    Tx = nx
+    Ty = ny
+  }
+
+  // Per-sample curvature from the turn between RAW adjacent tangents. A
+  // sharp corner (dot << 1) gets a local radial bulge so joins read full and
+  // organic instead of creased — the soft-tissue "puff at the bend" feel.
+  // curvature in [0,1]: 0 = straight, 1 = ~90deg+ turn.
+  const curvature = new Float32Array(n)
   for (let i = 0; i < n; i++) {
     const i0 = Math.max(0, i - 1)
     const i1 = Math.min(n - 1, i + 1)
-    let tx = TxRaw[i0] * 0.25 + TxRaw[i] * 0.5 + TxRaw[i1] * 0.25
-    let ty = TyRaw[i0] * 0.25 + TyRaw[i] * 0.5 + TyRaw[i1] * 0.25
-    const L = Math.hypot(tx, ty)
-    if (L > 1e-9) {
-      tx /= L
-      ty /= L
-    } else {
-      tx = TxRaw[i]
-      ty = TyRaw[i]
-    }
-    Tx[i] = tx
-    Ty[i] = ty
+    const dot = TxRaw[i0] * TxRaw[i1] + TyRaw[i0] * TyRaw[i1]
+    curvature[i] = Math.max(0, Math.min(1, 1 - dot))
   }
 
   // Hemispherical end-cap fade. Cap length scales with capRoundness:
@@ -4728,8 +4762,11 @@ function inflateBuildEllipticalTube(
     const sx = -ty
     const sy = tx
     const rs = radiusScale(i)
-    const rXY = radiusXY * rs
-    const rZ = radiusZ * rs
+    // Local join bulge: fuller cross-section where the path bends. Subtle —
+    // capped at joinSoftness * 0.3 extra radius at the sharpest corners.
+    const joinScale = 1 + joinSoftness * 0.3 * curvature[i]
+    const rXY = radiusXY * rs * joinScale
+    const rZ = radiusZ * rs * joinScale
     for (let j = 0; j < ringSegs; j++) {
       const ux = profCosX[j]
       const uz = profSinZ[j]
@@ -4865,6 +4902,153 @@ function inflateFallbackToSolid(
   return [meshData]
 }
 
+/**
+ * Shared static Inflate geometry builder.
+ *
+ * SINGLE SOURCE OF TRUTH for the full-stroke Inflate volume. Both
+ * `InflateEngine.buildPreview` (static + animated reveal) and
+ * `InflateEngine.buildExport` call this so the exported GLB is byte-for-byte
+ * the same geometry the user sees in the preview. It receives the FULL
+ * processed strokes (never animated/partial filtered strokes) and performs
+ * the same calibration as Solid (coordScale + effectiveThickness + puffNorm).
+ *
+ * It is intentionally side-effect free except for returning everything the
+ * callers need; it does NOT mutate INFLATE_DEBUG (callers own that).
+ */
+interface InflateStaticBuild {
+  geometries: { geometry: THREE.BufferGeometry; key: string; strokeIndex: number; filteredCount: number }[]
+  // calibrated values (for debug + export metadata)
+  inflateStrokeRadiusXY: number
+  inflatePuffAspectZ: number
+  radiusZ: number
+  puffNorm: number
+  profileExponent: number
+  crossSectionBulge: number
+  capRoundness: number
+  ringSampleCount: number
+  joinSoftness: number
+  tangentSmoothingPasses: number
+  totalSamples: number
+  totalVerts: number
+  totalTris: number
+  bbox: THREE.Box3
+}
+
+function inflateBuildStaticGeometries(
+  strokes: ProcessedStroke[],
+  canvasWidth: number,
+  canvasHeight: number,
+  solidParams: SolidParams,
+): InflateStaticBuild {
+  // ---- Calibration (matches Solid's coord scale exactly) ----
+  const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
+  const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
+    solidParams.thickness,
+  )
+
+  // ---- canvas-pixel → world-space ----
+  const cw2 = canvasWidth / 2
+  const ch2 = canvasHeight / 2
+  const px2w = (px: number, py: number) => ({
+    x: (px - cw2) * coordScale,
+    y: -(py - ch2) * coordScale,
+  })
+
+  // ---- decoupled controls ----
+  // Width = stroke DIAMETER in canvas px → halve for radius, scale to world.
+  const inflateStrokeRadiusXY = (effectiveThicknessPx * coordScale) / 2
+
+  // Puff → Z aspect (cross-section roundness/pressure).
+  const depthRange = SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN
+  const puffNorm =
+    depthRange > 0
+      ? Math.min(
+          1,
+          Math.max(0, (solidParams.depth - SOLID_DEPTH_SLIDER_MIN) / depthRange),
+        )
+      : 0.5
+  const puffEased = Math.sqrt(puffNorm)
+  const inflatePuffAspectZ = 0.34 + puffEased * 1.21 // 0.34 → 1.55
+  const radiusZ = inflateStrokeRadiusXY * inflatePuffAspectZ
+
+  // Profile shaping (drives the FEEL of Puff, not its size).
+  const profileExponent = 2.1 + puffEased * 1.3 // 2.1 → 3.4
+  const crossSectionBulge = 0.07 + puffEased * 0.21 // 0.07 → 0.28
+  const capRoundness = 0.6 + puffEased * 0.4 // 0.6 → 1.0
+  const ringSampleCount = 28
+  const tangentSmoothingPasses = 3
+  const joinSoftness = 0.45 + puffEased * 0.4 // 0.45 → 0.85
+
+  // ---- resample + sweep elliptical tube per stroke ----
+  const sampleSpacing = Math.max(
+    coordScale * 1.5,
+    Math.min(inflateStrokeRadiusXY * 0.6, coordScale * 8),
+  )
+
+  const geometries: InflateStaticBuild["geometries"] = []
+  let totalSamples = 0
+  let totalVerts = 0
+  let totalTris = 0
+  const bbox = new THREE.Box3()
+
+  for (let si = 0; si < strokes.length; si++) {
+    const s = strokes[si]
+    if (!s.points || s.points.length < 2) continue
+    const worldPts = s.points.map((p) => px2w(p.x, p.y))
+    const resampled = inflateResampleCenterline(worldPts, sampleSpacing)
+    if (resampled.length < 2) continue
+    totalSamples += resampled.length
+
+    let geometry: THREE.BufferGeometry | null = null
+    try {
+      geometry = inflateBuildEllipticalTube(resampled, inflateStrokeRadiusXY, radiusZ, {
+        ringSegs: ringSampleCount,
+        profileExponent,
+        crossSectionBulge,
+        capRoundness,
+        tangentSmoothingPasses,
+        joinSoftness,
+      })
+    } catch {
+      geometry = null
+    }
+    if (!geometry) continue
+
+    const posAttr = geometry.getAttribute("position") as
+      | THREE.BufferAttribute
+      | undefined
+    if (posAttr) totalVerts += posAttr.count
+    const idx = geometry.getIndex()
+    if (idx) totalTris += idx.count / 3
+    if (geometry.boundingBox) bbox.union(geometry.boundingBox)
+
+    geometries.push({
+      geometry,
+      strokeIndex: si,
+      filteredCount: s.points.length,
+      key: `inflate-svfi-${si}-${resampled.length}-${inflateStrokeRadiusXY.toFixed(4)}-${radiusZ.toFixed(4)}-${profileExponent.toFixed(2)}-${crossSectionBulge.toFixed(2)}-${capRoundness.toFixed(2)}-${joinSoftness.toFixed(2)}`,
+    })
+  }
+
+  return {
+    geometries,
+    inflateStrokeRadiusXY,
+    inflatePuffAspectZ,
+    radiusZ,
+    puffNorm,
+    profileExponent,
+    crossSectionBulge,
+    capRoundness,
+    ringSampleCount,
+    joinSoftness,
+    tangentSmoothingPasses,
+    totalSamples,
+    totalVerts,
+    totalTris,
+    bbox,
+  }
+}
+
 export const InflateEngine: GeometryEngine = {
   buildPreview(strokes: ProcessedStroke[], params: PreviewParams): StrokeMeshData[] {
     const { canvasWidth, canvasHeight, solidParams: sp } = params
@@ -4895,6 +5079,10 @@ export const InflateEngine: GeometryEngine = {
     INFLATE_DEBUG.profileExponent = 0
     INFLATE_DEBUG.ringSampleCount = 0
     INFLATE_DEBUG.capRoundness = 0
+    INFLATE_DEBUG.joinSoftness = 0
+    INFLATE_DEBUG.tangentSmoothing = 0
+    INFLATE_DEBUG.materialRoughness = 0
+    INFLATE_DEBUG.materialMetalness = 0
     INFLATE_DEBUG.fieldResolution = 0
     INFLATE_DEBUG.smoothUnionStrength = 0
     INFLATE_DEBUG.sampleCount = 0
@@ -4918,124 +5106,39 @@ export const InflateEngine: GeometryEngine = {
       return []
     }
 
-    // ---- Calibration (matches Solid's coord scale exactly) ----
-    const coordScale = 3.0 / Math.max(canvasWidth, canvasHeight)
-    const effectiveThicknessPx = computeSolidEffectiveThicknessPx(
-      solidParams.thickness,
+    // ---- Build the full-stroke static geometry via the SHARED builder ----
+    // (Identical path used by buildExport, so preview === export.)
+    const build = inflateBuildStaticGeometries(
+      strokes,
+      canvasWidth,
+      canvasHeight,
+      solidParams,
     )
-    const effectiveDepth = computeSolidEffectiveDepth(solidParams.depth)
 
-    // ---- Step 1: canvas-pixel → world-space ----
-    const cw2 = canvasWidth / 2
-    const ch2 = canvasHeight / 2
-    const px2w = (px: number, py: number) => ({
-      x: (px - cw2) * coordScale,
-      y: -(py - ch2) * coordScale,
-    })
-
-    // ---- Step 2: decoupled controls ----
-    // Width = stroke DIAMETER in canvas px → halve for radius, scale to world.
-    const inflateStrokeRadiusXY = (effectiveThicknessPx * coordScale) / 2
-    INFLATE_DEBUG.inflateStrokeRadiusXY = inflateStrokeRadiusXY
-
-    // Puff → Z aspect (cross-section roundness/pressure).
-    const depthRange = SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN
-    const puffNorm =
-      depthRange > 0
-        ? Math.min(
-            1,
-            Math.max(
-              0,
-              (solidParams.depth - SOLID_DEPTH_SLIDER_MIN) / depthRange,
-            ),
-          )
-        : 0.5
-    // Wider aspect range: low Puff = visibly flatter gel; high Puff = full balloon.
-    // 0.18 → 1.35 (was 0.25 → 1.15)
-    const inflatePuffAspectZ = 0.18 + puffNorm * 1.17
-    const radiusZ = inflateStrokeRadiusXY * inflatePuffAspectZ
-    INFLATE_DEBUG.inflatePuffAspectZ = inflatePuffAspectZ
-    INFLATE_DEBUG.inflatePressure = puffNorm
+    // Mirror calibrated values into the debug probe.
+    INFLATE_DEBUG.inflateStrokeRadiusXY = build.inflateStrokeRadiusXY
+    INFLATE_DEBUG.inflatePuffAspectZ = build.inflatePuffAspectZ
+    INFLATE_DEBUG.inflatePressure = build.puffNorm
     INFLATE_DEBUG.fieldResolution = 0
     INFLATE_DEBUG.smoothUnionStrength = 0
-    INFLATE_DEBUG.inflateRadiusZ = radiusZ
-
-    // Profile shaping. Drives the FEEL of Puff (pressure/fullness), not its size.
-    //   exponent: < 2 = soft / squashed (gel), 2 = ellipse, > 2 = squircle / balloon
-    //   bulge:    0 at low puff, up to ~0.18 at high puff (radial pressure)
-    //   capRoundness: longer + rounder caps as Puff increases
-    const profileExponent = 1.4 + puffNorm * 1.4 // 1.4 → 2.8
-    const crossSectionBulge = puffNorm * 0.18
-    const capRoundness = 0.45 + puffNorm * 0.5 // 0.45 → 0.95
-    const ringSampleCount = 24
-    INFLATE_DEBUG.profileExponent = profileExponent
-    INFLATE_DEBUG.crossSectionBulge = crossSectionBulge
-    INFLATE_DEBUG.capRoundness = capRoundness
-    INFLATE_DEBUG.ringSampleCount = ringSampleCount
-
-    // ---- Step 3: resample + sweep elliptical tube per stroke ----
-    const sampleSpacing = Math.max(
-      coordScale * 1.5,
-      Math.min(inflateStrokeRadiusXY * 0.6, coordScale * 8),
-    )
-
-    const meshes: StrokeMeshData[] = []
-    let totalSamples = 0
-    let totalVerts = 0
-    let totalTris = 0
-    const aggregateBox = new THREE.Box3()
-
-    for (let si = 0; si < strokes.length; si++) {
-      const s = strokes[si]
-      if (!s.points || s.points.length < 2) continue
-      const worldPts = s.points.map((p) => px2w(p.x, p.y))
-      const resampled = inflateResampleCenterline(worldPts, sampleSpacing)
-      if (resampled.length < 2) continue
-      totalSamples += resampled.length
-
-      let geometry: THREE.BufferGeometry | null = null
-      try {
-        geometry = inflateBuildEllipticalTube(
-          resampled,
-          inflateStrokeRadiusXY,
-          radiusZ,
-          {
-            ringSegs: ringSampleCount,
-            profileExponent,
-            crossSectionBulge,
-            capRoundness,
-          },
-        )
-      } catch (e) {
-        INFLATE_DEBUG.failureReason = `tube build threw: ${(e as Error).message}`
-        geometry = null
-      }
-      if (!geometry) continue
-
-      const posAttr = geometry.getAttribute("position") as
-        | THREE.BufferAttribute
-        | undefined
-      if (posAttr) totalVerts += posAttr.count
-      const idx = geometry.getIndex()
-      if (idx) totalTris += idx.count / 3
-      if (geometry.boundingBox) aggregateBox.union(geometry.boundingBox)
-
-      meshes.push({
-        tubeGeometry: geometry,
-        filteredCount: s.points.length,
-        key: `inflate-svfi-${si}-${resampled.length}-${inflateStrokeRadiusXY.toFixed(4)}-${radiusZ.toFixed(4)}-${profileExponent.toFixed(2)}-${crossSectionBulge.toFixed(2)}-${capRoundness.toFixed(2)}`,
-        mode: "inflate",
-      })
-    }
-
-    INFLATE_DEBUG.sampleCount = totalSamples
-    INFLATE_DEBUG.strokeSampleCount = totalSamples
+    INFLATE_DEBUG.inflateRadiusZ = build.radiusZ
+    INFLATE_DEBUG.profileExponent = build.profileExponent
+    INFLATE_DEBUG.crossSectionBulge = build.crossSectionBulge
+    INFLATE_DEBUG.capRoundness = build.capRoundness
+    INFLATE_DEBUG.ringSampleCount = build.ringSampleCount
+    INFLATE_DEBUG.joinSoftness = build.joinSoftness
+    INFLATE_DEBUG.tangentSmoothing = build.tangentSmoothingPasses
+    // Material is a soft, low-spec gel/balloon (set in viewport-3d.tsx).
+    INFLATE_DEBUG.materialRoughness = 0.62
+    INFLATE_DEBUG.materialMetalness = 0.0
+    INFLATE_DEBUG.sampleCount = build.totalSamples
+    INFLATE_DEBUG.strokeSampleCount = build.totalSamples
     // Tube-loft spike has no 3D field — fieldSampleCount stays 0.
     INFLATE_DEBUG.fieldSampleCount = 0
-    INFLATE_DEBUG.meshVertexCount = totalVerts
-    INFLATE_DEBUG.meshTriangleCount = totalTris
+    INFLATE_DEBUG.meshVertexCount = build.totalVerts
+    INFLATE_DEBUG.meshTriangleCount = build.totalTris
 
-    if (meshes.length === 0) {
+    if (build.geometries.length === 0) {
       INFLATE_DEBUG.failureReason =
         INFLATE_DEBUG.failureReason || "no tubes produced"
       return inflateFallbackToSolid(
@@ -5047,29 +5150,114 @@ export const InflateEngine: GeometryEngine = {
       )
     }
 
-    if (!aggregateBox.isEmpty()) {
-      INFLATE_DEBUG.bboxX = aggregateBox.max.x - aggregateBox.min.x
-      INFLATE_DEBUG.bboxY = aggregateBox.max.y - aggregateBox.min.y
-      INFLATE_DEBUG.bboxZ = aggregateBox.max.z - aggregateBox.min.z
+    const meshes: StrokeMeshData[] = build.geometries.map((g) => ({
+      tubeGeometry: g.geometry,
+      filteredCount: g.filteredCount,
+      key: g.key,
+      mode: "inflate",
+    }))
+
+    if (!build.bbox.isEmpty()) {
+      INFLATE_DEBUG.bboxX = build.bbox.max.x - build.bbox.min.x
+      INFLATE_DEBUG.bboxY = build.bbox.max.y - build.bbox.min.y
+      INFLATE_DEBUG.bboxZ = build.bbox.max.z - build.bbox.min.z
     }
     INFLATE_DEBUG.inflateGeometryCreated = "YES"
     return meshes
   },
 
-  buildExport(_strokes: ProcessedStroke[], _params: ExportParams): ExportResult {
-    // Phase 1: export is intentionally a placeholder. Solid export is the
-    // production path; Inflate export will be addressed in a later phase
-    // once the visual direction is locked. Returning an empty group keeps
-    // the export pipeline non-crashing without claiming an export that
-    // doesn't actually exist.
-    const group = new THREE.Group()
-    group.name = "FreeStroke"
-    group.userData = {
+  buildExport(strokes: ProcessedStroke[], params: ExportParams): ExportResult {
+    // Inflate export = the FULL static Inflate model. It calls the exact same
+    // shared geometry builder the preview uses (`inflateBuildStaticGeometries`)
+    // with the FULL processed strokes — never animated/partial filtered
+    // strokes — so the exported GLB matches the static preview 1:1.
+    const { canvasWidth, canvasHeight, solidParams: sp } = params
+    const solidParams = sp ?? DEFAULT_SOLID_PARAMS
+
+    const inkMaterial = new THREE.MeshStandardMaterial({
+      color: "#1a1a1a",
+      name: "Ink",
+    })
+    const disposables: THREE.BufferGeometry[] = []
+
+    const rootGroup = new THREE.Group()
+    rootGroup.name = "FreeStroke"
+
+    // Empty input → non-crashing empty group (matches other modes' guard).
+    if (strokes.length === 0 || canvasWidth === 0 || canvasHeight === 0) {
+      inkMaterial.dispose()
+      rootGroup.userData = { app: "Free Stroke", mode: "inflate", empty: true }
+      return { group: rootGroup, disposables, objectCount: 0, merged: false }
+    }
+
+    const build = inflateBuildStaticGeometries(
+      strokes,
+      canvasWidth,
+      canvasHeight,
+      solidParams,
+    )
+
+    // Fallback: if the loft produced nothing, export the Solid silhouette so
+    // the user still gets a non-empty model (parity with preview's fallback).
+    let fallbackUsed = false
+    if (build.geometries.length === 0) {
+      fallbackUsed = true
+      inkMaterial.dispose()
+      const solidExport = SolidEngine.buildExport(strokes, params)
+      solidExport.group.userData = {
+        ...solidExport.group.userData,
+        mode: "inflate",
+        inflateStrategy: "SOLID_H3_PASSTHROUGH_FALLBACK",
+        fallbackUsed: true,
+      }
+      return solidExport
+    }
+
+    // Center the whole model at the origin (same convention as Solid export):
+    // translate every geometry by the aggregate bbox center.
+    const center = new THREE.Vector3()
+    if (!build.bbox.isEmpty()) build.bbox.getCenter(center)
+
+    let added = 0
+    for (const g of build.geometries) {
+      const geometry = g.geometry
+      geometry.translate(-center.x, -center.y, -center.z)
+      const mesh = new THREE.Mesh(geometry, inkMaterial)
+      mesh.name = `inflate_${String(added).padStart(3, "0")}`
+      rootGroup.add(mesh)
+      disposables.push(geometry)
+      added++
+    }
+
+    rootGroup.userData = {
       app: "Free Stroke",
       mode: "inflate",
-      phase: "PHASE_1_PREVIEW_ONLY",
+      exportedAt: new Date().toISOString(),
+      strokeCount: params.strokeCount,
+      totalPoints: params.totalPoints,
+      inflateStrategy: "STROKE_VOLUME_FIELD_INFLATE / ELLIPTICAL_TUBE_LOFT",
+      fallbackUsed,
+      vertexCount: build.totalVerts,
+      triangleCount: build.totalTris,
+      settings: {
+        ...params.settings,
+        // Width / Puff (raw slider values) + calibrated geometry values.
+        inflateThickness: solidParams.thickness,
+        inflatePuff: solidParams.depth,
+        inflateStrokeRadiusXY: build.inflateStrokeRadiusXY,
+        inflatePuffAspectZ: build.inflatePuffAspectZ,
+        inflateRadiusZ: build.radiusZ,
+      },
     }
-    return { group, disposables: [], objectCount: 0, merged: false }
+
+    inkMaterial.dispose()
+
+    return {
+      group: rootGroup,
+      disposables,
+      objectCount: added,
+      merged: false,
+    }
   },
 }
 

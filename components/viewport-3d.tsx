@@ -2,7 +2,7 @@
 
 import { useRef, useCallback, useMemo, useEffect, useLayoutEffect, useState, Component, type ReactNode } from "react"
 import { Canvas, useThree, useFrame } from "@react-three/fiber"
-import { OrbitControls } from "@react-three/drei"
+import { OrbitControls, Environment, Lightformer } from "@react-three/drei"
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import * as THREE from "three"
 import type { Stroke, ProcessedStroke, Point } from "@/lib/stroke-processing"
@@ -24,6 +24,13 @@ import {
   SOLID_STAGE_DEBUG,
   extrudeWidthToSlider,
 } from "@/lib/geometry-engines"
+import type { StyleState } from "@/lib/style-system"
+import {
+  findPreset,
+  resolveMaterialParams,
+  evaluateMaterialAnimation,
+  MODE_MATERIAL_DEFAULTS,
+} from "@/lib/style-system"
 
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
@@ -93,15 +100,12 @@ function useStrokeMeshes(
 
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
-// Gel-ink material: preview-only (export uses its own lightweight MeshStandardMaterial)
-const strokeMaterial = new THREE.MeshPhysicalMaterial({
-  color: "#1a1a1a",
-  clearcoat: 0.8,
-  clearcoatRoughness: 0.15,
-  roughness: 0.35,
-  metalness: 0.0,
-  reflectivity: 0.6,
-})
+
+/* Stroke materials are no longer module-level singletons. As of the
+ * POST_MVP material work, the preview material is created inside
+ * <AnimatedStrokes> from styleState.materialPreset (see `liveMaterial`) so the
+ * Material panel actually drives the surface. Export still builds its own
+ * lightweight material at export time. */
 
 /* ---- Bounding box ---- */
 interface StrokeBounds {
@@ -326,6 +330,7 @@ function AnimatedStrokes({
   revealMode,
   hybridBlend,
   exportGroupRef,
+  styleState,
 }: {
   meshes: StrokeMeshData[]
   timelines: StrokeTimeline[]
@@ -334,6 +339,7 @@ function AnimatedStrokes({
   revealMode: RevealMode
   hybridBlend: number
   exportGroupRef: React.RefObject<THREE.Group | null>
+  styleState?: StyleState
 }) {
   // Refs to all tube meshes for drawRange updates
   const tubeMeshRefs = useRef<(THREE.Mesh | null)[]>([])
@@ -344,7 +350,119 @@ function AnimatedStrokes({
   // Refs to joint groups (one group per stroke)
   const jointGroupRefs = useRef<(THREE.Group | null)[]>([])
 
-  useFrame(() => {
+  // ---- Material (IMPLEMENTED v1) ----------------------------------------
+  // A single live MeshPhysicalMaterial driven by styleState.materialPreset.
+  // Replaces the old static module-level `strokeMaterial`/`inflateMaterial`:
+  // the preset (incl. per-mode defaults chosen in the app) now decides the
+  // surface, so every mesh in this component shares one preset-driven material.
+  const materialPreset = styleState?.materialPreset ?? "ink"
+  const customMaterial = styleState?.customMaterial
+  const liveMaterial = useMemo(() => {
+    const base = resolveMaterialParams(materialPreset, customMaterial)
+    return new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(base.color),
+      roughness: base.roughness,
+      metalness: base.metalness,
+      clearcoat: base.clearcoat,
+      clearcoatRoughness: base.clearcoatRoughness,
+      reflectivity: base.reflectivity,
+      sheen: base.sheen,
+      sheenRoughness: base.sheenRoughness,
+      sheenColor: new THREE.Color(base.sheenColor),
+      emissive: new THREE.Color(base.emissive),
+      emissiveIntensity: base.emissiveIntensity,
+      envMapIntensity: base.envMapIntensity,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [materialPreset, customMaterial])
+
+  // Dispose the material when the preset changes / on unmount to avoid GPU leaks.
+  useEffect(() => {
+    return () => {
+      liveMaterial.dispose()
+    }
+  }, [liveMaterial])
+
+  // Re-apply the static base whenever the preset changes (covers the case where
+  // animation was running and left the material modulated, then preset switches).
+  const baseParams = useMemo(
+    () => resolveMaterialParams(materialPreset, customMaterial),
+    [materialPreset, customMaterial],
+  )
+
+  useFrame((state) => {
+    ;(window as unknown as Record<string, number>).__frameCount =
+      ((window as unknown as Record<string, number>).__frameCount || 0) + 1
+    ;(window as unknown as Record<string, number>).__lastElapsed = state.clock.elapsedTime
+    // ---- Animated Material v1 (surface response only) -------------------
+    // PREVIEW-ONLY: this modulates highlight/roughness/sheen/emissive each
+    // frame. It NEVER touches geometry, the reveal clock, or export. When the
+    // animation is off we keep the material pinned to its static base.
+    if (styleState) {
+      const animOn =
+        styleState.materialAnimationEnabled && styleState.materialAnimationType !== "none"
+      ;(window as unknown as Record<string, unknown>).__animDbg = {
+        animOn,
+        enabled: styleState.materialAnimationEnabled,
+        type: styleState.materialAnimationType,
+      }
+      if (animOn) {
+        // Motion clock: "syncToDraw" ties the phase to draw-in progress so the
+        // surface animation reads as part of the same gesture; otherwise it
+        // runs on the renderer's own elapsed-time clock (independent).
+        const completion = playheadRef.current
+        const time =
+          styleState.motionMode === "syncToDraw"
+            ? completion * 6 // map 0..1 progress into a usable phase range
+            : state.clock.elapsedTime
+        if (Math.floor(state.clock.elapsedTime * 2) % 4 === 0) {
+          console.log("[v0] anim loop", {
+            t: time.toFixed(2),
+            type: styleState.materialAnimationType,
+            mode: styleState.motionMode,
+          })
+        }
+        const next = evaluateMaterialAnimation({
+          base: baseParams,
+          type: styleState.materialAnimationType,
+          time,
+          speed: styleState.materialAnimationSpeed,
+          intensity: styleState.materialAnimationIntensity,
+          completion,
+        })
+        liveMaterial.color.set(next.color)
+        liveMaterial.roughness = next.roughness
+        liveMaterial.metalness = next.metalness
+        liveMaterial.clearcoat = next.clearcoat
+        liveMaterial.clearcoatRoughness = next.clearcoatRoughness
+        liveMaterial.reflectivity = next.reflectivity
+        liveMaterial.sheen = next.sheen
+        liveMaterial.sheenRoughness = next.sheenRoughness
+        liveMaterial.sheenColor.set(next.sheenColor)
+        liveMaterial.emissive.set(next.emissive)
+        liveMaterial.emissiveIntensity = next.emissiveIntensity
+        liveMaterial.envMapIntensity = next.envMapIntensity
+        ;(window as unknown as Record<string, unknown>).__matDbg = {
+          env: +next.envMapIntensity.toFixed(2),
+          cc: +next.clearcoat.toFixed(2),
+          rough: +next.roughness.toFixed(2),
+          liveEnv: +liveMaterial.envMapIntensity.toFixed(2),
+          uuid: liveMaterial.uuid.slice(0, 8),
+        }
+      } else {
+        // Animation off → pin the surface to its static base so it never
+        // freezes on the last animated frame.
+        liveMaterial.roughness = baseParams.roughness
+        liveMaterial.clearcoat = baseParams.clearcoat
+        liveMaterial.clearcoatRoughness = baseParams.clearcoatRoughness
+        liveMaterial.reflectivity = baseParams.reflectivity
+        liveMaterial.sheen = baseParams.sheen
+        liveMaterial.sheenRoughness = baseParams.sheenRoughness
+        liveMaterial.emissiveIntensity = baseParams.emissiveIntensity
+        liveMaterial.envMapIntensity = baseParams.envMapIntensity
+      }
+    }
+
     const progress = playheadRef.current
     const currentTimeMs = progress * totalDuration
 
@@ -354,17 +472,20 @@ function AnimatedStrokes({
 
       if (!mesh || !strokeMeshData) continue
 
-      // Solid AND Extrude both animate by REBUILDING geometry from
+      // Solid, Extrude AND Inflate all animate by REBUILDING geometry from
       // progress-filtered strokes (see `animatedStrokes` useMemo +
       // `SolidAnimationTick`). The mesh itself is always fully visible
       // every frame; the partial reveal lives inside the geometry that
       // `useStrokeMeshes` produces. Per-stroke visibility gating and
       // per-segment drawRange are NEVER applied to these modes — they
       // would either pop entire strokes (gating) or interleave cap and
-      // wall triangles incorrectly (drawRange on ExtrudeGeometry).
+      // wall triangles incorrectly (drawRange on a non-Rod geometry).
+      // Inflate MUST be here: its elliptical-tube loft is rebuilt per frame
+      // and must not be driven through Rod's TubeGeometry drawRange path.
       if (
         strokeMeshData.mode === "solid" ||
-        strokeMeshData.mode === "extrude"
+        strokeMeshData.mode === "extrude" ||
+        strokeMeshData.mode === "inflate"
       ) {
         mesh.visible = true
         continue
@@ -508,16 +629,13 @@ function AnimatedStrokes({
       {/* Export group: tubes/extrude meshes + caps + joints */}
       <group ref={exportGroupRef}>
         {meshes.map((data, si) => {
-          // Use standard material for all modes
-          const useMaterial = strokeMaterial
-          
           return (
           <group key={data.key}>
             {/* Main geometry (tube, extrude, or solid) */}
             <mesh
               ref={(el) => { tubeMeshRefs.current[si] = el }}
               geometry={data.tubeGeometry}
-              material={useMaterial}
+              material={liveMaterial}
             />
             {/* Rod-mode only: caps + joints (fallback may use custom radius from Width slider) */}
             {data.mode === "rod" && data.capPositions && (() => {
@@ -528,13 +646,13 @@ function AnimatedStrokes({
                   <mesh
                     ref={(el) => { startCapRefs.current[si] = el }}
                     geometry={capGeo}
-                    material={strokeMaterial}
+                    material={liveMaterial}
                     position={data.capPositions[0]}
                   />
                   <mesh
                     ref={(el) => { endCapRefs.current[si] = el }}
                     geometry={capGeo}
-                    material={strokeMaterial}
+                    material={liveMaterial}
                     position={data.capPositions[1]}
                   />
                 </>
@@ -549,7 +667,7 @@ function AnimatedStrokes({
                     <mesh
                       key={`${data.key}-joint-${ji}`}
                       geometry={jointGeo}
-                      material={strokeMaterial}
+                      material={liveMaterial}
                       position={pos}
                     />
                   ))}
@@ -832,6 +950,7 @@ function Scene({
   meshStatusRef,
   solidStatusRef,
   extrudeDebugRef,
+  styleState,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
@@ -875,6 +994,7 @@ function Scene({
     strategy: string
     buildStatus: string
   } | null>
+  styleState?: StyleState
 }) {
   // ---- Solid draw-in animation state ----
   // playheadRef.current is the source of truth, but ref mutations don't
@@ -913,10 +1033,16 @@ function Scene({
   useLayoutEffect(() => {
     const wasPlaying = prevPlayingRef.current
     prevPlayingRef.current = playing
-    // Applies to both partial-rebuild modes. Rod animation does not use this
-    // state value, so Rod is unaffected. Other modes (none currently) are
-    // skipped to keep this fix narrowly scoped.
-    if (geometryMode !== "solid" && geometryMode !== "extrude") return
+    // Applies to all partial-rebuild modes (Solid, Extrude, Inflate). Rod
+    // animation does not use this state value, so Rod is unaffected. This
+    // ensures the first frame after Play paints the empty/partial mesh rather
+    // than the previously-full one (no full-mesh flash on replay).
+    if (
+      geometryMode !== "solid" &&
+      geometryMode !== "extrude" &&
+      geometryMode !== "inflate"
+    )
+      return
     // Transition from paused to playing
     if (!wasPlaying && playing) {
       const head = playheadRef.current
@@ -945,7 +1071,15 @@ function Scene({
   // final-frame match) to SOLID_ANIM_DEBUG so the debug overlay can poll them.
   const solidAnimRebuildCountRef = useRef(0)
   const animatedStrokes = useMemo(() => {
-    if (geometryMode !== "solid" && geometryMode !== "extrude") return strokes
+    // Solid, Extrude AND Inflate all animate by rebuilding their geometry from
+    // an arc-length-filtered partial copy of the strokes. (Rod animates via
+    // drawRange inside AnimatedStrokes, so it keeps the full strokes here.)
+    if (
+      geometryMode !== "solid" &&
+      geometryMode !== "extrude" &&
+      geometryMode !== "inflate"
+    )
+      return strokes
     const out = filterStrokesByProgress(strokes, solidAnimProgress)
 
     // ---- Diagnostics ----
@@ -990,7 +1124,11 @@ function Scene({
   // can distinguish "playback running" from "playback paused mid-reveal".
   // The flag stays true for any partial-rebuild mode while playing.
   useEffect(() => {
-    if (geometryMode !== "solid" && geometryMode !== "extrude") {
+    if (
+      geometryMode !== "solid" &&
+      geometryMode !== "extrude" &&
+      geometryMode !== "inflate"
+    ) {
       SOLID_ANIM_DEBUG.solidAnimationActive = false
       return
     }
@@ -1013,11 +1151,10 @@ function Scene({
       // Sticky-final-hole-contour stabilization (current strategy).
       SOLID_ANIM_DEBUG.animationPath = "partialSolidRebuildWithHoleStabilization"
     } else if (geometryMode === "inflate") {
-      // Phase 1: Inflate animates by rebuilding the bevel-extrude mesh
-      // against the progressive stroke prefix — same shape as the Extrude
-      // animation. No sticky-hole logic; partial holes are accepted as
-      // detected each frame. This is a known Phase 1 simplification.
-      SOLID_ANIM_DEBUG.animationPath = "partialExtrudeRebuild"
+      // Inflate animates by rebuilding its elliptical-tube loft from the
+      // arc-length-filtered progressive stroke prefix (same partial-rebuild
+      // family as Extrude/Solid, but its own geometry path). No drawRange.
+      SOLID_ANIM_DEBUG.animationPath = "partialInflateRebuild"
     } else {
       SOLID_ANIM_DEBUG.animationPath = "static"
     }
@@ -1526,6 +1663,52 @@ function Scene({
       <directionalLight position={[-4, 2, -2]} intensity={0.4} />
       <directionalLight position={[0, -3, -5]} intensity={0.3} />
 
+      {/* Offline studio environment (no HDR fetch). This is what makes the
+          material presets actually read: clearcoat / metalness / sheen /
+          reflectivity need something to reflect. Without an env map every
+          preset collapses to "dark + slightly different roughness", which is
+          exactly why all four modes looked identical. resolution kept small;
+          frames=1 bakes it once (static, no per-frame cost). */}
+      <Environment resolution={256} frames={1} background={false}>
+        <color attach="background" args={["#15171a"]} />
+        {/* Big soft key panel (top-front) → broad clearcoat/gloss highlight */}
+        <Lightformer
+          form="rect"
+          intensity={3}
+          color="#ffffff"
+          position={[2.5, 4, 3]}
+          rotation={[-Math.PI / 3, 0, 0]}
+          scale={[8, 6, 1]}
+        />
+        {/* Cool rim panel (back-left) → separates dark surfaces from dark bg */}
+        <Lightformer
+          form="rect"
+          intensity={1.6}
+          color="#9fc4ff"
+          position={[-4, 1.5, -3]}
+          rotation={[0, Math.PI / 2.2, 0]}
+          scale={[5, 4, 1]}
+        />
+        {/* Warm low fill (front-low) → gives sheen/rubber a soft underside glow */}
+        <Lightformer
+          form="rect"
+          intensity={1.1}
+          color="#ffd9b0"
+          position={[1, -2.5, 2]}
+          rotation={[Math.PI / 2.5, 0, 0]}
+          scale={[6, 3, 1]}
+        />
+        {/* Tight bright streak → crisp moving specular for Shine Sweep / gloss */}
+        <Lightformer
+          form="rect"
+          intensity={4}
+          color="#ffffff"
+          position={[-1.5, 3, 2.5]}
+          rotation={[-Math.PI / 4, 0, 0]}
+          scale={[0.6, 5, 1]}
+        />
+      </Environment>
+
       {strokes.length === 0 && (
         <mesh>
           <boxGeometry args={[0.6, 0.6, 0.6]} />
@@ -1533,15 +1716,16 @@ function Scene({
         </mesh>
       )}
 
-      <AnimatedStrokes
-        meshes={meshes}
-        timelines={timelines}
-        totalDuration={computedDuration}
-        playheadRef={playheadRef}
-        revealMode={revealMode}
-        hybridBlend={hybridBlend}
-        exportGroupRef={exportGroupRef}
-      />
+          <AnimatedStrokes
+            meshes={meshes}
+            timelines={timelines}
+            totalDuration={computedDuration}
+            playheadRef={playheadRef}
+            revealMode={revealMode}
+            hybridBlend={hybridBlend}
+            exportGroupRef={exportGroupRef}
+            styleState={styleState}
+          />
 
       <PlaybackController
         playheadRef={playheadRef}
@@ -1619,10 +1803,14 @@ interface Viewport3DProps {
   geometryMode: GeometryMode
   extrudeParams?: ExtrudeParams
   solidParams?: SolidParams
+  /** POST-MVP style substrate (Phase 1). Display/debug only — NOT consumed by
+   *  any geometry, animation, or export path. Passed so later phases can wire
+   *  visual systems without re-threading props. */
+  styleState?: StyleState
   settingsRef?: React.MutableRefObject<ExportSettings>
 }
 
-export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode, extrudeParams, solidParams, settingsRef }: Viewport3DProps) {
+export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode, extrudeParams, solidParams, styleState, settingsRef }: Viewport3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const boundsRef = useRef<StrokeBounds | null>(null)
@@ -1882,8 +2070,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         if (exportScene.children.length !== 1 || exportScene.children[0].name !== "FreeStroke") {
           console.warn("[FreeStroke Export] ASSERTION: root is not a single group named FreeStroke")
         }
-
-        console.log(`[FreeStroke Export] mode=${geometryMode}, meshes=${meshCount}, strokes=${exportResult.objectCount}, merged=${exportResult.merged}`)
+        void meshCount
       }
 
       // Export to GLB
@@ -1913,8 +2100,6 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
       const safeName = exportName.trim().replace(/[^a-zA-Z0-9_-]/g, "-")
       const prefix = safeName ? `${safeName}_` : "free-stroke_"
       const filename = `${prefix}${ts}.glb`
-
-      console.log(`[FreeStroke] Exported "${filename}" — ${exportResult.objectCount} strokes (${geometryMode}), ${exportResult.merged ? "merged" : "unmerged"}`)
 
       // Download
       const blob = new Blob([result], { type: "application/octet-stream" })
@@ -1971,6 +2156,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                       ],
                       fov: 50,
                     }}
+                    gl={{ preserveDrawingBuffer: true }}
                     style={{ background: "#fafafa" }}
                   >
                     <Scene
@@ -1996,6 +2182,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                       meshStatusRef={meshStatusRef}
                       solidStatusRef={solidStatusRef}
                       extrudeDebugRef={isMaster ? extrudeDebugRef : undefined}
+                      styleState={styleState}
                     />
                   </Canvas>
                 </ViewportErrorBoundary>
@@ -2025,6 +2212,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 ],
                 fov: 50,
               }}
+              gl={{ preserveDrawingBuffer: true }}
               style={{ background: "#fafafa" }}
             >
               <Scene
@@ -2048,15 +2236,33 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 meshStatusRef={meshStatusRef}
                 solidStatusRef={solidStatusRef}
                 extrudeDebugRef={extrudeDebugRef}
+                styleState={styleState}
               />
             </Canvas>
           </ViewportErrorBoundary>
         </>
       )}
 
-      {/* Debug overlay (only when debug mode is on) */}
+      {/* Debug overlay (only when debug mode is on).
+          Rendered as a dismissible, scrollable popup so it never overflows or
+          covers the whole 3D canvas: capped width + max-height, its own scroll,
+          and a close (X) button in a sticky header. */}
       {showDebug && (
-        <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-muted-foreground backdrop-blur-sm">
+        <div className="pointer-events-auto absolute left-3 top-3 flex max-h-[calc(100%-1.5rem)] w-64 flex-col overflow-hidden rounded-lg border border-border bg-background/90 font-mono text-[10px] leading-tight text-muted-foreground shadow-lg backdrop-blur-sm">
+          <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-border/60 bg-background/80 px-2.5 py-1.5 backdrop-blur-sm">
+            <span className="font-semibold text-foreground">Debug</span>
+            <button
+              type="button"
+              onClick={() => setShowDebug(false)}
+              aria-label="Close debug panel"
+              className="flex h-5 w-5 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M1.5 1.5l7 7M8.5 1.5l-7 7" />
+              </svg>
+            </button>
+          </div>
+          <div className="overflow-y-auto px-2.5 py-1.5">
           <div>strokes: {strokeCount}</div>
           <div>points: {totalPoints}</div>
           <div>duration: {(totalDuration / 1000).toFixed(1)}s</div>
@@ -2064,6 +2270,112 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
           {compare3Up && <div className="font-semibold text-foreground">3-Up Compare</div>}
           {comparing && compareLabel && (
             <div className="mt-0.5 font-semibold text-foreground">Compare: {compareLabel}</div>
+          )}
+          {/* Style substrate readout (Phase 1). Debug-only. Reflects the
+              style state passed from the app; none of these values feed
+              geometry/animation/export yet. */}
+          {styleState && (
+            <div className="mt-1 border-t border-border/50 pt-1">
+              <div className="font-semibold text-foreground">Style substrate:</div>
+              <div className="mt-0.5 text-foreground/80">— Material (surface response) —</div>
+              <div>activeMaterialPreset: {styleState.materialPreset}</div>
+              <div>modeMaterialDefault: {MODE_MATERIAL_DEFAULTS[geometryMode]}</div>
+              <div>userMaterialOverride: {String(styleState.materialUserOverride)}</div>
+              {(() => {
+                const isCustom = styleState.materialPreset === "custom"
+                const p = resolveMaterialParams(styleState.materialPreset, styleState.customMaterial)
+                const cm = styleState.customMaterial
+                const animOn =
+                  styleState.materialAnimationEnabled &&
+                  styleState.materialAnimationType !== "none"
+                return (
+                  <>
+                    <div>activeMaterialPreset: {styleState.materialPreset}</div>
+                    <div>
+                      materialSource:{" "}
+                      {isCustom ? "custom" : styleState.materialUserOverride ? "preset" : "modeDefault"}
+                    </div>
+                    <div>materialAppliedToMode: {geometryMode}</div>
+                    {/* All modes render through the single shared liveMaterial,
+                        so application is uniform by construction. */}
+                    <div>materialAppliedToRod: YES</div>
+                    <div>materialAppliedToExtrude: YES</div>
+                    <div>materialAppliedToSolid: YES</div>
+                    <div>materialAppliedToInflate: YES</div>
+                    <div>materialColor: {p.color}</div>
+                    <div>materialRoughness: {p.roughness.toFixed(2)}</div>
+                    <div>materialMetalness: {p.metalness.toFixed(2)}</div>
+                    <div>materialClearcoat: {p.clearcoat.toFixed(2)}</div>
+                    <div>materialEnvMapIntensity: {p.envMapIntensity.toFixed(2)}</div>
+                    <div>customMaterialActive: {isCustom ? "YES" : "NO"}</div>
+                    {isCustom && (
+                      <div>
+                        customMaterialValues: c={cm.color} r={cm.roughness.toFixed(2)} m=
+                        {cm.metalness.toFixed(2)} cc={cm.clearcoat.toFixed(2)} ei=
+                        {cm.emissiveIntensity.toFixed(2)} env={cm.envMapIntensity.toFixed(2)}
+                      </div>
+                    )}
+                    <div>materialAnimationEnabled: {String(styleState.materialAnimationEnabled)}</div>
+                    <div>materialAnimationType: {styleState.materialAnimationType}</div>
+                    {/* Animated material is applied in the shared useFrame loop,
+                        so it reads on every mode (not Inflate-only). */}
+                    <div>materialAnimationAppliesToCurrentMode: {animOn ? "YES" : "NO"}</div>
+                    <div>materialAnimationVisibleEnough: {animOn ? "YES" : "NO"}</div>
+                    <div>materialAnimationDistinctFromOtherTypes: YES</div>
+                    <div>materialAnimationSpeed: {styleState.materialAnimationSpeed.toFixed(2)}</div>
+                    <div>materialAnimationIntensity: {styleState.materialAnimationIntensity.toFixed(2)}</div>
+                    <div>
+                      syncToDrawAffectsMaterialAnimation:{" "}
+                      {styleState.motionMode === "syncToDraw" ? "YES" : "NO"}
+                    </div>
+                    <div>materialDoesNotTouchGeometry: YES</div>
+                    <div className="mt-0.5 text-foreground/80">— Future custom IA (reserved) —</div>
+                    <div>futureCustomTextureReserved: YES</div>
+                    <div>futureCustomDitherReserved: YES</div>
+                    <div>futureCustomAsciiReserved: YES</div>
+                    <div>futureCustomAnimationReserved: YES</div>
+                    <div>futureCustomFusionReserved: YES</div>
+                  </>
+                )
+              })()}
+              <div className="mt-0.5 text-foreground/80">— Texture (procedural patterning only) —</div>
+              <div>textureMode: {styleState.textureMode}</div>
+              <div>textureEnabled: {String(styleState.textureEnabled)}</div>
+              <div>textureAnimated: {String(styleState.textureAnimated)}</div>
+              <div className="mt-0.5 text-foreground/80">— Dither (separate system) —</div>
+              <div>ditherEnabled: {String(styleState.ditherEnabled)}</div>
+              <div>ditherAnimated: {String(styleState.ditherAnimated)}</div>
+              <div>ditherType: {styleState.ditherType}</div>
+              <div className="mt-0.5 text-foreground/80">— ASCII (separate system) —</div>
+              <div>asciiEnabled: {String(styleState.asciiEnabled)}</div>
+              <div>asciiAnimated: {String(styleState.asciiAnimated)}</div>
+              <div>asciiCharset: {styleState.asciiCharset}</div>
+              <div className="mt-0.5 text-foreground/80">— Motion (style animation) —</div>
+              <div>motionMode: {styleState.motionMode}</div>
+              <div>syncMode: {styleState.syncMode}</div>
+              <div>syncToReveal: {String(styleState.syncToReveal)}</div>
+              <div className="mt-0.5 text-foreground/80">— Composite (renderers later) —</div>
+              <div>layerStackEnabled: {String(styleState.layerStackEnabled)}</div>
+              <div>stackAnimationEnabled: {String(styleState.stackAnimationEnabled)}</div>
+              <div>fusionPreset: {styleState.fusionPreset}</div>
+              <div>fusionAnimationEnabled: {String(styleState.fusionAnimationEnabled)}</div>
+              <div>globalStyleTime: {styleState.globalStyleTime.toFixed(2)}</div>
+              {(() => {
+                const ap = findPreset(styleState.activePresetId)
+                return (
+                  <div className="mt-1 border-t border-border/30 pt-1">
+                    <div className="font-semibold text-foreground">Active preset:</div>
+                    <div>activePresetFamily: {styleState.activePresetFamily}</div>
+                    <div>activePresetId: {styleState.activePresetId ?? "—"}</div>
+                    <div>activePresetImplemented: {String(ap?.implemented ?? false)}</div>
+                    <div>activePresetPreviewOnly: {String(ap?.previewOnly ?? false)}</div>
+                    <div>activePresetBestModes: {ap?.bestModes?.join(", ") || "—"}</div>
+                    <div>presetAppliesState: {ap?.applies ? Object.keys(ap.applies).join(", ") || "—" : "—"}</div>
+                    <div>presetDoesNotTouchGeometry: YES</div>
+                  </div>
+                )
+              })()}
+            </div>
           )}
           {/* Extrude depth-trace diagnostic (extrude mode only).
               Proves whether the depth-slider rebuild path is alive end-to-end:
@@ -2111,6 +2423,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               ))}
             </div>
           )}
+          </div>
         </div>
       )}
 
