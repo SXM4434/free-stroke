@@ -391,9 +391,6 @@ function AnimatedStrokes({
   )
 
   useFrame((state) => {
-    ;(window as unknown as Record<string, number>).__frameCount =
-      ((window as unknown as Record<string, number>).__frameCount || 0) + 1
-    ;(window as unknown as Record<string, number>).__lastElapsed = state.clock.elapsedTime
     // ---- Animated Material v1 (surface response only) -------------------
     // PREVIEW-ONLY: this modulates highlight/roughness/sheen/emissive each
     // frame. It NEVER touches geometry, the reveal clock, or export. When the
@@ -401,11 +398,6 @@ function AnimatedStrokes({
     if (styleState) {
       const animOn =
         styleState.materialAnimationEnabled && styleState.materialAnimationType !== "none"
-      ;(window as unknown as Record<string, unknown>).__animDbg = {
-        animOn,
-        enabled: styleState.materialAnimationEnabled,
-        type: styleState.materialAnimationType,
-      }
       if (animOn) {
         // Motion clock: "syncToDraw" ties the phase to draw-in progress so the
         // surface animation reads as part of the same gesture; otherwise it
@@ -415,13 +407,6 @@ function AnimatedStrokes({
           styleState.motionMode === "syncToDraw"
             ? completion * 6 // map 0..1 progress into a usable phase range
             : state.clock.elapsedTime
-        if (Math.floor(state.clock.elapsedTime * 2) % 4 === 0) {
-          console.log("[v0] anim loop", {
-            t: time.toFixed(2),
-            type: styleState.materialAnimationType,
-            mode: styleState.motionMode,
-          })
-        }
         const next = evaluateMaterialAnimation({
           base: baseParams,
           type: styleState.materialAnimationType,
@@ -442,13 +427,6 @@ function AnimatedStrokes({
         liveMaterial.emissive.set(next.emissive)
         liveMaterial.emissiveIntensity = next.emissiveIntensity
         liveMaterial.envMapIntensity = next.envMapIntensity
-        ;(window as unknown as Record<string, unknown>).__matDbg = {
-          env: +next.envMapIntensity.toFixed(2),
-          cc: +next.clearcoat.toFixed(2),
-          rough: +next.roughness.toFixed(2),
-          liveEnv: +liveMaterial.envMapIntensity.toFixed(2),
-          uuid: liveMaterial.uuid.slice(0, 8),
-        }
       } else {
         // Animation off → pin the surface to its static base so it never
         // freezes on the last animated frame.
