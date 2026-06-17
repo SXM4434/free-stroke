@@ -1879,6 +1879,21 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
       disable: () => setCaptureMode(false),
       isEnabled: () => captureMode,
       size: () => ({ width: captureWidth, height: captureHeight }),
+      // Front-on framing so the word faces the camera flat (matches the 2D
+      // logo orientation for the card-flip). Fits the bounds to the viewport.
+      frontView: (fillK = 1.0) => {
+        const controls = controlsRef.current
+        if (!controls) return false
+        const bounds = boundsRef.current
+        if (!bounds || bounds.radius <= 0) return false
+        const dist = bounds.radius * TOP_K * fillK
+        controls.object.position
+          .copy(bounds.center)
+          .add(new THREE.Vector3(0, 0, dist))
+        controls.target.copy(bounds.center)
+        controls.update()
+        return true
+      },
       // Returns the data URL (PNG, with alpha) of the 3D canvas backing buffer.
       grab: () => {
         const canvas = containerRef.current?.querySelector("canvas") as
