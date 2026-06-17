@@ -929,6 +929,7 @@ function Scene({
   solidStatusRef,
   extrudeDebugRef,
   styleState,
+  hideGrid = false,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   strokes: ProcessedStroke[]
@@ -973,6 +974,8 @@ function Scene({
     buildStatus: string
   } | null>
   styleState?: StyleState
+  /** DEV capture: hides the grid helper for clean transparent frames. */
+  hideGrid?: boolean
 }) {
   // ---- Solid draw-in animation state ----
   // playheadRef.current is the source of truth, but ref mutations don't
@@ -1727,11 +1730,13 @@ function Scene({
         controlsRef={controlsRef}
       />
 
-      <gridHelper
-        args={[6, 12, "#cccccc", "#e5e5e5"]}
-        rotation={[Math.PI / 2, 0, 0]}
-        position={[0, 0, -0.05]}
-      />
+      {!hideGrid && (
+        <gridHelper
+          args={[6, 12, "#cccccc", "#e5e5e5"]}
+          rotation={[Math.PI / 2, 0, 0]}
+          position={[0, 0, -0.05]}
+        />
+      )}
       {orbitEnabled ? (
         <OrbitControls ref={controlsRef} makeDefault />
       ) : masterControlsRef ? (
@@ -1796,6 +1801,15 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const [exporting, setExporting] = useState(false)
   const [exportName, setExportName] = useState("")
 
+  /* ---- DEV capture mode ----
+   * When enabled, the viewport becomes a fixed 1920x1080 transparent render
+   * target with all UI/grid hidden, so the automated video script can grab
+   * clean alpha frames of the draw-in via canvas.toDataURL. Non-production
+   * only; never affects geometry or the normal app render path. */
+  const [captureMode, setCaptureMode] = useState(false)
+  const captureWidth = 1920
+  const captureHeight = 1080
+
   /* ---- Animation state ---- */
   const playheadRef = useRef(0) // 0..1
   const [playing, setPlaying] = useState(false)
@@ -1852,6 +1866,32 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
       if (progressUpdateTimerRef.current) clearTimeout(progressUpdateTimerRef.current)
     }
   }, [])
+
+  // DEV-ONLY capture harness: lets the automated video script toggle the
+  // fixed transparent 1920x1080 render target and grab an alpha PNG of the
+  // current frame straight from the WebGL backing buffer (toDataURL keeps the
+  // alpha channel; a page screenshot would not). Guarded to non-production.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return
+    const w = window as unknown as Record<string, unknown>
+    w.__captureHarness = {
+      enable: () => setCaptureMode(true),
+      disable: () => setCaptureMode(false),
+      isEnabled: () => captureMode,
+      size: () => ({ width: captureWidth, height: captureHeight }),
+      // Returns the data URL (PNG, with alpha) of the 3D canvas backing buffer.
+      grab: () => {
+        const canvas = containerRef.current?.querySelector("canvas") as
+          | HTMLCanvasElement
+          | undefined
+        if (!canvas) return null
+        return canvas.toDataURL("image/png")
+      },
+    }
+    return () => {
+      delete w.__captureHarness
+    }
+  }, [captureMode])
 
   // Reset animation when strokes are cleared or undone
   const prevStrokeCountRef = useRef(processedStrokes.length)
@@ -2139,7 +2179,23 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
   const slaveExportRef2 = useRef<THREE.Group | null>(null)
 
   return (
-    <div ref={containerRef} className="relative h-full w-full">
+    <div
+      ref={containerRef}
+      className="relative h-full w-full"
+      style={
+        captureMode
+          ? {
+              position: "fixed",
+              top: 0,
+              left: 0,
+              width: `${captureWidth}px`,
+              height: `${captureHeight}px`,
+              background: "transparent",
+              zIndex: 9999,
+            }
+          : undefined
+      }
+    >
       {compare3Up ? (
         /* ---- 3-Up side-by-side view ---- */
         <div className="grid h-full w-full grid-cols-3">
@@ -2207,6 +2263,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
         <>
           <ViewportErrorBoundary>
             <Canvas
+              dpr={captureMode ? 1 : undefined}
               camera={{
                 position: [
                   INITIAL_CAMERA_POSITION.x,
@@ -2215,8 +2272,8 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 ],
                 fov: 50,
               }}
-              gl={{ preserveDrawingBuffer: true }}
-              style={{ background: "#fafafa" }}
+              gl={{ preserveDrawingBuffer: true, alpha: true }}
+              style={{ background: captureMode ? "transparent" : "#fafafa" }}
             >
               <Scene
                 controlsRef={controlsRef}
@@ -2240,6 +2297,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 solidStatusRef={solidStatusRef}
                 extrudeDebugRef={extrudeDebugRef}
                 styleState={styleState}
+                hideGrid={captureMode}
               />
             </Canvas>
           </ViewportErrorBoundary>
