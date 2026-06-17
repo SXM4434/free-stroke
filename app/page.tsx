@@ -4,7 +4,8 @@ import { useState, useRef, useEffect } from "react"
 import Viewport3DWrapper from "@/components/viewport-3d-wrapper"
 import DrawingCanvas, { type ExportSettings } from "@/components/drawing-canvas"
 import { StylePanelScaffold, type StylePanelId } from "@/components/style-panel-scaffold"
-import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
+import type { Stroke, ProcessedStroke, Point } from "@/lib/stroke-processing"
+import { processStroke } from "@/lib/stroke-processing"
 import {
   type GeometryMode,
   type ExtrudeParams,
@@ -140,6 +141,38 @@ export default function Home() {
         })),
       setCustom: (patch: Record<string, unknown>) =>
         setStyleState((s) => ({ ...s, customMaterial: { ...s.customMaterial, ...patch } })),
+      // DEV capture: inject a set of strokes deterministically (instead of
+      // synthetic pointer events). Each entry is an array of {x,y} in canvas
+      // pixel space; timestamps are baked sequentially so the draw-in reveal
+      // replays them in order. Used by the automated video script.
+      injectStrokes: (
+        polylines: { x: number; y: number }[][],
+        opts?: { msPerPoint?: number; gapMs?: number },
+      ) => {
+        const msPerPoint = opts?.msPerPoint ?? 16
+        const gapMs = opts?.gapMs ?? 120
+        let t = 0
+        const raws: Stroke[] = []
+        for (const poly of polylines) {
+          if (poly.length < 2) continue
+          const points: Point[] = poly.map((p) => {
+            const pt: Point = { x: p.x, y: p.y, t, pressure: 0.6 }
+            t += msPerPoint
+            return pt
+          })
+          t += gapMs
+          raws.push({ points })
+        }
+        const processed = raws.map((r) =>
+          processStroke(r, settingsRef.current.spacing, settingsRef.current.smoothing, settingsRef.current.preserveCorners),
+        )
+        setRawStrokes(raws)
+        setProcessedStrokes(processed)
+      },
+      clearStrokes: () => {
+        setRawStrokes([])
+        setProcessedStrokes([])
+      },
       get: () => ({ geometryMode, styleState }),
     }
     return () => {

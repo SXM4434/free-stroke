@@ -1953,6 +1953,31 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
     setProgress(value)
   }, [])
 
+  // DEV-ONLY reveal scrubber harness. Exposes an imperative API so the
+  // automated video capture script can step the draw-in reveal to an exact
+  // progress (0..1) and read it back, instead of relying on the wall-clock
+  // PlaybackController. It drives the SAME state the reveal already reads
+  // (playheadRef + solidAnimProgress for Solid/Extrude/Inflate), so it can
+  // never reach geometry params or export. Guarded to non-production.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return
+    const w = window as unknown as Record<string, unknown>
+    w.__revealHarness = {
+      setProgress: (value: number) => {
+        const v = Math.max(0, Math.min(1, value))
+        setPlaying(false)
+        playheadRef.current = v
+        setProgress(v)
+        setSolidAnimProgress(v)
+      },
+      getProgress: () => playheadRef.current,
+      getTotalDuration: () => totalDuration,
+    }
+    return () => {
+      delete w.__revealHarness
+    }
+  }, [totalDuration])
+
   const canvasWidth =
     typeof window !== "undefined" ? window.innerWidth / 2 : 800
   const canvasHeight =
