@@ -2021,9 +2021,11 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
       setProgress: (value: number) => {
         const v = Math.max(0, Math.min(1, value))
         setPlaying(false)
+        // SolidAnimationTick (always enabled for solid/extrude/inflate) reads
+        // playheadRef each frame and propagates it into solidAnimProgress, so
+        // setting the ref here is sufficient to advance the draw-in reveal.
         playheadRef.current = v
         setProgress(v)
-        setSolidAnimProgress(v)
       },
       getProgress: () => playheadRef.current,
       getTotalDuration: () => totalDuration,
