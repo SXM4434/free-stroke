@@ -37,7 +37,7 @@ function injectAndStyle() {
     const H = window.__styleHarness;
     H.setMode('inflate');
     H.setMaterial('custom');
-    H.setCustom({ color: '#1a1a1a', roughness: ${ROUGHNESS}, metalness: 0.0, clearcoat: 0.0, sheen: 0.0, emissiveIntensity: 0.0, transmission: 0.0 });
+    H.setCustom({ color: '#1a1a1a', roughness: ${ROUGHNESS}, metalness: 0.0, clearcoat: 0.0, sheen: 0.0, emissiveIntensity: 0.0, envMapIntensity: 1.0 });
     H.injectStrokes(${poly}, { msPerPoint: 12, gapMs: 60 });
     window.__captureHarness.enable();
     return 'ok';
