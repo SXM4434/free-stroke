@@ -174,21 +174,42 @@ async function main() {
   const paths = tracePaths(bmp, w, h)
   console.log(`[trace] raw paths=${paths.length}`)
 
-  // simplify + scale back to original logo pixel coords + drop tiny specks
-  const polylines = paths
-    .map((p) => simplify(p, 1.2).map(([x, y]) => ({ x: x / scale, y: y / scale })))
+  // Normalize into a compact target coordinate space (~TARGET_W wide). The
+  // inflate rasterizer uses a fixed ~22px lineWidth, so a smaller span makes
+  // each tube proportionally bolder and lets neighbouring skeleton fragments
+  // merge into continuous strokes (matching the logo's solid weight).
+  const TARGET_W = 1100
+  const norm = TARGET_W / (w / scale) // strokes are in downscaled space here
+  const polylines0 = paths
+    .map((p) => simplify(p, 1.2).map(([x, y]) => ({ x: (x / scale) * norm, y: (y / scale) * norm })))
     .filter((p) => p.length >= 2)
 
-  // total path length filter (remove dust)
   const lenOf = (p) => {
     let L = 0
     for (let i = 1; i < p.length; i++) L += Math.hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y)
     return L
   }
-  const kept = polylines.filter((p) => lenOf(p) > 18)
-  console.log(`[trace] kept polylines=${kept.length} (dropped ${polylines.length - kept.length})`)
 
-  writeFileSync(OUT, JSON.stringify({ width: img.width, height: img.height, polylines: kept }))
+  // Densify: resample each polyline at ~3px steps so the tube surface stays
+  // smooth and the draw-in reveal advances evenly along the path.
+  const STEP = 3
+  const densify = (p) => {
+    if (p.length < 2) return p
+    const out = [p[0]]
+    for (let i = 1; i < p.length; i++) {
+      const a = p[i - 1],
+        b = p[i]
+      const d = Math.hypot(b.x - a.x, b.y - a.y)
+      const n = Math.max(1, Math.round(d / STEP))
+      for (let k = 1; k <= n; k++) out.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n })
+    }
+    return out
+  }
+
+  const kept = polylines0.filter((p) => lenOf(p) > 18 * norm).map(densify)
+  console.log(`[trace] kept polylines=${kept.length} (dropped ${polylines0.length - kept.length}), target width=${TARGET_W}`)
+
+  writeFileSync(OUT, JSON.stringify({ width: TARGET_W, height: Math.round((h / scale) * norm), polylines: kept }))
   console.log(`[trace] wrote ${OUT}`)
 }
 
