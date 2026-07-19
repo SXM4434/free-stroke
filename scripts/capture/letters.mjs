@@ -47,9 +47,12 @@ const GLYPHS = {
     adv: 60,
     strokes: [
       [
-        [50, -XH / 2],
+        // bar left -> right, then sweep from the right end up over the top,
+        // around the left and bottom, opening at the lower right.
+        // (theta convention: 0=right, 90=down, 270/-90=up)
         [8, -XH / 2],
-        ...arc(28, -XH / 2, 22, 180, 400, 30).slice(1),
+        [50, -XH / 2],
+        ...arc(28, -XH / 2, 22, 360, 45, 30).slice(1),
       ],
     ],
   },
@@ -59,8 +62,11 @@ const GLYPHS = {
     adv: 50,
     strokes: [
       [
-        ...arc(25, -XH * 0.72, 15, -30, 210, 20),
-        ...arc(25, -XH * 0.26, 15, 30, 250, 20).slice(1),
+        // top bowl: upper-right, over the top, down the left to the junction;
+        // bottom bowl: from junction around the right and bottom, open lower-left.
+        // Circles share the junction point at y=-26 (r=12.5).
+        ...arc(25, -38.5, 12.5, -45, -270, 20),
+        ...arc(25, -13.5, 12.5, -90, 135, 20).slice(1),
       ],
     ],
   },
@@ -98,7 +104,7 @@ const GLYPHS = {
         [46, -CAP],
         [46, 0],
       ],
-      [[...arc(24, -XH / 2, 22, -20, 340, 28)]],
+      [...arc(24, -XH / 2, 22, -20, 340, 28)],
     ],
   },
 
