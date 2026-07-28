@@ -98,3 +98,123 @@ export function resolveStack(s: StyleState): ResolvedStack {
     order: STACK_ORDER_INDEX[on ? s.stackOrder : "ditherFirst"],
   }
 }
+
+
+/* ------------------------- stack-level animation ------------------------- */
+/**
+ * Stack animation animates the WHOLE GROUP as one container, while the layers
+ * inside stay independently editable — the Photoshop layer-group / After
+ * Effects precomp idea from the PRD.
+ *
+ * This is a different thing from both of its neighbours:
+ *   per-layer animation  each layer moves on its own (already built)
+ *   STACK animation      the group moves together (this)
+ *   fusion animation     layers influence EACH OTHER (a later phase)
+ *
+ * It works by producing two group-level values that every layer then respects:
+ *   `amount`      multiplies each layer's contribution -> fades and pulses
+ *   `timeOffset`  adds to each layer's phase -> the whole stack drifts together
+ * Because both apply uniformly, the layers keep their relative balance: a
+ * preset tuned to "ASCII dominant, others supporting" stays that way while the
+ * group fades in.
+ */
+export type StackAnimationBehaviour =
+  | "none"
+  | "fadeIn"
+  | "pulse"
+  | "drift"
+  | "delayAfterReveal"
+  | "completionPulse"
+  | "freezeOnComplete"
+  | "loop"
+
+export interface StackAnimationState {
+  /** Group opacity multiplier, 0..1. */
+  amount: number
+  /** Phase added to every layer's own time. */
+  timeOffset: number
+  /** When true, layers should hold their current phase instead of advancing. */
+  frozen: boolean
+}
+
+export const STACK_ANIM_NEUTRAL: StackAnimationState = { amount: 1, timeOffset: 0, frozen: false }
+
+/**
+ * Evaluates the group-level animation for this frame.
+ *
+ * `elapsed`, `reveal` and `sinceCompletion` come from the shared style clock —
+ * the same clock the individual layers use, which is what keeps group motion and
+ * layer motion coherent instead of drifting apart.
+ */
+export function evaluateStackAnimation(opts: {
+  enabled: boolean
+  behaviour: StackAnimationBehaviour
+  speed: number
+  phase: number
+  /**
+   * Seconds since this behaviour was ARMED, not since the scene started.
+   *
+   * This distinction is load-bearing. `fadeIn` measured from scene start is
+   * invisible: by the time a user enables it, scene time is already far past
+   * the fade duration, so the group is at full strength before the first frame
+   * renders and nothing appears to happen. Measuring from the moment the
+   * behaviour was switched on makes "fade in" mean what it says, and makes
+   * drift and loop start from a sensible phase instead of an arbitrary one.
+   */
+  sinceArmed: number
+  reveal: number
+  sinceCompletion: number
+  loopSeconds: number
+}): StackAnimationState {
+  const { enabled, behaviour, speed, phase, sinceArmed, reveal, sinceCompletion, loopSeconds } = opts
+  const elapsed = sinceArmed
+  if (!enabled || behaviour === "none") return STACK_ANIM_NEUTRAL
+
+  switch (behaviour) {
+    case "fadeIn": {
+      // The stack arrives over ~1.2s of scene time, then stays.
+      const t = elapsed * speed
+      return { amount: Math.min(1, t / 1.2), timeOffset: 0, frozen: false }
+    }
+
+    case "pulse": {
+      // Every layer breathes together. Bottoms out at 0.45 rather than 0 so the
+      // composition never fully disappears.
+      const v = 0.5 + 0.5 * Math.sin(elapsed * speed * 2.2 + phase)
+      return { amount: 0.45 + v * 0.55, timeOffset: 0, frozen: false }
+    }
+
+    case "drift":
+      // One shared phase offset added to every layer -> the whole stack slides.
+      return { amount: 1, timeOffset: elapsed * speed * 0.6 + phase, frozen: false }
+
+    case "delayAfterReveal": {
+      // The style stack lands AFTER the form is drawn.
+      if (sinceCompletion === Infinity) return { amount: 0, timeOffset: 0, frozen: false }
+      return { amount: Math.min(1, (sinceCompletion * speed) / 0.6), timeOffset: 0, frozen: false }
+    }
+
+    case "completionPulse": {
+      // One-shot swell when the drawing finishes, then back to the normal look.
+      if (sinceCompletion === Infinity) return { amount: 1, timeOffset: 0, frozen: false }
+      const decay = Math.exp(-(sinceCompletion * speed) / 0.5)
+      if (decay < 0.04) return STACK_ANIM_NEUTRAL
+      // Swell ABOVE the resting value, then settle back to exactly 1.
+      return { amount: 1 + decay * 0.6, timeOffset: 0, frozen: false }
+    }
+
+    case "freezeOnComplete":
+      // Animated layers run during the draw, then hold their final frame — so a
+      // still export matches what the viewer last saw moving.
+      return { amount: 1, timeOffset: 0, frozen: reveal >= 1 }
+
+    case "loop": {
+      // Wrapped shared offset: the whole stack repeats seamlessly.
+      const loop = Math.max(loopSeconds, 0.1)
+      return { amount: 1, timeOffset: ((elapsed * speed) % loop) + phase, frozen: false }
+    }
+
+    default:
+      return STACK_ANIM_NEUTRAL
+  }
+}

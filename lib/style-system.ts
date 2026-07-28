@@ -142,7 +142,20 @@ export type FusionPreset =
   | "claySinter"
   | "signalGlitch"
 
-export type StackAnimationType = "none" | "offset" | "cascade" | "shuffle" | "pulse"
+/**
+ * StackAnimationType — how the WHOLE layer group animates as a container.
+ * See lib/style-stack.ts. Distinct from per-layer animation (each layer moving
+ * on its own) and from fusion animation (layers influencing each other).
+ */
+export type StackAnimationType =
+  | "none"
+  | "fadeIn"
+  | "pulse"
+  | "drift"
+  | "delayAfterReveal"
+  | "completionPulse"
+  | "freezeOnComplete"
+  | "loop"
 
 // Stack types live in style-stack.ts (next to the blend GLSL they describe).
 // Imported so StyleState can reference them, re-exported so consumers still get
@@ -1423,14 +1436,95 @@ export const LAYER_STACK_PRESET_DEFS: StylePreset[] = [
   },
 ]
 
-/* --- stack animation (definitions only) --- */
+/* --- stack animation (IMPLEMENTED v1) ---
+ * These animate the GROUP. They set stackAnimation* only; each layer's own
+ * animation settings are untouched, which is the point — the group moves while
+ * the layers keep whatever they were individually doing. */
 export const STACK_ANIMATION_PRESET_DEFS: StylePreset[] = [
-  { id: "stackFadeIn", label: "Stack Fade In", family: "stackAnimation", enabled: true, implemented: false },
-  { id: "stackCompletionPulse", label: "Stack Completion Pulse", family: "stackAnimation", enabled: true, implemented: false },
-  { id: "stackDrift", label: "Stack Drift", family: "stackAnimation", enabled: true, implemented: false },
-  { id: "stackFreezeOnComplete", label: "Stack Freeze On Complete", family: "stackAnimation", enabled: true, implemented: false },
-  { id: "stackLoopCrawl", label: "Stack Loop Crawl", family: "stackAnimation", enabled: true, implemented: false },
-  { id: "stackDelay", label: "Stack Delay", family: "stackAnimation", enabled: true, implemented: false },
+  {
+    id: "stackFadeIn",
+    label: "Stack Fade In",
+    family: "stackAnimation",
+    enabled: true,
+    implemented: true,
+    description: "The whole visual stack arrives together.",
+    applies: {
+      layerStackEnabled: true,
+      stackAnimationEnabled: true,
+      stackAnimationType: "fadeIn",
+      stackAnimationSpeed: 1,
+    },
+  },
+  {
+    id: "stackCompletionPulse",
+    label: "Stack Completion Pulse",
+    family: "stackAnimation",
+    enabled: true,
+    implemented: true,
+    description: "The stack swells when the draw-in finishes, then settles.",
+    applies: {
+      layerStackEnabled: true,
+      stackAnimationEnabled: true,
+      stackAnimationType: "completionPulse",
+      stackAnimationSpeed: 1,
+    },
+  },
+  {
+    id: "stackDrift",
+    label: "Stack Drift",
+    family: "stackAnimation",
+    enabled: true,
+    implemented: true,
+    description: "Every layer slides together at one shared speed.",
+    applies: {
+      layerStackEnabled: true,
+      stackAnimationEnabled: true,
+      stackAnimationType: "drift",
+      stackAnimationSpeed: 0.6,
+    },
+  },
+  {
+    id: "stackFreezeOnComplete",
+    label: "Stack Freeze On Complete",
+    family: "stackAnimation",
+    enabled: true,
+    implemented: true,
+    description: "Layers animate during the draw, then hold their final frame.",
+    applies: {
+      layerStackEnabled: true,
+      stackAnimationEnabled: true,
+      stackAnimationType: "freezeOnComplete",
+      stackAnimationSpeed: 1,
+    },
+  },
+  {
+    id: "stackLoopCrawl",
+    label: "Stack Loop Crawl",
+    family: "stackAnimation",
+    enabled: true,
+    implemented: true,
+    description: "The whole stack repeats on the shared loop.",
+    applies: {
+      layerStackEnabled: true,
+      stackAnimationEnabled: true,
+      stackAnimationType: "loop",
+      stackAnimationSpeed: 1,
+    },
+  },
+  {
+    id: "stackDelay",
+    label: "Stack Delay",
+    family: "stackAnimation",
+    enabled: true,
+    implemented: true,
+    description: "The style stack appears only after the geometry is fully drawn.",
+    applies: {
+      layerStackEnabled: true,
+      stackAnimationEnabled: true,
+      stackAnimationType: "delayAfterReveal",
+      stackAnimationSpeed: 1,
+    },
+  },
 ]
 
 /* --- fusion (definitions only) --- */

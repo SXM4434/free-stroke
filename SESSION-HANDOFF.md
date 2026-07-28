@@ -1733,3 +1733,97 @@ this. Per-layer animation already works; what's missing is the group.
 
 (supersedes `POST_MVP_VISUAL_TIMING_SYSTEM_PHASE_1_PASS`; all prior checkpoints
 remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_STACK_ANIMATION_PHASE_1_PASS`
+
+**Status: stack-level animation is LIVE.** The whole layer group animates as one
+container while layers stay independently editable. Geometry, geometry
+animation, and export untouched.
+
+### The distinction this phase makes concrete
+
+- per-layer animation: one layer moves on its own (built earlier)
+- **STACK animation: the group moves together (this phase)**
+- fusion animation: layers influence EACH OTHER (still absent, next major phase)
+
+The mental model is a Photoshop layer group / AE precomp: contents keep their own
+settings and keep doing their own thing; you animate the container.
+
+### How it works
+
+Two group values applied UNIFORMLY to every layer:
+- `amount` multiplies each layer's contribution (fades, pulses)
+- `timeOffset` is added to each layer's phase (the stack drifts in formation)
+- plus `frozen` for freeze-on-complete
+
+Uniform application is the point: layers keep their RELATIVE BALANCE, so a preset
+tuned "ASCII dominant, others supporting" arrives in that proportion rather than
+rearranging itself on the way in.
+
+A layer's final strength now composes four dials:
+`own control × stack opacity × its timing envelope × group amount`.
+
+### Seven behaviours
+
+fadeIn / pulse (bottoms out at 0.45, never fully vanishes) / drift / 
+delayAfterReveal / completionPulse (swells ABOVE resting, settles back to exactly
+1) / freezeOnComplete / loop. Six stack-animation presets implemented.
+
+### The bug the assertions caught
+
+`fadeIn` failed: presence 66.3 → 67.5 across the whole fade. Root cause was a
+real design mistake — **the fade measured from SCENE START**. By the time a user
+enables fadeIn, `clock.elapsed` is already far past the 1.2s fade, so the group
+is at full strength before the first frame renders. The feature was invisible in
+exactly the situation where you would use it. Fixed by measuring from when the
+behaviour was ARMED (viewport stamps `clock.elapsed` when `(enabled, behaviour)`
+changes and passes `sinceArmed`). Also gives drift/loop a sensible start phase.
+After: 90.2 → 73.6.
+
+**This is the SECOND "measure from when?" bug** (the first was completion
+detection in the timing phase). Standing lesson recorded in the explainer:
+time-based effects need an explicit origin, and "scene start" is almost never it.
+
+### freezeOnComplete needed a phase snapshot
+
+Freezing cannot just stop the clock — it is shared. Instead the viewport
+snapshots each layer's current phase ON THE TRANSITION into freeze and pins the
+uniforms there, clearing on release so replay works. Verified consecutive-frame
+change 61.46 during the reveal, **0.00** after — identical frames, not "nearly
+still".
+
+### Test results (evidence in `docs/verification/stack-anim-v1/`)
+
+`assert-stack-anim.mjs` — **6/6 PASS:**
+- fadeIn presence 90.2 → 73.6 across the fade
+- pulse oscillates (consecΔ 54.98)
+- drift slides (consecΔ 44.89)
+- delay: absent during reveal (93.3) vs present after (67.6)
+- freeze: animates during (61.46), EXACTLY still after (0.00)
+
+Note the deliberate mix of measures: motion questions use frame-to-frame change,
+presence questions use mean luminance over the object's pixels. "How much of the
+effect is present" is not the same question as "is it moving" — using the wrong
+measure would have passed a broken fade.
+
+**Full regression: 20/20 gates, 10/10 timing, 9/9 stack — all still PASS.**
+Console errors 0.
+
+### Docs
+
+- `docs/explainers/06-stack-animation.md`
+
+### Next branch — `POST_MVP_FUSION_PRESETS_PHASE_1`
+
+Fusion is where layers stop being independent and start influencing each other
+(ASCII density driving dither threshold, etc). Per the PRD this must come after
+the individual systems and the stack — both now exist, so fusion is unblocked.
+
+### Final locked checkpoint label
+
+`POST_MVP_STACK_ANIMATION_PHASE_1_PASS`
+
+(supersedes `POST_MVP_LAYER_STACK_PHASE_1_PASS`; all prior checkpoints remain in
+effect as underlying layers)

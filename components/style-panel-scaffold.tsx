@@ -1262,6 +1262,93 @@ function LayersControl({
         </label>
       </div>
 
+      {/* Stack-level animation: the GROUP animates as one container. */}
+      <div className={`border-t border-border pt-3 ${on ? "" : "pointer-events-none opacity-50"}`}>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={styleState.stackAnimationEnabled}
+            onChange={(e) =>
+              setStyleState((s) => ({
+                ...s,
+                stackAnimationEnabled: e.target.checked,
+                stackAnimationType:
+                  e.target.checked && s.stackAnimationType === "none" ? "fadeIn" : s.stackAnimationType,
+              }))
+            }
+            className="h-3.5 w-3.5 accent-foreground"
+            disabled={!on}
+          />
+          <span className="text-xs font-medium text-foreground">Stack Animation</span>
+        </label>
+        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+          Animates the whole group as one container. Different from each layer animating on its own —
+          this moves them together, so the composition&apos;s balance is preserved.
+        </p>
+
+        <div
+          className={`mt-3 flex flex-col gap-3 ${
+            on && styleState.stackAnimationEnabled ? "" : "pointer-events-none opacity-50"
+          }`}
+        >
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>Behaviour</span>
+            <select
+              value={styleState.stackAnimationType}
+              onChange={(e) =>
+                setStyleState((s) => ({
+                  ...s,
+                  stackAnimationType: e.target.value as StyleState["stackAnimationType"],
+                }))
+              }
+              className={selectClass}
+              disabled={!on || !styleState.stackAnimationEnabled}
+            >
+              <option value="fadeIn">Fade in — the stack arrives</option>
+              <option value="pulse">Pulse — the whole stack breathes</option>
+              <option value="drift">Drift — every layer slides together</option>
+              <option value="delayAfterReveal">Delay — lands after the form is drawn</option>
+              <option value="completionPulse">Completion pulse — swell at the end</option>
+              <option value="freezeOnComplete">Freeze on complete — hold the final frame</option>
+              <option value="loop">Loop — the stack repeats</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>
+              Speed <span className="text-foreground">{styleState.stackAnimationSpeed.toFixed(2)}×</span>
+            </span>
+            <input
+              type="range"
+              min={0.1}
+              max={3}
+              step={0.05}
+              value={styleState.stackAnimationSpeed}
+              onChange={(e) =>
+                setStyleState((s) => ({ ...s, stackAnimationSpeed: Number(e.target.value) }))
+              }
+              className="w-44 accent-foreground"
+              disabled={!on || !styleState.stackAnimationEnabled}
+            />
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {PRESET_REGISTRY.stackAnimation.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => onSelectPreset("stackAnimation", p.id)}
+                className={`rounded-md border px-2 py-1 text-[11px] ${
+                  styleState.activePresetId === p.id
+                    ? "border-foreground bg-foreground/10 text-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+                title={p.description}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
       <div className="border-t border-border pt-3">
         <span className={fieldLabelClass}>Stack presets</span>
         <div className="mt-2 flex flex-wrap gap-1.5">

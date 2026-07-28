@@ -46,7 +46,7 @@ import {
   type AsciiUniforms,
 } from "@/lib/ascii-shader"
 import { applyStyleShader, createStackUniforms, type StackUniforms } from "@/lib/style-shader"
-import { resolveStack } from "@/lib/style-stack"
+import { resolveStack, evaluateStackAnimation } from "@/lib/style-stack"
 import {
   createStyleClock,
   advanceStyleClock,
@@ -77,6 +77,9 @@ export const STYLE_CLOCK_DEBUG = {
   elapsed: 0,
   reveal: 0,
   sinceCompletion: Infinity as number,
+  groupAmount: 1,
+  groupOffset: 0,
+  groupFrozen: false,
 }
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
@@ -425,6 +428,12 @@ function AnimatedStrokes({
   if (stackUniformsRef.current === null) {
     stackUniformsRef.current = createStackUniforms()
   }
+  // Holds each layer's phase at the moment freezeOnComplete engaged.
+  const frozenPhaseRef = useRef<{ tex: number; dit: number; asc: number } | null>(null)
+  // When the current stack-animation behaviour was switched on. Scene-relative
+  // behaviours (fade, drift, loop) measure from here, so enabling one mid-session
+  // actually plays instead of starting already finished.
+  const stackArmRef = useRef<{ key: string; at: number }>({ key: "", at: 0 })
   const styleClockRef = useRef<StyleClock | null>(null)
   if (styleClockRef.current === null) {
     styleClockRef.current = createStyleClock()
@@ -482,6 +491,49 @@ function AnimatedStrokes({
     const stack = styleState ? resolveStack(styleState) : null
     if (stack) stackUniformsRef.current!.uFsStackOrder.value = stack.order
 
+    // Stack-level animation: the whole GROUP as one container. Produces a
+    // group amount (fades/pulses) and a shared time offset (the stack drifts
+    // together), both applied uniformly below so layers keep their relative
+    // balance — a preset tuned "ASCII dominant, others supporting" stays that
+    // way while the group fades in.
+    // Re-arm whenever the behaviour (or its enabled state) changes.
+    const armKey = styleState
+      ? `${styleState.layerStackEnabled && styleState.stackAnimationEnabled}:${styleState.stackAnimationType}`
+      : ""
+    if (stackArmRef.current.key !== armKey) {
+      stackArmRef.current = { key: armKey, at: clock.elapsed }
+    }
+    const groupAnim = styleState
+      ? evaluateStackAnimation({
+          enabled: styleState.layerStackEnabled && styleState.stackAnimationEnabled,
+          behaviour: styleState.stackAnimationType,
+          speed: styleState.stackAnimationSpeed,
+          phase: styleState.stackAnimationPhase,
+          sinceArmed: clock.elapsed - stackArmRef.current.at,
+          reveal: clock.reveal,
+          sinceCompletion: clock.sinceCompletion,
+          loopSeconds: styleState.styleLoopSeconds,
+        })
+      : null
+    const gAmt = groupAnim ? groupAnim.amount : 1
+    const gOff = groupAnim ? groupAnim.timeOffset : 0
+    // freezeOnComplete holds every layer's phase at the frame the reveal ended.
+    if (groupAnim?.frozen) {
+      if (frozenPhaseRef.current === null) {
+        frozenPhaseRef.current = {
+          tex: textureUniformsRef.current!.uFsTexTime.value,
+          dit: ditherUniformsRef.current!.uFsDitTime.value,
+          asc: asciiUniformsRef.current!.uFsAscTime.value,
+        }
+      }
+    } else {
+      frozenPhaseRef.current = null
+    }
+    const frozen = frozenPhaseRef.current
+    STYLE_CLOCK_DEBUG.groupAmount = gAmt
+    STYLE_CLOCK_DEBUG.groupOffset = gOff
+    STYLE_CLOCK_DEBUG.groupFrozen = !!groupAnim?.frozen
+
     // ---- Procedural texture v1 (uniform writes only) --------------------
     // Pattern selection + params + animation phase all flow through uniform
     // values on the injected shader. No material swap, no recompile, no
@@ -510,12 +562,17 @@ function AnimatedStrokes({
         loopSeconds: styleState.styleLoopSeconds,
         revealScale: 4,
       })
-      u.uFsTexTime.value = texT.active ? texT.time : styleState.texturePhase
+      u.uFsTexTime.value = frozen
+        ? frozen.tex
+        : texT.active
+          ? texT.time + gOff
+          : styleState.texturePhase + gOff
       // One-shot / delayed modes fade the layer in and out via `amount`.
       // Stack opacity multiplies the layer's own intensity; the timing
       // envelope (`amount`) then scales one-shot / delayed modes on top.
       const texBase = stack ? stack.textureAmount : styleState.textureIntensity
-      u.uFsTexIntensity.value = texT.active && texT.amount < 1 ? texBase * texT.amount : texBase
+      u.uFsTexIntensity.value =
+        (texT.active && texT.amount < 1 ? texBase * texT.amount : texBase) * gAmt
     }
 
     // ---- Dither v1 (uniform writes only) --------------------------------
@@ -545,8 +602,9 @@ function AnimatedStrokes({
         revealScale: 6,
       })
       // MATRIX motion: shift which threshold cell each pixel samples.
-      d.uFsDitTime.value = ditT.active ? ditT.time : 0
+      d.uFsDitTime.value = frozen ? frozen.dit : ditT.active ? ditT.time + gOff : gOff
       if (ditT.active && ditT.amount < 1) d.uFsDitIntensity.value *= ditT.amount
+      d.uFsDitIntensity.value *= gAmt
       // THRESHOLD-BIAS motion: with no travel direction the matrix cannot move,
       // so animation instead sweeps the bias — tone opens and closes in place.
       // This is what distinguishes "Threshold Sweep" from "Dither Crawl".
@@ -596,9 +654,10 @@ function AnimatedStrokes({
       a.uFsAscAnim.value = ascT.active ? ASCII_ANIM_INDEX[styleState.asciiAnimationType] : 0
       // revealDensity reads uFsAscReveal directly, so it needs no phase of its
       // own; every other behaviour rides the shared clock.
-      a.uFsAscTime.value = ascT.active ? ascT.time : 0
+      a.uFsAscTime.value = frozen ? frozen.asc : ascT.active ? ascT.time + gOff : gOff
       const ascBase = stack ? stack.asciiAmount : 1
-      a.uFsAscAmount.value = ascT.active && ascT.amount < 1 ? ascBase * ascT.amount : ascBase
+      a.uFsAscAmount.value =
+        (ascT.active && ascT.amount < 1 ? ascBase * ascT.amount : ascBase) * gAmt
       a.uFsAscBlend.value = stack ? stack.asciiBlend : 0
     }
 
@@ -2748,6 +2807,15 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 stackAscii: {styleState.stackAsciiOpacity.toFixed(2)} / {styleState.stackAsciiBlend}
               </div>
               <div>textureIsAlwaysBase: YES (pre-lighting, not reorderable)</div>
+              <div className="mt-0.5 text-foreground/80">— Stack animation (the GROUP) —</div>
+              <div>stackAnimationImplemented: YES (v1)</div>
+              <div>stackAnimationEnabled: {String(styleState.stackAnimationEnabled)}</div>
+              <div>stackAnimationType: {styleState.stackAnimationType}</div>
+              <div>stackAnimationSpeed: {styleState.stackAnimationSpeed.toFixed(2)}</div>
+              <div>groupAmount: {STYLE_CLOCK_DEBUG.groupAmount.toFixed(3)}</div>
+              <div>groupTimeOffset: {STYLE_CLOCK_DEBUG.groupOffset.toFixed(2)}</div>
+              <div>groupFrozen: {String(STYLE_CLOCK_DEBUG.groupFrozen)}</div>
+              <div>stackAnimIsNotPerLayerAnim: YES (moves the group, not one layer)</div>
               <div>syncMode: {styleState.syncMode}</div>
               <div>syncToReveal: {String(styleState.syncToReveal)}</div>
               <div className="mt-0.5 text-foreground/80">— Composite (renderers later) —</div>
