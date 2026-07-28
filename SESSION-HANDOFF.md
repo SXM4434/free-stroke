@@ -1827,3 +1827,94 @@ the individual systems and the stack — both now exist, so fusion is unblocked.
 
 (supersedes `POST_MVP_LAYER_STACK_PHASE_1_PASS`; all prior checkpoints remain in
 effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `CRAFT_PASS_TEXTURE_AND_MATERIAL_STRENGTH`
+
+**Status: quality pass on the two systems Sebs called weak.** Fable craft agent,
+judged in a HEADED browser (headless:false, Metal ANGLE) per his explicit
+instruction. No geometry touched; all gates still pass.
+
+### Sebs's verdict that triggered this
+
+"a lot of the animations for textures are hard to notice or just don't do
+anything · need more options · a lot of the options are just weak · texture and
+material are the easiest to make and they suck"
+
+He was right, and my verification was the reason I missed it: I measured "did
+the pixels change", never "is this strong enough to be worth having". Those are
+different questions. Every numeric gate passed on effects that looked like
+nothing.
+
+### Real bugs found (all mine, all invisible to the existing gates)
+
+1. **completionFlash never ended.** `completion` stays 1 after the draw, so the
+   "flash" froze into a permanent gray glow. Before-frames 1s apart were
+   BYTE-IDENTICAL. Rewired to ramp over the last 20% of the draw then decay on a
+   real `sinceCompletion` clock — a genuine one-shot.
+2. **Animation-off left material state stuck.** metalness / emissive /
+   sheenColor kept their last animated values instead of pinning back to base.
+3. **Animated textures genuinely did not move perceptibly.** Frames 1s apart at
+   54 dB PSNR (bubbleDrift) = nothing. Texture clock base rate was 0.6.
+4. **contourBands and gelBubbles were INVISIBLE** — textured and untextured
+   frames indistinguishable.
+
+### Changes
+
+- **Texture strength**: albedo gain 1.6→2.4, roughness swing 0.85→1.3; noise
+  re-expanded + third octave; bands smoothstep-shaped; contour lines thickened;
+  grain now re-seeds on a time step so it BOILS like film grain instead of
+  sliding invisibly.
+- **Texture motion**: clock base 0.6→1.2, preset speeds roughly doubled, preset
+  intensities 0.35–0.55 → 0.6–0.75. Emil framework: decorative, rarely-seen,
+  expressive canvas motion may be present; target one visible feature-cycle per
+  ~1–1.5s (was ~4s, which reads as static).
+- **7 NEW texture patterns** (indices APPENDED so saved states stay valid):
+  crosshatch, dots (ink-dot grid — texture, not dither), woodgrain, cellular,
+  brushed, craquelure, ripple. Plus 4 new animated presets.
+- **7 NEW materials**: ceramic, chalk, chrome, gold, wax, neon, iridescent
+  (thin-film via new optional MaterialParams fields). Existing six retuned so
+  glossyPlastic/softGel/rubber stop collapsing into each other.
+- **Environment rig strengthened** (key 3→5, rim 1.6→2.5, fill 1.1→1.8, streak
+  4→8 narrower, + a horizon band) — glossy and metal now have something to
+  mirror. This was the root cause of "every material is slightly different
+  black": roughness differences are invisible without reflections.
+- **Animated material**: env swells now ADDITIVE as well as multiplicative (a
+  multiplier alone dies on a matte base); roughnessPulse reaches near-mirror;
+  gelShimmer forces a visible sheenColor on black-sheen bases; signalFlicker
+  gained hard dropout blinks (61→37 dB frame change).
+
+### Measured improvement
+
+- Texture pairwise distinctness (closest pair, grain vs noise):
+  **13.8–23.9 → 28.9–42.7** across the four modes.
+- Animated texture frame-pairs: **37–54 dB/s → 29–37 dB per 0.6s.**
+- `verify-gates.mjs`: **ALL GATES PASS** (rebuild counts flat on all four modes
+  incl. the 7 new patterns, exports valid, taxonomy clean, 0 console errors).
+
+### New tool
+
+`scripts/verify/verify-live.mjs` — opens a REAL VISIBLE Chrome window and holds
+it open. The headless scripts answer "did pixels change"; only a live window
+answers "is this noticeable". Use it for any judgment call from now on.
+
+### Still weak (honest)
+
+- **shineSweep** is a global gloss wave, not a travelling highlight. A real
+  positional sweep needs a shader-level band next to the texture injection
+  (~half a day of GLSL).
+- **chrome** reads as dark metal rather than a mirror — there is little in the
+  scene for it to reflect. A richer environment would fix it.
+- **chalk vs ceramic** are close head-on; they separate on orbit.
+- **iridescent** shift is real but modest at stroke scale.
+
+### Standing lesson
+
+Numeric gates must test the effect's OWN signature and its STRENGTH, not just
+that something changed. "Reads" needs a perceptual floor a designer would agree
+with, not a pixel-difference floor.
+
+### Final locked checkpoint label
+
+`CRAFT_PASS_TEXTURE_AND_MATERIAL_STRENGTH`

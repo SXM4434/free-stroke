@@ -453,6 +453,8 @@ function AnimatedStrokes({
       emissive: new THREE.Color(base.emissive),
       emissiveIntensity: base.emissiveIntensity,
       envMapIntensity: base.envMapIntensity,
+      iridescence: base.iridescence ?? 0,
+      iridescenceIOR: base.iridescenceIOR ?? 1.3,
     })
     // Every style layer rides the same shared material across all four modes.
     applyStyleShader(mat, {
@@ -556,7 +558,11 @@ function AnimatedStrokes({
       const texT = evaluateLayerTime(clock, {
         animated: texOn && styleState.textureAnimated && texSync.animated,
         syncMode: texSync.syncMode,
-        speed: styleState.textureSpeed * 0.6,
+        // Base rate 0.6 → 1.2 after live judging: at 0.6 a default-speed
+        // pattern took ~4s to travel one feature width and read as static.
+        // Decorative surface motion on the canvas object is allowed to be
+        // present — it is not UI-chrome motion that must stay out of the way.
+        speed: styleState.textureSpeed * 1.2,
         phase: styleState.texturePhase,
         delay: styleState.textureDelay,
         loopSeconds: styleState.styleLoopSeconds,
@@ -684,6 +690,9 @@ function AnimatedStrokes({
           speed: styleState.materialAnimationSpeed,
           intensity: styleState.materialAnimationIntensity,
           completion,
+          // Real post-completion clock so one-shot accents (completionFlash)
+          // can decay instead of freezing at their completion-1.0 value.
+          sinceCompletion: clock.sinceCompletion,
         })
         liveMaterial.color.set(next.color)
         liveMaterial.roughness = next.roughness
@@ -697,17 +706,24 @@ function AnimatedStrokes({
         liveMaterial.emissive.set(next.emissive)
         liveMaterial.emissiveIntensity = next.emissiveIntensity
         liveMaterial.envMapIntensity = next.envMapIntensity
+        liveMaterial.iridescence = next.iridescence ?? 0
       } else {
         // Animation off → pin the surface to its static base so it never
-        // freezes on the last animated frame.
+        // freezes on the last animated frame. Pins EVERY field an animation
+        // can touch (metalness/emissive/sheenColor were previously left
+        // stuck at their last animated values).
         liveMaterial.roughness = baseParams.roughness
+        liveMaterial.metalness = baseParams.metalness
         liveMaterial.clearcoat = baseParams.clearcoat
         liveMaterial.clearcoatRoughness = baseParams.clearcoatRoughness
         liveMaterial.reflectivity = baseParams.reflectivity
         liveMaterial.sheen = baseParams.sheen
         liveMaterial.sheenRoughness = baseParams.sheenRoughness
+        liveMaterial.sheenColor.set(baseParams.sheenColor)
+        liveMaterial.emissive.set(baseParams.emissive)
         liveMaterial.emissiveIntensity = baseParams.emissiveIntensity
         liveMaterial.envMapIntensity = baseParams.envMapIntensity
+        liveMaterial.iridescence = baseParams.iridescence ?? 0
       }
     }
 
@@ -1926,12 +1942,17 @@ function Scene({
           preset collapses to "dark + slightly different roughness", which is
           exactly why all four modes looked identical. resolution kept small;
           frames=1 bakes it once (static, no per-frame cost). */}
+      {/* Rig strengthened after live judging: at the old intensities the
+          glossy presets were indistinguishable from ink at real stroke sizes —
+          almost nothing bright existed to reflect. Matte presets are shielded
+          by their own low envMapIntensity, so the hot rig does not wash them
+          out; it is exactly the glossy/metal family that picks it up. */}
       <Environment resolution={256} frames={1} background={false}>
-        <color attach="background" args={["#15171a"]} />
+        <color attach="background" args={["#1a1d22"]} />
         {/* Big soft key panel (top-front) → broad clearcoat/gloss highlight */}
         <Lightformer
           form="rect"
-          intensity={3}
+          intensity={5}
           color="#ffffff"
           position={[2.5, 4, 3]}
           rotation={[-Math.PI / 3, 0, 0]}
@@ -1940,7 +1961,7 @@ function Scene({
         {/* Cool rim panel (back-left) → separates dark surfaces from dark bg */}
         <Lightformer
           form="rect"
-          intensity={1.6}
+          intensity={2.5}
           color="#9fc4ff"
           position={[-4, 1.5, -3]}
           rotation={[0, Math.PI / 2.2, 0]}
@@ -1949,20 +1970,31 @@ function Scene({
         {/* Warm low fill (front-low) → gives sheen/rubber a soft underside glow */}
         <Lightformer
           form="rect"
-          intensity={1.1}
+          intensity={1.8}
           color="#ffd9b0"
           position={[1, -2.5, 2]}
           rotation={[Math.PI / 2.5, 0, 0]}
           scale={[6, 3, 1]}
         />
-        {/* Tight bright streak → crisp moving specular for Shine Sweep / gloss */}
+        {/* Tight bright streak → crisp specular line for gloss/chrome. The
+            thing a "wet" surface visibly mirrors. */}
         <Lightformer
           form="rect"
-          intensity={4}
+          intensity={8}
           color="#ffffff"
           position={[-1.5, 3, 2.5]}
           rotation={[-Math.PI / 4, 0, 0]}
-          scale={[0.6, 5, 1]}
+          scale={[0.4, 6, 1]}
+        />
+        {/* Long horizon band (eye level, behind) → gives chrome/gold/glossy a
+            classic studio horizon to reflect, which is what makes metal read
+            as metal instead of gray. */}
+        <Lightformer
+          form="rect"
+          intensity={3.5}
+          color="#f2ede4"
+          position={[0, 0.4, -6]}
+          scale={[14, 0.8, 1]}
         />
       </Environment>
 

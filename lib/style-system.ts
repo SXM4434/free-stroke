@@ -26,6 +26,13 @@ export type MaterialPreset =
   | "glossyPlastic"
   | "rubber"
   | "signal"
+  | "ceramic"
+  | "chalk"
+  | "chrome"
+  | "gold"
+  | "wax"
+  | "neon"
+  | "iridescent"
   | "custom"
 
 /**
@@ -73,6 +80,13 @@ export type TextureMode =
   | "scanlines"
   | "bands"
   | "contour"
+  | "crosshatch"
+  | "dots"
+  | "woodgrain"
+  | "cellular"
+  | "brushed"
+  | "craquelure"
+  | "ripple"
 
 /** How a texture/effect is anchored as the camera or geometry moves. */
 export type TextureLockMode = "screen" | "object" | "surface" | "stroke"
@@ -391,6 +405,13 @@ export const MATERIAL_PRESETS: PresetShell<MaterialPreset>[] = [
   { id: "glossyPlastic", label: "Glossy Plastic" },
   { id: "rubber", label: "Rubber" },
   { id: "signal", label: "Signal" },
+  { id: "ceramic", label: "Ceramic" },
+  { id: "chalk", label: "Chalk" },
+  { id: "chrome", label: "Chrome" },
+  { id: "gold", label: "Gold" },
+  { id: "wax", label: "Wax" },
+  { id: "neon", label: "Neon" },
+  { id: "iridescent", label: "Iridescent" },
   { id: "custom", label: "Custom…" },
 ]
 
@@ -424,6 +445,10 @@ export interface MaterialParams {
    *  glossier / more mirror-like; drives the visible difference between
    *  matte (low) and glossy/signal (high) presets. */
   envMapIntensity: number
+  /** Thin-film iridescence (oil-slick color shift). Optional — only the
+   *  "iridescent" preset uses it; absent means 0. */
+  iridescence?: number
+  iridescenceIOR?: number
 }
 
 export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
@@ -443,21 +468,23 @@ export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
     emissiveIntensity: 0,
     envMapIntensity: 1.1,
   },
-  // Softer, fuller balloon/gel feel: cool blue-gray, clearly lighter than ink so
-  // the broad diffuse sheen reads as a soft glow. Best for Inflate / Solid.
+  // Softer, fuller balloon/gel feel: cool blue-gray, clearly lighter than ink,
+  // with a wet clearcoat over a strong blue sheen so it reads as translucent
+  // gel rather than "gray plastic". Live-judged: the old 0.3 clearcoat /
+  // 0.8 env version was indistinguishable from a plain gray tube.
   softGel: {
-    color: "#454b57",
-    roughness: 0.5,
+    color: "#4e5a6e",
+    roughness: 0.42,
     metalness: 0.0,
-    clearcoat: 0.3,
-    clearcoatRoughness: 0.5,
-    reflectivity: 0.4,
+    clearcoat: 0.55,
+    clearcoatRoughness: 0.22,
+    reflectivity: 0.5,
     sheen: 1.0,
-    sheenRoughness: 0.65,
-    sheenColor: "#8fa6bd",
+    sheenRoughness: 0.45,
+    sheenColor: "#a9c3e8",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 0.8,
+    envMapIntensity: 1.1,
   },
   // Matte dry clay: warm, notably light, fully rough, zero clearcoat/sheen. Reads
   // as a soft chalky surface — the clear "no highlight" opposite of glossy.
@@ -476,39 +503,43 @@ export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
     envMapIntensity: 0.12,
   },
   // Smooth shiny plastic: kept deliberately dark so the mirror-sharp clearcoat
-  // highlight + strong env reflection pop hard against it. The "wet/glossy" end.
+  // highlight + strong env reflection pop hard against it. The "wet/glossy"
+  // end. Live-judged against ink on Solid: at env 1.8 the two were
+  // indistinguishable — 2.8 (with the brighter studio rig) is where the wet
+  // streak reflections actually appear on a stroke-sized surface.
   glossyPlastic: {
-    color: "#1b1d24",
-    roughness: 0.06,
+    color: "#14161c",
+    roughness: 0.05,
     metalness: 0.0,
     clearcoat: 1.0,
-    clearcoatRoughness: 0.03,
-    reflectivity: 0.9,
+    clearcoatRoughness: 0.02,
+    reflectivity: 1.0,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 1.8,
+    envMapIntensity: 2.8,
   },
-  // Soft rubber: warm mid-brown, high roughness, warm sheen → satin, no hard
-  // highlight. Clearly a softer, warmer sibling of matteClay.
+  // Soft rubber: dark warm charcoal with a satin sheen band — a tire, not
+  // clay. Live-judged: the old #33312f/0.92 version collapsed into matteClay
+  // at stroke size; darker base + tighter sheen separates them.
   rubber: {
-    color: "#33312f",
-    roughness: 0.92,
+    color: "#2c2927",
+    roughness: 0.82,
     metalness: 0.0,
     clearcoat: 0.04,
     clearcoatRoughness: 0.95,
     reflectivity: 0.15,
     sheen: 1.0,
-    sheenRoughness: 0.8,
-    sheenColor: "#9a8a78",
+    sheenRoughness: 0.6,
+    sheenColor: "#8f7d68",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 0.3,
+    envMapIntensity: 0.4,
   },
   // Digital "signal": metallic teal with a clear cool emissive so it reads
-  // screen-lit. The most chromatic preset while still restrained.
+  // screen-lit. The most chromatic of the original set.
   signal: {
     color: "#16242c",
     roughness: 0.2,
@@ -520,8 +551,124 @@ export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
     sheenRoughness: 0.5,
     sheenColor: "#000000",
     emissive: "#1f6e8c",
-    emissiveIntensity: 0.7,
-    envMapIntensity: 1.4,
+    emissiveIntensity: 1.0,
+    envMapIntensity: 1.6,
+  },
+  // White porcelain: the first LIGHT preset. Pale warm body under a hard
+  // glaze — the single biggest read against the dark family, and the glaze
+  // highlight is obvious on every mode.
+  ceramic: {
+    color: "#e9e7e1",
+    roughness: 0.22,
+    metalness: 0.0,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.08,
+    reflectivity: 0.7,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+    envMapIntensity: 1.3,
+  },
+  // Bone-dry chalk/plaster: pale AND totally flat — the "no highlight at all"
+  // extreme. Pairs against ceramic (same lightness, opposite surface).
+  chalk: {
+    color: "#dcd9d2",
+    roughness: 1.0,
+    metalness: 0.0,
+    clearcoat: 0.0,
+    clearcoatRoughness: 1.0,
+    reflectivity: 0.03,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+    envMapIntensity: 0.06,
+  },
+  // Polished chrome: full metal, near-mirror. The surface IS the environment —
+  // nothing else in the family behaves like this.
+  chrome: {
+    color: "#f4f5f7",
+    roughness: 0.06,
+    metalness: 1.0,
+    clearcoat: 0.0,
+    clearcoatRoughness: 0.5,
+    reflectivity: 1.0,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+    envMapIntensity: 2.2,
+  },
+  // Brushed gold/brass: warm colored metal with a softer reflection than
+  // chrome — reads as jewelry, not mirror.
+  gold: {
+    color: "#d4a437",
+    roughness: 0.24,
+    metalness: 1.0,
+    clearcoat: 0.0,
+    clearcoatRoughness: 0.5,
+    reflectivity: 1.0,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+    envMapIntensity: 1.8,
+  },
+  // Amber wax: warm honey body, soft wet-ish coat, waxy bloom sheen. The
+  // "organic soft" preset that is neither gel (cool) nor clay (dry).
+  wax: {
+    color: "#b8863f",
+    roughness: 0.55,
+    metalness: 0.0,
+    clearcoat: 0.45,
+    clearcoatRoughness: 0.35,
+    reflectivity: 0.4,
+    sheen: 0.5,
+    sheenRoughness: 0.5,
+    sheenColor: "#e8c98f",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+    envMapIntensity: 0.7,
+  },
+  // Neon tube: emissive-dominant hot pink over a near-black body — the stroke
+  // reads as a light source. Honest label: this glows, it does not bloom
+  // (no post-processing pass exists).
+  neon: {
+    color: "#1a0b10",
+    roughness: 0.4,
+    metalness: 0.0,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.2,
+    reflectivity: 0.5,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#ff2d6f",
+    emissiveIntensity: 2.4,
+    envMapIntensity: 0.4,
+  },
+  // Oil-slick: thin-film iridescence over dark gloss — the reflection color
+  // shifts with view angle. Unique mechanism (iridescence), not a tint.
+  iridescent: {
+    color: "#101216",
+    roughness: 0.15,
+    metalness: 0.3,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.05,
+    reflectivity: 0.9,
+    sheen: 0.0,
+    sheenRoughness: 0.5,
+    sheenColor: "#000000",
+    emissive: "#000000",
+    emissiveIntensity: 0,
+    envMapIntensity: 2.0,
+    iridescence: 1.0,
+    iridescenceIOR: 1.6,
   },
   // Custom — the editable base. Starts as a neutral mid surface; the actual
   // values come from styleState.customMaterial (merged in resolveMaterialParams).
@@ -599,6 +746,13 @@ export const TEXTURE_MODES: PresetShell<TextureMode>[] = [
   { id: "scanlines", label: "Scanlines" },
   { id: "bands", label: "Bands" },
   { id: "contour", label: "Contour" },
+  { id: "crosshatch", label: "Crosshatch" },
+  { id: "dots", label: "Ink Dots" },
+  { id: "woodgrain", label: "Woodgrain" },
+  { id: "cellular", label: "Cellular" },
+  { id: "brushed", label: "Brushed" },
+  { id: "craquelure", label: "Craquelure" },
+  { id: "ripple", label: "Ripple" },
 ]
 
 export const DITHER_PRESETS: PresetShell<DitherType>[] = [
@@ -680,6 +834,13 @@ export const MATERIAL_PRESET_DEFS: StylePreset[] = [
   { id: "glossyPlastic", label: "Glossy Plastic", family: "material", enabled: true, implemented: true, applies: { materialPreset: "glossyPlastic" }, bestModes: ["inflate"] },
   { id: "rubber", label: "Rubber", family: "material", enabled: true, implemented: true, applies: { materialPreset: "rubber" }, bestModes: ["inflate", "rod"] },
   { id: "signal", label: "Signal", family: "material", enabled: true, implemented: true, applies: { materialPreset: "signal" }, bestModes: ["rod", "extrude"] },
+  { id: "ceramic", label: "Ceramic", family: "material", enabled: true, implemented: true, description: "White porcelain under a hard glaze.", applies: { materialPreset: "ceramic" }, bestModes: ["solid", "inflate"] },
+  { id: "chalk", label: "Chalk", family: "material", enabled: true, implemented: true, description: "Bone-dry plaster. Pale and totally flat.", applies: { materialPreset: "chalk" }, bestModes: ["solid"] },
+  { id: "chrome", label: "Chrome", family: "material", enabled: true, implemented: true, description: "Full-metal mirror — the surface is the room.", applies: { materialPreset: "chrome" }, bestModes: ["extrude", "inflate"] },
+  { id: "gold", label: "Gold", family: "material", enabled: true, implemented: true, description: "Warm polished brass-gold metal.", applies: { materialPreset: "gold" }, bestModes: ["extrude", "solid"] },
+  { id: "wax", label: "Wax", family: "material", enabled: true, implemented: true, description: "Amber honey-wax with a soft bloom.", applies: { materialPreset: "wax" }, bestModes: ["inflate", "solid"] },
+  { id: "neon", label: "Neon", family: "material", enabled: true, implemented: true, description: "Self-lit hot-pink tube (glow, no post bloom).", applies: { materialPreset: "neon" }, bestModes: ["rod"] },
+  { id: "iridescent", label: "Iridescent", family: "material", enabled: true, implemented: true, description: "Oil-slick thin film — color shifts with view angle.", applies: { materialPreset: "iridescent" }, bestModes: ["inflate", "extrude"] },
 ]
 
 /* --- dither (IMPLEMENTED v1 — threshold renderer is live) ---
@@ -1098,19 +1259,22 @@ export const ANIMATED_ASCII_PRESET_DEFS: StylePreset[] = [
 * Each preset enables the texture layer and picks a pattern + tuning. They
 * only touch texture* state: never material, never dither, never ascii. */
 export const TEXTURE_PRESET_DEFS: StylePreset[] = [
+  // Intensities across this family were raised after LIVE judging (headed
+  // window, all four modes): at the old 0.35–0.55 defaults most patterns were
+  // invisible at real viewport stroke sizes. Texture presets exist to be SEEN.
   {
     id: "fineGrain",
     label: "Fine Grain",
     family: "texture",
     enabled: true,
     implemented: true,
-    description: "Subtle per-cell speckle. Safe default on every mode.",
+    description: "Per-cell speckle, clearly present on every mode.",
     applies: {
       textureEnabled: true,
       textureMode: "grain",
       textureScale: 1.6,
-      textureIntensity: 0.35,
-      textureContrast: 0.45,
+      textureIntensity: 0.6,
+      textureContrast: 0.6,
     },
   },
   {
@@ -1125,8 +1289,8 @@ export const TEXTURE_PRESET_DEFS: StylePreset[] = [
       textureEnabled: true,
       textureMode: "scanlines",
       textureScale: 1.0,
-      textureIntensity: 0.5,
-      textureContrast: 0.6,
+      textureIntensity: 0.75,
+      textureContrast: 0.7,
     },
   },
   {
@@ -1135,14 +1299,14 @@ export const TEXTURE_PRESET_DEFS: StylePreset[] = [
     family: "texture",
     enabled: true,
     implemented: true,
-    description: "Broad soft stripes wrapping the volume.",
+    description: "Broad stripes wrapping the volume.",
     bestModes: ["solid", "inflate"],
     applies: {
       textureEnabled: true,
       textureMode: "bands",
-      textureScale: 0.8,
-      textureIntensity: 0.45,
-      textureContrast: 0.4,
+      textureScale: 1.1,
+      textureIntensity: 0.75,
+      textureContrast: 0.65,
     },
   },
   {
@@ -1157,8 +1321,8 @@ export const TEXTURE_PRESET_DEFS: StylePreset[] = [
       textureEnabled: true,
       textureMode: "contour",
       textureScale: 1.4,
-      textureIntensity: 0.55,
-      textureContrast: 0.5,
+      textureIntensity: 0.75,
+      textureContrast: 0.65,
     },
   },
   {
@@ -1167,14 +1331,126 @@ export const TEXTURE_PRESET_DEFS: StylePreset[] = [
     family: "texture",
     enabled: true,
     implemented: true,
-    description: "Soft blobby value-noise field, like bubbles under the skin.",
+    description: "Blobby noise field, like bubbles under the skin.",
     bestModes: ["inflate"],
     applies: {
       textureEnabled: true,
       textureMode: "noise",
-      textureScale: 0.7,
-      textureIntensity: 0.4,
-      textureContrast: 0.35,
+      textureScale: 0.9,
+      textureIntensity: 0.7,
+      textureContrast: 0.6,
+    },
+  },
+  {
+    id: "crosshatch",
+    label: "Crosshatch",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Crossing diagonal pen-hatching, like ink shading.",
+    bestModes: ["extrude", "solid"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "crosshatch",
+      textureScale: 1.0,
+      textureIntensity: 0.7,
+      textureContrast: 0.65,
+    },
+  },
+  {
+    id: "inkDots",
+    label: "Ink Dots",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Printed dot grid with size jitter. Texture, not dither.",
+    bestModes: ["solid", "extrude"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "dots",
+      textureScale: 1.0,
+      textureIntensity: 0.75,
+      textureContrast: 0.6,
+    },
+  },
+  {
+    id: "woodgrain",
+    label: "Woodgrain",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Wandering parallel grain lines, like cut timber.",
+    bestModes: ["solid", "extrude"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "woodgrain",
+      textureScale: 1.0,
+      textureIntensity: 0.7,
+      textureContrast: 0.6,
+    },
+  },
+  {
+    id: "cellular",
+    label: "Cellular",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Packed organic cells with visible walls, like foam.",
+    bestModes: ["inflate", "solid"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "cellular",
+      textureScale: 1.0,
+      textureIntensity: 0.7,
+      textureContrast: 0.6,
+    },
+  },
+  {
+    id: "brushedSteel",
+    label: "Brushed",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Anisotropic streaks, like brushed metal. Pairs with Chrome/Gold.",
+    bestModes: ["rod", "extrude"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "brushed",
+      textureScale: 1.0,
+      textureIntensity: 0.65,
+      textureContrast: 0.6,
+    },
+  },
+  {
+    id: "craquelure",
+    label: "Craquelure",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Connected crack web, like old varnish or dried glaze.",
+    bestModes: ["solid", "inflate"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "craquelure",
+      textureScale: 1.1,
+      textureIntensity: 0.75,
+      textureContrast: 0.7,
+    },
+  },
+  {
+    id: "interference",
+    label: "Ripple",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Two radial wave sources interfering, like still water rings.",
+    bestModes: ["solid", "inflate"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "ripple",
+      textureScale: 1.0,
+      textureIntensity: 0.65,
+      textureContrast: 0.6,
     },
   },
 ]
@@ -1184,20 +1460,28 @@ export const TEXTURE_PRESET_DEFS: StylePreset[] = [
  * are pattern MOTION only — never threshold motion (dither) or glyph motion
  * (ascii). */
 export const ANIMATED_TEXTURE_PRESET_DEFS: StylePreset[] = [
+  // Speeds and intensities were retuned in a HEADED window. Per the animation
+  // decision framework: this is decorative, expressive, rarely-toggled motion
+  // on a canvas object — it is allowed to be PRESENT (unlike UI chrome
+  // motion, which must stay under ~300ms and out of the way). Constant
+  // travel uses a linear clock (already the case); the tuning target was
+  // "one visible feature-cycle every ~1–1.5s at default settings" — at the
+  // old speeds a band took ~4s to cross one stripe width and read as static.
   {
     id: "grainDrift",
-    label: "Grain Drift",
+    label: "Grain Boil",
     family: "animatedTexture",
     enabled: true,
     implemented: true,
-    description: "Grain crawls slowly across the surface.",
+    description: "Film-grain speckle re-rolls and crawls — a constant boil.",
     applies: {
       textureEnabled: true,
       textureAnimated: true,
       textureMode: "grain",
       textureScale: 1.6,
-      textureIntensity: 0.35,
-      textureSpeed: 0.5,
+      textureIntensity: 0.6,
+      textureContrast: 0.6,
+      textureSpeed: 1.2,
       textureDirection: "diagonal",
       motionMode: "independent",
     },
@@ -1215,26 +1499,28 @@ export const ANIMATED_TEXTURE_PRESET_DEFS: StylePreset[] = [
       textureAnimated: true,
       textureMode: "scanlines",
       textureScale: 1.0,
-      textureIntensity: 0.5,
-      textureSpeed: 1.2,
+      textureIntensity: 0.75,
+      textureContrast: 0.7,
+      textureSpeed: 2.2,
       textureDirection: "vertical",
       motionMode: "independent",
     },
   },
   {
     id: "rippleFlow",
-    label: "Ripple Flow",
+    label: "Contour Flow",
     family: "animatedTexture",
     enabled: true,
     implemented: true,
-    description: "Contour ripples travel across the form.",
+    description: "Topo contour lines stream across the form.",
     applies: {
       textureEnabled: true,
       textureAnimated: true,
       textureMode: "contour",
       textureScale: 1.2,
-      textureIntensity: 0.5,
-      textureSpeed: 0.8,
+      textureIntensity: 0.75,
+      textureContrast: 0.65,
+      textureSpeed: 1.6,
       textureDirection: "horizontal",
       motionMode: "independent",
     },
@@ -1245,15 +1531,16 @@ export const ANIMATED_TEXTURE_PRESET_DEFS: StylePreset[] = [
     family: "animatedTexture",
     enabled: true,
     implemented: true,
-    description: "Broad bands slide slowly along the stroke.",
+    description: "Broad bands slide deliberately along the stroke.",
     bestModes: ["solid", "inflate"],
     applies: {
       textureEnabled: true,
       textureAnimated: true,
       textureMode: "bands",
-      textureScale: 0.8,
-      textureIntensity: 0.45,
-      textureSpeed: 0.4,
+      textureScale: 1.1,
+      textureIntensity: 0.75,
+      textureContrast: 0.65,
+      textureSpeed: 1.0,
       textureDirection: "vertical",
       motionMode: "independent",
     },
@@ -1264,16 +1551,97 @@ export const ANIMATED_TEXTURE_PRESET_DEFS: StylePreset[] = [
     family: "animatedTexture",
     enabled: true,
     implemented: true,
-    description: "Soft noise blobs drift under the surface.",
+    description: "Noise blobs drift under the surface.",
     bestModes: ["inflate"],
     applies: {
       textureEnabled: true,
       textureAnimated: true,
       textureMode: "noise",
-      textureScale: 0.7,
-      textureIntensity: 0.4,
-      textureSpeed: 0.35,
+      textureScale: 0.9,
+      textureIntensity: 0.7,
+      textureContrast: 0.6,
+      textureSpeed: 0.9,
       textureDirection: "diagonal",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "rippleRadiate",
+    label: "Ripple Radiate",
+    family: "animatedTexture",
+    enabled: true,
+    implemented: true,
+    description: "Water rings radiate outward from two sources.",
+    bestModes: ["solid", "inflate"],
+    applies: {
+      textureEnabled: true,
+      textureAnimated: true,
+      textureMode: "ripple",
+      textureScale: 1.0,
+      textureIntensity: 0.7,
+      textureContrast: 0.6,
+      textureSpeed: 1.4,
+      textureDirection: "horizontal",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "cellFlow",
+    label: "Cell Flow",
+    family: "animatedTexture",
+    enabled: true,
+    implemented: true,
+    description: "Foam cells migrate across the surface.",
+    bestModes: ["inflate", "solid"],
+    applies: {
+      textureEnabled: true,
+      textureAnimated: true,
+      textureMode: "cellular",
+      textureScale: 1.0,
+      textureIntensity: 0.7,
+      textureContrast: 0.6,
+      textureSpeed: 0.9,
+      textureDirection: "diagonal",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "hatchDrift",
+    label: "Hatch Drift",
+    family: "animatedTexture",
+    enabled: true,
+    implemented: true,
+    description: "The pen-hatching weave slides diagonally.",
+    bestModes: ["extrude", "solid"],
+    applies: {
+      textureEnabled: true,
+      textureAnimated: true,
+      textureMode: "crosshatch",
+      textureScale: 1.0,
+      textureIntensity: 0.7,
+      textureContrast: 0.65,
+      textureSpeed: 1.2,
+      textureDirection: "diagonal",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "dotStream",
+    label: "Dot Stream",
+    family: "animatedTexture",
+    enabled: true,
+    implemented: true,
+    description: "The printed dot grid streams along the stroke.",
+    bestModes: ["solid", "extrude"],
+    applies: {
+      textureEnabled: true,
+      textureAnimated: true,
+      textureMode: "dots",
+      textureScale: 1.0,
+      textureIntensity: 0.75,
+      textureContrast: 0.6,
+      textureSpeed: 1.6,
+      textureDirection: "vertical",
       motionMode: "independent",
     },
   },
@@ -1632,6 +2000,10 @@ export interface MaterialAnimationInput {
   intensity: number
   /** Stroke draw-in progress 0..1 (for completionFlash). */
   completion: number
+  /** Seconds since the draw-in reached 100% (Infinity if it never has, 0 while
+   *  drawing). Lets completionFlash actually DECAY — with only `completion`
+   *  the flash froze at its completion-1.0 value forever. */
+  sinceCompletion?: number
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
@@ -1657,69 +2029,96 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
     // swells, so a wet specular "shine" rolls in and out. Pure reflectance —
     // clearcoat up, clearcoat roughness toward mirror, reflectivity + env up,
     // and the base roughness eased down so the reflection tightens.
+    // env swell is ADDITIVE as well as multiplicative: on matte bases
+    // (envMapIntensity ~0.1) a pure multiply had nothing to multiply, which is
+    // why this read as static in the live check. ~3.3s period: constant
+    // ambient surface motion, deliberately slower than UI timing — this is
+    // canvas decoration, not interface feedback.
     case "shineSweep": {
       const s = (Math.sin(t * 1.9) + 1) / 2 // 0..1
-      p.clearcoat = clamp01(base.clearcoat + s * 0.85 * k)
+      p.clearcoat = clamp01(base.clearcoat + s * 0.9 * k)
       p.clearcoatRoughness = clamp01(
         base.clearcoatRoughness - (base.clearcoatRoughness - 0.02) * s * k,
       )
-      p.reflectivity = clamp01(base.reflectivity + s * 0.5 * k)
-      p.roughness = clamp01(base.roughness * (1 - s * 0.45 * k))
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 2.6 * k)
+      p.reflectivity = clamp01(base.reflectivity + s * 0.6 * k)
+      p.roughness = clamp01(base.roughness * (1 - s * 0.7 * k))
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 3.2 * k) + s * 2.0 * k
       return p
     }
 
     // Breathing sheen: the soft retroreflective sheen layer grows and tightens
     // while a touch of clearcoat fades in — the velvety rim glow swells and
-    // recedes. Sheen + sheenRoughness + clearcoat + env, no color change.
+    // recedes. Forces a visible sheen color on bases that have none (sheen
+    // with a black sheenColor is arithmetic, not light).
     case "gelShimmer": {
       const s = (Math.sin(t * 2.4) + 1) / 2
-      p.sheen = clamp01(Math.max(base.sheen, 0.4) + s * 0.6 * k)
-      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.6 * k))
-      p.clearcoat = clamp01(base.clearcoat + s * 0.45 * k)
-      p.reflectivity = clamp01(base.reflectivity + s * 0.25 * k)
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 1.4 * k)
+      p.sheen = clamp01(Math.max(base.sheen, 0.5) + s * 0.5 * k)
+      p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.65 * k))
+      if (base.sheenColor === "#000000") p.sheenColor = "#b9c8dd"
+      p.clearcoat = clamp01(base.clearcoat + s * 1.0 * k)
+      p.clearcoatRoughness = clamp01(base.clearcoatRoughness * (1 - s * 0.8 * k))
+      p.reflectivity = clamp01(base.reflectivity + s * 0.5 * k)
+      p.roughness = clamp01(base.roughness * (1 - s * 0.5 * k))
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 2.2 * k) + s * 1.6 * k
       return p
     }
 
     // Matte <-> glossy: roughness makes a big swing between dry/scattered and
     // smooth/reflective, with clearcoat and env reflection rising as it
-    // smooths. This is the most purely "material property" animation.
+    // smooths. The additive env floor is what makes this land on the matte
+    // presets it exists for (clay/chalk sit at envMapIntensity ≤ 0.15, so a
+    // multiplier alone kept them matte — confirmed invisible in the live
+    // check at every frame of the cycle).
     case "roughnessPulse": {
       const s = (Math.sin(t * 2.0) + 1) / 2
-      p.roughness = clamp01(base.roughness - s * 0.85 * k)
-      p.clearcoat = clamp01(base.clearcoat + s * 0.4 * k)
-      p.clearcoatRoughness = clamp01(base.clearcoatRoughness * (1 - s * 0.6 * k))
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 2.0 * k)
+      // At default 50% intensity the peak must still land near-mirror
+      // (roughness ~0.2, glazed clearcoat), otherwise the pulse dies on the
+      // matte presets it exists for — measured invisible at the 0.95 swing.
+      p.roughness = clamp01(base.roughness - s * 1.6 * k)
+      p.clearcoat = clamp01(base.clearcoat + s * 1.2 * k)
+      p.clearcoatRoughness = clamp01(
+        base.clearcoatRoughness - (base.clearcoatRoughness - 0.03) * s * Math.min(1, 1.6 * k),
+      )
+      p.envMapIntensity = base.envMapIntensity * (1 + s * 2.0 * k) + s * 2.6 * k
       return p
     }
 
-    // Accent that follows stroke completion: a brief emissive + clearcoat flash
-    // as draw-in approaches 100%, then settles. Reads `completion` only.
+    // Accent when the stroke completes: emissive + clearcoat flash that ramps
+    // in over the last stretch of the draw and then DECAYS on a real clock.
+    // The old version froze at its completion=1.0 value forever (the "flash"
+    // was a permanent gray glow — visible in the live frames as a stroke that
+    // stayed lit seconds after the draw ended). One-shot accent: fast decay
+    // (~0.4s to half) so it reads as an event, per the "exits should be
+    // snappy" rule.
     case "completionFlash": {
-      const d = 1 - clamp01(Math.abs(completion - 0.92) / 0.18)
-      const flash = d * d
+      const since = input.sinceCompletion ?? Infinity
+      const ramp = clamp01((completion - 0.8) / 0.2) // 0 → 1 over the last 20%
+      const decay = since === Infinity ? 1 : Math.exp(-since * 1.8)
+      const flash = ramp * ramp * decay
       p.emissive = "#b9c6d2"
-      p.emissiveIntensity = base.emissiveIntensity + flash * 1.4 * k
-      p.clearcoat = clamp01(base.clearcoat + flash * 0.5 * k)
+      p.emissiveIntensity = base.emissiveIntensity + flash * 2.2 * k
+      p.clearcoat = clamp01(base.clearcoat + flash * 0.6 * k)
       p.clearcoatRoughness = clamp01(base.clearcoatRoughness * (1 - flash * 0.7 * k))
-      p.envMapIntensity = base.envMapIntensity * (1 + flash * 1.5 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + flash * 1.8 * k) + flash * 0.8 * k
       return p
     }
 
     // Digital flicker for Signal: the surface is screen-lit, so its own
-    // emissive output jitters; metalness + reflectivity + env flicker alongside
-    // it so the reflections strobe like an unstable display. No albedo change.
+    // emissive output jitters; metalness + reflectivity + env flicker
+    // alongside it so the reflections strobe like an unstable display. The
+    // hard dropout (brief near-black blink a couple of times per cycle) is
+    // what makes it read as a FAULTY sign rather than a gentle shimmer.
     case "signalFlicker": {
       const slow = (Math.sin(t * 3) + 1) / 2
       const fast = (Math.sin(t * 21.3) + Math.sin(t * 13.7)) / 2 // ~-1..1
       const flick = clamp01(0.5 + 0.5 * fast)
-      const baseEm = Math.max(base.emissiveIntensity, 0.3)
+      const drop = (t * 0.9) % 1 < 0.06 ? 0.12 : 1 // hard blink
+      const baseEm = Math.max(base.emissiveIntensity, 0.4)
       p.emissive = base.emissive === "#000000" ? "#1f6e8c" : base.emissive
-      p.emissiveIntensity = baseEm + (slow * 0.5 + flick * 0.9) * k
+      p.emissiveIntensity = (baseEm + (slow * 0.6 + flick * 1.4) * k) * drop
       p.metalness = clamp01(base.metalness + (flick - 0.5) * 0.4 * k)
       p.reflectivity = clamp01(base.reflectivity + (flick - 0.5) * 0.4 * k)
-      p.envMapIntensity = base.envMapIntensity * (1 + flick * 0.9 * k)
+      p.envMapIntensity = base.envMapIntensity * (1 + flick * 1.2 * k) * drop
       return p
     }
 
