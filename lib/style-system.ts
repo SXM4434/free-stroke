@@ -85,6 +85,8 @@ export type StyleSyncMode =
   | "independent"
   | "revealSynced"
   | "strokeTimeSynced"
+  /** Starts only once the draw-in has finished (PRD: "delayed after reveal"). */
+  | "delayedAfterReveal"
   | "completionPulse"
   | "loopSynced"
 
@@ -172,6 +174,9 @@ export interface StyleState {
   textureSpeed: number
   texturePhase: number
   textureDirection: TextureDirection
+  /** Per-layer timing (see lib/style-clock.ts). */
+  textureSyncMode: StyleSyncMode
+  textureDelay: number
 
   /* --- dither --- */
   ditherEnabled: boolean
@@ -186,6 +191,9 @@ export interface StyleState {
   ditherIntensity: number
   /** Output tone levels. 2 = pure two-tone; higher keeps more shading. */
   ditherLevels: number
+  /** Per-layer timing (see lib/style-clock.ts). */
+  ditherSyncMode: StyleSyncMode
+  ditherDelay: number
   /** Dither has its OWN lock mode — screen-space is the classic graphic look. */
   ditherLockMode: TextureLockMode
 
@@ -201,6 +209,9 @@ export interface StyleState {
   asciiAnimationType: AsciiAnimationType
   /** ASCII has its OWN lock mode; screen space is the terminal look. */
   asciiLockMode: TextureLockMode
+  /** Per-layer timing (see lib/style-clock.ts). */
+  asciiSyncMode: StyleSyncMode
+  asciiDelay: number
 
 /* --- layer stack --- */
   layerStackEnabled: boolean
@@ -224,6 +235,8 @@ export interface StyleState {
   syncMode: StyleSyncMode
   syncToReveal: boolean
   globalStyleTime: number
+  /** Loop length in seconds shared by every layer using loopSynced. */
+  styleLoopSeconds: number
 
   /* --- preset rails (Phase 1) ---
    * Tracks which preset family/preset is currently selected in the UI. These
@@ -270,6 +283,8 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   textureSpeed: 1,
   texturePhase: 0,
   textureDirection: "horizontal",
+  textureSyncMode: "independent",
+  textureDelay: 0,
 
   ditherEnabled: false,
   ditherAnimated: false,
@@ -282,6 +297,8 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   ditherIntensity: 1,
   ditherLevels: 2,
   ditherLockMode: "screen",
+  ditherSyncMode: "independent",
+  ditherDelay: 0,
 
   asciiEnabled: false,
   asciiAnimated: false,
@@ -293,6 +310,8 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   asciiDirection: "vertical",
   asciiAnimationType: "none",
   asciiLockMode: "screen",
+  asciiSyncMode: "independent",
+  asciiDelay: 0,
 
   layerStackEnabled: false,
   stackAnimationEnabled: false,
@@ -312,6 +331,7 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   syncMode: "independent",
   syncToReveal: false,
   globalStyleTime: 0,
+  styleLoopSeconds: 4,
 
   activePresetFamily: "material",
   activePresetId: null,

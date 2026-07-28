@@ -406,6 +406,62 @@ function MaterialControl({
   )
 }
 
+/* ---- Shared per-layer timing control (POST_MVP_VISUAL_TIMING_SYSTEM) ----
+ * Every animated layer answers the same question — which clock do I ride, and
+ * when do I start? Rendering that as one component keeps the three systems
+ * consistent and means new sync modes appear everywhere at once. */
+function LayerTimingControl({
+  label,
+  syncMode,
+  delay,
+  disabled,
+  onSync,
+  onDelay,
+}: {
+  label: string
+  syncMode: StyleState["syncMode"]
+  delay: number
+  disabled: boolean
+  onSync: (v: StyleState["syncMode"]) => void
+  onDelay: (v: number) => void
+}) {
+  return (
+    <div className={`flex flex-col gap-3 ${disabled ? "pointer-events-none opacity-50" : ""}`}>
+      <label className="flex flex-col gap-1">
+        <span className={fieldLabelClass}>{label} timing</span>
+        <select
+          value={syncMode}
+          onChange={(e) => onSync(e.target.value as StyleState["syncMode"])}
+          className={selectClass}
+          disabled={disabled}
+        >
+          <option value="independent">Independent — own clock</option>
+          <option value="revealSynced">Reveal synced — rides the draw-in</option>
+          <option value="strokeTimeSynced">Stroke time — the gesture&apos;s own tempo</option>
+          <option value="delayedAfterReveal">After reveal — starts once drawing ends</option>
+          <option value="completionPulse">Completion pulse — one-shot burst</option>
+          <option value="loopSynced">Loop synced — shared loop</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className={fieldLabelClass}>
+          Delay <span className="text-foreground">{delay.toFixed(1)}s</span>
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={4}
+          step={0.1}
+          value={delay}
+          onChange={(e) => onDelay(Number(e.target.value))}
+          className="w-48 accent-foreground"
+          disabled={disabled}
+        />
+      </label>
+    </div>
+  )
+}
+
 /* ---- Texture panel: procedural pattern renderer (IMPLEMENTED v1) ----
  * Texture is PATTERN only. It never sets dither (threshold) or ASCII (glyph)
  * state — those are sibling systems with their own panels. */
@@ -580,6 +636,15 @@ function TextureControl({
               <option value="diagonal">Diagonal</option>
             </select>
           </label>
+
+          <LayerTimingControl
+            label="Texture"
+            syncMode={styleState.textureSyncMode}
+            delay={styleState.textureDelay}
+            disabled={!animOn}
+            onSync={(v) => setStyleState((s) => ({ ...s, textureSyncMode: v }))}
+            onDelay={(v) => setStyleState((s) => ({ ...s, textureDelay: v }))}
+          />
 
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             Pattern motion only. Timing follows the{" "}
@@ -802,6 +867,15 @@ function DitherControl({
             </select>
           </label>
 
+          <LayerTimingControl
+            label="Dither"
+            syncMode={styleState.ditherSyncMode}
+            delay={styleState.ditherDelay}
+            disabled={!animOn}
+            onSync={(v) => setStyleState((s) => ({ ...s, ditherSyncMode: v }))}
+            onDelay={(v) => setStyleState((s) => ({ ...s, ditherDelay: v }))}
+          />
+
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             Threshold motion, not pattern motion. &ldquo;Threshold sweep&rdquo; oscillates the bias so tone
             opens and closes in place; the crawl options travel the matrix. With{" "}
@@ -1019,6 +1093,15 @@ function AsciiControl({
             )}
           </label>
 
+          <LayerTimingControl
+            label="ASCII"
+            syncMode={styleState.asciiSyncMode}
+            delay={styleState.asciiDelay}
+            disabled={!animOn}
+            onSync={(v) => setStyleState((s) => ({ ...s, asciiSyncMode: v }))}
+            onDelay={(v) => setStyleState((s) => ({ ...s, asciiDelay: v }))}
+          />
+
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             Glyph motion — not pattern motion (Texture) or threshold motion (Dither). With{" "}
             <span className="font-medium text-foreground">Sync to Draw</span> the motion rides the
@@ -1059,6 +1142,27 @@ function AnimationControl({
         &ldquo;Sync to Draw&rdquo; lets visual (style) animation use draw/reveal progress as its timing input. It
         does <span className="font-medium text-foreground">not</span> change geometry animation behavior.
       </p>
+
+      {/* Shared loop length — every layer on "Loop synced" uses this, which is
+          what lets several layers repeat in lockstep. */}
+      <label className="flex flex-col gap-1">
+        <span className={fieldLabelClass}>
+          Shared loop length <span className="text-foreground">{styleState.styleLoopSeconds.toFixed(1)}s</span>
+        </span>
+        <input
+          type="range"
+          min={0.5}
+          max={12}
+          step={0.5}
+          value={styleState.styleLoopSeconds}
+          onChange={(e) => setStyleState((s) => ({ ...s, styleLoopSeconds: Number(e.target.value) }))}
+          className="w-48 accent-foreground"
+        />
+        <span className="text-[10px] leading-relaxed text-muted-foreground">
+          Layers set to &ldquo;Loop synced&rdquo; share this cycle, so they repeat together.
+          Each layer&apos;s own timing mode and delay live in its panel.
+        </span>
+      </label>
 
       {/* The animation categories. */}
       <div className="flex flex-col gap-1.5">

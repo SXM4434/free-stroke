@@ -99,7 +99,18 @@ async function motionReport() {
     }
     consec /= frames.length - 1
     const span = compare(await pixels(frames[0]), await pixels(frames[frames.length - 1])).mean
-    const verdict = consec < 0.5 ? "STATIC (not animating)" : span < 1 ? "jitters in place" : "travels"
+    // A low span with a HIGH consecutive change is not a stuck layer — it is a
+    // periodic effect (a threshold sweep, a looped scroll) that happened to
+    // return to its starting phase by the last captured frame. Only a low
+    // consecutive change means nothing is happening.
+    const verdict =
+      consec < 0.5
+        ? "STATIC (not animating)"
+        : span < 1
+          ? consec > 5
+            ? "travels (periodic — returned to phase)"
+            : "jitters in place"
+          : "travels"
     console.log(
       `${cell.replace("motion_", "").padEnd(24)} ${consec.toFixed(2).padStart(6)} ${span
         .toFixed(2)

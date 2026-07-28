@@ -1519,3 +1519,114 @@ explicitly that phase's job; `stack-v1/` gives it a baseline.
 
 (supersedes `POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1_PASS`; all prior
 checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_VISUAL_TIMING_SYSTEM_PHASE_1_PASS`
+
+**Status: one shared clock now drives every animated style layer.** Replaces
+three hand-rolled per-system clocks. Geometry, geometry animation, and export
+untouched.
+
+### Why this phase existed
+
+Texture, dither and ASCII each grew their own timing code during their own
+phases — three near-duplicate implementations with different multipliers and no
+shared vocabulary. That drifts, and it makes the interesting behaviours
+impossible: "everything pulses together on completion" and "dither joins half a
+second after texture" cannot be expressed when each layer only knows its own
+accumulator. Fusion (a later phase) is *layers influencing each other over
+time*, which requires them to agree on what time is.
+
+### What was built
+
+- **`lib/style-clock.ts` (NEW)** — the single place a layer's phase is computed.
+  - `StyleClock`: shared scene time, reveal progress, **seconds since the reveal
+    completed**, and stroke duration. Advanced ONCE per frame before any layer
+    reads it.
+  - Completion is detected by watching the 0→1 BOUNDARY CROSSING, not by testing
+    `reveal >= 1` each frame. So a playhead parked at 1 does not retrigger,
+    scrubbing back re-arms for replay, and `Infinity` cleanly means "hasn't
+    happened yet".
+  - `evaluateLayerTime()` returns `{ time, amount, active }`. **`amount` is the
+    key design choice**: a 0..1 envelope the caller multiplies effect strength
+    by, so one-shot and continuous modes share one interface and renderers never
+    branch on mode.
+  - `resolveSyncMode()` maps the coarse user-facing MotionMode onto the finer
+    per-layer sync mode, so renderers never branch on motionMode either.
+- **Six sync modes:** independent / revealSynced / strokeTimeSynced (the
+  gesture's own tempo — a slowly-drawn stroke gets slow style motion) /
+  delayedAfterReveal / completionPulse / loopSynced (shared loop length so
+  layers repeat in lockstep).
+- **`lib/style-system.ts`** — added `delayedAfterReveal` to `StyleSyncMode`
+  (the PRD lists it; the union was missing it), plus per-layer
+  `{texture,dither,ascii}SyncMode` + `Delay`, and a shared `styleLoopSeconds`.
+- **`components/viewport-3d.tsx`** — all three renderers rewired onto the shared
+  clock; their bespoke accumulators deleted. New `STYLE_CLOCK_DEBUG` singleton
+  (same pattern as SOLID_ANIM_DEBUG) so the Debug panel can read a clock that
+  lives inside `<AnimatedStrokes>`. Timing debug fields added.
+- **`components/style-panel-scaffold.tsx`** — one reusable `LayerTimingControl`
+  (timing mode + delay) used by all three panels, so new sync modes appear
+  everywhere at once. Shared loop length exposed in the Animation panel.
+
+### The bug the new assertions caught
+
+`assert-timing.mjs` checks each mode behaves in its OWN pattern, not merely that
+it moves. The pulse failed its third assertion:
+
+```
+PASS  completionPulse / bursts at completion — consecΔ 23.59
+FAIL  completionPulse / decays back to still — consecΔ 1.14
+```
+
+It was decaying 95% but never STOPPING — with a 1.1s decay and a 1% cutoff it
+kept creeping at ~10% strength for many seconds. A one-shot that never ends is
+not a one-shot. Every screenshot of this looks correct ("it bursts and fades");
+only measuring frame-to-frame change long after the burst exposes it. Fixed with
+a 0.55s decay + 4% cutoff → definite ~1.8s lifetime, then EXACTLY static
+(verified 0.00).
+
+### New verification tooling
+
+- `scripts/verify/verify-timing.mjs` — captures each mode under conditions
+  designed to expose it (continuous with reveal parked; delayed/pulse across a
+  completion event; reveal-synced both held and scrubbed).
+- `scripts/verify/assert-timing.mjs` — turns those into pass/fail behavioural
+  assertions.
+- `diff-frames.mjs` metric fix: a periodic effect that completes a full cycle
+  inside the capture window ends where it started, which the old scoring
+  mislabeled "jitters in place". Low span + HIGH frame-to-frame change now reads
+  "travels (periodic — returned to phase)".
+
+### Test results
+
+- **Timing assertions — 10/10 PASS.**
+  - independent 40.24, loopSynced 38.21 (animate freely)
+  - delayedAfterReveal: **0.00 during** the reveal, 37.83 after
+  - completionPulse: **0.00 before**, 14.14 burst, **0.00 settled**
+  - revealSynced: **0.00 held**, 32.69 when scrubbed
+- **Regression — texture + dither animation re-captured after the refactor,
+  all still travel** (texture 17.78–59.00, dither 9.87–73.43).
+- **All 20 gates still PASS**, including all three systems stacked with no
+  geometry rebuild and working export.
+- **Console errors — 0.**
+
+### Docs
+
+- `docs/explainers/04-timing-system.md` — the model, the six modes, the
+  completion-detection detail, and the one-shot bug
+
+### Next branch — `POST_MVP_LAYER_STACK_PHASE_1`
+
+Carry forward: the stack phase owns TASTEFUL DEFAULTS. With all three systems on
+at full strength the result is legible but dark (see `docs/verification/stack-v1/`).
+The PRD's guidance — one dominant graphic layer, others supporting — is that
+phase's job, and it now has both a baseline capture and a shared clock to build
+group animation on (`amount` exists for exactly that).
+
+### Final locked checkpoint label
+
+`POST_MVP_VISUAL_TIMING_SYSTEM_PHASE_1_PASS`
+
+(supersedes `POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1_PASS`; all prior
+checkpoints remain in effect as underlying layers)

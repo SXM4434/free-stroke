@@ -46,6 +46,13 @@ import {
   type AsciiUniforms,
 } from "@/lib/ascii-shader"
 import { applyStyleShader } from "@/lib/style-shader"
+import {
+  createStyleClock,
+  advanceStyleClock,
+  evaluateLayerTime,
+  resolveSyncMode,
+  type StyleClock,
+} from "@/lib/style-clock"
 
 
 /**
@@ -57,6 +64,19 @@ import { applyStyleShader } from "@/lib/style-shader"
  * for Rod / Solid / Inflate too.
  */
 export const GEOM_BUILD_DEBUG = { buildCount: 0 }
+
+/**
+ * STYLE_CLOCK_DEBUG — the shared style clock lives inside <AnimatedStrokes>
+ * (it must, to be advanced from useFrame), but the Debug panel renders in
+ * <Viewport3D>. Mirroring the values into a module singleton is the same
+ * pattern SOLID_ANIM_DEBUG uses, and avoids threading a ref through props for
+ * a Debug-only readout.
+ */
+export const STYLE_CLOCK_DEBUG = {
+  elapsed: 0,
+  reveal: 0,
+  sinceCompletion: Infinity as number,
+}
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
 const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
@@ -397,6 +417,13 @@ function AnimatedStrokes({
   if (asciiUniformsRef.current === null) {
     asciiUniformsRef.current = createAsciiUniforms()
   }
+  // ONE clock for every animated style layer. Each layer asks it for a phase
+  // rather than accumulating its own time, so layers can share a loop, stagger
+  // by delay, or fire together on reveal completion.
+  const styleClockRef = useRef<StyleClock | null>(null)
+  if (styleClockRef.current === null) {
+    styleClockRef.current = createStyleClock()
+  }
   const liveMaterial = useMemo(() => {
     const base = resolveMaterialParams(materialPreset, customMaterial)
     const mat = new THREE.MeshPhysicalMaterial({
@@ -438,6 +465,13 @@ function AnimatedStrokes({
   )
 
   useFrame((state, delta) => {
+    // ---- Shared style clock (advance ONCE, before any layer reads it) ---
+    const clock = styleClockRef.current!
+    advanceStyleClock(clock, delta, playheadRef.current, totalDuration)
+    STYLE_CLOCK_DEBUG.elapsed = clock.elapsed
+    STYLE_CLOCK_DEBUG.reveal = clock.reveal
+    STYLE_CLOCK_DEBUG.sinceCompletion = clock.sinceCompletion
+
     // ---- Procedural texture v1 (uniform writes only) --------------------
     // Pattern selection + params + animation phase all flow through uniform
     // values on the injected shader. No material swap, no recompile, no
@@ -453,18 +487,25 @@ function AnimatedStrokes({
       const dir = styleState.textureDirection
       u.uFsTexDirX.value = dir === "vertical" ? 0 : dir === "diagonal" ? 0.7071 : 1
       u.uFsTexDirY.value = dir === "horizontal" ? 0 : dir === "diagonal" ? 0.7071 : 1
-      const texAnim = texOn && styleState.textureAnimated && styleState.motionMode !== "off"
-      if (texAnim) {
-        if (styleState.motionMode === "syncToDraw") {
-          // Reveal progress IS the clock: the pattern travels with the draw.
-          u.uFsTexTime.value =
-            styleState.texturePhase + playheadRef.current * 4 * styleState.textureSpeed
-        } else {
-          u.uFsTexTime.value += delta * styleState.textureSpeed * 0.6
-        }
-      } else {
-        u.uFsTexTime.value = styleState.texturePhase
-      }
+      // Phase comes from the shared clock (lib/style-clock.ts), not a local
+      // accumulator — see the timing explainer for why the three renderers no
+      // longer each roll their own.
+      const texSync = resolveSyncMode(styleState.motionMode, styleState.textureSyncMode)
+      const texT = evaluateLayerTime(clock, {
+        animated: texOn && styleState.textureAnimated && texSync.animated,
+        syncMode: texSync.syncMode,
+        speed: styleState.textureSpeed * 0.6,
+        phase: styleState.texturePhase,
+        delay: styleState.textureDelay,
+        loopSeconds: styleState.styleLoopSeconds,
+        revealScale: 4,
+      })
+      u.uFsTexTime.value = texT.active ? texT.time : styleState.texturePhase
+      // One-shot / delayed modes fade the layer in and out via `amount`.
+      u.uFsTexIntensity.value =
+        texT.active && texT.amount < 1
+          ? styleState.textureIntensity * texT.amount
+          : styleState.textureIntensity
     }
 
     // ---- Dither v1 (uniform writes only) --------------------------------
@@ -483,28 +524,29 @@ function AnimatedStrokes({
       d.uFsDitDirX.value = ddx
       d.uFsDitDirY.value = ddy
 
-      const ditAnim = ditOn && styleState.ditherAnimated && styleState.motionMode !== "off"
-      if (ditAnim) {
-        const syncing = styleState.motionMode === "syncToDraw"
-        const phase = syncing ? playheadRef.current * 6 : state.clock.elapsedTime
-        // MATRIX motion: shift which threshold cell each pixel samples.
-        d.uFsDitTime.value = syncing
-          ? phase * styleState.ditherSpeed
-          : d.uFsDitTime.value + delta * styleState.ditherSpeed * 6
-        // THRESHOLD-BIAS motion: with no travel direction the matrix can't
-        // move, so animation instead sweeps the bias — tone opens/closes.
-        // This is what distinguishes "Threshold Sweep" from "Dither Crawl".
-        if (styleState.ditherDirection === "static") {
-          const sweep = syncing
-            ? // reveal-synced: threshold opens up as the stroke draws in
-              (1 - playheadRef.current) * 0.42
-            : Math.sin(phase * styleState.ditherSpeed * 1.6) * 0.22
-          d.uFsDitThreshold.value = styleState.ditherThreshold + sweep
-        } else {
-          d.uFsDitThreshold.value = styleState.ditherThreshold
-        }
+      const ditSync = resolveSyncMode(styleState.motionMode, styleState.ditherSyncMode)
+      const ditT = evaluateLayerTime(clock, {
+        animated: ditOn && styleState.ditherAnimated && ditSync.animated,
+        syncMode: ditSync.syncMode,
+        speed: styleState.ditherSpeed * 6,
+        delay: styleState.ditherDelay,
+        loopSeconds: styleState.styleLoopSeconds,
+        revealScale: 6,
+      })
+      // MATRIX motion: shift which threshold cell each pixel samples.
+      d.uFsDitTime.value = ditT.active ? ditT.time : 0
+      // THRESHOLD-BIAS motion: with no travel direction the matrix cannot move,
+      // so animation instead sweeps the bias — tone opens and closes in place.
+      // This is what distinguishes "Threshold Sweep" from "Dither Crawl".
+      if (ditT.active && styleState.ditherDirection === "static") {
+        const revealDriven =
+          ditSync.syncMode === "revealSynced" || ditSync.syncMode === "strokeTimeSynced"
+        const sweep = revealDriven
+          ? // reveal-driven: the threshold opens as the stroke draws in
+            (1 - clock.reveal) * 0.42
+          : Math.sin(ditT.time * 0.27) * 0.22
+        d.uFsDitThreshold.value = styleState.ditherThreshold + sweep * ditT.amount
       } else {
-        d.uFsDitTime.value = 0
         d.uFsDitThreshold.value = styleState.ditherThreshold
       }
     }
@@ -526,23 +568,23 @@ function AnimatedStrokes({
       a.uFsAscDirX.value = adx
       a.uFsAscDirY.value = ady
 
-      const ascAnim =
-        ascOn &&
-        styleState.asciiAnimated &&
-        styleState.asciiAnimationType !== "none" &&
-        styleState.motionMode !== "off"
-      a.uFsAscAnim.value = ascAnim ? ASCII_ANIM_INDEX[styleState.asciiAnimationType] : 0
-      if (ascAnim) {
-        // revealDensity reads uFsAscReveal directly, so it needs no clock of
-        // its own; the others accumulate time (or ride reveal progress when
-        // the user asked for Sync to Draw).
-        a.uFsAscTime.value =
-          styleState.motionMode === "syncToDraw"
-            ? playheadRef.current * 8 * styleState.asciiScrollSpeed
-            : a.uFsAscTime.value + delta * styleState.asciiScrollSpeed * 1.6
-      } else {
-        a.uFsAscTime.value = 0
-      }
+      const ascSync = resolveSyncMode(styleState.motionMode, styleState.asciiSyncMode)
+      const ascT = evaluateLayerTime(clock, {
+        animated:
+          ascOn &&
+          styleState.asciiAnimated &&
+          styleState.asciiAnimationType !== "none" &&
+          ascSync.animated,
+        syncMode: ascSync.syncMode,
+        speed: styleState.asciiScrollSpeed * 1.6,
+        delay: styleState.asciiDelay,
+        loopSeconds: styleState.styleLoopSeconds,
+        revealScale: 8,
+      })
+      a.uFsAscAnim.value = ascT.active ? ASCII_ANIM_INDEX[styleState.asciiAnimationType] : 0
+      // revealDensity reads uFsAscReveal directly, so it needs no phase of its
+      // own; every other behaviour rides the shared clock.
+      a.uFsAscTime.value = ascT.active ? ascT.time : 0
     }
 
     // ---- Animated Material v1 (surface response only) -------------------
@@ -2664,7 +2706,21 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               <div>asciiIsNotTexture: YES (glyphs, not pattern)</div>
               <div>asciiIsNotDither: YES (glyphs, not threshold)</div>
               <div className="mt-0.5 text-foreground/80">— Motion (style animation) —</div>
+              <div>timingSystemImplemented: YES (v1, shared clock)</div>
               <div>motionMode: {styleState.motionMode}</div>
+              <div>styleClockElapsed: {STYLE_CLOCK_DEBUG.elapsed.toFixed(2)}</div>
+              <div>styleClockReveal: {STYLE_CLOCK_DEBUG.reveal.toFixed(3)}</div>
+              <div>
+                sinceCompletion:{" "}
+                {STYLE_CLOCK_DEBUG.sinceCompletion !== Infinity
+                  ? STYLE_CLOCK_DEBUG.sinceCompletion.toFixed(2) + "s"
+                  : "not complete"}
+              </div>
+              <div>styleLoopSeconds: {styleState.styleLoopSeconds.toFixed(1)}</div>
+              <div>textureSyncMode: {styleState.textureSyncMode} (+{styleState.textureDelay.toFixed(1)}s)</div>
+              <div>ditherSyncMode: {styleState.ditherSyncMode} (+{styleState.ditherDelay.toFixed(1)}s)</div>
+              <div>asciiSyncMode: {styleState.asciiSyncMode} (+{styleState.asciiDelay.toFixed(1)}s)</div>
+              <div>layersShareOneClock: YES</div>
               <div>syncMode: {styleState.syncMode}</div>
               <div>syncToReveal: {String(styleState.syncToReveal)}</div>
               <div className="mt-0.5 text-foreground/80">— Composite (renderers later) —</div>
