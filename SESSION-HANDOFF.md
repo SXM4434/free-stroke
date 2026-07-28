@@ -1992,3 +1992,86 @@ matteClay; chrome, gold and iridescent verified as stills; full 13-material ×
 ### Final locked checkpoint label
 
 `CRAFT_PASS_SWEEP_ENV_AND_MATERIAL_FAMILY`
+
+---
+
+## LOCKED CHECKPOINT — `ENGINE_PASS_1_ROD_EXPORT_AND_CAMERA_FRAMING`
+
+**GEOMETRY IS NOW UNLOCKED.** Sebs explicitly lifted the PRD's "do not touch
+geometry" rule ("even if its from the inflate extrude etc maximise and improve
+to max"). Because that lock existed for a reason, a regression net was built
+FIRST and must be used for every engine change from now on.
+
+### NEW: `scripts/verify/geometry-baseline.mjs` — the geometry regression net
+
+Runs 8 stroke shapes drawn from this project's own failure history (open C,
+closed O, near-touch gap, zigzag corners, self-intersecting scribble, two
+strokes, degenerate tick, loopy S) through all four modes; records export size
+and a rendered PNG per cell.
+
+```
+node scripts/verify/geometry-baseline.mjs --save=before
+...change an engine...
+node scripts/verify/geometry-baseline.mjs --save=after
+node scripts/verify/geometry-baseline.mjs --compare=before,after
+```
+
+A HARD failure is geometry or export DYING. Everything else is a judgment call —
+the PNGs are there to be looked at. Improving an engine SHOULD move the numbers;
+the point is that every move is visible and deliberate.
+
+### Rod export was 10.7 MB. Now 1.84 MB.
+
+**Root cause:** joint spheres. They fill the wedge gap on the OUTSIDE of a sharp
+corner where two consecutive tube cross-sections don't meet — so the vast
+majority of each sphere is buried inside the tube, and only a small cap is ever
+visible. They were being built at full `SPHERE_SEGMENTS` (14x14 = 225 verts) and
+deduplicated only every `0.75 x TUBE_RADIUS`, so consecutive spheres overlapped
+almost entirely. A dense scribble piled up hundreds of them.
+
+**Fix:** new `JOINT_SPHERE_SEGMENTS = 8` (81 verts, 2.8x cheaper) used for
+joints only — caps keep full resolution because caps ARE visible at stroke ends
+— and dedup widened to `1.8 x TUBE_RADIUS`. A sphere spans 2x radius, so
+adjacent joints still touch and corners stay filled. Applied to BOTH the export
+path and the preview path so parity is preserved.
+
+**Measured (export bytes, before → after):**
+
+| shape | change |
+| --- | --- |
+| scribble | **-83%** (10.7 MB → 1.84 MB) |
+| zigzag | -81% |
+| closedO | -77% |
+| nearTouch | -76% |
+| loopyS | -69% |
+| openC | -67% |
+| twoStrokes | -60% |
+| tick | -39% |
+
+Extrude, Solid and Inflate exports are **byte-identical** across all 8 shapes,
+confirming the change was surgical. Corners verified visually on the zigzag case
+(the sharpest) — no gaps, no change in appearance.
+
+### Camera never framed a newly drawn stroke
+
+**Symptom:** draw a stroke and the 3D panel showed a hugely-zoomed, apparently
+empty grid until the user found "Reset camera".
+
+**Root cause:** the auto-frame effect required `prevCountRef.current === 0`
+while `prevCountRef.current = strokeCount` ran UNCONDITIONALLY at the end. The
+mesh is built in a memo downstream of this effect, so on the render where the
+first stroke arrives `bounds` is usually still null — the effect did nothing,
+but the counter advanced anyway, permanently consuming the one-shot.
+
+**Fix:** `hasFramedRef` is the real one-shot gate, so gate on that alone (plus a
+valid bounds radius and live controls) and let the effect re-attempt on the next
+render that has bounds. Verified by drawing with real pointer events: the form
+is framed immediately.
+
+### Gates
+
+`verify-gates.mjs` ALL PASS.
+
+### Final locked checkpoint label
+
+`ENGINE_PASS_1_ROD_EXPORT_AND_CAMERA_FRAMING`

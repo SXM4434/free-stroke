@@ -19,6 +19,7 @@ import {
   TUBE_RADIUS,
   RADIAL_SEGMENTS,
   SPHERE_SEGMENTS,
+  JOINT_SPHERE_SEGMENTS,
   SOLID_DEBUG,
   SOLID_ANIM_DEBUG,
   SOLID_STAGE_DEBUG,
@@ -155,6 +156,14 @@ function useStrokeMeshes(
 
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+// Joint spheres are mostly buried inside the tube (see JOINT_SPHERE_SEGMENTS in
+// geometry-engines). Preview uses the same reduced resolution as export so the
+// two stay in visual parity.
+const jointSphereGeometry = new THREE.SphereGeometry(
+  TUBE_RADIUS,
+  JOINT_SPHERE_SEGMENTS,
+  JOINT_SPHERE_SEGMENTS,
+)
 
 /* Stroke materials are no longer module-level singletons. As of the
  * POST_MVP material work, the preview material is created inside
@@ -285,15 +294,27 @@ function AutoFrameOnFirstDraw({
       prevCountRef.current = 0
       return
     }
-    if (prevCountRef.current === 0 && strokeCount > 0 && !hasFramedRef.current && bounds) {
-      hasFramedRef.current = true
+    // Frame the first stroke once bounds AND controls are actually available.
+    //
+    // This used to also require `prevCountRef.current === 0`, while
+    // `prevCountRef.current = strokeCount` ran unconditionally at the end. So
+    // if geometry had not finished building when the first stroke arrived
+    // (bounds still null — the common case, since the mesh is built in a memo
+    // downstream of this effect), the one-shot was CONSUMED without ever
+    // framing: prevCount became 1, the condition could never be true again, and
+    // the user was left staring at an empty grid until they found "Reset
+    // camera". `hasFramedRef` is the real one-shot gate, so gate on that alone
+    // and let the effect re-attempt on the next render that has bounds.
+    if (strokeCount > 0 && !hasFramedRef.current && bounds && bounds.radius > 0) {
       const controls = controlsRef.current
-      if (!controls) return
-      const dir = new THREE.Vector3(1, 1, 1).normalize()
-      const pos = bounds.center.clone().add(dir.multiplyScalar(bounds.radius * FRAME_K))
-      camera.position.copy(pos)
-      controls.target.copy(bounds.center)
-      controls.update()
+      if (controls) {
+        hasFramedRef.current = true
+        const dir = new THREE.Vector3(1, 1, 1).normalize()
+        const pos = bounds.center.clone().add(dir.multiplyScalar(bounds.radius * FRAME_K))
+        camera.position.copy(pos)
+        controls.target.copy(bounds.center)
+        controls.update()
+      }
     }
     prevCountRef.current = strokeCount
   }, [strokeCount, bounds, camera, controlsRef])
@@ -995,7 +1016,10 @@ function AnimatedStrokes({
             })()}
             {data.mode === "rod" && data.jointPositions && (() => {
               const r = data.capRadius ?? TUBE_RADIUS
-              const jointGeo = r === TUBE_RADIUS ? sphereGeometry : new THREE.SphereGeometry(r, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+              const jointGeo =
+                r === TUBE_RADIUS
+                  ? jointSphereGeometry
+                  : new THREE.SphereGeometry(r, JOINT_SPHERE_SEGMENTS, JOINT_SPHERE_SEGMENTS)
               return (
                 <group ref={(el) => { jointGroupRefs.current[si] = el }}>
                   {data.jointPositions.map((pos, ji) => (

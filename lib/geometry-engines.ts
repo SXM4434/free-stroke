@@ -195,6 +195,18 @@ export const TUBE_SEGMENTS_MULTIPLIER = 3
 export const MAX_TUBULAR_SEGMENTS = 512
 export const RADIAL_SEGMENTS = 16
 export const SPHERE_SEGMENTS = 14
+/**
+ * Joint spheres fill the wedge gap on the OUTSIDE of a sharp corner, where two
+ * consecutive tube cross-sections don't meet. They are the same radius as the
+ * tube, so the vast majority of each sphere is buried inside the tube itself —
+ * only a small cap is ever visible, and only at corners.
+ *
+ * At SPHERE_SEGMENTS (14x14 = 225 verts) a scribble with hundreds of detected
+ * corners was exporting 10.7 MB of GLB, nearly all of it buried sphere. 8x8
+ * (81 verts) is 2.8x cheaper and indistinguishable at the scale a joint
+ * actually occupies on screen.
+ */
+export const JOINT_SPHERE_SEGMENTS = 8
 export const JOINT_ANGLE_THRESHOLD_DEG = 40
 export const JOINT_MIN_DISTANCE = 0.03
 export const MIN_STROKE_LENGTH = 0.01
@@ -697,8 +709,12 @@ function detectJoints3D(
 
   // Exclusion zone around endpoints: joints here cause "dot" artifacts
   const endpointEps = TUBE_RADIUS * 1.25
-  // Minimum distance between consecutive joints (tighter than JOINT_MIN_DISTANCE)
-  const jointDedup = TUBE_RADIUS * 0.75
+  // Minimum distance between consecutive joints. At 0.75x radius consecutive
+  // spheres overlapped almost entirely — each one added cost while covering
+  // area the previous already filled. 1.8x still leaves adjacent joints
+  // touching (a sphere spans 2x radius), so corners stay filled, but the
+  // redundant pile-up on a dense scribble is gone.
+  const jointDedup = TUBE_RADIUS * 1.8
 
   for (let i = 1; i < filtered.length - 1; i++) {
     const prev = filtered[i - 1]
@@ -829,6 +845,12 @@ export const RodEngine: GeometryEngine = {
 
     const inkMaterial = new THREE.MeshStandardMaterial({ color: "#1a1a1a", name: "Ink" })
     const capSphere = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+    // Joints are mostly buried inside the tube — see JOINT_SPHERE_SEGMENTS.
+    const jointSphere = new THREE.SphereGeometry(
+      TUBE_RADIUS,
+      JOINT_SPHERE_SEGMENTS,
+      JOINT_SPHERE_SEGMENTS,
+    )
 
     const exportObjects: THREE.Object3D[] = []
     const disposables: THREE.BufferGeometry[] = []
@@ -867,7 +889,7 @@ export const RodEngine: GeometryEngine = {
         filtered, filtered[0], filtered[filtered.length - 1]
       )
       for (const pos of jointPositions) {
-        jointGeos.push(capSphere.clone().translate(pos.x, pos.y, pos.z))
+        jointGeos.push(jointSphere.clone().translate(pos.x, pos.y, pos.z))
       }
 
       const strokeName = `stroke_${String(si).padStart(3, "0")}`
