@@ -141,6 +141,13 @@ for ci, (cname, ramp) in enumerate(RAMPS.items()):
     print("  }")
 print("  return 0;")
 print("}")
+print("")
+print("// highest ramp LEVEL per charset (= ramp length - 1)")
+print("float fsRampMaxFor(int charset) {")
+for ci, (cname, ramp) in enumerate(RAMPS.items()):
+    print(f"  if (charset == {ci}) return {len(ramp) - 1}.0; // {cname}")
+print("  return 1.0;")
+print("}")
 print("`")
 print("")
 print("// ramp lengths, in charset order")

@@ -677,6 +677,11 @@ function DitherControl({
           <option value="blueNoise">Noise threshold (IGN)</option>
           <option value="halftone">Halftone dots</option>
           <option value="lines">Lines</option>
+          <option value="dotScreen">Dot screen (angled print)</option>
+          <option value="hatch">Hatch (angled lines)</option>
+          <option value="crosshatch">Crosshatch (engraving)</option>
+          <option value="diamond">Diamond dots</option>
+          <option value="newsprint">Newsprint (grainy dot)</option>
         </select>
       </label>
 
@@ -746,6 +751,46 @@ function DitherControl({
             disabled={!ditOn}
           />
         </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Exposure <span className="text-foreground">{Math.round(styleState.ditherExposure * 100)}%</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={styleState.ditherExposure}
+            onChange={(e) => setStyleState((s) => ({ ...s, ditherExposure: Number(e.target.value) }))}
+            className={sliderClass}
+            disabled={!ditOn}
+          />
+          <span className="text-[10px] text-muted-foreground">
+            Maps the subject&rsquo;s real tonal range onto the pattern. Raise it for dark ink materials.
+          </span>
+        </label>
+
+        {["dotScreen", "hatch", "crosshatch", "diamond", "newsprint"].includes(
+          styleState.ditherType,
+        ) && (
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>
+              Screen angle <span className="text-foreground">{styleState.ditherAngle}°</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={90}
+              step={1}
+              value={styleState.ditherAngle}
+              onChange={(e) => setStyleState((s) => ({ ...s, ditherAngle: Number(e.target.value) }))}
+              className={sliderClass}
+              disabled={!ditOn}
+            />
+            <span className="text-[10px] text-muted-foreground">45° is the classic single-ink print angle.</span>
+          </label>
+        )}
 
         <label className="flex flex-col gap-1">
           <span className={fieldLabelClass}>
@@ -896,6 +941,11 @@ function AsciiControl({
           <option value="minimal">Binary 0 1</option>
           <option value="dots">Dots</option>
           <option value="custom">Code marks / &lt; &gt; [ &#123;</option>
+          <option value="braille">Braille cells</option>
+          <option value="boxes">Box lines │ ┼ ▦</option>
+          <option value="arrows">Arrows ^ / \ ×</option>
+          <option value="punct">Punctuation &apos; ! ? &amp; $</option>
+          <option value="numeric">Numerals 1 7 3 … 8</option>
         </select>
       </label>
 

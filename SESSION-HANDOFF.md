@@ -2075,3 +2075,64 @@ is framed immediately.
 ### Final locked checkpoint label
 
 `ENGINE_PASS_1_ROD_EXPORT_AND_CAMERA_FRAMING`
+
+---
+
+## LOCKED CHECKPOINT — `CRAFT_PASS_DITHER_AND_ASCII_STRENGTH`
+
+**Status: dither and ASCII brought up to the bar texture/material already met.**
+5 dither types → **10**; 5 ASCII charsets → **10**. Fable pass, judged headed.
+
+### Root causes found (all invisible to the previous numeric gates)
+
+- **Default cell sizes were SUBPIXEL.** `ditherScale: 1` made halftone cells
+  smaller than a pixel, which is why halftone rendered as a solid black stroke —
+  completely invisible. `asciiCellSize: 8` gave 1.6px per glyph pixel, so no
+  charset could read as characters; it was woven rope texture.
+- **Same near-black exposure disease ASCII already had.** The stroke's real
+  tonal range measured 0.30–0.62 with mass at 0.538, so contrast-about-0.5 left
+  every pixel half-open and bayer/blueNoise came out as uniform 1px mush.
+- **`lines` washed the form into the paper** — the `tint * q` rebuild sent lit
+  cells to luminance 1.0, matching the background.
+
+### Fixes
+
+- New `ditherExposure` uniform + slider: divides raw luminance by
+  `mix(1.9, 0.16, e)` so the subject's real range spans the ramp.
+- Pattern floor `max(lum, pow(raw/ref, 0.4) * 0.42)`: a glossy-black subject
+  (rod/extrude, raw ~0.04) was previously unrescuable at ANY dial setting; it
+  now keeps 10–15% threshold structure. Default material unaffected.
+- Ink/paper duotone rebuild, light end capped at 0.9 tint — the form no longer
+  dissolves into the background.
+- `ditherScale` 1→3, `asciiCellSize` 8→13, per-type cell factor x2.4 for
+  cell-grown marks.
+
+### New options
+
+**Dither (+5, all threshold-based, with a new `ditherAngle` dial):** dotScreen
+(angled clustered dot — classic print screen), hatch (bold 45° triangle-profile),
+crosshatch (min of two orthogonal screens — engraving weave), diamond (L1 dots),
+newsprint (angled dot + IGN grain — ragged cheap print). All 10 distinct,
+closest pair 26.97 meanΔ.
+
+**ASCII (+5):** braille, boxes, arrows, punct, numeric. `glyphs.py` now also
+emits `fsRampMaxFor(charset)`, replacing a hand-maintained nested ternary.
+Indices 0–25 unchanged, 26–56 new. All 10 distinct, closest pair 17.75 meanΔ.
+
+### Verification
+
+`verify-gates.mjs` ALL PASS (19/19), gate sweep extended to all 10 dither types
+and 10 charsets. Animation measured over ink pixels per ~90ms frame: crawl 90.7,
+scroll 60.0, cycle 46.1, rain 35.5, flicker 13.7.
+
+### Still weak
+
+- Flicker is the least present animation (13.7).
+- Numeric/punct glyphs read as marks rather than unmistakable digits below
+  cell ~16.
+- Rod is ~8px thin, so any screen coarser than bayer shows only 1–2 pattern
+  rows — inherent to the geometry, not the shader.
+
+### Final locked checkpoint label
+
+`CRAFT_PASS_DITHER_AND_ASCII_STRENGTH`

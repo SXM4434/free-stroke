@@ -126,10 +126,30 @@ export type StyleAnimationType =
   | "drift"
   | "breathe"
 
-export type DitherType = "bayer4" | "bayer8" | "blueNoise" | "halftone" | "lines"
+export type DitherType =
+  | "bayer4"
+  | "bayer8"
+  | "blueNoise"
+  | "halftone"
+  | "lines"
+  | "dotScreen"
+  | "hatch"
+  | "crosshatch"
+  | "diamond"
+  | "newsprint"
 export type DitherDirection = "static" | "horizontal" | "vertical" | "diagonal"
 
-export type AsciiCharset = "blocks" | "classic" | "minimal" | "dots" | "custom"
+export type AsciiCharset =
+  | "blocks"
+  | "classic"
+  | "minimal"
+  | "dots"
+  | "custom"
+  | "braille"
+  | "boxes"
+  | "arrows"
+  | "punct"
+  | "numeric"
 export type AsciiDirection = "static" | "horizontal" | "vertical"
 
 /**
@@ -224,6 +244,14 @@ export interface StyleState {
   ditherIntensity: number
   /** Output tone levels. 2 = pure two-tone; higher keeps more shading. */
   ditherLevels: number
+  /** Tone exposure BEFORE quantization — rescales the subject's real tonal
+   * range (which never spans 0..1) onto the threshold ramp. 0 = darkest,
+   * 1 = hottest. Without this a mid-tone or near-black subject sits on one
+   * side of every threshold and the pattern is uniform mush. */
+  ditherExposure: number
+  /** Screen angle in DEGREES for the print-style maps (dot screen, hatch,
+   * crosshatch, diamond, newsprint). Classic print uses 45. */
+  ditherAngle: number
   /** Per-layer timing (see lib/style-clock.ts). */
   ditherSyncMode: StyleSyncMode
   ditherDelay: number
@@ -331,13 +359,18 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   ditherEnabled: false,
   ditherAnimated: false,
   ditherType: "bayer4",
-  ditherScale: 1,
+  // 3px threshold cells: at the old default of 1 every map was subpixel —
+  // bayer read as uniform 1px mush and halftone was entirely invisible
+  // (verified live, 2026-07 craft pass).
+  ditherScale: 3,
   ditherThreshold: 0.5,
   ditherContrast: 0.5,
   ditherSpeed: 1,
   ditherDirection: "static",
   ditherIntensity: 1,
   ditherLevels: 2,
+  ditherExposure: 0.5,
+  ditherAngle: 45,
   ditherLockMode: "screen",
   ditherSyncMode: "independent",
   ditherDelay: 0,
@@ -345,7 +378,10 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   asciiEnabled: false,
   asciiAnimated: false,
   asciiCharset: "blocks",
-  asciiCellSize: 8,
+  // 13px cells: at 8px a 5x5 glyph gets ~1.6px per glyph pixel, which is
+  // below legibility — every charset read as woven texture, never as
+  // characters (verified live, 2026-07 craft pass).
+  asciiCellSize: 13,
   asciiDensity: 0.5,
   asciiContrast: 0.5,
   asciiScrollSpeed: 1,
@@ -782,6 +818,11 @@ export const DITHER_PRESETS: PresetShell<DitherType>[] = [
   { id: "blueNoise", label: "Blue Noise" },
   { id: "halftone", label: "Halftone" },
   { id: "lines", label: "Lines" },
+  { id: "dotScreen", label: "Dot Screen 45" },
+  { id: "hatch", label: "Hatch" },
+  { id: "crosshatch", label: "Crosshatch" },
+  { id: "diamond", label: "Diamond" },
+  { id: "newsprint", label: "Newsprint" },
 ]
 
 export const ASCII_PRESETS: PresetShell<AsciiCharset>[] = [
@@ -790,6 +831,11 @@ export const ASCII_PRESETS: PresetShell<AsciiCharset>[] = [
   { id: "minimal", label: "Minimal" },
   { id: "dots", label: "Dots" },
   { id: "custom", label: "Custom" },
+  { id: "braille", label: "Braille" },
+  { id: "boxes", label: "Box Lines" },
+  { id: "arrows", label: "Arrows" },
+  { id: "punct", label: "Punctuation" },
+  { id: "numeric", label: "Numerals" },
 ]
 
 export const FUSION_PRESETS: PresetShell<FusionPreset>[] = [

@@ -39,6 +39,11 @@ export const ASCII_CHARSET_INDEX: Record<AsciiCharset, number> = {
   minimal: 2,
   dots: 3,
   custom: 4,
+  braille: 5,
+  boxes: 6,
+  arrows: 7,
+  punct: 8,
+  numeric: 9,
 }
 
 /** Number of glyphs in each charset ramp (must match scripts/gen/glyphs.py). */
@@ -48,6 +53,11 @@ export const ASCII_RAMP_LENGTH: Record<AsciiCharset, number> = {
   minimal: 3,
   dots: 6,
   custom: 7,
+  braille: 7,
+  boxes: 6,
+  arrows: 7,
+  punct: 8,
+  numeric: 10,
 }
 
 /** Distinct animated-ASCII behaviours. Each moves a DIFFERENT thing. */
@@ -139,6 +149,37 @@ vec2 fsGlyphBits(int idx) {
   if (idx == 23) return vec2(2184.0, 1040.0); // lt
   if (idx == 24) return vec2(2188.0, 1552.0); // lbrc
   if (idx == 25) return vec2(2126.0, 1800.0); // lbr
+  if (idx == 26) return vec2(2048.0, 0.0); // b1
+  if (idx == 27) return vec2(2050.0, 0.0); // b2
+  if (idx == 28) return vec2(2050.0, 256.0); // b3
+  if (idx == 29) return vec2(2058.0, 1280.0); // b4
+  if (idx == 30) return vec2(2058.0, 1281.0); // b5
+  if (idx == 31) return vec2(2378.0, 1321.0); // b6
+  if (idx == 32) return vec2(4228.0, 528.0); // vline
+  if (idx == 33) return vec2(7300.0, 531.0); // cross
+  if (idx == 34) return vec2(3050.0, 1405.0); // lattice
+  if (idx == 35) return vec2(1599.0, 4038.0); // frame
+  if (idx == 36) return vec2(7871.0, 4055.0); // framecross
+  if (idx == 37) return vec2(1348.0, 2.0); // caret
+  if (idx == 38) return vec2(4161.0, 2080.0); // bslash
+  if (idx == 39) return vec2(4433.0, 2216.0); // diagx
+  if (idx == 40) return vec2(5572.0, 530.0); // arrowup
+  if (idx == 41) return vec2(6272.0, 125.0); // tri
+  if (idx == 42) return vec2(132.0, 0.0); // apos
+  if (idx == 43) return vec2(330.0, 0.0); // quote
+  if (idx == 44) return vec2(128.0, 272.0); // semi
+  if (idx == 45) return vec2(4228.0, 512.0); // excl
+  if (idx == 46) return vec2(4654.0, 513.0); // quest
+  if (idx == 47) return vec2(2210.0, 1364.0); // amp
+  if (idx == 48) return vec2(6334.0, 2001.0); // dollar
+  if (idx == 49) return vec2(543.0, 529.0); // seven
+  if (idx == 50) return vec2(4623.0, 1985.0); // three
+  if (idx == 51) return vec2(7465.0, 1059.0); // four
+  if (idx == 52) return vec2(4654.0, 3977.0); // two
+  if (idx == 53) return vec2(7214.0, 1861.0); // six
+  if (idx == 54) return vec2(6702.0, 1859.0); // nine
+  if (idx == 55) return vec2(7231.0, 1985.0); // five
+  if (idx == 56) return vec2(6702.0, 1861.0); // eight
   return vec2(0.0, 0.0);
 }
 
@@ -190,7 +231,75 @@ int fsRampIndex(int charset, int level) {
     if (level <= 6) return 25;
     return 25;
   }
+  if (charset == 5) { // braille
+    if (level <= 0) return 0;
+    if (level <= 1) return 26;
+    if (level <= 2) return 27;
+    if (level <= 3) return 28;
+    if (level <= 4) return 29;
+    if (level <= 5) return 30;
+    if (level <= 6) return 31;
+    return 31;
+  }
+  if (charset == 6) { // boxes
+    if (level <= 0) return 0;
+    if (level <= 1) return 32;
+    if (level <= 2) return 33;
+    if (level <= 3) return 34;
+    if (level <= 4) return 35;
+    if (level <= 5) return 36;
+    return 36;
+  }
+  if (charset == 7) { // arrows
+    if (level <= 0) return 0;
+    if (level <= 1) return 37;
+    if (level <= 2) return 21;
+    if (level <= 3) return 38;
+    if (level <= 4) return 39;
+    if (level <= 5) return 40;
+    if (level <= 6) return 41;
+    return 41;
+  }
+  if (charset == 8) { // punct
+    if (level <= 0) return 0;
+    if (level <= 1) return 42;
+    if (level <= 2) return 43;
+    if (level <= 3) return 44;
+    if (level <= 4) return 45;
+    if (level <= 5) return 46;
+    if (level <= 6) return 47;
+    if (level <= 7) return 48;
+    return 48;
+  }
+  if (charset == 9) { // numeric
+    if (level <= 0) return 0;
+    if (level <= 1) return 14;
+    if (level <= 2) return 49;
+    if (level <= 3) return 50;
+    if (level <= 4) return 51;
+    if (level <= 5) return 52;
+    if (level <= 6) return 53;
+    if (level <= 7) return 54;
+    if (level <= 8) return 55;
+    if (level <= 9) return 56;
+    return 56;
+  }
   return 0;
+}
+
+// highest ramp LEVEL per charset (= ramp length - 1)
+float fsRampMaxFor(int charset) {
+  if (charset == 0) return 9.0; // classic
+  if (charset == 1) return 4.0; // blocks
+  if (charset == 2) return 2.0; // minimal
+  if (charset == 3) return 5.0; // dots
+  if (charset == 4) return 6.0; // custom
+  if (charset == 5) return 6.0; // braille
+  if (charset == 6) return 5.0; // boxes
+  if (charset == 7) return 6.0; // arrows
+  if (charset == 8) return 7.0; // punct
+  if (charset == 9) return 9.0; // numeric
+  return 1.0;
 }
 `
 
@@ -257,25 +366,24 @@ vec3 fsApplyAscii(vec3 fsAC) {
   // --- 2. brightness -> which character ---------------------------------
   float fsARaw = dot(fsAC, vec3(0.2126, 0.7152, 0.0722));
 
-  // EXPOSURE. Free Stroke's ink is near-black: a shaded stroke occupies only
-  // the bottom ~15% of the 0..1 luminance range. Feeding that straight into
-  // the ramp would only ever select the two sparsest characters, so the whole
-  // form reads as empty. Dividing by a reference luminance rescales the
-  // subject's actual range onto the full ramp. Density IS that reference:
-  // a low reference means dimmer pixels already count as "bright", which
-  // selects denser characters.
-  float fsRef = mix(1.1, 0.16, clamp(uFsAscDensity, 0.0, 1.0));
+  // EXPOSURE. Dividing by a reference luminance rescales the subject's actual
+  // tonal range onto the full ramp. Density IS that reference: a low reference
+  // means dimmer pixels already count as "bright", which selects denser
+  // characters. MEASURED against the live default material (2026-07 craft
+  // pass): the shaded stroke sits at luminance ~0.30 (shadow) .. 0.62 (lit),
+  // mass at 0.54. The old mix(1.1, 0.16, d) put default density at ref 0.63,
+  // which sent the whole form to the DENSEST glyph — every charset read as a
+  // uniform woven texture, never as characters. ref ~1.0 at the default puts
+  // the body mid-ramp so shading actually walks the ramp.
+  float fsRef = mix(1.9, 0.16, clamp(uFsAscDensity, 0.0, 1.0));
   float fsALum = clamp(fsARaw / max(fsRef, 0.02), 0.0, 1.0);
-  // Gentle contrast only. A hard expansion here crushes the shading variation
+  // Moderate contrast. A hard expansion here crushes the shading variation
   // that makes DIFFERENT characters appear across the form — over-expand and
   // every cell saturates to the densest glyph, which reads as a flat mesh
   // rather than as text.
-  fsALum = clamp((fsALum - 0.5) * (0.7 + uFsAscContrast * 1.1) + 0.5, 0.0, 1.0);
+  fsALum = clamp((fsALum - 0.5) * (0.6 + uFsAscContrast * 1.8) + 0.5, 0.0, 1.0);
 
-  float fsRampMax = max(uFsAscCharset > 3.5 ? 6.0
-                      : uFsAscCharset > 2.5 ? 5.0
-                      : uFsAscCharset > 1.5 ? 2.0
-                      : uFsAscCharset > 0.5 ? 4.0 : 9.0, 1.0);
+  float fsRampMax = fsRampMaxFor(int(uFsAscCharset + 0.5));
   float fsLevel = floor(fsALum * fsRampMax + 0.5);
 
   if (uFsAscAnim > 2.5 && uFsAscAnim < 3.5) {

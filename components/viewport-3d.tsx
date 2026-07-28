@@ -635,6 +635,8 @@ function AnimatedStrokes({
       d.uFsDitIntensity.value = stack ? stack.ditherAmount : styleState.ditherIntensity
       d.uFsDitBlend.value = stack ? stack.ditherBlend : 0
       d.uFsDitLevels.value = styleState.ditherLevels
+      d.uFsDitExposure.value = styleState.ditherExposure ?? 0.5
+      d.uFsDitAngle.value = ((styleState.ditherAngle ?? 45) * Math.PI) / 180
       d.uFsDitLockScreen.value = styleState.ditherLockMode === "screen" ? 1 : 0
       const [ddx, ddy] = DITHER_DIRECTION_VEC[styleState.ditherDirection]
       d.uFsDitDirX.value = ddx
