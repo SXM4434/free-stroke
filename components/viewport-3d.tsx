@@ -31,12 +31,14 @@ import {
   evaluateMaterialAnimation,
   MODE_MATERIAL_DEFAULTS,
 } from "@/lib/style-system"
+import { createTextureUniforms, TEXTURE_TYPE_INDEX, type TextureUniforms } from "@/lib/texture-shader"
 import {
-  applyTextureShader,
-  createTextureUniforms,
-  TEXTURE_TYPE_INDEX,
-  type TextureUniforms,
-} from "@/lib/texture-shader"
+  createDitherUniforms,
+  DITHER_TYPE_INDEX,
+  DITHER_DIRECTION_VEC,
+  type DitherUniforms,
+} from "@/lib/dither-shader"
+import { applyStyleShader } from "@/lib/style-shader"
 
 
 /**
@@ -380,6 +382,10 @@ function AnimatedStrokes({
   if (textureUniformsRef.current === null) {
     textureUniformsRef.current = createTextureUniforms()
   }
+  const ditherUniformsRef = useRef<DitherUniforms | null>(null)
+  if (ditherUniformsRef.current === null) {
+    ditherUniformsRef.current = createDitherUniforms()
+  }
   const liveMaterial = useMemo(() => {
     const base = resolveMaterialParams(materialPreset, customMaterial)
     const mat = new THREE.MeshPhysicalMaterial({
@@ -396,8 +402,11 @@ function AnimatedStrokes({
       emissiveIntensity: base.emissiveIntensity,
       envMapIntensity: base.envMapIntensity,
     })
-    // Texture layer rides the same shared material across all four modes.
-    applyTextureShader(mat, textureUniformsRef.current!)
+    // Every style layer rides the same shared material across all four modes.
+    applyStyleShader(mat, {
+      texture: textureUniformsRef.current!,
+      dither: ditherUniformsRef.current!,
+    })
     return mat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [materialPreset, customMaterial])
@@ -443,6 +452,48 @@ function AnimatedStrokes({
         }
       } else {
         u.uFsTexTime.value = styleState.texturePhase
+      }
+    }
+
+    // ---- Dither v1 (uniform writes only) --------------------------------
+    // Dither is a SEPARATE system from texture: it reduces final shaded tone
+    // through a threshold map. Same no-rebuild contract — uniforms only.
+    if (styleState) {
+      const d = ditherUniformsRef.current!
+      const ditOn = styleState.ditherEnabled
+      d.uFsDitType.value = ditOn ? DITHER_TYPE_INDEX[styleState.ditherType] : 0
+      d.uFsDitScale.value = styleState.ditherScale
+      d.uFsDitContrast.value = styleState.ditherContrast
+      d.uFsDitIntensity.value = styleState.ditherIntensity
+      d.uFsDitLevels.value = styleState.ditherLevels
+      d.uFsDitLockScreen.value = styleState.ditherLockMode === "screen" ? 1 : 0
+      const [ddx, ddy] = DITHER_DIRECTION_VEC[styleState.ditherDirection]
+      d.uFsDitDirX.value = ddx
+      d.uFsDitDirY.value = ddy
+
+      const ditAnim = ditOn && styleState.ditherAnimated && styleState.motionMode !== "off"
+      if (ditAnim) {
+        const syncing = styleState.motionMode === "syncToDraw"
+        const phase = syncing ? playheadRef.current * 6 : state.clock.elapsedTime
+        // MATRIX motion: shift which threshold cell each pixel samples.
+        d.uFsDitTime.value = syncing
+          ? phase * styleState.ditherSpeed
+          : d.uFsDitTime.value + delta * styleState.ditherSpeed * 6
+        // THRESHOLD-BIAS motion: with no travel direction the matrix can't
+        // move, so animation instead sweeps the bias — tone opens/closes.
+        // This is what distinguishes "Threshold Sweep" from "Dither Crawl".
+        if (styleState.ditherDirection === "static") {
+          const sweep = syncing
+            ? // reveal-synced: threshold opens up as the stroke draws in
+              (1 - playheadRef.current) * 0.42
+            : Math.sin(phase * styleState.ditherSpeed * 1.6) * 0.22
+          d.uFsDitThreshold.value = styleState.ditherThreshold + sweep
+        } else {
+          d.uFsDitThreshold.value = styleState.ditherThreshold
+        }
+      } else {
+        d.uFsDitTime.value = 0
+        d.uFsDitThreshold.value = styleState.ditherThreshold
       }
     }
 
@@ -2524,9 +2575,27 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               <div>textureIsNotDither: YES (pattern, no threshold logic)</div>
               <div>textureIsNotAscii: YES (pattern, no glyphs)</div>
               <div className="mt-0.5 text-foreground/80">— Dither (separate system) —</div>
+              <div>ditherRendererImplemented: YES (v1)</div>
               <div>ditherEnabled: {String(styleState.ditherEnabled)}</div>
               <div>ditherAnimated: {String(styleState.ditherAnimated)}</div>
               <div>ditherType: {styleState.ditherType}</div>
+              <div>ditherTypeIndex: {DITHER_TYPE_INDEX[styleState.ditherType]}</div>
+              <div>ditherScale (cell): {styleState.ditherScale.toFixed(1)}</div>
+              <div>ditherLevels: {styleState.ditherLevels}</div>
+              <div>ditherThreshold: {styleState.ditherThreshold.toFixed(2)}</div>
+              <div>ditherContrast: {styleState.ditherContrast.toFixed(2)}</div>
+              <div>ditherIntensity: {styleState.ditherIntensity.toFixed(2)}</div>
+              <div>ditherDirection: {styleState.ditherDirection}</div>
+              <div>ditherLockMode: {styleState.ditherLockMode}</div>
+              <div>ditherStage: after lighting (dithering_fragment)</div>
+              <div>
+                ditherAnimationKind:{" "}
+                {styleState.ditherDirection === "static" ? "threshold-bias sweep" : "matrix crawl"}
+              </div>
+              <div>ditherAppliedToAllModes: YES (shared material)</div>
+              <div>ditherDoesNotTouchGeometry: YES</div>
+              <div>ditherIsNotTexture: YES (threshold, not pattern)</div>
+              <div>ditherIsNotAscii: YES (threshold, not glyphs)</div>
               <div className="mt-0.5 text-foreground/80">— ASCII (separate system) —</div>
               <div>asciiEnabled: {String(styleState.asciiEnabled)}</div>
               <div>asciiAnimated: {String(styleState.asciiAnimated)}</div>

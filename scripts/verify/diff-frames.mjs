@@ -42,6 +42,44 @@ function compare(a, b) {
   return { mean: n ? sum / n : 0, max: maxD, px: n }
 }
 
+// Distinctness check: every variant within a mode must differ from every OTHER
+// variant, not just from the off baseline. This catches the "all the presets
+// look the same" failure that hit the material system — a set of options can
+// each register a big change versus off while being near-identical to each
+// other, which is useless to the user.
+async function distinctnessReport() {
+  const files = readdirSync(DIR).filter((f) => f.startsWith("still_") && f.endsWith(".png"))
+  if (!files.length) return
+  const modes = [...new Set(files.map((f) => f.split("_")[1]))]
+  console.log("\npairwise distinctness (within mode, excludes off)")
+  for (const mode of modes) {
+    const variants = files
+      .filter((f) => f.startsWith(`still_${mode}_`) && !f.endsWith("_off.png"))
+      .sort()
+    let worst = { pair: "", mean: Infinity }
+    const loaded = {}
+    for (const f of variants) loaded[f] = await pixels(f)
+    for (let i = 0; i < variants.length; i++) {
+      for (let j = i + 1; j < variants.length; j++) {
+        const r = compare(loaded[variants[i]], loaded[variants[j]])
+        if (r.mean < worst.mean) {
+          worst = {
+            pair: `${variants[i].split("_").pop().replace(".png", "")} vs ${variants[j]
+              .split("_")
+              .pop()
+              .replace(".png", "")}`,
+            mean: r.mean,
+          }
+        }
+      }
+    }
+    const verdict = worst.mean < 3 ? "TOO SIMILAR" : worst.mean < 8 ? "close" : "distinct"
+    console.log(
+      `${mode.padEnd(10)} closest pair: ${worst.pair.padEnd(26)} ${worst.mean.toFixed(2).padStart(6)}   ${verdict}`,
+    )
+  }
+}
+
 // Motion check: consecutive frames of an animated cell must differ from each
 // other (proves the pattern travels) AND the first/last must differ a lot
 // (proves it travels somewhere, not just jitters in place).
@@ -87,6 +125,7 @@ async function main() {
       )
     }
   }
+  await distinctnessReport()
   await motionReport()
 }
 

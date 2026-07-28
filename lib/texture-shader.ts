@@ -79,8 +79,7 @@ export function createTextureUniforms(): TextureUniforms {
  * point, then blend with a smoothstep-eased bilinear mix so cells flow into
  * each other instead of showing hard squares.
  */
-const PATTERN_GLSL = /* glsl */ `
-varying vec3 vFsObjPos;
+export const TEXTURE_COMMON_GLSL = /* glsl */ `
 uniform float uFsTexType;
 uniform float uFsTexScale;
 uniform float uFsTexIntensity;
@@ -130,32 +129,8 @@ float fsTexPattern(vec2 co, float type) {
 }
 `
 
-/**
- * Attaches the procedural texture layer to a built-in material. Call once per
- * material instance; uniform objects are shared by reference so per-frame
- * updates write straight through without touching the material.
- */
-export function applyTextureShader(
-  material: THREE.Material,
-  uniforms: TextureUniforms,
-): void {
-  material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms)
-
-    // Object-space position varying: `position` is the raw vertex attribute
-    // before any matrix transform, so the pattern is glued to the object and
-    // does not swim when the camera orbits.
-    shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vFsObjPos;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvFsObjPos = position;")
-
-    shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", `#include <common>\n${PATTERN_GLSL}`)
-      // Declare fsPat unconditionally in main() scope (chunks are inlined into
-      // one function, so it stays visible to the roughness chunk below).
-      .replace(
-        "#include <map_fragment>",
-        /* glsl */ `#include <map_fragment>
+/** Fragment injection A: pattern value + albedo modulation (needs diffuseColor). */
+export const TEXTURE_MAP_GLSL = /* glsl */ `
 float fsPat = 0.0;
 if (uFsTexType > 0.5) {
   // Coordinate: object-space (world-ish units, word spans ~3) or screen px.
@@ -172,27 +147,24 @@ if (uFsTexType > 0.5) {
   // almost-black albedo by <1 stays almost-black. Allowing the pattern to
   // lift as well gives marks somewhere to go on dark ink.
   diffuseColor.rgb *= clamp(1.0 + uFsTexIntensity * (fsPat - 0.5) * 1.6, 0.0, 2.5);
-}`,
-      )
-      // The pattern must also break up the SPECULAR response, not just albedo.
-      // On glossy near-black presets (Extrude's default) almost all visible
-      // light is the specular/clearcoat lobe — an albedo-only pattern reads as
-      // nothing there. `lights_physical_fragment` is where `material.roughness`
-      // and `material.clearcoatRoughness` are finalized, so modulating them
-      // right after it makes the highlight itself carry the pattern.
-      .replace(
-        "#include <lights_physical_fragment>",
-        /* glsl */ `#include <lights_physical_fragment>
+}
+`
+
+/**
+ * Fragment injection B: specular response.
+ * The pattern must also break up the SPECULAR response, not just albedo. On
+ * glossy near-black presets (Extrude's default) almost all visible light is the
+ * specular/clearcoat lobe — an albedo-only pattern reads as nothing there.
+ * `lights_physical_fragment` is where `material.roughness` and
+ * `material.clearcoatRoughness` are finalized, so modulating them right after
+ * it makes the highlight itself carry the pattern.
+ */
+export const TEXTURE_LIGHTS_GLSL = /* glsl */ `
 if (uFsTexType > 0.5) {
   float fsRough = (fsPat - 0.5) * uFsTexIntensity * 0.85;
   material.roughness = clamp(material.roughness + fsRough, 0.035, 1.0);
   #ifdef USE_CLEARCOAT
     material.clearcoatRoughness = clamp(material.clearcoatRoughness + fsRough, 0.035, 1.0);
   #endif
-}`,
-      )
-  }
-  // Constant cache key: every material carrying this layer shares one GLSL
-  // program (three.js would otherwise hash onBeforeCompile.toString()).
-  material.customProgramCacheKey = () => "freestroke-texture-v1"
 }
+`

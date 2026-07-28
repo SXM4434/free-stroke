@@ -1296,3 +1296,111 @@ Measured: extrude/contour meanΔ 1.94 (below perceptual floor) → 10.74.
 
 (supersedes `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`;
 all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1_PASS`
+
+**Status: dither + animated dither are LIVE on all four modes.** Threshold
+renderer implemented. Geometry, geometry animation, and export geometry
+untouched.
+
+### What was built
+
+- **`lib/dither-shader.ts` (NEW)** — threshold-based tonal reduction. Injects at
+  `<dithering_fragment>` — the very END of the fragment shader, AFTER lighting,
+  tone mapping and color space. This is what makes dither a genuinely different
+  system from texture (which injects at albedo + lighting stages).
+  - Core: `quantize(luminance + (threshold(x,y) - 0.5))`. The `- 0.5` centring
+    is required or average brightness drifts up (Wikipedia flags this).
+  - `fsBayer` generates the Bayer recurrence ARITHMETICALLY (one bit of x/y per
+    refinement level, accumulated base-4) instead of a lookup table, so ONE
+    function serves both 4x4 and 8x8 via a `levels` parameter.
+  - Five threshold maps: bayer4, bayer8, blueNoise (interleaved gradient noise —
+    honestly labeled "Noise threshold (IGN)", NOT true blue noise), halftone
+    (distance-from-cell-centre so dots GROW with tone, like print), lines.
+  - Rec. 709 luma weights for perceived brightness.
+  - Hue preservation: divides colour by its own luminance, quantizes brightness,
+    re-applies the tint — so material presets stay distinguishable under dither
+    instead of all collapsing to identical black/white.
+- **`lib/style-shader.ts` (NEW)** — a material has ONE `onBeforeCompile`, but
+  texture and dither must both live on the shared material. This composer
+  stitches each system's GLSL into its correct chunk while each system keeps its
+  own module, uniforms and state (the PRD's separation preserved in code).
+- **`lib/texture-shader.ts`** — refactored to export its GLSL as constants
+  (`TEXTURE_COMMON_GLSL` / `TEXTURE_MAP_GLSL` / `TEXTURE_LIGHTS_GLSL`) for the
+  composer. Behaviour identical.
+- **`lib/style-system.ts`** — added `ditherIntensity`, `ditherLevels`, and a
+  DEDICATED `ditherLockMode` (dither gets its own, not texture's). DITHER and
+  ANIMATED_DITHER preset defs are now `implemented: true` with real `applies`
+  patches (Bayer Classic, Dot Matrix, Hard Threshold, Soft Dither, Pixel Signal /
+  Dither Crawl, Threshold Sweep, Reveal Dither, Completion Pulse Dither,
+  Diagonal Matrix Drift).
+- **`components/viewport-3d.tsx`** — dither uniforms ref + per-frame uniform
+  writes; two genuinely different animation behaviours (see below); full dither
+  debug readout.
+- **`components/style-panel-scaffold.tsx`** — real Dither panel (threshold map /
+  cell size / tone levels / threshold bias / contrast / amount / lock mode +
+  Dither Animation with speed and motion kind). Panel + Animation-category
+  status flipped to "active".
+- **`app/page.tsx`** — Dither summary chip now live; harness gained
+  `selectPreset(family, id)` so gates exercise the REAL preset path.
+
+### Animated dither = THRESHOLD motion (not pattern motion)
+
+- **Matrix crawl** (direction chosen): offsets the threshold lookup coordinate,
+  so the dither structure travels while tone stays put.
+- **Threshold-bias sweep** (direction "static"): oscillates the bias so tone
+  opens and closes in place, like an aperture. Verified in frames: sparse dots →
+  open checkerboard.
+- **Sync to Draw**: threshold opens as the reveal progresses.
+
+### NEW verification check — pairwise distinctness
+
+`diff-frames.mjs` now also compares every variant against every OTHER variant
+within a mode, not just against the off baseline. This is the check that would
+have caught the historical "all the material presets look the same" bug — a set
+of options can each differ hugely from off while being near-identical to each
+other. Retroactively run on texture-v1 too; both systems pass.
+
+### Test results (evidence in `docs/verification/dither-v1/`)
+
+- **Stills — 20/20 read.** Every mode × threshold map, meanΔ 22.83 (extrude/
+  lines) to 119.80 (solid/halftone). Zero TOO SUBTLE, zero faint.
+- **Distinctness — distinct on all four modes.** Closest pair is bayer4 vs
+  bayer8 (same family, different resolution): 9.68 extrude / 17.36 rod /
+  36.52 inflate / 70.93 solid.
+- **Texture distinctness (retroactive) — distinct on all four modes.** Closest
+  pair grain vs noise: 13.84–23.90.
+- **Motion — 3/3 travel.** solid/crawl (consecΔ 72.15), solid/sweep (9.56),
+  inflate/halftonesweep (13.10).
+- **Geometry-rebuild gate — PASS on all four modes** across 20 combined
+  texture+dither style changes each: rod 3→3, extrude 5→5, solid 6→6,
+  inflate 7→7.
+- **Export regression — PASS on all four** (unchanged byte counts).
+- **Taxonomy gates — PASS.** Texture never enables dither/ASCII; the dither
+  preset `dotMatrix` applies `ditherType: halftone` and touches neither
+  `textureMode` nor `ascii*`. Asserted through the real `handleSelectPreset`.
+- **Console errors — 0** across every run.
+
+### Confirmations
+
+- ASCII renderer NOT implemented (next phase).
+- Geometry untouched. Geometry animation untouched. Export geometry untouched.
+- Dither is preview-only — no dither baking into GLB.
+- Texture (pattern) / Dither (threshold) / ASCII (glyphs) remain separate
+  systems with separate state, separate modules, and separate shader stages.
+
+### Docs
+
+- `docs/explainers/02-dither.md` — code / tech / math / reasoning
+- `docs/research/dither-phase.md` — every source used
+
+### Next branch — `POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1`
+
+### Final locked checkpoint label
+
+`POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1_PASS`
+
+(supersedes `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1_PASS`; all prior
+checkpoints remain in effect as underlying layers)

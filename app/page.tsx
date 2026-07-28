@@ -145,6 +145,9 @@ export default function Home() {
       // params, motion mode, …) so verification captures can sweep the matrix
       // without DOM clicks. Same state path the UI uses.
       setStyle: (patch: Partial<StyleState>) => setStyleState((s) => ({ ...s, ...patch })),
+      // DEV capture: exercise the real preset-selection path (same function the
+      // preset rail calls) so verification asserts what users actually get.
+      selectPreset: (family: PresetFamily, id: string) => handleSelectPreset(family, id),
       // DEV capture: inject a set of strokes deterministically (instead of
       // synthetic pointer events). Each entry is an array of {x,y} in canvas
       // pixel space; timestamps are baked sequentially so the draw-in reveal
@@ -406,9 +409,11 @@ export default function Home() {
             id: "dither",
             label: "Dither",
             value: styleState.ditherEnabled
-              ? DITHER_PRESETS.find((d) => d.id === styleState.ditherType)?.label ?? "On"
+              ? `${DITHER_PRESETS.find((d) => d.id === styleState.ditherType)?.label ?? "On"}${
+                  styleState.ditherAnimated ? " ·anim" : ""
+                }`
               : "Off",
-            live: false,
+            live: true,
           },
           {
             id: "ascii",

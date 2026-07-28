@@ -80,9 +80,9 @@ const PANELS: PanelDef[] = [
   {
     id: "dither",
     label: "Dither",
-    status: "reserved",
-    note: "Dither controls land here. Dither renderer not implemented yet.",
-    futureControls: ["scale", "threshold", "contrast", "intensity", "dither direction", "reveal sync"],
+    status: "active",
+    note: "Threshold renderer is live on all four modes (Bayer 4x4/8x8, noise threshold, halftone, lines). Reduces final shaded tone after lighting — never geometry, draw-in, or export geometry.",
+    futureControls: ["custom threshold map", "per-channel dither", "palette quantization", "dither blend mode"],
   },
   {
     id: "ascii",
@@ -150,9 +150,8 @@ const ANIMATION_CATEGORIES: {
   {
     key: "dither",
     label: "Dither Animation",
-    state: "reserved",
-    detail: "Threshold sweep, Bayer crawl, diagonal drift, reveal dither, controlled flicker.",
-    futureBranch: "POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1",
+    state: "active",
+    detail: "Active now (v1). THRESHOLD motion — matrix crawl and threshold-bias sweep, with reveal-synced opening. Configure it in the Dither panel.",
   },
   {
     key: "ascii",
@@ -594,6 +593,228 @@ function TextureControl({
   )
 }
 
+/* ---- Dither panel: threshold renderer (IMPLEMENTED v1) ----
+ * Dither is TONAL REDUCTION through a threshold map — a different system from
+ * Texture (surface pattern) and ASCII (glyphs). It writes only dither* state. */
+function DitherControl({
+  styleState,
+  setStyleState,
+}: {
+  styleState: StyleState
+  setStyleState: (updater: (s: StyleState) => StyleState) => void
+}) {
+  const ditOn = styleState.ditherEnabled
+  const animOn = ditOn && styleState.ditherAnimated
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-foreground">Dither</span>
+          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+            {ditOn ? "active" : "off"}
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+          Reduces the final shaded tone to a few levels using a threshold map, so the pattern of
+          kept/dropped pixels fakes the shades in between. Applied after lighting — separate from
+          Texture (surface pattern) and ASCII (glyphs).
+        </p>
+      </div>
+
+      <label className="flex flex-col gap-1">
+        <span className={fieldLabelClass}>Threshold map</span>
+        <select
+          value={ditOn ? styleState.ditherType : "off"}
+          onChange={(e) => {
+            const v = e.target.value
+            setStyleState((s) =>
+              v === "off"
+                ? { ...s, ditherEnabled: false }
+                : { ...s, ditherEnabled: true, ditherType: v as StyleState["ditherType"] },
+            )
+          }}
+          className={selectClass}
+        >
+          <option value="off">Off</option>
+          <option value="bayer4">Bayer 4×4 (ordered)</option>
+          <option value="bayer8">Bayer 8×8 (finer ordered)</option>
+          <option value="blueNoise">Noise threshold (IGN)</option>
+          <option value="halftone">Halftone dots</option>
+          <option value="lines">Lines</option>
+        </select>
+      </label>
+
+      <div className={`flex flex-col gap-3 ${ditOn ? "" : "pointer-events-none opacity-50"}`}>
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Cell size <span className="text-foreground">{styleState.ditherScale.toFixed(1)}</span>
+          </span>
+          <input
+            type="range"
+            min={1}
+            max={14}
+            step={0.5}
+            value={styleState.ditherScale}
+            onChange={(e) => setStyleState((s) => ({ ...s, ditherScale: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!ditOn}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Tone levels <span className="text-foreground">{styleState.ditherLevels}</span>
+          </span>
+          <input
+            type="range"
+            min={2}
+            max={8}
+            step={1}
+            value={styleState.ditherLevels}
+            onChange={(e) => setStyleState((s) => ({ ...s, ditherLevels: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!ditOn}
+          />
+          <span className="text-[10px] text-muted-foreground">2 = pure two-tone; higher keeps more shading.</span>
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Threshold bias{" "}
+            <span className="text-foreground">{Math.round(styleState.ditherThreshold * 100)}%</span>
+          </span>
+          <input
+            type="range"
+            min={0.15}
+            max={0.85}
+            step={0.01}
+            value={styleState.ditherThreshold}
+            onChange={(e) => setStyleState((s) => ({ ...s, ditherThreshold: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!ditOn}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Contrast <span className="text-foreground">{Math.round(styleState.ditherContrast * 100)}%</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={styleState.ditherContrast}
+            onChange={(e) => setStyleState((s) => ({ ...s, ditherContrast: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!ditOn}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Amount <span className="text-foreground">{Math.round(styleState.ditherIntensity * 100)}%</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={styleState.ditherIntensity}
+            onChange={(e) => setStyleState((s) => ({ ...s, ditherIntensity: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!ditOn}
+          />
+          <span className="text-[10px] text-muted-foreground">Blend between smooth shading and full dither.</span>
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>Lock mode</span>
+          <select
+            value={styleState.ditherLockMode}
+            onChange={(e) =>
+              setStyleState((s) => ({
+                ...s,
+                ditherLockMode: e.target.value as StyleState["ditherLockMode"],
+              }))
+            }
+            className={selectClass}
+            disabled={!ditOn}
+          >
+            <option value="screen">Screen (classic graphic dither)</option>
+            <option value="object">Object (grid sticks to the form)</option>
+          </select>
+        </label>
+      </div>
+
+      {/* Animated dither — THRESHOLD MOTION. */}
+      <div className="border-t border-border pt-3">
+        <label className={`flex items-center gap-2 ${ditOn ? "" : "pointer-events-none opacity-50"}`}>
+          <input
+            type="checkbox"
+            checked={styleState.ditherAnimated}
+            onChange={(e) =>
+              setStyleState((s) => ({
+                ...s,
+                ditherAnimated: e.target.checked,
+                motionMode: e.target.checked && s.motionMode === "off" ? "independent" : s.motionMode,
+              }))
+            }
+            className="h-3.5 w-3.5 accent-foreground"
+            disabled={!ditOn}
+          />
+          <span className="text-xs font-medium text-foreground">Dither Animation</span>
+        </label>
+
+        <div className={`mt-3 flex flex-col gap-3 ${animOn ? "" : "pointer-events-none opacity-50"}`}>
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>
+              Speed <span className="text-foreground">{styleState.ditherSpeed.toFixed(2)}×</span>
+            </span>
+            <input
+              type="range"
+              min={0.1}
+              max={3}
+              step={0.05}
+              value={styleState.ditherSpeed}
+              onChange={(e) => setStyleState((s) => ({ ...s, ditherSpeed: Number(e.target.value) }))}
+              className="w-48 accent-foreground"
+              disabled={!animOn}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>Motion</span>
+            <select
+              value={styleState.ditherDirection}
+              onChange={(e) =>
+                setStyleState((s) => ({
+                  ...s,
+                  ditherDirection: e.target.value as StyleState["ditherDirection"],
+                }))
+              }
+              className={selectClass}
+              disabled={!animOn}
+            >
+              <option value="static">Threshold sweep (no travel)</option>
+              <option value="horizontal">Matrix crawl — horizontal</option>
+              <option value="vertical">Matrix crawl — vertical</option>
+              <option value="diagonal">Matrix crawl — diagonal</option>
+            </select>
+          </label>
+
+          <p className="text-[10px] leading-relaxed text-muted-foreground">
+            Threshold motion, not pattern motion. &ldquo;Threshold sweep&rdquo; oscillates the bias so tone
+            opens and closes in place; the crawl options travel the matrix. With{" "}
+            <span className="font-medium text-foreground">Sync to Draw</span> the threshold opens as the
+            stroke reveals.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ---- Animation panel: full IA, only Material is functional ---- */
 function AnimationControl({
   styleState,
@@ -686,30 +907,7 @@ function PanelControl({
       return <TextureControl styleState={styleState} setStyleState={setStyleState} />
 
     case "dither":
-      return (
-        <label className="flex flex-col gap-1">
-          <span className={fieldLabelClass}>Dither type</span>
-          <select
-            value={styleState.ditherEnabled ? styleState.ditherType : "off"}
-            onChange={(e) => {
-              const v = e.target.value
-              setStyleState((s) =>
-                v === "off"
-                  ? { ...s, ditherEnabled: false }
-                  : { ...s, ditherEnabled: true, ditherType: v as StyleState["ditherType"] },
-              )
-            }}
-            className={selectClass}
-          >
-            <option value="off">Off</option>
-            {DITHER_PRESETS.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      )
+      return <DitherControl styleState={styleState} setStyleState={setStyleState} />
     case "ascii":
       return (
         <label className="flex flex-col gap-1">

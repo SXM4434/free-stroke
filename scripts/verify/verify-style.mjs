@@ -31,6 +31,9 @@ const MOTION_FRAMES = parseInt(process.env.MOTION_FRAMES || "24", 10)
 
 const MODES = ["rod", "extrude", "solid", "inflate"]
 const TEXTURES = ["grain", "noise", "scanlines", "bands", "contour"]
+const DITHERS = ["bayer4", "bayer8", "blueNoise", "halftone", "lines"]
+// Which system this pass is exercising: texture | dither
+const SYSTEM = arg("system", "texture")
 
 // A single loopy test stroke, drawn once and reused across the whole matrix so
 // every comparison is same-geometry / different-style.
@@ -100,21 +103,45 @@ async function main() {
   if (ONLY === "all" || ONLY === "still") {
     for (const mode of MODES) {
       await setMode(mode)
-      await setStyle({ textureEnabled: false, textureMode: "none", textureAnimated: false })
+      await setStyle({
+        textureEnabled: false,
+        textureMode: "none",
+        textureAnimated: false,
+        ditherEnabled: false,
+        ditherAnimated: false,
+      })
       await page.waitForTimeout(350)
       await grab(`still_${mode}_off`)
-      for (const tex of TEXTURES) {
-        await setStyle({
-          textureEnabled: true,
-          textureMode: tex,
-          textureAnimated: false,
-          textureScale: 1.2,
-          textureIntensity: 0.6,
-          textureContrast: 0.55,
-          textureLockMode: "object",
-        })
-        await page.waitForTimeout(350)
-        await grab(`still_${mode}_${tex}`)
+      if (SYSTEM === "texture") {
+        for (const tex of TEXTURES) {
+          await setStyle({
+            textureEnabled: true,
+            textureMode: tex,
+            textureAnimated: false,
+            textureScale: 1.2,
+            textureIntensity: 0.6,
+            textureContrast: 0.55,
+            textureLockMode: "object",
+          })
+          await page.waitForTimeout(350)
+          await grab(`still_${mode}_${tex}`)
+        }
+      } else {
+        for (const dit of DITHERS) {
+          await setStyle({
+            ditherEnabled: true,
+            ditherAnimated: false,
+            ditherType: dit,
+            ditherScale: dit === "halftone" ? 6 : 4,
+            ditherLevels: 2,
+            ditherIntensity: 1,
+            ditherContrast: 0.55,
+            ditherThreshold: 0.5,
+            ditherLockMode: "screen",
+          })
+          await page.waitForTimeout(350)
+          await grab(`still_${mode}_${dit}`)
+        }
       }
       console.log(`[verify] stills done: ${mode}`)
     }
@@ -122,28 +149,34 @@ async function main() {
 
   // ---- MOTION: consecutive frames prove the pattern actually travels -----
   if (ONLY === "all" || ONLY === "motion") {
-    for (const mode of ["inflate", "solid"]) {
-      await setMode(mode)
-      for (const tex of ["scanlines", "grain"]) {
-        await setStyle({
-          textureEnabled: true,
-          textureMode: tex,
-          textureAnimated: true,
-          textureScale: 1.0,
-          textureIntensity: 0.65,
-          textureContrast: 0.6,
-          textureSpeed: 2.0,
-          textureDirection: "vertical",
-          motionMode: "independent",
-          textureLockMode: "object",
-        })
-        await page.waitForTimeout(400)
-        for (let i = 0; i < MOTION_FRAMES; i++) {
-          await page.waitForTimeout(90)
-          await grab(`motion_${mode}_${tex}_${String(i).padStart(3, "0")}`)
-        }
-        console.log(`[verify] motion done: ${mode}/${tex} (${MOTION_FRAMES} frames)`)
+    const cells =
+      SYSTEM === "texture"
+        ? [
+            { mode: "inflate", key: "scanlines", patch: { textureEnabled: true, textureMode: "scanlines", textureAnimated: true, textureScale: 1, textureIntensity: 0.65, textureContrast: 0.6, textureSpeed: 2, textureDirection: "vertical", motionMode: "independent", textureLockMode: "object" } },
+            { mode: "inflate", key: "grain", patch: { textureEnabled: true, textureMode: "grain", textureAnimated: true, textureScale: 1, textureIntensity: 0.65, textureContrast: 0.6, textureSpeed: 2, textureDirection: "vertical", motionMode: "independent", textureLockMode: "object" } },
+            { mode: "solid", key: "scanlines", patch: { textureEnabled: true, textureMode: "scanlines", textureAnimated: true, textureScale: 1, textureIntensity: 0.65, textureContrast: 0.6, textureSpeed: 2, textureDirection: "vertical", motionMode: "independent", textureLockMode: "object" } },
+            { mode: "solid", key: "grain", patch: { textureEnabled: true, textureMode: "grain", textureAnimated: true, textureScale: 1, textureIntensity: 0.65, textureContrast: 0.6, textureSpeed: 2, textureDirection: "vertical", motionMode: "independent", textureLockMode: "object" } },
+          ]
+        : [
+            // matrix crawl (has a travel direction)
+            { mode: "solid", key: "crawl", patch: { ditherEnabled: true, ditherAnimated: true, ditherType: "bayer4", ditherScale: 4, ditherLevels: 2, ditherIntensity: 1, ditherContrast: 0.55, ditherThreshold: 0.5, ditherSpeed: 2, ditherDirection: "diagonal", ditherLockMode: "screen", motionMode: "independent" } },
+            // threshold-bias sweep (static direction -> tone opens/closes)
+            { mode: "solid", key: "sweep", patch: { ditherEnabled: true, ditherAnimated: true, ditherType: "bayer8", ditherScale: 5, ditherLevels: 2, ditherIntensity: 1, ditherContrast: 0.55, ditherThreshold: 0.5, ditherSpeed: 1.6, ditherDirection: "static", ditherLockMode: "screen", motionMode: "independent" } },
+            { mode: "inflate", key: "halftonesweep", patch: { ditherEnabled: true, ditherAnimated: true, ditherType: "halftone", ditherScale: 7, ditherLevels: 2, ditherIntensity: 1, ditherContrast: 0.5, ditherThreshold: 0.5, ditherSpeed: 1.6, ditherDirection: "static", ditherLockMode: "screen", motionMode: "independent" } },
+          ]
+    let lastMode = null
+    for (const c of cells) {
+      if (c.mode !== lastMode) {
+        await setMode(c.mode)
+        lastMode = c.mode
       }
+      await setStyle(c.patch)
+      await page.waitForTimeout(400)
+      for (let i = 0; i < MOTION_FRAMES; i++) {
+        await page.waitForTimeout(90)
+        await grab(`motion_${c.mode}_${c.key}_${String(i).padStart(3, "0")}`)
+      }
+      console.log(`[verify] motion done: ${c.mode}/${c.key} (${MOTION_FRAMES} frames)`)
     }
   }
 

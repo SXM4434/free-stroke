@@ -165,6 +165,12 @@ export interface StyleState {
   ditherContrast: number
   ditherSpeed: number
   ditherDirection: DitherDirection
+  /** How strongly the dithered result replaces the smooth shading. */
+  ditherIntensity: number
+  /** Output tone levels. 2 = pure two-tone; higher keeps more shading. */
+  ditherLevels: number
+  /** Dither has its OWN lock mode — screen-space is the classic graphic look. */
+  ditherLockMode: TextureLockMode
 
   /* --- ascii --- */
   asciiEnabled: boolean
@@ -253,6 +259,9 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   ditherContrast: 0.5,
   ditherSpeed: 1,
   ditherDirection: "static",
+  ditherIntensity: 1,
+  ditherLevels: 2,
+  ditherLockMode: "screen",
 
   asciiEnabled: false,
   asciiAnimated: false,
@@ -597,22 +606,210 @@ export const MATERIAL_PRESET_DEFS: StylePreset[] = [
   { id: "signal", label: "Signal", family: "material", enabled: true, implemented: true, applies: { materialPreset: "signal" }, bestModes: ["rod", "extrude"] },
 ]
 
-/* --- dither (definitions only; applies set dither* state, never textureMode) --- */
+/* --- dither (IMPLEMENTED v1 — threshold renderer is live) ---
+ * Dither presets only ever write dither* state: never textureMode, never
+ * ascii*. Dither = THRESHOLD/tonal reduction, a different machine from
+ * texture (pattern) and ascii (glyphs). */
 export const DITHER_PRESET_DEFS: StylePreset[] = [
-  { id: "bayerClassic", label: "Bayer Classic", family: "dither", enabled: true, implemented: false, applies: { ditherEnabled: true, ditherType: "bayer4" } },
-  { id: "dotMatrix", label: "Dot Matrix", family: "dither", enabled: true, implemented: false, applies: { ditherEnabled: true, ditherType: "halftone" } },
-  { id: "hardThreshold", label: "Hard Threshold", family: "dither", enabled: true, implemented: false, applies: { ditherEnabled: true, ditherType: "lines" } },
-  { id: "softDither", label: "Soft Dither", family: "dither", enabled: true, implemented: false, applies: { ditherEnabled: true, ditherType: "blueNoise" } },
-  { id: "pixelSignal", label: "Pixel Signal", family: "dither", enabled: true, implemented: false, applies: { ditherEnabled: true, ditherType: "bayer8" } },
+  {
+    id: "bayerClassic",
+    label: "Bayer Classic",
+    family: "dither",
+    enabled: true,
+    implemented: true,
+    description: "Ordered 4x4 Bayer threshold. The clean computational look.",
+    applies: {
+      ditherEnabled: true,
+      ditherType: "bayer4",
+      ditherScale: 3,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherContrast: 0.55,
+      ditherThreshold: 0.5,
+      ditherLockMode: "screen",
+    },
+  },
+  {
+    id: "dotMatrix",
+    label: "Dot Matrix",
+    family: "dither",
+    enabled: true,
+    implemented: true,
+    description: "Halftone dots that grow with tone, like print.",
+    bestModes: ["solid", "extrude"],
+    applies: {
+      ditherEnabled: true,
+      ditherType: "halftone",
+      ditherScale: 6,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherContrast: 0.5,
+      ditherThreshold: 0.5,
+      ditherLockMode: "screen",
+    },
+  },
+  {
+    id: "hardThreshold",
+    label: "Hard Threshold",
+    family: "dither",
+    enabled: true,
+    implemented: true,
+    description: "Line-growth threshold, high contrast two-tone.",
+    applies: {
+      ditherEnabled: true,
+      ditherType: "lines",
+      ditherScale: 4,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherContrast: 0.8,
+      ditherThreshold: 0.5,
+      ditherLockMode: "screen",
+    },
+  },
+  {
+    id: "softDither",
+    label: "Soft Dither",
+    family: "dither",
+    enabled: true,
+    implemented: true,
+    description: "Noise-threshold dither at more tone levels — least aggressive.",
+    applies: {
+      ditherEnabled: true,
+      ditherType: "blueNoise",
+      ditherScale: 2,
+      ditherLevels: 4,
+      ditherIntensity: 0.75,
+      ditherContrast: 0.45,
+      ditherThreshold: 0.5,
+      ditherLockMode: "screen",
+    },
+  },
+  {
+    id: "pixelSignal",
+    label: "Pixel Signal",
+    family: "dither",
+    enabled: true,
+    implemented: true,
+    description: "Chunky 8x8 Bayer, high contrast. Most digital.",
+    bestModes: ["rod", "extrude"],
+    applies: {
+      ditherEnabled: true,
+      ditherType: "bayer8",
+      ditherScale: 5,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherContrast: 0.7,
+      ditherThreshold: 0.5,
+      ditherLockMode: "screen",
+    },
+  },
 ]
 
-/* --- animated dither (definitions only) --- */
+/* --- animated dither (IMPLEMENTED v1) ---
+ * Animated dither = THRESHOLD MOTION (the matrix/threshold moves), which is a
+ * different thing from animated texture (pattern motion) and animated ascii
+ * (glyph motion). */
 export const ANIMATED_DITHER_PRESET_DEFS: StylePreset[] = [
-  { id: "ditherCrawl", label: "Dither Crawl", family: "animatedDither", enabled: true, implemented: false },
-  { id: "thresholdSweep", label: "Threshold Sweep", family: "animatedDither", enabled: true, implemented: false },
-  { id: "revealDither", label: "Reveal Dither", family: "animatedDither", enabled: true, implemented: false },
-  { id: "completionPulseDither", label: "Completion Pulse Dither", family: "animatedDither", enabled: true, implemented: false },
-  { id: "diagonalMatrixDrift", label: "Diagonal Matrix Drift", family: "animatedDither", enabled: true, implemented: false },
+  {
+    id: "ditherCrawl",
+    label: "Dither Crawl",
+    family: "animatedDither",
+    enabled: true,
+    implemented: true,
+    description: "The threshold matrix drifts slowly across the frame.",
+    applies: {
+      ditherEnabled: true,
+      ditherAnimated: true,
+      ditherType: "bayer4",
+      ditherScale: 3,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherSpeed: 0.5,
+      ditherDirection: "diagonal",
+      ditherLockMode: "screen",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "thresholdSweep",
+    label: "Threshold Sweep",
+    family: "animatedDither",
+    enabled: true,
+    implemented: true,
+    description: "The threshold BIAS oscillates — tone opens and closes.",
+    applies: {
+      ditherEnabled: true,
+      ditherAnimated: true,
+      ditherType: "bayer8",
+      ditherScale: 4,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherSpeed: 0.8,
+      ditherDirection: "static",
+      ditherLockMode: "screen",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "revealDither",
+    label: "Reveal Dither",
+    family: "animatedDither",
+    enabled: true,
+    implemented: true,
+    description: "Threshold follows the geometry draw-in progress.",
+    applies: {
+      ditherEnabled: true,
+      ditherAnimated: true,
+      ditherType: "bayer4",
+      ditherScale: 3,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherSpeed: 1,
+      ditherDirection: "static",
+      ditherLockMode: "screen",
+      motionMode: "syncToDraw",
+    },
+  },
+  {
+    id: "completionPulseDither",
+    label: "Completion Pulse Dither",
+    family: "animatedDither",
+    enabled: true,
+    implemented: true,
+    description: "Halftone dots pulse open as the reveal completes.",
+    applies: {
+      ditherEnabled: true,
+      ditherAnimated: true,
+      ditherType: "halftone",
+      ditherScale: 6,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherSpeed: 1.2,
+      ditherDirection: "static",
+      ditherLockMode: "screen",
+      motionMode: "syncToDraw",
+    },
+  },
+  {
+    id: "diagonalMatrixDrift",
+    label: "Diagonal Matrix Drift",
+    family: "animatedDither",
+    enabled: true,
+    implemented: true,
+    description: "8x8 Bayer matrix drifts diagonally at speed.",
+    applies: {
+      ditherEnabled: true,
+      ditherAnimated: true,
+      ditherType: "bayer8",
+      ditherScale: 5,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherSpeed: 1.5,
+      ditherDirection: "diagonal",
+      ditherLockMode: "screen",
+      motionMode: "independent",
+    },
+  },
 ]
 
 /* --- ascii (definitions only; applies set ascii* state, never textureMode) --- */

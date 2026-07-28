@@ -13,6 +13,7 @@ import { chromium } from "playwright-core"
 
 const MODES = ["rod", "extrude", "solid", "inflate"]
 const TEXTURES = ["grain", "noise", "scanlines", "bands", "contour"]
+const DITHERS = ["bayer4", "bayer8", "blueNoise", "halftone", "lines"]
 
 function testStroke() {
   const pts = []
@@ -60,12 +61,30 @@ async function main() {
             }),
           { tex, intensity },
         )
-        await page.waitForTimeout(90)
+        await page.waitForTimeout(80)
+      }
+    }
+    for (const dit of DITHERS) {
+      for (const levels of [2, 5]) {
+        await page.evaluate(
+          ({ dit, levels }) =>
+            window.__styleHarness.setStyle({
+              ditherEnabled: true,
+              ditherType: dit,
+              ditherLevels: levels,
+              ditherScale: 3 + levels,
+              ditherAnimated: true,
+              ditherDirection: "diagonal",
+              motionMode: "independent",
+            }),
+          { dit, levels },
+        )
+        await page.waitForTimeout(80)
       }
     }
     await page.waitForTimeout(300)
     const after = await page.evaluate(() => window.__geomDebug.buildCount())
-    say(after === before, `geometry-rebuild gate / ${mode}`, `buildCount ${before} → ${after} (10 style changes)`)
+    say(after === before, `geometry-rebuild gate / ${mode}`, `buildCount ${before} → ${after} (20 style changes)`)
   }
 
   // ---- 2. export regression ---------------------------------------------
@@ -89,6 +108,23 @@ async function main() {
   const s = await page.evaluate(() => window.__styleHarness.get().styleState)
   say(!s.ditherEnabled, "taxonomy / texture does not enable dither")
   say(!s.asciiEnabled, "taxonomy / texture does not enable ascii")
+
+  // Dither presets must write ONLY dither* state — never textureMode/ascii.
+  await page.evaluate(() =>
+    window.__styleHarness.setStyle({
+      textureEnabled: false,
+      textureMode: "none",
+      ditherEnabled: false,
+      asciiEnabled: false,
+    }),
+  )
+  await page.waitForTimeout(150)
+  await page.evaluate(() => window.__styleHarness.selectPreset("dither", "dotMatrix"))
+  await page.waitForTimeout(200)
+  const s2 = await page.evaluate(() => window.__styleHarness.get().styleState)
+  say(s2.ditherEnabled && s2.ditherType === "halftone", "dither preset / dotMatrix applies", `type=${s2.ditherType}`)
+  say(s2.textureMode === "none" && !s2.textureEnabled, "taxonomy / dither preset does not touch texture")
+  say(!s2.asciiEnabled, "taxonomy / dither preset does not touch ascii")
 
   say(errors.length === 0, "console errors", `${errors.length}${errors.length ? ": " + errors[0] : ""}`)
 
