@@ -2208,3 +2208,62 @@ contract holds. Stills in `docs/verification/geometry/extrude_orbit/`.
 ### Final locked checkpoint label
 
 `ENGINE_PASS_2_EXTRUDE_JOINS_CAPS_AND_STRATEGY_COLLAPSE`
+
+---
+
+## LOCKED CHECKPOINT — `ENGINE_PASS_3_STROKE_PROCESSING_MATH`
+
+**Status: smoothing algorithm corrected, spacing contract restored.** Honest
+result: one change is preventive rather than a fix for a visible bug — see the
+measurement below.
+
+### Change 1 — Taubin (lambda|mu) smoothing instead of plain Laplacian
+
+The kernel was `c*0.5 + (p+n)*0.25`, i.e. a Laplacian pass with lambda = 0.5,
+run twice. Laplacian smoothing always pulls each point toward the chord between
+its neighbours, so every iteration SHRINKS the curve. Taubin alternates the
+smoothing pass with a slightly larger NEGATIVE pass (mu = -0.53) which
+re-inflates; high-frequency tremor is removed by both, low-frequency shape
+survives because they cancel there. Stability condition `1/lambda + 1/mu > 0`
+holds.
+
+**MEASURED HONESTLY: at the default 4px spacing this changed rendered size by
+0.00%.** Shrinkage per pass scales roughly as `s^2 / 8R`, so at s=4px against a
+~170px radius it is ~0.006px — below noticing. The change is therefore
+PREVENTIVE, not a fix for a visible defect: it matters at coarse spacing and
+tight curvature (s=20px against R=50px works out near 4% over four passes), both
+of which the spacing slider can reach. It is the correct algorithm and costs
+nothing, so it stays — but it should not be described as having fixed a bug.
+
+### Change 2 — re-resample AFTER smoothing (the measurable win)
+
+Smoothing moves points off the arc-length grid the resample just built, and
+every downstream engine assumes roughly even spacing: Rod's tube cross-sections,
+Solid's rasteriser and Inflate's loft all sample the point list directly, so
+uneven spacing shows up as wobbling tube radius and stair-stepped contours.
+Re-resampling after smoothing restores the even grid while keeping the smoothed
+shape.
+
+Measured effect (export bytes): twoStrokes rod -15%, extrude -22%, inflate -23%;
+tick -9% across modes; the dense shapes unchanged. Fewer, better-placed samples
+for the same form.
+
+### Verification
+
+Geometry net `sp_before` vs `sp_after`: no hard regressions, nothing died.
+Rendered bounding boxes measured on closedO / openC / loopyS in both solid and
+rod: **0.00% change** on every axis except a 0.35% rounding on one. Hole
+detection on the closed O still correct. `verify-gates.mjs` ALL PASS.
+
+### Not done (deliberately)
+
+Input jitter filtering (one-euro / velocity-adaptive low-pass on raw pointer
+data) and curvature-adaptive sample density were both considered. Neither was
+implemented: the first needs real hand-drawn input to tune against rather than
+synthetic test strokes, and the second changes the point-count contract that
+Solid's animation hole-stabilisation depends on. Both are worth doing with a
+human in the loop.
+
+### Final locked checkpoint label
+
+`ENGINE_PASS_3_STROKE_PROCESSING_MATH`
