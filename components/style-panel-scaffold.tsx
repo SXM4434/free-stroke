@@ -101,9 +101,9 @@ const PANELS: PanelDef[] = [
   {
     id: "layers",
     label: "Layers",
-    status: "reserved",
-    note: "Layer stack compositing lands here. Compositor not implemented yet.",
-    futureControls: ["add / remove layer", "reorder", "per-layer opacity", "blend mode"],
+    status: "active",
+    note: "Stack compositor is live: per-layer opacity, blend mode, and post-lighting order. Texture is always the base (it modulates the surface before lighting, so it cannot be reordered above the others).",
+    futureControls: ["stack-level animation", "more blend modes", "save custom stack", "per-layer solo/mute"],
   },
   {
     id: "fusion",
@@ -1113,6 +1113,182 @@ function AsciiControl({
   )
 }
 
+/* ---- Layers panel: the stack compositor (IMPLEMENTED v1) ----
+ * Composition-level controls: how strongly each layer lands, how it blends, and
+ * (for the two post-lighting layers) which runs first. Texture is shown as the
+ * base because it is part of the SURFACE — it modulates albedo and roughness
+ * before lighting — so it genuinely cannot be reordered above the others
+ * without rendering the material twice. Offering a control that silently does
+ * nothing would be worse than saying so. */
+function LayersControl({
+  styleState,
+  setStyleState,
+  onSelectPreset,
+}: {
+  styleState: StyleState
+  setStyleState: (updater: (s: StyleState) => StyleState) => void
+  onSelectPreset: (family: PresetFamily, id: string) => void
+}) {
+  const on = styleState.layerStackEnabled
+  const blendOptions = (
+    <>
+      <option value="normal">Normal</option>
+      <option value="multiply">Multiply (darken only)</option>
+      <option value="screen">Screen (lighten only)</option>
+    </>
+  )
+  const row = (
+    label: string,
+    active: boolean,
+    opacity: number,
+    onOpacity: (v: number) => void,
+    blend?: { value: StyleState["stackDitherBlend"]; onChange: (v: StyleState["stackDitherBlend"]) => void },
+  ) => (
+    <div className="rounded-md border border-border p-2.5">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-medium text-foreground">{label}</span>
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+            active ? "bg-foreground/10 text-foreground" : "bg-muted text-muted-foreground"
+          }`}
+        >
+          {active ? "in stack" : "off"}
+        </span>
+      </div>
+      <div className={`mt-2 flex flex-col gap-2 ${active && on ? "" : "pointer-events-none opacity-50"}`}>
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Opacity <span className="text-foreground">{Math.round(opacity * 100)}%</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={opacity}
+            onChange={(e) => onOpacity(Number(e.target.value))}
+            className="w-44 accent-foreground"
+            disabled={!active || !on}
+          />
+        </label>
+        {blend ? (
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>Blend</span>
+            <select
+              value={blend.value}
+              onChange={(e) => blend.onChange(e.target.value as StyleState["stackDitherBlend"])}
+              className={selectClass}
+              disabled={!active || !on}
+            >
+              {blendOptions}
+            </select>
+          </label>
+        ) : (
+          <span className="text-[10px] text-muted-foreground">
+            Base layer — part of the surface, so it has no blend of its own.
+          </span>
+        )}
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={on}
+            onChange={(e) => setStyleState((s) => ({ ...s, layerStackEnabled: e.target.checked }))}
+            className="h-3.5 w-3.5 accent-foreground"
+          />
+          <span className="text-xs font-medium text-foreground">Layer stack</span>
+          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+            {on ? "active" : "off"}
+          </span>
+        </label>
+        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+          Composes the visual systems. Each layer keeps its own controls in its own panel; the stack
+          adds opacity, blend, and order on top. With the stack off, every layer behaves exactly as it
+          does on its own.
+        </p>
+      </div>
+
+      <div className={`flex flex-col gap-2 ${on ? "" : "pointer-events-none opacity-50"}`}>
+        {row(
+          "1 · Texture (base)",
+          styleState.textureEnabled && styleState.textureMode !== "none",
+          styleState.stackTextureOpacity,
+          (v) => setStyleState((s) => ({ ...s, stackTextureOpacity: v })),
+        )}
+        {row(
+          "2 · Dither",
+          styleState.ditherEnabled,
+          styleState.stackDitherOpacity,
+          (v) => setStyleState((s) => ({ ...s, stackDitherOpacity: v })),
+          {
+            value: styleState.stackDitherBlend,
+            onChange: (v) => setStyleState((s) => ({ ...s, stackDitherBlend: v })),
+          },
+        )}
+        {row(
+          "3 · ASCII",
+          styleState.asciiEnabled,
+          styleState.stackAsciiOpacity,
+          (v) => setStyleState((s) => ({ ...s, stackAsciiOpacity: v })),
+          {
+            value: styleState.stackAsciiBlend,
+            onChange: (v) => setStyleState((s) => ({ ...s, stackAsciiBlend: v })),
+          },
+        )}
+
+        <label className="mt-1 flex flex-col gap-1">
+          <span className={fieldLabelClass}>Order (post-lighting layers)</span>
+          <select
+            value={styleState.stackOrder}
+            onChange={(e) =>
+              setStyleState((s) => ({ ...s, stackOrder: e.target.value as StyleState["stackOrder"] }))
+            }
+            className={selectClass}
+            disabled={!on}
+          >
+            <option value="ditherFirst">Dither → ASCII (crisper, printed)</option>
+            <option value="asciiFirst">ASCII → Dither (grittier, degraded)</option>
+          </select>
+          <span className="text-[10px] leading-relaxed text-muted-foreground">
+            Dither first means characters are chosen from already-quantized tone. ASCII first means the
+            dither breaks up the character shapes themselves. Texture is always the base.
+          </span>
+        </label>
+      </div>
+
+      <div className="border-t border-border pt-3">
+        <span className={fieldLabelClass}>Stack presets</span>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {PRESET_REGISTRY.layerStack.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => onSelectPreset("layerStack", p.id)}
+              className={`rounded-md border px-2 py-1 text-[11px] ${
+                styleState.activePresetId === p.id
+                  ? "border-foreground bg-foreground/10 text-foreground"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+              title={p.description}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+          Each preset is a composition, not a pile of switches: one dominant layer, the others
+          supporting at reduced opacity.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 /* ---- Animation panel: full IA, only Material is functional ---- */
 function AnimationControl({
   styleState,
@@ -1229,6 +1405,14 @@ function PanelControl({
       return <DitherControl styleState={styleState} setStyleState={setStyleState} />
     case "ascii":
       return <AsciiControl styleState={styleState} setStyleState={setStyleState} />
+    case "layers":
+      return (
+        <LayersControl
+          styleState={styleState}
+          setStyleState={setStyleState}
+          onSelectPreset={onSelectPreset}
+        />
+      )
     case "presets": {
       const family = styleState.activePresetFamily
       const presets = (PRESET_REGISTRY[family] ?? []).filter((p) => p.enabled)

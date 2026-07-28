@@ -144,6 +144,12 @@ export type FusionPreset =
 
 export type StackAnimationType = "none" | "offset" | "cascade" | "shuffle" | "pulse"
 
+// Stack types live in style-stack.ts (next to the blend GLSL they describe).
+// Imported so StyleState can reference them, re-exported so consumers still get
+// the whole style model from one module.
+import type { StackBlendMode, StackOrder } from "./style-stack"
+export type { StackBlendMode, StackOrder }
+
 /* ------------------------------ style state ------------------------------ */
 
 export interface StyleState {
@@ -215,6 +221,15 @@ export interface StyleState {
 
 /* --- layer stack --- */
   layerStackEnabled: boolean
+  /** Composition-level opacity per layer, multiplied with the layer's own control. */
+  stackTextureOpacity: number
+  stackDitherOpacity: number
+  stackAsciiOpacity: number
+  /** Blend mode per post-lighting layer. Texture is part of the surface. */
+  stackDitherBlend: StackBlendMode
+  stackAsciiBlend: StackBlendMode
+  /** Which post-lighting layer runs first. Texture is ALWAYS the base. */
+  stackOrder: StackOrder
   stackAnimationEnabled: boolean
   stackAnimationType: StackAnimationType
   stackAnimationSpeed: number
@@ -314,6 +329,12 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   asciiDelay: 0,
 
   layerStackEnabled: false,
+  stackTextureOpacity: 1,
+  stackDitherOpacity: 1,
+  stackAsciiOpacity: 1,
+  stackDitherBlend: "normal",
+  stackAsciiBlend: "normal",
+  stackOrder: "ditherFirst",
   stackAnimationEnabled: false,
   stackAnimationType: "none",
   stackAnimationSpeed: 1,
@@ -1246,13 +1267,160 @@ export const ANIMATED_TEXTURE_PRESET_DEFS: StylePreset[] = [
 ]
 
 
-/* --- layer stack (definitions only) --- */
+/* --- layer stack (IMPLEMENTED v1) ---
+ * Each preset is a COMPOSITION, not a pile of switches. They follow the PRD's
+ * taste rule: ONE dominant graphic layer, the others supporting at reduced
+ * opacity. That is why the opacities differ so much within a preset — a stack
+ * with three layers at full strength is the visual soup the PRD warns about
+ * (see docs/verification/stack-v1/ for what that looks like). */
 export const LAYER_STACK_PRESET_DEFS: StylePreset[] = [
-  { id: "cleanInkStack", label: "Clean Ink Stack", family: "layerStack", enabled: true, implemented: false },
-  { id: "ditheredGelStack", label: "Dithered Gel Stack", family: "layerStack", enabled: true, implemented: false },
-  { id: "terminalStack", label: "Terminal Stack", family: "layerStack", enabled: true, implemented: false },
-  { id: "graphicSlabStack", label: "Graphic Slab Stack", family: "layerStack", enabled: true, implemented: false },
-  { id: "softSignalStack", label: "Soft Signal Stack", family: "layerStack", enabled: true, implemented: false },
+  {
+    id: "cleanInkStack",
+    label: "Clean Ink Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "Ink with a whisper of grain. Nothing dominates — the form leads.",
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "ink",
+      textureEnabled: true,
+      textureMode: "grain",
+      textureScale: 1.6,
+      textureIntensity: 0.3,
+      textureContrast: 0.45,
+      ditherEnabled: false,
+      asciiEnabled: false,
+      stackTextureOpacity: 0.7,
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "ditheredGelStack",
+    label: "Dithered Gel Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "Soft gel body, dither doing the graphic work, texture barely there.",
+    bestModes: ["inflate"],
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "softGel",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "noise",
+      textureScale: 0.7,
+      textureIntensity: 0.3,
+      ditherEnabled: true,
+      ditherType: "blueNoise",
+      ditherScale: 2.5,
+      ditherLevels: 4,
+      ditherIntensity: 0.85,
+      ditherContrast: 0.45,
+      ditherLockMode: "screen",
+      asciiEnabled: false,
+      stackTextureOpacity: 0.35,
+      stackDitherOpacity: 0.9,
+      stackDitherBlend: "normal",
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "terminalStack",
+    label: "Terminal Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "ASCII dominant, scanlines underneath, no dither competing.",
+    bestModes: ["solid", "extrude"],
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "signal",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "scanlines",
+      textureScale: 1.0,
+      textureIntensity: 0.4,
+      ditherEnabled: false,
+      asciiEnabled: true,
+      asciiCharset: "classic",
+      asciiCellSize: 11,
+      asciiDensity: 0.55,
+      asciiContrast: 0.5,
+      asciiLockMode: "screen",
+      stackTextureOpacity: 0.4,
+      stackAsciiOpacity: 0.95,
+      stackAsciiBlend: "normal",
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "graphicSlabStack",
+    label: "Graphic Slab Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "Matte clay slab broken by hard Bayer dither. Contour bands support.",
+    bestModes: ["solid"],
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "matteClay",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "bands",
+      textureScale: 0.8,
+      textureIntensity: 0.4,
+      ditherEnabled: true,
+      ditherType: "bayer4",
+      ditherScale: 3.5,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherContrast: 0.6,
+      ditherLockMode: "screen",
+      asciiEnabled: false,
+      stackTextureOpacity: 0.45,
+      stackDitherOpacity: 1,
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "softSignalStack",
+    label: "Soft Signal Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "All three layers, deliberately restrained — binary glyphs lead, dither and scanlines whisper.",
+    bestModes: ["rod", "inflate"],
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "rubber",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "scanlines",
+      textureScale: 1.1,
+      textureIntensity: 0.35,
+      ditherEnabled: true,
+      ditherType: "blueNoise",
+      ditherScale: 2,
+      ditherLevels: 5,
+      ditherIntensity: 0.5,
+      ditherContrast: 0.4,
+      ditherLockMode: "screen",
+      asciiEnabled: true,
+      asciiCharset: "minimal",
+      asciiCellSize: 10,
+      asciiDensity: 0.5,
+      asciiContrast: 0.5,
+      asciiLockMode: "screen",
+      // The taste rule in numbers: ASCII leads, the other two support.
+      stackTextureOpacity: 0.3,
+      stackDitherOpacity: 0.35,
+      stackAsciiOpacity: 0.85,
+      stackDitherBlend: "multiply",
+      stackAsciiBlend: "normal",
+      stackOrder: "asciiFirst",
+    },
+  },
 ]
 
 /* --- stack animation (definitions only) --- */

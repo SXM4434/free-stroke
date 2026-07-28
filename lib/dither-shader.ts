@@ -67,6 +67,8 @@ export interface DitherUniforms {
   uFsDitDirX: { value: number }
   uFsDitDirY: { value: number }
   uFsDitLockScreen: { value: number }
+  /** Stack blend mode (see STACK_BLEND_INDEX). */
+  uFsDitBlend: { value: number }
 }
 
 export function createDitherUniforms(): DitherUniforms {
@@ -81,6 +83,7 @@ export function createDitherUniforms(): DitherUniforms {
     uFsDitDirX: { value: 0 },
     uFsDitDirY: { value: 0 },
     uFsDitLockScreen: { value: 1 },
+    uFsDitBlend: { value: 0 },
   }
 }
 
@@ -108,6 +111,7 @@ uniform float uFsDitTime;
 uniform float uFsDitDirX;
 uniform float uFsDitDirY;
 uniform float uFsDitLockScreen;
+uniform float uFsDitBlend;
 
 float fsBayer(vec2 c, int levels) {
   float result = 0.0;
@@ -148,9 +152,18 @@ float fsDitherThreshold(vec2 co, float type) {
 }
 `
 
-/** Fragment-shader tail: quantize the final tone through the threshold map. */
-export const DITHER_FRAGMENT_GLSL = /* glsl */ `
-if (uFsDitType > 0.5) {
+/**
+ * Dither as a COMPOSABLE FUNCTION rather than an inline tail.
+ *
+ * Making it `vec3 -> vec3` is what lets the layer stack reorder it against
+ * ASCII and blend its result: an inline block that mutates gl_FragColor can
+ * only ever run in the position it was pasted. Blend + amount are applied here
+ * so every layer honours the stack the same way.
+ */
+export const DITHER_APPLY_GLSL = /* glsl */ `
+vec3 fsApplyDither(vec3 fsCol) {
+  if (uFsDitType < 0.5) return fsCol;
+
   // Coordinate for the threshold tile.
   vec2 fsDCo = uFsDitLockScreen > 0.5
     ? gl_FragCoord.xy / max(uFsDitScale, 0.05)
@@ -159,9 +172,8 @@ if (uFsDitType > 0.5) {
 
   float fsThr = fsDitherThreshold(fsDCo, uFsDitType);
 
-  // Perceived brightness of the shaded pixel (Rec. 709 luma weights: the eye
-  // is far more sensitive to green than to blue).
-  vec3 fsCol = gl_FragColor.rgb;
+  // Perceived brightness (Rec. 709 luma weights: the eye is far more
+  // sensitive to green than to blue).
   float fsLum = dot(fsCol, vec3(0.2126, 0.7152, 0.0722));
 
   // Contrast about mid-grey, then the user's threshold bias.
@@ -174,24 +186,12 @@ if (uFsDitType > 0.5) {
 
   // Rebuild colour: keep the surface's hue, drive its value from the
   // quantized tone. Fully desaturating would make every material identical.
-  vec3 fsTint = fsLum > 0.001 ? fsCol / max(fsLum, 0.001) : vec3(1.0);
+  float fsSrcLum = dot(fsCol, vec3(0.2126, 0.7152, 0.0722));
+  vec3 fsTint = fsSrcLum > 0.001 ? fsCol / max(fsSrcLum, 0.001) : vec3(1.0);
   vec3 fsDithered = clamp(fsTint * fsQ, 0.0, 1.0);
-  gl_FragColor.rgb = mix(fsCol, fsDithered, clamp(uFsDitIntensity, 0.0, 1.0));
+
+  return fsStackBlend(fsCol, fsDithered, uFsDitBlend, uFsDitIntensity);
 }
 `
 
 export const DITHER_COMMON_GLSL = DITHER_GLSL
-
-/** Standalone install (used when dither is applied without the texture layer). */
-export function applyDitherShader(material: THREE.Material, uniforms: DitherUniforms): void {
-  material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms)
-    shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vFsObjPos;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvFsObjPos = position;")
-    shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", `#include <common>\nvarying vec3 vFsObjPos;\n${DITHER_GLSL}`)
-      .replace("#include <dithering_fragment>", `#include <dithering_fragment>\n${DITHER_FRAGMENT_GLSL}`)
-  }
-  material.customProgramCacheKey = () => "freestroke-dither-v1"
-}

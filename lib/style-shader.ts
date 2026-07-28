@@ -30,13 +30,24 @@ import {
   TEXTURE_LIGHTS_GLSL,
   type TextureUniforms,
 } from "./texture-shader"
-import { DITHER_COMMON_GLSL, DITHER_FRAGMENT_GLSL, type DitherUniforms } from "./dither-shader"
-import { ASCII_COMMON_GLSL, ASCII_FRAGMENT_GLSL, type AsciiUniforms } from "./ascii-shader"
+import { DITHER_COMMON_GLSL, DITHER_APPLY_GLSL, type DitherUniforms } from "./dither-shader"
+import { ASCII_COMMON_GLSL, ASCII_APPLY_GLSL, type AsciiUniforms } from "./ascii-shader"
+import { STACK_BLEND_GLSL } from "./style-stack"
+
+export interface StackUniforms {
+  /** 0 = dither then ascii, 1 = ascii then dither. */
+  uFsStackOrder: { value: number }
+}
+
+export function createStackUniforms(): StackUniforms {
+  return { uFsStackOrder: { value: 0 } }
+}
 
 export interface StyleShaderUniforms {
   texture: TextureUniforms
   dither: DitherUniforms
   ascii: AsciiUniforms
+  stack: StackUniforms
 }
 
 /**
@@ -46,7 +57,7 @@ export interface StyleShaderUniforms {
  */
 export function applyStyleShader(material: THREE.Material, u: StyleShaderUniforms): void {
   material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, u.texture, u.dither, u.ascii)
+    Object.assign(shader.uniforms, u.texture, u.dither, u.ascii, u.stack)
 
     // Object-space position varying, shared by every layer that can be
     // object-locked. `position` is the raw vertex attribute before any matrix
@@ -58,21 +69,47 @@ export function applyStyleShader(material: THREE.Material, u: StyleShaderUniform
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
-        `#include <common>\nvarying vec3 vFsObjPos;\n${TEXTURE_COMMON_GLSL}\n${DITHER_COMMON_GLSL}\n${ASCII_COMMON_GLSL}`,
+        [
+          "#include <common>",
+          "varying vec3 vFsObjPos;",
+          "uniform float uFsStackOrder;",
+          TEXTURE_COMMON_GLSL,
+          DITHER_COMMON_GLSL,
+          ASCII_COMMON_GLSL,
+          // The blend helper must be declared before the apply functions use it.
+          STACK_BLEND_GLSL,
+          DITHER_APPLY_GLSL,
+          ASCII_APPLY_GLSL,
+        ].join("\n"),
       )
       .replace("#include <map_fragment>", `#include <map_fragment>\n${TEXTURE_MAP_GLSL}`)
       .replace(
         "#include <lights_physical_fragment>",
         `#include <lights_physical_fragment>\n${TEXTURE_LIGHTS_GLSL}`,
       )
-      // ASCII runs AFTER dither: dither reduces the tone, ASCII then renders
-      // that tone as characters. Reversing them would dither the glyph edges
-      // into mush instead of quantizing the surface the glyphs represent.
+      // Post-lighting layers run in the stack's chosen order. Both are pure
+      // vec3 -> vec3 functions, so swapping them is a genuine reorder rather
+      // than two hardcoded pastes.
+      //   dither -> ascii : characters are chosen from already-quantized tone
+      //                     (crisper, more "printed")
+      //   ascii -> dither : glyphs get thresholded, so the dither breaks up the
+      //                     character shapes (grittier, degraded-terminal)
       .replace(
         "#include <dithering_fragment>",
-        `#include <dithering_fragment>\n${DITHER_FRAGMENT_GLSL}\n${ASCII_FRAGMENT_GLSL}`,
+        [
+          "#include <dithering_fragment>",
+          "vec3 fsStackCol = gl_FragColor.rgb;",
+          "if (uFsStackOrder < 0.5) {",
+          "  fsStackCol = fsApplyDither(fsStackCol);",
+          "  fsStackCol = fsApplyAscii(fsStackCol);",
+          "} else {",
+          "  fsStackCol = fsApplyAscii(fsStackCol);",
+          "  fsStackCol = fsApplyDither(fsStackCol);",
+          "}",
+          "gl_FragColor.rgb = fsStackCol;",
+        ].join("\n"),
       )
   }
   // One shared compiled program for every material carrying the style layers.
-  material.customProgramCacheKey = () => "freestroke-style-v3"
+  material.customProgramCacheKey = () => "freestroke-style-v4"
 }

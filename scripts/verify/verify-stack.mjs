@@ -23,11 +23,49 @@ await page.evaluate(() => window.__captureHarness.frontView(1))
 const grab = async (n) => { const u = await page.evaluate(()=>window.__captureHarness.grab()); writeFileSync(`${OUT}/${n}.png`, Buffer.from(u.match(/base64,(.+)/)[1],"base64")) }
 const set = (p) => page.evaluate((x)=>window.__styleHarness.setStyle(x), p)
 const OFF = { textureEnabled:false, ditherEnabled:false, asciiEnabled:false, textureAnimated:false, ditherAnimated:false, asciiAnimated:false }
+const BASE = {
+  textureEnabled: true, textureMode: "contour", textureScale: 1.2, textureIntensity: 0.6,
+  textureContrast: 0.55, textureLockMode: "object",
+  ditherEnabled: true, ditherType: "bayer4", ditherScale: 4, ditherLevels: 3,
+  ditherIntensity: 0.8, ditherContrast: 0.55, ditherThreshold: 0.5, ditherLockMode: "screen",
+  asciiEnabled: true, asciiCharset: "classic", asciiCellSize: 14, asciiDensity: 0.5,
+  asciiContrast: 0.5, asciiLockMode: "screen",
+}
 const cases = [
+  // --- progressive layering ---
   ["1_none", OFF],
-  ["2_texture_only", {...OFF, textureEnabled:true, textureMode:"contour", textureScale:1.2, textureIntensity:0.6, textureContrast:0.55, textureLockMode:"object"}],
-  ["3_texture_dither", {...OFF, textureEnabled:true, textureMode:"contour", textureScale:1.2, textureIntensity:0.6, textureLockMode:"object", ditherEnabled:true, ditherType:"bayer4", ditherScale:4, ditherLevels:2, ditherIntensity:1, ditherContrast:0.55, ditherThreshold:0.5, ditherLockMode:"screen"}],
-  ["4_all_three", {...OFF, textureEnabled:true, textureMode:"contour", textureScale:1.2, textureIntensity:0.6, textureLockMode:"object", ditherEnabled:true, ditherType:"bayer4", ditherScale:4, ditherLevels:3, ditherIntensity:0.7, ditherContrast:0.55, ditherThreshold:0.5, ditherLockMode:"screen", asciiEnabled:true, asciiCharset:"classic", asciiCellSize:16, asciiDensity:0.5, asciiContrast:0.5, asciiLockMode:"screen"}],
+  ["2_texture_only", {...OFF, ...BASE, ditherEnabled:false, asciiEnabled:false}],
+  ["3_texture_dither", {...OFF, ...BASE, asciiEnabled:false}],
+  ["4_all_three", {...OFF, ...BASE}],
+  // --- ORDER: same layers, swapped post-lighting order ---
+  ["5_order_ditherFirst", {...OFF, ...BASE, layerStackEnabled:true, stackOrder:"ditherFirst",
+    stackTextureOpacity:0.5, stackDitherOpacity:0.9, stackAsciiOpacity:0.9}],
+  ["6_order_asciiFirst", {...OFF, ...BASE, layerStackEnabled:true, stackOrder:"asciiFirst",
+    stackTextureOpacity:0.5, stackDitherOpacity:0.9, stackAsciiOpacity:0.9}],
+  // --- BLEND: same layers, different dither blend ---
+  ["7_blend_normal", {...OFF, ...BASE, layerStackEnabled:true, stackDitherBlend:"normal",
+    stackTextureOpacity:0.5, stackDitherOpacity:0.9, stackAsciiOpacity:0.6}],
+  ["8_blend_multiply", {...OFF, ...BASE, layerStackEnabled:true, stackDitherBlend:"multiply",
+    stackTextureOpacity:0.5, stackDitherOpacity:0.9, stackAsciiOpacity:0.6}],
+  ["9_blend_screen", {...OFF, ...BASE, layerStackEnabled:true, stackDitherBlend:"screen",
+    stackTextureOpacity:0.5, stackDitherOpacity:0.9, stackAsciiOpacity:0.6}],
+  // --- OPACITY: stack dialing a layer down must visibly change it ---
+  ["10_opacity_full", {...OFF, ...BASE, layerStackEnabled:true, stackAsciiOpacity:1,
+    stackTextureOpacity:0.5, stackDitherOpacity:0.8}],
+  ["11_opacity_low", {...OFF, ...BASE, layerStackEnabled:true, stackAsciiOpacity:0.15,
+    stackTextureOpacity:0.5, stackDitherOpacity:0.8}],
 ]
+
 for (const [n, p] of cases) { await set(p); await page.waitForTimeout(500); await grab(n); console.log("captured", n) }
+
+// Stack PRESETS, applied through the real preset-selection path.
+const PRESETS = ["cleanInkStack", "ditheredGelStack", "terminalStack", "graphicSlabStack", "softSignalStack"]
+for (const id of PRESETS) {
+  await set(OFF)
+  await page.waitForTimeout(200)
+  await page.evaluate((x) => window.__styleHarness.selectPreset("layerStack", x), id)
+  await page.waitForTimeout(600)
+  await grab(`preset_${id}`)
+  console.log("captured preset", id)
+}
 await b.close()

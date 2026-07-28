@@ -45,7 +45,8 @@ import {
   ASCII_DIRECTION_VEC,
   type AsciiUniforms,
 } from "@/lib/ascii-shader"
-import { applyStyleShader } from "@/lib/style-shader"
+import { applyStyleShader, createStackUniforms, type StackUniforms } from "@/lib/style-shader"
+import { resolveStack } from "@/lib/style-stack"
 import {
   createStyleClock,
   advanceStyleClock,
@@ -420,6 +421,10 @@ function AnimatedStrokes({
   // ONE clock for every animated style layer. Each layer asks it for a phase
   // rather than accumulating its own time, so layers can share a loop, stagger
   // by delay, or fire together on reveal completion.
+  const stackUniformsRef = useRef<StackUniforms | null>(null)
+  if (stackUniformsRef.current === null) {
+    stackUniformsRef.current = createStackUniforms()
+  }
   const styleClockRef = useRef<StyleClock | null>(null)
   if (styleClockRef.current === null) {
     styleClockRef.current = createStyleClock()
@@ -445,6 +450,7 @@ function AnimatedStrokes({
       texture: textureUniformsRef.current!,
       dither: ditherUniformsRef.current!,
       ascii: asciiUniformsRef.current!,
+      stack: stackUniformsRef.current!,
     })
     return mat
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -471,6 +477,10 @@ function AnimatedStrokes({
     STYLE_CLOCK_DEBUG.elapsed = clock.elapsed
     STYLE_CLOCK_DEBUG.reveal = clock.reveal
     STYLE_CLOCK_DEBUG.sinceCompletion = clock.sinceCompletion
+
+    // Layer stack: composition-level opacity / blend / order, resolved once.
+    const stack = styleState ? resolveStack(styleState) : null
+    if (stack) stackUniformsRef.current!.uFsStackOrder.value = stack.order
 
     // ---- Procedural texture v1 (uniform writes only) --------------------
     // Pattern selection + params + animation phase all flow through uniform
@@ -502,10 +512,10 @@ function AnimatedStrokes({
       })
       u.uFsTexTime.value = texT.active ? texT.time : styleState.texturePhase
       // One-shot / delayed modes fade the layer in and out via `amount`.
-      u.uFsTexIntensity.value =
-        texT.active && texT.amount < 1
-          ? styleState.textureIntensity * texT.amount
-          : styleState.textureIntensity
+      // Stack opacity multiplies the layer's own intensity; the timing
+      // envelope (`amount`) then scales one-shot / delayed modes on top.
+      const texBase = stack ? stack.textureAmount : styleState.textureIntensity
+      u.uFsTexIntensity.value = texT.active && texT.amount < 1 ? texBase * texT.amount : texBase
     }
 
     // ---- Dither v1 (uniform writes only) --------------------------------
@@ -517,7 +527,8 @@ function AnimatedStrokes({
       d.uFsDitType.value = ditOn ? DITHER_TYPE_INDEX[styleState.ditherType] : 0
       d.uFsDitScale.value = styleState.ditherScale
       d.uFsDitContrast.value = styleState.ditherContrast
-      d.uFsDitIntensity.value = styleState.ditherIntensity
+      d.uFsDitIntensity.value = stack ? stack.ditherAmount : styleState.ditherIntensity
+      d.uFsDitBlend.value = stack ? stack.ditherBlend : 0
       d.uFsDitLevels.value = styleState.ditherLevels
       d.uFsDitLockScreen.value = styleState.ditherLockMode === "screen" ? 1 : 0
       const [ddx, ddy] = DITHER_DIRECTION_VEC[styleState.ditherDirection]
@@ -535,6 +546,7 @@ function AnimatedStrokes({
       })
       // MATRIX motion: shift which threshold cell each pixel samples.
       d.uFsDitTime.value = ditT.active ? ditT.time : 0
+      if (ditT.active && ditT.amount < 1) d.uFsDitIntensity.value *= ditT.amount
       // THRESHOLD-BIAS motion: with no travel direction the matrix cannot move,
       // so animation instead sweeps the bias — tone opens and closes in place.
       // This is what distinguishes "Threshold Sweep" from "Dither Crawl".
@@ -585,6 +597,9 @@ function AnimatedStrokes({
       // revealDensity reads uFsAscReveal directly, so it needs no phase of its
       // own; every other behaviour rides the shared clock.
       a.uFsAscTime.value = ascT.active ? ascT.time : 0
+      const ascBase = stack ? stack.asciiAmount : 1
+      a.uFsAscAmount.value = ascT.active && ascT.amount < 1 ? ascBase * ascT.amount : ascBase
+      a.uFsAscBlend.value = stack ? stack.asciiBlend : 0
     }
 
     // ---- Animated Material v1 (surface response only) -------------------
@@ -2721,6 +2736,18 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               <div>ditherSyncMode: {styleState.ditherSyncMode} (+{styleState.ditherDelay.toFixed(1)}s)</div>
               <div>asciiSyncMode: {styleState.asciiSyncMode} (+{styleState.asciiDelay.toFixed(1)}s)</div>
               <div>layersShareOneClock: YES</div>
+              <div className="mt-0.5 text-foreground/80">— Layer stack —</div>
+              <div>stackRendererImplemented: YES (v1)</div>
+              <div>layerStackEnabled: {String(styleState.layerStackEnabled)}</div>
+              <div>stackOrder: {styleState.stackOrder}</div>
+              <div>stackTextureOpacity: {styleState.stackTextureOpacity.toFixed(2)}</div>
+              <div>
+                stackDither: {styleState.stackDitherOpacity.toFixed(2)} / {styleState.stackDitherBlend}
+              </div>
+              <div>
+                stackAscii: {styleState.stackAsciiOpacity.toFixed(2)} / {styleState.stackAsciiBlend}
+              </div>
+              <div>textureIsAlwaysBase: YES (pre-lighting, not reorderable)</div>
               <div>syncMode: {styleState.syncMode}</div>
               <div>syncToReveal: {String(styleState.syncToReveal)}</div>
               <div className="mt-0.5 text-foreground/80">— Composite (renderers later) —</div>

@@ -87,6 +87,10 @@ export interface AsciiUniforms {
   uFsAscLockScreen: { value: number }
   /** Draw-in reveal progress, for revealDensity. */
   uFsAscReveal: { value: number }
+  /** How strongly the glyph result replaces the input (stack amount). */
+  uFsAscAmount: { value: number }
+  /** Stack blend mode (see STACK_BLEND_INDEX). */
+  uFsAscBlend: { value: number }
 }
 
 export function createAsciiUniforms(): AsciiUniforms {
@@ -102,6 +106,8 @@ export function createAsciiUniforms(): AsciiUniforms {
     uFsAscDirY: { value: 0 },
     uFsAscLockScreen: { value: 1 },
     uFsAscReveal: { value: 1 },
+    uFsAscAmount: { value: 1 },
+    uFsAscBlend: { value: 0 },
   }
 }
 
@@ -200,6 +206,8 @@ uniform float uFsAscDirX;
 uniform float uFsAscDirY;
 uniform float uFsAscLockScreen;
 uniform float uFsAscReveal;
+uniform float uFsAscAmount;
+uniform float uFsAscBlend;
 
 ${GLYPH_TABLE_GLSL}
 
@@ -220,9 +228,15 @@ float fsGlyphPixel(int idx, vec2 g) {
 }
 `
 
-/** Fragment tail: replace the shaded surface with character glyphs. */
-export const ASCII_FRAGMENT_GLSL = /* glsl */ `
-if (uFsAscOn > 0.5) {
+/**
+ * ASCII as a COMPOSABLE FUNCTION (see the dither module for why: an inline
+ * block that mutates gl_FragColor can only run where it was pasted, which makes
+ * layer reordering impossible).
+ */
+export const ASCII_APPLY_GLSL = /* glsl */ `
+vec3 fsApplyAscii(vec3 fsAC) {
+  if (uFsAscOn < 0.5) return fsAC;
+
   // --- 1. the cell grid -------------------------------------------------
   vec2 fsACo = uFsAscLockScreen > 0.5
     ? gl_FragCoord.xy / max(uFsAscCell, 2.0)
@@ -241,7 +255,6 @@ if (uFsAscOn > 0.5) {
   vec2 fsInCell = fract(fsACo);
 
   // --- 2. brightness -> which character ---------------------------------
-  vec3 fsAC = gl_FragColor.rgb;
   float fsARaw = dot(fsAC, vec3(0.2126, 0.7152, 0.0722));
 
   // EXPOSURE. Free Stroke's ink is near-black: a shaded stroke occupies only
@@ -296,20 +309,8 @@ if (uFsAscOn > 0.5) {
   vec3 fsATint = fsARaw > 0.002 ? fsAC / fsARaw : vec3(1.0);
   vec3 fsOnCol = clamp(fsATint * 0.82, 0.0, 1.0);
   vec3 fsOffCol = clamp(fsATint * 0.05, 0.0, 1.0);
-  gl_FragColor.rgb = mix(fsOffCol, fsOnCol, fsOn);
+  vec3 fsGlyphed = mix(fsOffCol, fsOnCol, fsOn);
+
+  return fsStackBlend(fsAC, fsGlyphed, uFsAscBlend, uFsAscAmount);
 }
 `
-
-/** Standalone install (unused when the composer is active; kept for parity). */
-export function applyAsciiShader(material: THREE.Material, uniforms: AsciiUniforms): void {
-  material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms)
-    shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vFsObjPos;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvFsObjPos = position;")
-    shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", `#include <common>\nvarying vec3 vFsObjPos;\n${ASCII_COMMON_GLSL}`)
-      .replace("#include <dithering_fragment>", `#include <dithering_fragment>\n${ASCII_FRAGMENT_GLSL}`)
-  }
-  material.customProgramCacheKey = () => "freestroke-ascii-v1"
-}

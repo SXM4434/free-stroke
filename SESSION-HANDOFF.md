@@ -1630,3 +1630,106 @@ group animation on (`amount` exists for exactly that).
 
 (supersedes `POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1_PASS`; all prior
 checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_LAYER_STACK_PHASE_1_PASS`
+
+**Status: the stack compositor is LIVE.** Three independent effects are now a
+composition: per-layer opacity, blend mode, post-lighting order, and five
+tasteful presets. Geometry, geometry animation, and export untouched.
+
+### The refactor that made it possible
+
+Dither and ASCII were INLINE blocks pasted into the shader tail, each mutating
+`gl_FragColor` where it sat. An inline block can only ever run where it was
+pasted — text already substituted cannot be reordered. Both became pure
+`vec3 -> vec3` functions (`fsApplyDither`, `fsApplyAscii`), and the composer
+picks order at runtime from a uniform. Both orders compile into ONE shader, so
+switching order costs nothing (no recompile, no material swap, rebuild gate
+still passes). Composability had to exist in the shader's SHAPE before it could
+exist in the UI.
+
+### The honest constraint: texture cannot be reordered
+
+Texture is not a layer over the object — it IS part of the object, modulating
+albedo + roughness BEFORE/DURING lighting. Dither and ASCII operate on final
+shaded tone AFTER lighting. Putting texture "above" ASCII would mean re-running
+the entire lighting calculation on top of the glyphs (rendering the material
+twice). So the UI shows texture as "1 · Texture (base)" with an explanation, and
+offers order only for the two layers that genuinely swap. **A control that
+silently does nothing is worse than a missing one.**
+
+Dither <-> ASCII order genuinely matters (measured Δ 56.16, among the largest
+differences in the stack):
+- dither → ascii: characters chosen from already-quantized tone. Crisper, printed.
+- ascii → dither: glyphs get thresholded, so dither breaks up the character
+  shapes. Grittier, degraded-terminal.
+
+### What was built
+
+- **`lib/style-stack.ts` (NEW)** — blend modes (normal / multiply / screen),
+  order model, the shared `fsStackBlend` GLSL helper every layer routes through,
+  and `resolveStack()`.
+- **`lib/style-shader.ts`** — composer emits the ordered branch; new
+  `StackUniforms`.
+- **`lib/dither-shader.ts` / `lib/ascii-shader.ts`** — refactored to composable
+  functions; gained blend + amount uniforms. Dead standalone installers removed.
+- **`lib/style-system.ts`** — `stack{Texture,Dither,Ascii}Opacity`,
+  `stack{Dither,Ascii}Blend`, `stackOrder`. LAYER_STACK presets now
+  `implemented: true` with real compositions.
+- **`components/viewport-3d.tsx`** — stack resolved once per frame; layer
+  amounts now compose THREE multipliers (own control × stack opacity × timing
+  envelope); stack debug fields.
+- **`components/style-panel-scaffold.tsx`** — real Layers panel: per-layer
+  opacity + blend rows, order control, preset buttons.
+
+### Taste, expressed numerically
+
+Soft Signal Stack (the only preset using all three layers):
+`stackTextureOpacity 0.30 / stackDitherOpacity 0.35 / stackAsciiOpacity 0.85`,
+dither on multiply. That is the PRD's "one dominant layer, others supporting"
+rule as numbers. The five presets each pick a different dominant layer.
+
+**Confirmation that earlier decisions paid off:** the presets visibly carry their
+MATERIAL colour (Terminal Stack reads cyan from Signal, Graphic Slab reads warm
+from Matte Clay). That is the hue-preservation choice from the dither and ASCII
+phases — both divide by luminance and re-apply the tint rather than outputting
+pure black/white — so the material system still means something underneath the
+graphic layers.
+
+### Test results (evidence in `docs/verification/stack-v1/`)
+
+`assert-stack.mjs` (NEW) exists because a control that renders identically
+whatever you set it to is worse than a missing control. **9/9 PASS:**
+
+- layering: texture Δ31.43, dither Δ47.67, ascii Δ31.23
+- **order**: dither-first vs ascii-first Δ56.16
+- blend: normal/multiply Δ24.98, normal/screen Δ25.28, multiply/screen Δ50.26
+- **opacity**: full vs low Δ58.58
+- all five presets pairwise distinct, closest Δ22.37
+
+Presets applied through the REAL `handleSelectPreset`, not a parallel path.
+
+- **All 20 gates still PASS** after the shader refactor (incl. no geometry
+  rebuild with all three systems stacked, export intact).
+- **All 10 timing assertions still PASS.**
+- **Console errors — 0.**
+
+### Docs
+
+- `docs/explainers/05-layer-stack.md` — the constraint, the refactor, the three
+  multipliers, and what taste means numerically
+
+### Next branch — `POST_MVP_ANIMATED_LAYERING_AND_STACK_ANIMATION_PHASE_1`
+
+Stack-level animation (the whole group animating as one container) is next. It
+will build on the shared clock's `amount` envelope, which exists for exactly
+this. Per-layer animation already works; what's missing is the group.
+
+### Final locked checkpoint label
+
+`POST_MVP_LAYER_STACK_PHASE_1_PASS`
+
+(supersedes `POST_MVP_VISUAL_TIMING_SYSTEM_PHASE_1_PASS`; all prior checkpoints
+remain in effect as underlying layers)
