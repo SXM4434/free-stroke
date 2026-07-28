@@ -10,7 +10,11 @@ import { fileURLToPath } from "node:url"
 import { existsSync, readdirSync } from "node:fs"
 
 const require = createRequire(import.meta.url)
-const FFMPEG = require("ffmpeg-static")
+// pnpm may block ffmpeg-static's postinstall download; fall back to a system
+// ffmpeg on PATH when the static binary is missing.
+import { existsSync as ffmpegBinExists } from "node:fs"
+let FFMPEG = require("ffmpeg-static")
+if (!FFMPEG || !ffmpegBinExists(FFMPEG)) FFMPEG = "ffmpeg"
 
 const DIR = dirname(fileURLToPath(import.meta.url))
 const COMPOSED = join(DIR, "composed")

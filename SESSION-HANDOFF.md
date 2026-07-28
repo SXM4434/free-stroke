@@ -1140,3 +1140,56 @@ materialDoesNotTouchGeometry, future custom* reserved flags.
 ### Conclusion — `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`
 
 ### Next branch — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1`
+
+---
+
+## LOCKED CHECKPOINT — `LOGO_CAPTURE_VARIANTS_FONT_AND_TRACE_PASS`
+
+**Status: both logo-capture variants delivered.** Finishes the v0 plan that ran
+out of credits (PR #30): Variant B (clean rounded font, inflated, logo-sized)
+and Variant A (traced logo, inflated, matching the handwriting). No app code
+touched — capture tooling + stroke sources only.
+
+### What was delivered
+
+- **Variant B — font:** "Desk Doodles" laid out from the clean single-stroke
+  vector font (`letters.mjs`, size 120 scaled to the trace's 1100px coordinate
+  span so tube weight matches), injected via the DEV harnesses, Inflate mode,
+  custom near-ink material (roughness 0.35). Fully legible inflated word.
+  Output: `public/videos/desk-doodles-logo-flip-font.webm`.
+- **Variant A — trace:** the skeleton tracer no longer shreds the word. Fixed
+  `trace-logo.mjs`: walks THROUGH junctions picking the straightest
+  continuation (dot-product against the recent heading) instead of stopping,
+  then greedy endpoint-merging of fragments (≤6px gaps, direction-continuity
+  guard so neighbouring letters never bridge), then left-to-right stroke
+  ordering so the reveal draws like writing. 30 raw → 22 continuous strokes
+  (was ~60 shredded fragments). The inflated word now reads as the real
+  handwritten logo. Output: `public/videos/desk-doodles-logo-flip-traced.webm`.
+- Reference stills: `scripts/capture/variant-b-font-full.png`,
+  `scripts/capture/variant-a-traced-full.png`.
+
+### New capture driver (agent-browser replacement)
+
+- `scripts/capture/capture-run.mjs` — local Playwright-core driver using the
+  installed system Chrome (`channel: "chrome"`, headless works fine for this
+  WebGL capture since frames are grabbed via `canvas.toDataURL`, no
+  rAF-dependent motion). Supports `--source=font|trace`, `--headed`, and the
+  same env knobs as before (`DRAW_FRAMES`, `ROUGHNESS`, plus `FONT_TARGET_W`).
+- `encode.mjs` now falls back to a system `ffmpeg` on PATH when pnpm blocks
+  ffmpeg-static's postinstall download.
+- Full pipeline per variant:
+  `pnpm dev` → `node scripts/capture/capture-run.mjs --source=font|trace` →
+  `node scripts/capture/compose.mjs --mode=with3d` →
+  `node scripts/capture/encode.mjs --out=<name>.webm`
+
+### Untouched
+
+- Rod / Extrude / Solid / Inflate geometry, animation, export, style system,
+  and all app components — zero app code changed this pass.
+
+### Final locked checkpoint label
+
+`LOGO_CAPTURE_VARIANTS_FONT_AND_TRACE_PASS`
+
+(supersedes `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`
+as the latest layer; all prior checkpoints remain in effect)
