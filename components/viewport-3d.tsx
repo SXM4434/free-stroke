@@ -38,6 +38,13 @@ import {
   DITHER_DIRECTION_VEC,
   type DitherUniforms,
 } from "@/lib/dither-shader"
+import {
+  createAsciiUniforms,
+  ASCII_CHARSET_INDEX,
+  ASCII_ANIM_INDEX,
+  ASCII_DIRECTION_VEC,
+  type AsciiUniforms,
+} from "@/lib/ascii-shader"
 import { applyStyleShader } from "@/lib/style-shader"
 
 
@@ -386,6 +393,10 @@ function AnimatedStrokes({
   if (ditherUniformsRef.current === null) {
     ditherUniformsRef.current = createDitherUniforms()
   }
+  const asciiUniformsRef = useRef<AsciiUniforms | null>(null)
+  if (asciiUniformsRef.current === null) {
+    asciiUniformsRef.current = createAsciiUniforms()
+  }
   const liveMaterial = useMemo(() => {
     const base = resolveMaterialParams(materialPreset, customMaterial)
     const mat = new THREE.MeshPhysicalMaterial({
@@ -406,6 +417,7 @@ function AnimatedStrokes({
     applyStyleShader(mat, {
       texture: textureUniformsRef.current!,
       dither: ditherUniformsRef.current!,
+      ascii: asciiUniformsRef.current!,
     })
     return mat
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -494,6 +506,42 @@ function AnimatedStrokes({
       } else {
         d.uFsDitTime.value = 0
         d.uFsDitThreshold.value = styleState.ditherThreshold
+      }
+    }
+
+    // ---- ASCII v1 (uniform writes only) ---------------------------------
+    // ASCII is the THIRD system: glyph rendering, distinct from texture
+    // (pattern) and dither (threshold). Same no-rebuild contract.
+    if (styleState) {
+      const a = asciiUniformsRef.current!
+      const ascOn = styleState.asciiEnabled
+      a.uFsAscOn.value = ascOn ? 1 : 0
+      a.uFsAscCharset.value = ASCII_CHARSET_INDEX[styleState.asciiCharset]
+      a.uFsAscCell.value = styleState.asciiCellSize
+      a.uFsAscDensity.value = styleState.asciiDensity
+      a.uFsAscContrast.value = styleState.asciiContrast
+      a.uFsAscLockScreen.value = styleState.asciiLockMode === "screen" ? 1 : 0
+      a.uFsAscReveal.value = playheadRef.current
+      const [adx, ady] = ASCII_DIRECTION_VEC[styleState.asciiDirection]
+      a.uFsAscDirX.value = adx
+      a.uFsAscDirY.value = ady
+
+      const ascAnim =
+        ascOn &&
+        styleState.asciiAnimated &&
+        styleState.asciiAnimationType !== "none" &&
+        styleState.motionMode !== "off"
+      a.uFsAscAnim.value = ascAnim ? ASCII_ANIM_INDEX[styleState.asciiAnimationType] : 0
+      if (ascAnim) {
+        // revealDensity reads uFsAscReveal directly, so it needs no clock of
+        // its own; the others accumulate time (or ride reveal progress when
+        // the user asked for Sync to Draw).
+        a.uFsAscTime.value =
+          styleState.motionMode === "syncToDraw"
+            ? playheadRef.current * 8 * styleState.asciiScrollSpeed
+            : a.uFsAscTime.value + delta * styleState.asciiScrollSpeed * 1.6
+      } else {
+        a.uFsAscTime.value = 0
       }
     }
 
@@ -2597,9 +2645,24 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
               <div>ditherIsNotTexture: YES (threshold, not pattern)</div>
               <div>ditherIsNotAscii: YES (threshold, not glyphs)</div>
               <div className="mt-0.5 text-foreground/80">— ASCII (separate system) —</div>
+              <div>asciiRendererImplemented: YES (v1)</div>
               <div>asciiEnabled: {String(styleState.asciiEnabled)}</div>
               <div>asciiAnimated: {String(styleState.asciiAnimated)}</div>
               <div>asciiCharset: {styleState.asciiCharset}</div>
+              <div>asciiCharsetIndex: {ASCII_CHARSET_INDEX[styleState.asciiCharset]}</div>
+              <div>asciiAnimationType: {styleState.asciiAnimationType}</div>
+              <div>asciiCellSize: {styleState.asciiCellSize}</div>
+              <div>asciiDensity: {styleState.asciiDensity.toFixed(2)}</div>
+              <div>asciiContrast: {styleState.asciiContrast.toFixed(2)}</div>
+              <div>asciiScrollSpeed: {styleState.asciiScrollSpeed.toFixed(2)}</div>
+              <div>asciiDirection: {styleState.asciiDirection}</div>
+              <div>asciiLockMode: {styleState.asciiLockMode}</div>
+              <div>asciiGlyphSource: 5x5 bitfield (no font, no atlas)</div>
+              <div>asciiStage: after dither (glyphs represent reduced tone)</div>
+              <div>asciiAppliedToAllModes: YES (shared material)</div>
+              <div>asciiDoesNotTouchGeometry: YES</div>
+              <div>asciiIsNotTexture: YES (glyphs, not pattern)</div>
+              <div>asciiIsNotDither: YES (glyphs, not threshold)</div>
               <div className="mt-0.5 text-foreground/80">— Motion (style animation) —</div>
               <div>motionMode: {styleState.motionMode}</div>
               <div>syncMode: {styleState.syncMode}</div>

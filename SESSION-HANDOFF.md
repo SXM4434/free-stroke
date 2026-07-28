@@ -1404,3 +1404,118 @@ other. Retroactively run on texture-v1 too; both systems pass.
 
 (supersedes `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1_PASS`; all prior
 checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1_PASS`
+
+**Status: ASCII + animated ASCII are LIVE on all four modes.** Glyph renderer
+implemented. All three visual primitives (texture / dither / ASCII) now exist
+and compose. Geometry, geometry animation, and export geometry untouched.
+
+### What was built
+
+- **`lib/ascii-shader.ts` (NEW)** — glyph-grid renderer. Injects at
+  `<dithering_fragment>` AFTER dither, so glyphs represent the tone dither
+  produced.
+  - **No font, no texture atlas.** Each character is a 5x5 bitmap packed into
+    bits (bit index = x + 5*y); a pixel works out its position in the cell and
+    tests one bit.
+  - **PRECISION:** a full 5x5 block is 2^25-1 but GLSL floats are only exact to
+    2^24 — every glyph is split into lo (13 bit) / hi (12 bit) halves. Storing
+    the raw value would silently corrupt the densest glyphs.
+  - Five charsets: classic `.:-=+*#%@`, blocks, binary, dots, code marks.
+- **`scripts/gen/glyphs.py` (NEW)** — generates the bit tables from readable
+  ASCII-art strings so bitmaps are reviewable as pictures, not magic numbers.
+  **Self-validating:** our `0` encodes to 15255086, the exact constant the
+  Codrops reference publishes for the same glyph — confirms the bit convention.
+- **`lib/style-shader.ts`** — now composes all three systems into one
+  `onBeforeCompile` with the correct stage ordering.
+- **`lib/style-system.ts`** — `AsciiAnimationType` (scroll / rain / cycle /
+  flicker / revealDensity), `asciiLockMode`. ASCII + ANIMATED_ASCII presets now
+  `implemented: true` with real `applies` patches.
+- **`components/viewport-3d.tsx`** — ASCII uniforms + per-frame writes + full
+  debug readout.
+- **`components/style-panel-scaffold.tsx`** — real ASCII panel (charset / cell
+  size / density / contrast / lock + animation behaviour / speed / direction,
+  with direction disabled for the behaviours that don't travel).
+- **`app/page.tsx`** — ASCII chip live.
+
+### Three bugs found ONLY by looking at frames
+
+1. **Empty output.** Raw luminance of near-black ink (~0.05–0.25) only ever
+   selected the two sparsest glyphs. Fixed with an exposure step: divide
+   luminance by a reference representing "bright for this subject". Density IS
+   that reference.
+2. **Flat mesh.** The first exposure fix over-corrected — hard contrast
+   expansion saturated every cell to the DENSEST glyph, so no character
+   variation showed. Contrast multiplier reduced ~3.0 → ~1.1.
+3. **Invisible glyphs.** Lit pixels were `surface * 1.35`, which on near-black
+   is still near-black. Now hue is recovered by dividing by luminance and
+   brightness is set explicitly (bright glyph / near-black gap), same technique
+   as dither, so material presets stay distinguishable.
+
+All three were correct code that rendered wrong. This is the third consecutive
+phase where the frames-verified rule caught something review would not have.
+
+### CONVENTION NOTE (deliberate inversion)
+
+Traditional ASCII art maps DARK → DENSE (black chars on white paper). Free
+Stroke's glyph pixels are the LIT part of a dark object, so we map
+BRIGHT → DENSE. Copying the traditional convention would make highlights vanish
+and shadows glow.
+
+### Animated ASCII = GLYPH motion, five genuinely different behaviours
+
+scroll (grid travels) / rain (each column falls at its own hashed speed) /
+cycle (glyphs change in place, walking the ramp) / flicker (random cells jump
+per tick) / revealDensity (density follows draw-in).
+
+### Test results (evidence in `docs/verification/ascii-v1/` + `stack-v1/`)
+
+- **Stills — 20/20 read.** meanΔ 17.06 (extrude/blocks) to 100.42
+  (solid/blocks). Zero TOO SUBTLE, zero faint.
+- **Distinctness — distinct on all modes.** Closest pair classic vs custom
+  (17.03 extrude / 31.43 rod / 58.04 inflate).
+- **Motion — 4/4 travel.** solid/scroll 61.86, solid/cycle 46.79, solid/rain
+  38.46, inflate/flicker 13.21 (consecutive-frame change).
+- **Geometry-rebuild gate — PASS on all four modes** across 30 combined
+  texture+dither+ASCII style changes each.
+- **NEW: all three systems STACKED — PASS.** texture + dither + ASCII
+  simultaneously: no geometry rebuild (buildCount 10→10), export still works
+  (261 KB), zero console errors. Four-step layering series captured in
+  `docs/verification/stack-v1/`.
+- **Taxonomy gates — PASS.** ASCII preset `blockGlyph` applies
+  `asciiCharset: blocks` and touches neither `texture*` nor `dither*`. Asserted
+  through the real `handleSelectPreset`.
+- **Export regression — PASS on all four.**
+- **Console errors — 0.**
+
+### Known limitation (documented, not hidden)
+
+Character selection uses PER-PIXEL luminance, not cell-mean luminance, because
+this runs in the MATERIAL shader where a fragment cannot read its neighbours.
+The ramp is coarsely quantized so nearly every cell resolves to one character; a
+cell on a brightness boundary can show two. True cell-averaging requires a
+post-process pass — listed in the panel's future controls.
+
+### Observation for the layer-stack phase
+
+With all three systems on at default strengths the result is legible but dark.
+Tasteful stacking defaults (one dominant graphic layer, others supporting) are
+explicitly that phase's job; `stack-v1/` gives it a baseline.
+
+### Docs
+
+- `docs/explainers/03-ascii.md` — code / tech / math / reasoning
+- `docs/research/ascii-phase.md` — every source, incl. the deliberate
+  convention inversion and the finding no source covers (dark subjects)
+
+### Next branch — `POST_MVP_VISUAL_TIMING_SYSTEM_PHASE_1`
+
+### Final locked checkpoint label
+
+`POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1_PASS`
+
+(supersedes `POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1_PASS`; all prior
+checkpoints remain in effect as underlying layers)

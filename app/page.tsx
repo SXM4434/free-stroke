@@ -419,9 +419,11 @@ export default function Home() {
             id: "ascii",
             label: "ASCII",
             value: styleState.asciiEnabled
-              ? ASCII_PRESETS.find((a) => a.id === styleState.asciiCharset)?.label ?? "On"
+              ? `${ASCII_PRESETS.find((a) => a.id === styleState.asciiCharset)?.label ?? "On"}${
+                  styleState.asciiAnimated ? " ·anim" : ""
+                }`
               : "Off",
-            live: false,
+            live: true,
           },
           {
             id: "animation",

@@ -32,6 +32,7 @@ const MOTION_FRAMES = parseInt(process.env.MOTION_FRAMES || "24", 10)
 const MODES = ["rod", "extrude", "solid", "inflate"]
 const TEXTURES = ["grain", "noise", "scanlines", "bands", "contour"]
 const DITHERS = ["bayer4", "bayer8", "blueNoise", "halftone", "lines"]
+const ASCII = ["classic", "blocks", "minimal", "dots", "custom"]
 // Which system this pass is exercising: texture | dither
 const SYSTEM = arg("system", "texture")
 
@@ -109,6 +110,8 @@ async function main() {
         textureAnimated: false,
         ditherEnabled: false,
         ditherAnimated: false,
+        asciiEnabled: false,
+        asciiAnimated: false,
       })
       await page.waitForTimeout(350)
       await grab(`still_${mode}_off`)
@@ -125,6 +128,20 @@ async function main() {
           })
           await page.waitForTimeout(350)
           await grab(`still_${mode}_${tex}`)
+        }
+      } else if (SYSTEM === "ascii") {
+        for (const cs of ASCII) {
+          await setStyle({
+            asciiEnabled: true,
+            asciiAnimated: false,
+            asciiCharset: cs,
+            asciiCellSize: 16,
+            asciiDensity: 0.5,
+            asciiContrast: 0.5,
+            asciiLockMode: "screen",
+          })
+          await page.waitForTimeout(350)
+          await grab(`still_${mode}_${cs}`)
         }
       } else {
         for (const dit of DITHERS) {
@@ -156,6 +173,13 @@ async function main() {
             { mode: "inflate", key: "grain", patch: { textureEnabled: true, textureMode: "grain", textureAnimated: true, textureScale: 1, textureIntensity: 0.65, textureContrast: 0.6, textureSpeed: 2, textureDirection: "vertical", motionMode: "independent", textureLockMode: "object" } },
             { mode: "solid", key: "scanlines", patch: { textureEnabled: true, textureMode: "scanlines", textureAnimated: true, textureScale: 1, textureIntensity: 0.65, textureContrast: 0.6, textureSpeed: 2, textureDirection: "vertical", motionMode: "independent", textureLockMode: "object" } },
             { mode: "solid", key: "grain", patch: { textureEnabled: true, textureMode: "grain", textureAnimated: true, textureScale: 1, textureIntensity: 0.65, textureContrast: 0.6, textureSpeed: 2, textureDirection: "vertical", motionMode: "independent", textureLockMode: "object" } },
+          ]
+        : SYSTEM === "ascii"
+        ? [
+            { mode: "solid", key: "scroll", patch: { asciiEnabled: true, asciiAnimated: true, asciiAnimationType: "scroll", asciiCharset: "classic", asciiCellSize: 10, asciiDensity: 0.55, asciiContrast: 0.55, asciiScrollSpeed: 2, asciiDirection: "horizontal", asciiLockMode: "screen", motionMode: "independent" } },
+            { mode: "solid", key: "rain", patch: { asciiEnabled: true, asciiAnimated: true, asciiAnimationType: "rain", asciiCharset: "minimal", asciiCellSize: 10, asciiDensity: 0.55, asciiContrast: 0.55, asciiScrollSpeed: 2, asciiDirection: "vertical", asciiLockMode: "screen", motionMode: "independent" } },
+            { mode: "solid", key: "cycle", patch: { asciiEnabled: true, asciiAnimated: true, asciiAnimationType: "cycle", asciiCharset: "classic", asciiCellSize: 10, asciiDensity: 0.55, asciiContrast: 0.55, asciiScrollSpeed: 1.5, asciiLockMode: "screen", motionMode: "independent" } },
+            { mode: "inflate", key: "flicker", patch: { asciiEnabled: true, asciiAnimated: true, asciiAnimationType: "flicker", asciiCharset: "custom", asciiCellSize: 10, asciiDensity: 0.55, asciiContrast: 0.55, asciiScrollSpeed: 2, asciiLockMode: "screen", motionMode: "independent" } },
           ]
         : [
             // matrix crawl (has a travel direction)

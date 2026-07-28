@@ -87,9 +87,9 @@ const PANELS: PanelDef[] = [
   {
     id: "ascii",
     label: "ASCII",
-    status: "reserved",
-    note: "ASCII controls land here. ASCII renderer not implemented yet.",
-    futureControls: ["cell size", "contrast", "color mode", "background"],
+    status: "active",
+    note: "Glyph renderer is live on all four modes. 5x5 bitmap characters drawn in-shader (no font, no atlas), chosen per cell by brightness. Never geometry, draw-in, or export geometry.",
+    futureControls: ["custom character string", "colour mode", "background fill", "true cell-average sampling"],
   },
   {
     id: "presets",
@@ -156,9 +156,8 @@ const ANIMATION_CATEGORIES: {
   {
     key: "ascii",
     label: "ASCII Animation",
-    state: "reserved",
-    detail: "Glyph scroll, ASCII rain, character cycling, reveal glyphs, terminal flicker.",
-    futureBranch: "POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1",
+    state: "active",
+    detail: "Active now (v1). GLYPH motion — scroll, rain, character cycle, flicker, reveal density. Configure it in the ASCII panel.",
   },
   {
     key: "layer",
@@ -815,6 +814,222 @@ function DitherControl({
   )
 }
 
+/* ---- ASCII panel: glyph renderer (IMPLEMENTED v1) ----
+ * ASCII is the THIRD system: character glyphs, distinct from Texture (pattern)
+ * and Dither (threshold). It writes only ascii* state. */
+function AsciiControl({
+  styleState,
+  setStyleState,
+}: {
+  styleState: StyleState
+  setStyleState: (updater: (s: StyleState) => StyleState) => void
+}) {
+  const ascOn = styleState.asciiEnabled
+  const animOn = ascOn && styleState.asciiAnimated
+  const travels =
+    styleState.asciiAnimationType === "scroll" || styleState.asciiAnimationType === "rain"
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-foreground">ASCII</span>
+          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+            {ascOn ? "active" : "off"}
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+          Splits the surface into a character grid and picks a glyph per cell from its brightness.
+          Glyphs are 5×5 bitmaps drawn in the shader — no font, no texture atlas. Separate from
+          Texture (pattern) and Dither (threshold).
+        </p>
+      </div>
+
+      <label className="flex flex-col gap-1">
+        <span className={fieldLabelClass}>Character set</span>
+        <select
+          value={ascOn ? styleState.asciiCharset : "off"}
+          onChange={(e) => {
+            const v = e.target.value
+            setStyleState((s) =>
+              v === "off"
+                ? { ...s, asciiEnabled: false }
+                : { ...s, asciiEnabled: true, asciiCharset: v as StyleState["asciiCharset"] },
+            )
+          }}
+          className={selectClass}
+        >
+          <option value="off">Off</option>
+          <option value="classic">Classic .:-=+*#%@</option>
+          <option value="blocks">Blocks ░▒▓█</option>
+          <option value="minimal">Binary 0 1</option>
+          <option value="dots">Dots</option>
+          <option value="custom">Code marks / &lt; &gt; [ &#123;</option>
+        </select>
+      </label>
+
+      <div className={`flex flex-col gap-3 ${ascOn ? "" : "pointer-events-none opacity-50"}`}>
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Cell size <span className="text-foreground">{styleState.asciiCellSize}px</span>
+          </span>
+          <input
+            type="range"
+            min={4}
+            max={24}
+            step={1}
+            value={styleState.asciiCellSize}
+            onChange={(e) => setStyleState((s) => ({ ...s, asciiCellSize: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!ascOn}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Density <span className="text-foreground">{Math.round(styleState.asciiDensity * 100)}%</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={styleState.asciiDensity}
+            onChange={(e) => setStyleState((s) => ({ ...s, asciiDensity: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!ascOn}
+          />
+          <span className="text-[10px] text-muted-foreground">Biases the ramp toward sparser or denser characters.</span>
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Contrast <span className="text-foreground">{Math.round(styleState.asciiContrast * 100)}%</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={styleState.asciiContrast}
+            onChange={(e) => setStyleState((s) => ({ ...s, asciiContrast: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!ascOn}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>Lock mode</span>
+          <select
+            value={styleState.asciiLockMode}
+            onChange={(e) =>
+              setStyleState((s) => ({
+                ...s,
+                asciiLockMode: e.target.value as StyleState["asciiLockMode"],
+              }))
+            }
+            className={selectClass}
+            disabled={!ascOn}
+          >
+            <option value="screen">Screen (terminal grid)</option>
+            <option value="object">Object (grid sticks to the form)</option>
+          </select>
+        </label>
+      </div>
+
+      {/* Animated ASCII — GLYPH MOTION. */}
+      <div className="border-t border-border pt-3">
+        <label className={`flex items-center gap-2 ${ascOn ? "" : "pointer-events-none opacity-50"}`}>
+          <input
+            type="checkbox"
+            checked={styleState.asciiAnimated}
+            onChange={(e) =>
+              setStyleState((s) => ({
+                ...s,
+                asciiAnimated: e.target.checked,
+                asciiAnimationType:
+                  e.target.checked && s.asciiAnimationType === "none" ? "scroll" : s.asciiAnimationType,
+                motionMode: e.target.checked && s.motionMode === "off" ? "independent" : s.motionMode,
+              }))
+            }
+            className="h-3.5 w-3.5 accent-foreground"
+            disabled={!ascOn}
+          />
+          <span className="text-xs font-medium text-foreground">ASCII Animation</span>
+        </label>
+
+        <div className={`mt-3 flex flex-col gap-3 ${animOn ? "" : "pointer-events-none opacity-50"}`}>
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>Behaviour</span>
+            <select
+              value={styleState.asciiAnimationType}
+              onChange={(e) =>
+                setStyleState((s) => ({
+                  ...s,
+                  asciiAnimationType: e.target.value as StyleState["asciiAnimationType"],
+                }))
+              }
+              className={selectClass}
+              disabled={!animOn}
+            >
+              <option value="scroll">Scroll — the grid travels</option>
+              <option value="rain">Rain — columns fall independently</option>
+              <option value="cycle">Cycle — glyphs change in place</option>
+              <option value="flicker">Flicker — random cells jump</option>
+              <option value="revealDensity">Reveal — density grows with draw-in</option>
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>
+              Speed <span className="text-foreground">{styleState.asciiScrollSpeed.toFixed(2)}×</span>
+            </span>
+            <input
+              type="range"
+              min={0.1}
+              max={3}
+              step={0.05}
+              value={styleState.asciiScrollSpeed}
+              onChange={(e) => setStyleState((s) => ({ ...s, asciiScrollSpeed: Number(e.target.value) }))}
+              className="w-48 accent-foreground"
+              disabled={!animOn}
+            />
+          </label>
+
+          <label className={`flex flex-col gap-1 ${travels ? "" : "opacity-50"}`}>
+            <span className={fieldLabelClass}>Direction</span>
+            <select
+              value={styleState.asciiDirection}
+              onChange={(e) =>
+                setStyleState((s) => ({
+                  ...s,
+                  asciiDirection: e.target.value as StyleState["asciiDirection"],
+                }))
+              }
+              className={selectClass}
+              disabled={!animOn || !travels}
+            >
+              <option value="horizontal">Horizontal</option>
+              <option value="vertical">Vertical</option>
+              <option value="static">None</option>
+            </select>
+            {!travels && (
+              <span className="text-[10px] text-muted-foreground">
+                Only Scroll and Rain travel; the others change glyphs in place.
+              </span>
+            )}
+          </label>
+
+          <p className="text-[10px] leading-relaxed text-muted-foreground">
+            Glyph motion — not pattern motion (Texture) or threshold motion (Dither). With{" "}
+            <span className="font-medium text-foreground">Sync to Draw</span> the motion rides the
+            stroke reveal.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ---- Animation panel: full IA, only Material is functional ---- */
 function AnimationControl({
   styleState,
@@ -909,30 +1124,7 @@ function PanelControl({
     case "dither":
       return <DitherControl styleState={styleState} setStyleState={setStyleState} />
     case "ascii":
-      return (
-        <label className="flex flex-col gap-1">
-          <span className={fieldLabelClass}>Charset</span>
-          <select
-            value={styleState.asciiEnabled ? styleState.asciiCharset : "off"}
-            onChange={(e) => {
-              const v = e.target.value
-              setStyleState((s) =>
-                v === "off"
-                  ? { ...s, asciiEnabled: false }
-                  : { ...s, asciiEnabled: true, asciiCharset: v as StyleState["asciiCharset"] },
-              )
-            }}
-            className={selectClass}
-          >
-            <option value="off">Off</option>
-            {ASCII_PRESETS.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      )
+      return <AsciiControl styleState={styleState} setStyleState={setStyleState} />
     case "presets": {
       const family = styleState.activePresetFamily
       const presets = (PRESET_REGISTRY[family] ?? []).filter((p) => p.enabled)

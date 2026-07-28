@@ -14,6 +14,7 @@ import { chromium } from "playwright-core"
 const MODES = ["rod", "extrude", "solid", "inflate"]
 const TEXTURES = ["grain", "noise", "scanlines", "bands", "contour"]
 const DITHERS = ["bayer4", "bayer8", "blueNoise", "halftone", "lines"]
+const ASCII = ["classic", "blocks", "minimal", "dots", "custom"]
 
 function testStroke() {
   const pts = []
@@ -82,9 +83,26 @@ async function main() {
         await page.waitForTimeout(80)
       }
     }
+    for (const cs of ASCII) {
+      for (const cell of [8, 16]) {
+        await page.evaluate(
+          ({ cs, cell }) =>
+            window.__styleHarness.setStyle({
+              asciiEnabled: true,
+              asciiCharset: cs,
+              asciiCellSize: cell,
+              asciiAnimated: true,
+              asciiAnimationType: "scroll",
+              motionMode: "independent",
+            }),
+          { cs, cell },
+        )
+        await page.waitForTimeout(80)
+      }
+    }
     await page.waitForTimeout(300)
     const after = await page.evaluate(() => window.__geomDebug.buildCount())
-    say(after === before, `geometry-rebuild gate / ${mode}`, `buildCount ${before} → ${after} (20 style changes)`)
+    say(after === before, `geometry-rebuild gate / ${mode}`, `buildCount ${before} → ${after} (30 style changes)`)
   }
 
   // ---- 2. export regression ---------------------------------------------
@@ -125,6 +143,46 @@ async function main() {
   say(s2.ditherEnabled && s2.ditherType === "halftone", "dither preset / dotMatrix applies", `type=${s2.ditherType}`)
   say(s2.textureMode === "none" && !s2.textureEnabled, "taxonomy / dither preset does not touch texture")
   say(!s2.asciiEnabled, "taxonomy / dither preset does not touch ascii")
+
+  // ASCII presets must write ONLY ascii* state.
+  await page.evaluate(() =>
+    window.__styleHarness.setStyle({
+      textureEnabled: false,
+      textureMode: "none",
+      ditherEnabled: false,
+      asciiEnabled: false,
+    }),
+  )
+  await page.waitForTimeout(150)
+  await page.evaluate(() => window.__styleHarness.selectPreset("ascii", "blockGlyph"))
+  await page.waitForTimeout(200)
+  const s3 = await page.evaluate(() => window.__styleHarness.get().styleState)
+  say(s3.asciiEnabled && s3.asciiCharset === "blocks", "ascii preset / blockGlyph applies", `charset=${s3.asciiCharset}`)
+  say(s3.textureMode === "none" && !s3.textureEnabled, "taxonomy / ascii preset does not touch texture")
+  say(!s3.ditherEnabled, "taxonomy / ascii preset does not touch dither")
+
+  // All three systems on at once must not error or rebuild geometry.
+  const stackBefore = await page.evaluate(() => window.__geomDebug.buildCount())
+  await page.evaluate(() =>
+    window.__styleHarness.setStyle({
+      textureEnabled: true,
+      textureMode: "scanlines",
+      textureAnimated: true,
+      ditherEnabled: true,
+      ditherType: "bayer4",
+      ditherAnimated: true,
+      asciiEnabled: true,
+      asciiCharset: "classic",
+      asciiAnimated: true,
+      asciiAnimationType: "scroll",
+      motionMode: "independent",
+    }),
+  )
+  await page.waitForTimeout(600)
+  const stackAfter = await page.evaluate(() => window.__geomDebug.buildCount())
+  say(stackAfter === stackBefore, "all three systems stacked / no geometry rebuild", `buildCount ${stackBefore} → ${stackAfter}`)
+  const stackBytes = await page.evaluate(() => window.__geomDebug.exportBytes())
+  say(stackBytes > 1000, "all three systems stacked / export still works", `${stackBytes} bytes`)
 
   say(errors.length === 0, "console errors", `${errors.length}${errors.length ? ": " + errors[0] : ""}`)
 

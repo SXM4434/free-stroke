@@ -116,6 +116,23 @@ export type DitherDirection = "static" | "horizontal" | "vertical" | "diagonal"
 export type AsciiCharset = "blocks" | "classic" | "minimal" | "dots" | "custom"
 export type AsciiDirection = "static" | "horizontal" | "vertical"
 
+/**
+ * AsciiAnimationType — each value moves a DIFFERENT thing, so the animated
+ * presets are genuinely distinct rather than one effect at five speeds:
+ *   scroll        the whole glyph grid travels
+ *   rain          each column falls at its own speed
+ *   cycle         glyphs change in place, walking the character ramp
+ *   flicker       a few random cells jump to a random glyph each tick
+ *   revealDensity characters thicken as the stroke draws in
+ */
+export type AsciiAnimationType =
+  | "none"
+  | "scroll"
+  | "rain"
+  | "cycle"
+  | "flicker"
+  | "revealDensity"
+
 export type FusionPreset =
   | "none"
   | "inkBleed"
@@ -181,8 +198,11 @@ export interface StyleState {
   asciiContrast: number
   asciiScrollSpeed: number
   asciiDirection: AsciiDirection
+  asciiAnimationType: AsciiAnimationType
+  /** ASCII has its OWN lock mode; screen space is the terminal look. */
+  asciiLockMode: TextureLockMode
 
-  /* --- layer stack --- */
+/* --- layer stack --- */
   layerStackEnabled: boolean
   stackAnimationEnabled: boolean
   stackAnimationType: StackAnimationType
@@ -270,7 +290,9 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   asciiDensity: 0.5,
   asciiContrast: 0.5,
   asciiScrollSpeed: 1,
-  asciiDirection: "static",
+  asciiDirection: "vertical",
+  asciiAnimationType: "none",
+  asciiLockMode: "screen",
 
   layerStackEnabled: false,
   stackAnimationEnabled: false,
@@ -812,28 +834,215 @@ export const ANIMATED_DITHER_PRESET_DEFS: StylePreset[] = [
   },
 ]
 
-/* --- ascii (definitions only; applies set ascii* state, never textureMode) --- */
+/* --- ascii (IMPLEMENTED v1 — glyph renderer is live) ---
+ * ASCII presets write only ascii* state. ASCII = GLYPHS, a third machine
+ * distinct from texture (pattern) and dither (threshold). */
 export const ASCII_PRESET_DEFS: StylePreset[] = [
-  { id: "terminalShade", label: "Terminal Shade", family: "ascii", enabled: true, implemented: false, applies: { asciiEnabled: true, asciiCharset: "classic" } },
-  { id: "binarySkin", label: "Binary Skin", family: "ascii", enabled: true, implemented: false, applies: { asciiEnabled: true, asciiCharset: "minimal" } },
-  { id: "blockGlyph", label: "Block Glyph", family: "ascii", enabled: true, implemented: false, applies: { asciiEnabled: true, asciiCharset: "blocks" } },
-  { id: "codeMarks", label: "Code Marks", family: "ascii", enabled: true, implemented: false, applies: { asciiEnabled: true, asciiCharset: "custom" } },
-  { id: "sparseGlyph", label: "Sparse Glyph", family: "ascii", enabled: true, implemented: false, applies: { asciiEnabled: true, asciiCharset: "dots" } },
+  {
+    id: "terminalShade",
+    label: "Terminal Shade",
+    family: "ascii",
+    enabled: true,
+    implemented: true,
+    description: "Classic .:-=+*#%@ brightness ramp. Ten levels of character density.",
+    applies: {
+      asciiEnabled: true,
+      asciiCharset: "classic",
+      asciiCellSize: 9,
+      asciiDensity: 0.55,
+      asciiContrast: 0.55,
+      asciiLockMode: "screen",
+    },
+  },
+  {
+    id: "binarySkin",
+    label: "Binary Skin",
+    family: "ascii",
+    enabled: true,
+    implemented: true,
+    description: "Only 0 and 1. Digital / signal feel.",
+    bestModes: ["rod", "extrude"],
+    applies: {
+      asciiEnabled: true,
+      asciiCharset: "minimal",
+      asciiCellSize: 10,
+      asciiDensity: 0.6,
+      asciiContrast: 0.6,
+      asciiLockMode: "screen",
+    },
+  },
+  {
+    id: "blockGlyph",
+    label: "Block Glyph",
+    family: "ascii",
+    enabled: true,
+    implemented: true,
+    description: "Shade blocks. Chunkiest, most graphic.",
+    bestModes: ["solid", "inflate"],
+    applies: {
+      asciiEnabled: true,
+      asciiCharset: "blocks",
+      asciiCellSize: 11,
+      asciiDensity: 0.5,
+      asciiContrast: 0.5,
+      asciiLockMode: "screen",
+    },
+  },
+  {
+    id: "codeMarks",
+    label: "Code Marks",
+    family: "ascii",
+    enabled: true,
+    implemented: true,
+    description: "Bracket and slash marks. Reads like source code.",
+    applies: {
+      asciiEnabled: true,
+      asciiCharset: "custom",
+      asciiCellSize: 9,
+      asciiDensity: 0.55,
+      asciiContrast: 0.55,
+      asciiLockMode: "screen",
+    },
+  },
+  {
+    id: "sparseGlyph",
+    label: "Sparse Glyph",
+    family: "ascii",
+    enabled: true,
+    implemented: true,
+    description: "Dot field at low density. Subtle overlay.",
+    applies: {
+      asciiEnabled: true,
+      asciiCharset: "dots",
+      asciiCellSize: 8,
+      asciiDensity: 0.34,
+      asciiContrast: 0.45,
+      asciiLockMode: "screen",
+    },
+  },
 ]
 
-/* --- animated ascii (definitions only) --- */
+/* --- animated ascii (IMPLEMENTED v1) ---
+ * Animated ASCII = GLYPH motion. Each preset drives a different
+ * `asciiAnimationType`, so they are distinct behaviours, not one effect at
+ * five speeds. */
 export const ANIMATED_ASCII_PRESET_DEFS: StylePreset[] = [
-  { id: "glyphScroll", label: "Glyph Scroll", family: "animatedAscii", enabled: true, implemented: false },
-  { id: "asciiRain", label: "ASCII Rain", family: "animatedAscii", enabled: true, implemented: false },
-  { id: "characterCycle", label: "Character Cycle", family: "animatedAscii", enabled: true, implemented: false },
-  { id: "revealGlyphs", label: "Reveal Glyphs", family: "animatedAscii", enabled: true, implemented: false },
-  { id: "terminalFlicker", label: "Terminal Flicker", family: "animatedAscii", enabled: true, implemented: false },
-  { id: "slowCodeCrawl", label: "Slow Code Crawl", family: "animatedAscii", enabled: true, implemented: false },
+  {
+    id: "glyphScroll",
+    label: "Glyph Scroll",
+    family: "animatedAscii",
+    enabled: true,
+    implemented: true,
+    description: "The whole character grid travels in one direction.",
+    applies: {
+      asciiEnabled: true,
+      asciiAnimated: true,
+      asciiAnimationType: "scroll",
+      asciiCharset: "classic",
+      asciiCellSize: 9,
+      asciiScrollSpeed: 1,
+      asciiDirection: "horizontal",
+      asciiLockMode: "screen",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "asciiRain",
+    label: "ASCII Rain",
+    family: "animatedAscii",
+    enabled: true,
+    implemented: true,
+    description: "Each column falls at its own speed — glyphs stream downward.",
+    applies: {
+      asciiEnabled: true,
+      asciiAnimated: true,
+      asciiAnimationType: "rain",
+      asciiCharset: "minimal",
+      asciiCellSize: 9,
+      asciiScrollSpeed: 1.2,
+      asciiDirection: "vertical",
+      asciiLockMode: "screen",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "characterCycle",
+    label: "Character Cycle",
+    family: "animatedAscii",
+    enabled: true,
+    implemented: true,
+    description: "Glyphs change in place, walking up the character ramp.",
+    applies: {
+      asciiEnabled: true,
+      asciiAnimated: true,
+      asciiAnimationType: "cycle",
+      asciiCharset: "classic",
+      asciiCellSize: 10,
+      asciiScrollSpeed: 0.8,
+      asciiLockMode: "screen",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "revealGlyphs",
+    label: "Reveal Glyphs",
+    family: "animatedAscii",
+    enabled: true,
+    implemented: true,
+    description: "Character density grows with the geometry draw-in.",
+    applies: {
+      asciiEnabled: true,
+      asciiAnimated: true,
+      asciiAnimationType: "revealDensity",
+      asciiCharset: "classic",
+      asciiCellSize: 9,
+      asciiScrollSpeed: 1,
+      asciiLockMode: "screen",
+      motionMode: "syncToDraw",
+    },
+  },
+  {
+    id: "terminalFlicker",
+    label: "Terminal Flicker",
+    family: "animatedAscii",
+    enabled: true,
+    implemented: true,
+    description: "A few random cells jump to a random glyph each tick.",
+    applies: {
+      asciiEnabled: true,
+      asciiAnimated: true,
+      asciiAnimationType: "flicker",
+      asciiCharset: "custom",
+      asciiCellSize: 9,
+      asciiScrollSpeed: 1,
+      asciiLockMode: "screen",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "slowCodeCrawl",
+    label: "Slow Code Crawl",
+    family: "animatedAscii",
+    enabled: true,
+    implemented: true,
+    description: "Code marks drifting slowly sideways.",
+    applies: {
+      asciiEnabled: true,
+      asciiAnimated: true,
+      asciiAnimationType: "scroll",
+      asciiCharset: "custom",
+      asciiCellSize: 10,
+      asciiScrollSpeed: 0.35,
+      asciiDirection: "horizontal",
+      asciiLockMode: "screen",
+      motionMode: "independent",
+    },
+  },
 ]
 
 /* --- texture (IMPLEMENTED v1 — procedural pattern renderer is live) ---
- * Each preset enables the texture layer and picks a pattern + tuning. They
- * only touch texture* state: never material, never dither, never ascii. */
+* Each preset enables the texture layer and picks a pattern + tuning. They
+* only touch texture* state: never material, never dither, never ascii. */
 export const TEXTURE_PRESET_DEFS: StylePreset[] = [
   {
     id: "fineGrain",
@@ -1015,6 +1224,7 @@ export const ANIMATED_TEXTURE_PRESET_DEFS: StylePreset[] = [
     },
   },
 ]
+
 
 /* --- layer stack (definitions only) --- */
 export const LAYER_STACK_PRESET_DEFS: StylePreset[] = [

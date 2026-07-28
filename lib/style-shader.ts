@@ -14,6 +14,8 @@
  *                                           HIGHLIGHT carries the pattern too)
  *   dither   → <dithering_fragment>        (the very END of the shader, after
  *                                           lighting + tonemapping + color space)
+ *   ascii    → <dithering_fragment>, after dither (glyphs represent the tone
+ *                                           dither produced)
  *
  * That ordering is the whole reason the two read as different systems rather
  * than two flavours of noise: texture changes what the SURFACE IS before light
@@ -29,10 +31,12 @@ import {
   type TextureUniforms,
 } from "./texture-shader"
 import { DITHER_COMMON_GLSL, DITHER_FRAGMENT_GLSL, type DitherUniforms } from "./dither-shader"
+import { ASCII_COMMON_GLSL, ASCII_FRAGMENT_GLSL, type AsciiUniforms } from "./ascii-shader"
 
 export interface StyleShaderUniforms {
   texture: TextureUniforms
   dither: DitherUniforms
+  ascii: AsciiUniforms
 }
 
 /**
@@ -42,7 +46,7 @@ export interface StyleShaderUniforms {
  */
 export function applyStyleShader(material: THREE.Material, u: StyleShaderUniforms): void {
   material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, u.texture, u.dither)
+    Object.assign(shader.uniforms, u.texture, u.dither, u.ascii)
 
     // Object-space position varying, shared by every layer that can be
     // object-locked. `position` is the raw vertex attribute before any matrix
@@ -54,15 +58,21 @@ export function applyStyleShader(material: THREE.Material, u: StyleShaderUniform
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
-        `#include <common>\nvarying vec3 vFsObjPos;\n${TEXTURE_COMMON_GLSL}\n${DITHER_COMMON_GLSL}`,
+        `#include <common>\nvarying vec3 vFsObjPos;\n${TEXTURE_COMMON_GLSL}\n${DITHER_COMMON_GLSL}\n${ASCII_COMMON_GLSL}`,
       )
       .replace("#include <map_fragment>", `#include <map_fragment>\n${TEXTURE_MAP_GLSL}`)
       .replace(
         "#include <lights_physical_fragment>",
         `#include <lights_physical_fragment>\n${TEXTURE_LIGHTS_GLSL}`,
       )
-      .replace("#include <dithering_fragment>", `#include <dithering_fragment>\n${DITHER_FRAGMENT_GLSL}`)
+      // ASCII runs AFTER dither: dither reduces the tone, ASCII then renders
+      // that tone as characters. Reversing them would dither the glyph edges
+      // into mush instead of quantizing the surface the glyphs represent.
+      .replace(
+        "#include <dithering_fragment>",
+        `#include <dithering_fragment>\n${DITHER_FRAGMENT_GLSL}\n${ASCII_FRAGMENT_GLSL}`,
+      )
   }
   // One shared compiled program for every material carrying the style layers.
-  material.customProgramCacheKey = () => "freestroke-style-v2"
+  material.customProgramCacheKey = () => "freestroke-style-v3"
 }
