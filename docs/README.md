@@ -31,6 +31,9 @@ we used it for.
 - [dither-phase.md](research/dither-phase.md) — ordered dithering, Bayer, IGN
 - [ascii-phase.md](research/ascii-phase.md) — bitfield glyphs, and the one
   finding no source covers (dark subjects)
+- [timing-and-stack-phases.md](research/timing-and-stack-phases.md) —
+  Porter–Duff blend formulas, the layer-group interaction model, and the three
+  findings that came from no source at all
 
 ## Verification
 

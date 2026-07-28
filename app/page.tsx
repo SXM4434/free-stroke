@@ -31,6 +31,7 @@ import {
   type StyleState,
   DEFAULT_STYLE_STATE,
   MATERIAL_PRESETS,
+  MATERIAL_ANIMATION_TYPES,
   MODE_MATERIAL_DEFAULTS,
   TEXTURE_MODES,
   DITHER_PRESETS,
@@ -69,10 +70,17 @@ export default function Home() {
   // updating it never rebuilds geometry, breaks animation, or affects export.
   const [styleState, setStyleState] = useState<StyleState>(DEFAULT_STYLE_STATE)
 
-  // Style panels drawer: controlled so the top strip can open a matching panel.
-  const [panelsOpen, setPanelsOpen] = useState(true)
+  // Style panels drawer: closed by default so the app opens canvas-first —
+  // the gesture is the product; the control surface is one click away. The
+  // summary strip is the drawer's header: a chip opens its panel, clicking the
+  // active chip again closes the drawer.
+  const [panelsOpen, setPanelsOpen] = useState(false)
   const [activePanelId, setActivePanelId] = useState<StylePanelId>("material")
   const openPanel = (id: StylePanelId) => {
+    if (panelsOpen && activePanelId === id) {
+      setPanelsOpen(false)
+      return
+    }
     setActivePanelId(id)
     setPanelsOpen(true)
   }
@@ -203,7 +211,7 @@ export default function Home() {
               onClick={() => !mode.disabled && handleModeChange(mode.value)}
               disabled={mode.disabled}
               title={mode.tooltip}
-              className={`relative rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+              className={`fs-press relative select-none rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                 geometryMode === mode.value
                   ? "bg-background text-foreground shadow-sm"
                   : mode.disabled
@@ -231,7 +239,7 @@ export default function Home() {
               quadratic curve to the effective half-width. Mid-slider lands
               on the clean default; only the last ~25% of slider travel
               reaches widths that are known to be chunky/breaking. */}
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground" title="How wide the ribbon is">
             <span className="select-none font-medium">Width</span>
             <input
               type="range"
@@ -244,10 +252,10 @@ export default function Home() {
                 setWidthSlider(t)
                 setExtrudeParams((p) => ({ ...p, width: mapExtrudeWidthSlider(t) }))
               }}
-              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+              className="fs-slider w-24"
             />
-            <span className="w-16 select-none font-mono text-[10px] tabular-nums">
-              {Math.round(widthSlider * 100)}% · {extrudeParams.width.toFixed(3)}
+            <span className="w-9 select-none text-[11px] tabular-nums">
+              {Math.round(widthSlider * 100)}%
             </span>
           </label>
 
@@ -255,7 +263,7 @@ export default function Home() {
 
           {/* Depth — slider value is a width-relative MULTIPLIER (effective
               depth = multiplier × width, clamped). See computeEffectiveExtrudeDepth. */}
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground" title="Ribbon depth, relative to its width">
             <span className="select-none font-medium">Depth</span>
             <input
               type="range"
@@ -264,9 +272,9 @@ export default function Home() {
               step={EXTRUDE_DEPTH_MULTIPLIER_STEP}
               value={extrudeParams.depth}
               onChange={(e) => setExtrudeParams((p) => ({ ...p, depth: Number(e.target.value) }))}
-              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+              className="fs-slider w-24"
             />
-            <span className="w-10 select-none font-mono text-[10px]">
+            <span className="w-10 select-none text-[11px] tabular-nums">
               {extrudeParams.depth.toFixed(2)}×
             </span>
           </label>
@@ -275,8 +283,11 @@ export default function Home() {
 
           {/* Bevel toggle */}
           <button
+            type="button"
             onClick={() => setExtrudeParams((p) => ({ ...p, bevelEnabled: !p.bevelEnabled }))}
-            className={`rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+            aria-pressed={extrudeParams.bevelEnabled}
+            title="Soften the ribbon's edges"
+            className={`fs-press select-none rounded-full border px-3 py-1 text-[11px] font-medium transition-colors ${
               extrudeParams.bevelEnabled
                 ? "border-foreground/20 bg-foreground text-background"
                 : "border-border bg-background text-muted-foreground hover:text-foreground"
@@ -295,7 +306,7 @@ export default function Home() {
               before feeding the value to canvas lineWidth + H3 walls, so
               the breaking territory lives in the upper end of the slider
               instead of the middle. */}
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground" title="Line thickness of the drawn silhouette">
             <span className="select-none font-medium">Thickness</span>
             <input
               type="range"
@@ -304,18 +315,19 @@ export default function Home() {
               step={SOLID_THICKNESS_SLIDER_STEP}
               value={solidParams.thickness}
               onChange={(e) => setSolidParams((p) => ({ ...p, thickness: Number(e.target.value) }))}
-              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+              className="fs-slider w-24"
             />
-            <span className="w-8 select-none font-mono text-[10px]">
-              {solidParams.thickness}px
+            <span className="w-10 select-none text-[11px] tabular-nums">
+              {solidParams.thickness} px
             </span>
           </label>
 
           <div className="h-4 w-px shrink-0 bg-border" />
 
           {/* Depth — slider value is RAW world depth. Calibrated through
-              computeSolidEffectiveDepth before being used as the H3 Z extent. */}
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              computeSolidEffectiveDepth before being used as the H3 Z extent.
+              The readout shows slider position as a %, not the raw world unit. */}
+          <label className="flex items-center gap-2 text-xs text-muted-foreground" title="How far the slab extends into depth">
             <span className="select-none font-medium">Depth</span>
             <input
               type="range"
@@ -324,10 +336,15 @@ export default function Home() {
               step={SOLID_DEPTH_SLIDER_STEP}
               value={solidParams.depth}
               onChange={(e) => setSolidParams((p) => ({ ...p, depth: Number(e.target.value) }))}
-              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+              className="fs-slider w-24"
             />
-            <span className="w-8 select-none font-mono text-[10px]">
-              {solidParams.depth.toFixed(2)}
+            <span className="w-9 select-none text-[11px] tabular-nums">
+              {Math.round(
+                ((solidParams.depth - SOLID_DEPTH_SLIDER_MIN) /
+                  (SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN)) *
+                  100,
+              )}
+              %
             </span>
           </label>
         </div>
@@ -339,7 +356,7 @@ export default function Home() {
           Preview, animation, and GLB export all share one geometry path. */}
       {geometryMode === "inflate" && (
         <div className="flex h-10 shrink-0 items-center gap-4 border-b border-border bg-muted/30 px-4">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground" title="How thick the inflated stroke is">
             <span className="select-none font-medium">Thickness</span>
             <input
               type="range"
@@ -348,16 +365,16 @@ export default function Home() {
               step={SOLID_THICKNESS_SLIDER_STEP}
               value={solidParams.thickness}
               onChange={(e) => setSolidParams((p) => ({ ...p, thickness: Number(e.target.value) }))}
-              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+              className="fs-slider w-24"
             />
-            <span className="w-8 select-none font-mono text-[10px]">
-              {solidParams.thickness}px
+            <span className="w-10 select-none text-[11px] tabular-nums">
+              {solidParams.thickness} px
             </span>
           </label>
 
           <div className="h-4 w-px shrink-0 bg-border" />
 
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground" title="How full the inflated cross-section is">
             <span className="select-none font-medium">Puff</span>
             <input
               type="range"
@@ -366,18 +383,17 @@ export default function Home() {
               step={SOLID_DEPTH_SLIDER_STEP}
               value={solidParams.depth}
               onChange={(e) => setSolidParams((p) => ({ ...p, depth: Number(e.target.value) }))}
-              className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+              className="fs-slider w-24"
             />
-            <span className="w-8 select-none font-mono text-[10px]">
-              {solidParams.depth.toFixed(2)}
+            <span className="w-9 select-none text-[11px] tabular-nums">
+              {Math.round(
+                ((solidParams.depth - SOLID_DEPTH_SLIDER_MIN) /
+                  (SOLID_DEPTH_SLIDER_MAX - SOLID_DEPTH_SLIDER_MIN)) *
+                  100,
+              )}
+              %
             </span>
           </label>
-
-          <div className="h-4 w-px shrink-0 bg-border" />
-
-          <span className="select-none font-mono text-[10px] text-muted-foreground">
-            Soft inflated stroke · GLB export enabled
-          </span>
         </div>
       )}
 
@@ -400,7 +416,7 @@ export default function Home() {
             value:
               styleState.textureEnabled && styleState.textureMode !== "none"
                 ? `${TEXTURE_MODES.find((t) => t.id === styleState.textureMode)?.label ?? "On"}${
-                    styleState.textureAnimated ? " ·anim" : ""
+                    styleState.textureAnimated ? " · animated" : ""
                   }`
                 : "None",
             live: true,
@@ -410,7 +426,7 @@ export default function Home() {
             label: "Dither",
             value: styleState.ditherEnabled
               ? `${DITHER_PRESETS.find((d) => d.id === styleState.ditherType)?.label ?? "On"}${
-                  styleState.ditherAnimated ? " ·anim" : ""
+                  styleState.ditherAnimated ? " · animated" : ""
                 }`
               : "Off",
             live: true,
@@ -420,7 +436,7 @@ export default function Home() {
             label: "ASCII",
             value: styleState.asciiEnabled
               ? `${ASCII_PRESETS.find((a) => a.id === styleState.asciiCharset)?.label ?? "On"}${
-                  styleState.asciiAnimated ? " ·anim" : ""
+                  styleState.asciiAnimated ? " · animated" : ""
                 }`
               : "Off",
             live: true,
@@ -430,7 +446,8 @@ export default function Home() {
             label: "Animation",
             value:
               styleState.materialAnimationEnabled && styleState.materialAnimationType !== "none"
-                ? `Material: ${styleState.materialAnimationType}`
+                ? MATERIAL_ANIMATION_TYPES.find((a) => a.id === styleState.materialAnimationType)
+                    ?.label ?? "Material"
                 : styleState.motionMode === "off"
                   ? "Static"
                   : styleState.motionMode === "independent"
@@ -455,8 +472,13 @@ export default function Home() {
                 key={item.id}
                 type="button"
                 onClick={() => openPanel(item.id)}
-                title={`Open ${item.label} panel`}
-                className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors ${
+                aria-expanded={activePanelId === item.id && panelsOpen}
+                title={
+                  activePanelId === item.id && panelsOpen
+                    ? `Close ${item.label}`
+                    : `Edit ${item.label}`
+                }
+                className={`fs-press flex shrink-0 select-none items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
                   activePanelId === item.id && panelsOpen
                     ? "border-foreground/30 bg-foreground/10"
                     : "border-border bg-background hover:bg-muted"
@@ -471,9 +493,14 @@ export default function Home() {
                 )}
               </button>
             ))}
-            <span className="ml-auto shrink-0 select-none text-[10px] italic text-muted-foreground/70">
-              click a chip to edit · &ldquo;preview&rdquo; = no visual effect yet
-            </span>
+            <button
+              type="button"
+              onClick={() => setPanelsOpen((v) => !v)}
+              aria-expanded={panelsOpen}
+              className="fs-press ml-auto shrink-0 select-none rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {panelsOpen ? "Hide panel" : "Show panel"}
+            </button>
           </div>
         )
       })()}

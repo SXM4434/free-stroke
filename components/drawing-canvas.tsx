@@ -41,6 +41,9 @@ export default function DrawingCanvas({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const isDrawingRef = useRef(false)
   const currentPointsRef = useRef<Point[]>([])
+  // Mirrors isDrawingRef for the empty-state hint only (the hot pointer path
+  // keeps using the ref so drawing never waits on a React render).
+  const [isDrawing, setIsDrawing] = useState(false)
 
   /* ---- processing controls ---- */
   const [smoothing, setSmoothing] = useState(true)
@@ -168,6 +171,10 @@ export default function DrawingCanvas({
   const renderStrokes = smoothing ? processedStrokes : rawStrokes
 
   /* ---- resize canvas to fill container ---- */
+  // Resizing a canvas clears its bitmap, so every resize MUST be followed by a
+  // redraw — otherwise the user's drawing silently vanishes whenever the
+  // layout shifts (opening/closing panels, switching modes, window resize).
+  const redrawRef = useRef<() => void>(() => {})
   useEffect(() => {
     const container = containerRef.current
     const canvas = canvasRef.current
@@ -180,6 +187,7 @@ export default function DrawingCanvas({
       canvas.height = height * dpr
       canvas.style.width = `${width}px`
       canvas.style.height = `${height}px`
+      redrawRef.current()
     })
 
     ro.observe(container)
@@ -204,6 +212,10 @@ export default function DrawingCanvas({
         ? [...renderStrokes, { points: extraPoints }]
         : renderStrokes
 
+      // Ink follows the theme's foreground color (the canvas element carries
+      // text-foreground), so strokes stay visible in dark mode too.
+      const ink = getComputedStyle(canvas).color || "#000000"
+
       for (const stroke of allStrokes) {
         if (stroke.points.length < 2) continue
         ctx.beginPath()
@@ -211,7 +223,7 @@ export default function DrawingCanvas({
         for (let i = 1; i < stroke.points.length; i++) {
           ctx.lineTo(stroke.points[i].x, stroke.points[i].y)
         }
-        ctx.strokeStyle = "#000000"
+        ctx.strokeStyle = ink
         ctx.lineWidth = 2
         ctx.lineCap = "round"
         ctx.lineJoin = "round"
@@ -237,8 +249,9 @@ export default function DrawingCanvas({
 
   /* redraw whenever committed strokes or processing result change */
   useEffect(() => {
+    redrawRef.current = redraw
     scheduleRedraw()
-  }, [scheduleRedraw])
+  }, [redraw, scheduleRedraw])
 
   /* cleanup rAF on unmount */
   useEffect(() => {
@@ -251,8 +264,12 @@ export default function DrawingCanvas({
       const canvas = canvasRef.current
       if (!canvas) return
 
+      // Ignore extra touch points once a drag is live (multi-touch protection).
+      if (isDrawingRef.current) return
+
       canvas.setPointerCapture(e.pointerId)
       isDrawingRef.current = true
+      setIsDrawing(true)
 
       const rect = canvas.getBoundingClientRect()
       const point: Point = {
@@ -289,6 +306,7 @@ export default function DrawingCanvas({
   const handlePointerUp = useCallback(() => {
     if (!isDrawingRef.current) return
     isDrawingRef.current = false
+    setIsDrawing(false)
 
     const points = currentPointsRef.current
     if (points.length >= 2) {
@@ -325,6 +343,28 @@ export default function DrawingCanvas({
     setProcessedStrokes([])
   }, [setRawStrokes, setProcessedStrokes])
 
+  /* ⌘Z / Ctrl+Z removes the last stroke. Keyboard-initiated, so it is
+   * deliberately NOT animated (emil: never animate keyboard actions). */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return
+      if (e.key.toLowerCase() !== "z") return
+      const t = e.target as HTMLElement | null
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "SELECT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      )
+        return
+      e.preventDefault()
+      handleUndo()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [handleUndo])
+
   /* ---- debug counts ---- */
   const rawTotalPoints = rawStrokes.reduce(
     (sum, s) => sum + s.points.length,
@@ -343,16 +383,47 @@ export default function DrawingCanvas({
     <div ref={containerRef} className="relative h-full w-full">
       <canvas
         ref={canvasRef}
-        className="h-full w-full cursor-crosshair touch-none"
+        aria-label="Drawing canvas — draw a stroke here to create 3D geometry"
+        className="h-full w-full cursor-crosshair touch-none text-foreground"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerUp}
       />
 
+      {/* Empty-state affordance: invites the first gesture, then gets out of
+          the way. Exit is a 200ms strong ease-out fade (element leaving). */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 flex select-none flex-col items-center justify-center gap-1.5"
+        style={{
+          opacity: rawStrokes.length === 0 && !isDrawing ? 1 : 0,
+          transition: "opacity 200ms var(--ease-out-strong)",
+        }}
+      >
+        <svg
+          width="28"
+          height="28"
+          viewBox="0 0 28 28"
+          fill="none"
+          className="text-muted-foreground/50"
+        >
+          <path
+            d="M4 20 C 8 8, 12 8, 14 14 S 20 22, 24 10"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+        <span className="text-sm font-medium text-muted-foreground">Draw here</span>
+        <span className="text-xs text-muted-foreground/70">
+          Your stroke becomes a 3D form on the right
+        </span>
+      </div>
+
       {/* Debug info (development-only telemetry; hidden in demo/production build) */}
       {process.env.NODE_ENV === "development" && (
-        <div className="pointer-events-none absolute left-3 top-3 select-none font-mono text-[11px] text-muted-foreground">
+        <div className="pointer-events-none absolute left-3 top-3 select-none font-mono text-[10px] text-muted-foreground/60">
           <div>
             raw {rawTotalPoints} pts | processed {processedTotalPoints} pts |
             spacing {spacing}px | smoothing: {smoothing ? "on" : "off"} |
@@ -363,69 +434,79 @@ export default function DrawingCanvas({
         </div>
       )}
 
-      {/* Controls bar */}
-      <div className="absolute bottom-3 left-3 right-3 flex items-center gap-3">
-        {/* Undo + Clear */}
-        <button
-          onClick={handleUndo}
-          disabled={rawStrokes.length === 0}
-          className="rounded-lg border border-border bg-background/80 px-3 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Undo
-        </button>
-        <button
-          onClick={handleClear}
-          disabled={rawStrokes.length === 0}
-          className="rounded-lg border border-border bg-background/80 px-3 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Clear
-        </button>
+      {/* Controls: two grouped cards — actions on the left, stroke-processing
+          options on the right. No dead gaps inside a group. */}
+      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1 rounded-xl border border-border bg-background/85 p-1 shadow-sm backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={handleUndo}
+            disabled={rawStrokes.length === 0}
+            title="Undo last stroke (⌘Z)"
+            className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            onClick={handleClear}
+            disabled={rawStrokes.length === 0}
+            title="Clear all strokes"
+            className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Clear
+          </button>
+        </div>
 
-        {/* Divider */}
-        <div className="h-5 w-px bg-border" />
-
-        {/* Smoothing toggle */}
-        <button
-          onClick={() => setSmoothing((v) => !v)}
-          className={`rounded-lg border px-3 py-1.5 text-xs font-medium backdrop-blur-sm transition-colors ${
-            smoothing
-              ? "border-foreground/20 bg-foreground text-background"
-              : "border-border bg-background/80 text-foreground hover:bg-accent"
-          }`}
-        >
-          Smoothing
-        </button>
-
-        {/* Preserve corners toggle */}
-        <button
-          onClick={() => setPreserveCorners((v) => !v)}
-          disabled={!smoothing}
-          className={`rounded-lg border px-3 py-1.5 text-xs font-medium backdrop-blur-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-            preserveCorners
-              ? "border-foreground/20 bg-foreground text-background"
-              : "border-border bg-background/80 text-foreground hover:bg-accent"
-          }`}
-        >
-          Corners
-        </button>
-
-        {/* Spacing slider */}
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="select-none">Spacing</span>
-          <input
-            type="range"
-            min={2}
-            max={8}
-            step={1}
-            value={spacing}
-            onChange={(e) => setSpacing(Number(e.target.value))}
-            onPointerUp={() => commitReprocess("spacing-commit")}
-            className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
-          />
-          <span className="w-5 select-none font-mono text-[11px]">
-            {spacing}
-          </span>
-        </label>
+        <div className="flex items-center gap-1 rounded-xl border border-border bg-background/85 p-1 shadow-sm backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={() => setSmoothing((v) => !v)}
+            aria-pressed={smoothing}
+            title="Smooth the stroke path"
+            className={`fs-press rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              smoothing
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:bg-accent hover:text-foreground"
+            }`}
+          >
+            Smoothing
+          </button>
+          <button
+            type="button"
+            onClick={() => setPreserveCorners((v) => !v)}
+            disabled={!smoothing}
+            aria-pressed={preserveCorners}
+            title="Keep sharp corners sharp while smoothing"
+            className={`fs-press rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              preserveCorners
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:bg-accent hover:text-foreground"
+            }`}
+          >
+            Corners
+          </button>
+          <div className="mx-1 h-5 w-px bg-border" />
+          <label
+            className="flex items-center gap-2 pr-2 text-xs text-muted-foreground"
+            title="Distance between resampled points — smaller keeps more detail"
+          >
+            <span className="select-none pl-1 font-medium">Spacing</span>
+            <input
+              type="range"
+              min={2}
+              max={8}
+              step={1}
+              value={spacing}
+              onChange={(e) => setSpacing(Number(e.target.value))}
+              onPointerUp={() => commitReprocess("spacing-commit")}
+              className="fs-slider w-20"
+            />
+            <span className="w-8 select-none text-[11px] tabular-nums">
+              {spacing} px
+            </span>
+          </label>
+        </div>
       </div>
     </div>
   )
