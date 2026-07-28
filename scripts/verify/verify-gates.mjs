@@ -102,7 +102,17 @@ async function main() {
     }
     await page.waitForTimeout(300)
     const after = await page.evaluate(() => window.__geomDebug.buildCount())
-    say(after === before, `geometry-rebuild gate / ${mode}`, `buildCount ${before} → ${after} (30 style changes)`)
+    // A DECREASE is impossible from rebuilding — the counter only increments.
+    // It means the module re-initialised, i.e. the dev server hot-reloaded
+    // mid-run (common when an agent is editing files concurrently). Report that
+    // honestly instead of failing the gate for a regression that didn't happen.
+    if (after < before) {
+      console.log(
+        `SKIP  geometry-rebuild gate / ${mode} — page reloaded mid-test (buildCount ${before} → ${after}); re-run when the tree is stable`,
+      )
+    } else {
+      say(after === before, `geometry-rebuild gate / ${mode}`, `buildCount ${before} → ${after} (30 style changes)`)
+    }
   }
 
   // ---- 2. export regression ---------------------------------------------
