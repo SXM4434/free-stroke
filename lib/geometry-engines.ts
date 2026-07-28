@@ -3682,8 +3682,11 @@ export const SolidEngine: GeometryEngine = {
     SOLID_DEBUG.stageDVertexCount = result.geometryNoHoles?.getAttribute("position")?.count ?? 0
     SOLID_DEBUG.stageEVertexCount = result.geometry?.getAttribute("position")?.count ?? 0
     
-    // TARGETED DEBUG: Stage D vs E comparison
-    if (SOLID_DEBUG.stageDVertexCount > 0 && SOLID_DEBUG.stageEVertexCount > 0) {
+    // TARGETED DEBUG: Stage D vs E comparison (static builds only — animated
+    // reveal builds run per rAF tick and must not pay for console logging)
+    const isAnimatedBuild =
+      params.holeStabilization !== undefined || params.disableHolesForAnimation === true
+    if (!isAnimatedBuild && SOLID_DEBUG.stageDVertexCount > 0 && SOLID_DEBUG.stageEVertexCount > 0) {
       const vertexIncrease = SOLID_DEBUG.stageEVertexCount - SOLID_DEBUG.stageDVertexCount
       const percentIncrease = (vertexIncrease / SOLID_DEBUG.stageDVertexCount) * 100
       console.log("[v0-solid] Stage D→E Vertex Comparison:", {
@@ -3953,9 +3956,13 @@ function inflateResampleCenterline(
  *   center + radiusXY*cos(theta)*S + radiusZ*sin(theta)*U
  * Sweeping theta over [0, 2π) gives a closed elliptical ring per sample.
  *
- * End caps: hemispherical, produced by scaling the cross-section radius
- * down to 0 along the first/last few samples. This matches the analytic
- * surface of the same anisotropic-capsule scalar field.
+ * End caps: TRUE protruding domes. Cap rings are appended BEYOND each
+ * endpoint along the endpoint tangent (like a balloon end extending past
+ * the stroke end), with ring radius following the ellipsoid profile
+ * r(phi) = cos(phi) at offset L*sin(phi). The old implementation instead
+ * faded the radius to zero ACROSS the last in-stroke samples, which both
+ * shortened the inflated form relative to the drawn stroke and made the
+ * cap shape depend on sample spacing.
  *
  * Why no medial-axis seam: each ring is a single closed loop. The
  * surface wraps fully around the centerline. There is no z=0 ridge.
@@ -3975,9 +3982,17 @@ function inflateBuildEllipticalTube(
     ringSegs?: number
     profileExponent?: number // 2 = ellipse; <2 squashed; >2 squircle/balloon
     crossSectionBulge?: number // 0..0.4 radial bulge (pressurized fullness)
-    capRoundness?: number // 0..1 controls cap fade length & roundness
+    capRoundness?: number // 0..1 controls cap protrusion length & roundness
     tangentSmoothingPasses?: number // # of 3-tap smoothing passes on tangents
     joinSoftness?: number // 0..1 local radial bulge at high-curvature joins
+    /**
+     * Optional per-sample radius multiplier (length n). Drives the
+     * crossing/overlap pressure bulge: where two stroke bodies pass within
+     * each other's inflated radius, both swell locally so the junction
+     * reads as one merged pressurized form instead of two hard pipes
+     * interpenetrating. 1 = no change.
+     */
+    radiusMultipliers?: Float32Array
   },
 ): THREE.BufferGeometry | null {
   const n = centerlineWorld.length
@@ -3992,6 +4007,7 @@ function inflateBuildEllipticalTube(
     Math.min(4, Math.round(opts?.tangentSmoothingPasses ?? 1)),
   )
   const joinSoftness = Math.max(0, Math.min(1, opts?.joinSoftness ?? 0))
+  const radiusMultipliers = opts?.radiusMultipliers
 
   // Per-sample tangent (in XY plane). Smoothed with a 3-tap pass to avoid
   // visible segmenting at sample joins on cursive / loopy strokes.
@@ -4059,31 +4075,6 @@ function inflateBuildEllipticalTube(
     curvature[i] = Math.max(0, Math.min(1, 1 - dot))
   }
 
-  // Hemispherical end-cap fade. Cap length scales with capRoundness:
-  // capRoundness=0 → minimum (2 samples), capRoundness=1 → up to ~14% of n.
-  const minCap = 2
-  const maxCap = Math.max(minCap, Math.floor(n * 0.14))
-  const capFadeSamples = Math.max(
-    minCap,
-    Math.min(maxCap, Math.floor(minCap + (maxCap - minCap) * capRoundness)),
-  )
-  const radiusScale = (i: number): number => {
-    let t = 1
-    if (i < capFadeSamples) {
-      t = i / capFadeSamples
-    } else if (i > n - 1 - capFadeSamples) {
-      t = (n - 1 - i) / capFadeSamples
-    } else {
-      return 1
-    }
-    // Hemispherical core: r = sqrt(1 - (1-t)^2). Blend toward smoothstep at
-    // low capRoundness so caps don't get pinched on short strokes.
-    const u = 1 - t
-    const hemi = Math.sqrt(Math.max(0, 1 - u * u))
-    const smooth = t * t * (3 - 2 * t)
-    return hemi * capRoundness + smooth * (1 - capRoundness)
-  }
-
   // Precompute the cross-section profile (one normalized ring shared by
   // every sample). Superellipse with a small radial bulge term.
   // Plain ellipse: |x|^2 + |z|^2 = 1 (exponent = 2).
@@ -4108,92 +4099,252 @@ function inflateBuildEllipticalTube(
     profSinZ[j] = zUnit * scale
   }
 
-  const positions = new Float32Array(n * ringSegs * 3)
-  for (let i = 0; i < n; i++) {
-    const c = centerlineWorld[i]
-    const tx = Tx[i]
-    const ty = Ty[i]
-    // Side S = (-ty, tx) in XY.
-    const sx = -ty
-    const sy = tx
-    const rs = radiusScale(i)
+  // ---- Ring list construction ----
+  // The tube is ONE ring sequence: start-cap dome rings (protruding beyond
+  // the first sample), one ring per centerline sample, end-cap dome rings
+  // (beyond the last sample), closed by a tip fan at each extreme.
+  interface InflateRing {
+    cx: number
+    cy: number
+    sx: number
+    sy: number
+    rXY: number
+    rZ: number
+  }
+
+  const sampleRadii = (i: number): { rXY: number; rZ: number } => {
     // Local join bulge: fuller cross-section where the path bends. Subtle —
     // capped at joinSoftness * 0.3 extra radius at the sharpest corners.
     const joinScale = 1 + joinSoftness * 0.3 * curvature[i]
-    const rXY = radiusXY * rs * joinScale
-    const rZ = radiusZ * rs * joinScale
-    for (let j = 0; j < ringSegs; j++) {
-      const ux = profCosX[j]
-      const uz = profSinZ[j]
-      const px = c.x + rXY * ux * sx
-      const py = c.y + rXY * ux * sy
-      const pz = rZ * uz
-      const idx = (i * ringSegs + j) * 3
-      positions[idx] = px
-      positions[idx + 1] = py
-      positions[idx + 2] = pz
+    // Crossing/overlap pressure bulge (1 = none).
+    const m = radiusMultipliers ? radiusMultipliers[i] : 1
+    return { rXY: radiusXY * joinScale * m, rZ: radiusZ * joinScale * m }
+  }
+
+  // Cap protrusion length: fraction of the local XY radius. capRoundness=1
+  // gives a full hemispherical dome (protrudes one radius past the stroke
+  // end, exactly like a pressurized balloon end), lower values squash it.
+  const capLenScale = 0.55 + 0.45 * capRoundness
+  const CAP_RINGS = Math.max(3, Math.round(ringSegs / 4))
+
+  const rings: InflateRing[] = []
+
+  // Start-cap dome rings, outermost (nearest tip) first.
+  {
+    const r0 = sampleRadii(0)
+    const L = r0.rXY * capLenScale
+    const tx = Tx[0]
+    const ty = Ty[0]
+    const sx = -ty
+    const sy = tx
+    for (let c = CAP_RINGS - 1; c >= 1; c--) {
+      const phi = (c / CAP_RINGS) * (Math.PI / 2)
+      const scale = Math.cos(phi)
+      rings.push({
+        cx: centerlineWorld[0].x - tx * L * Math.sin(phi),
+        cy: centerlineWorld[0].y - ty * L * Math.sin(phi),
+        sx,
+        sy,
+        rXY: r0.rXY * scale,
+        rZ: r0.rZ * scale,
+      })
     }
   }
 
-  // Side-wall indices.
-  const sideIndexCount = (n - 1) * ringSegs * 2 * 3
-  const sideIndices = new Uint32Array(sideIndexCount)
+  // Main body rings — full radius along the WHOLE stroke (no end fade).
+  for (let i = 0; i < n; i++) {
+    const { rXY, rZ } = sampleRadii(i)
+    rings.push({
+      cx: centerlineWorld[i].x,
+      cy: centerlineWorld[i].y,
+      sx: -Ty[i],
+      sy: Tx[i],
+      rXY,
+      rZ,
+    })
+  }
+
+  // End-cap dome rings, innermost first.
+  {
+    const rN = sampleRadii(n - 1)
+    const L = rN.rXY * capLenScale
+    const tx = Tx[n - 1]
+    const ty = Ty[n - 1]
+    const sx = -ty
+    const sy = tx
+    for (let c = 1; c <= CAP_RINGS - 1; c++) {
+      const phi = (c / CAP_RINGS) * (Math.PI / 2)
+      const scale = Math.cos(phi)
+      rings.push({
+        cx: centerlineWorld[n - 1].x + tx * L * Math.sin(phi),
+        cy: centerlineWorld[n - 1].y + ty * L * Math.sin(phi),
+        sx,
+        sy,
+        rXY: rN.rXY * scale,
+        rZ: rN.rZ * scale,
+      })
+    }
+  }
+
+  const ringCount = rings.length
+
+  const positions = new Float32Array((ringCount * ringSegs + 2) * 3)
+  for (let i = 0; i < ringCount; i++) {
+    const r = rings[i]
+    for (let j = 0; j < ringSegs; j++) {
+      const ux = profCosX[j]
+      const uz = profSinZ[j]
+      const idx = (i * ringSegs + j) * 3
+      positions[idx] = r.cx + r.rXY * ux * r.sx
+      positions[idx + 1] = r.cy + r.rXY * ux * r.sy
+      positions[idx + 2] = r.rZ * uz
+    }
+  }
+
+  // Tip vertices — protruded one cap length past each endpoint.
+  const tipStart = ringCount * ringSegs
+  const tipEnd = tipStart + 1
+  {
+    const r0 = sampleRadii(0)
+    const rN = sampleRadii(n - 1)
+    positions[tipStart * 3 + 0] = centerlineWorld[0].x - Tx[0] * r0.rXY * capLenScale
+    positions[tipStart * 3 + 1] = centerlineWorld[0].y - Ty[0] * r0.rXY * capLenScale
+    positions[tipStart * 3 + 2] = 0
+    positions[tipEnd * 3 + 0] = centerlineWorld[n - 1].x + Tx[n - 1] * rN.rXY * capLenScale
+    positions[tipEnd * 3 + 1] = centerlineWorld[n - 1].y + Ty[n - 1] * rN.rXY * capLenScale
+    positions[tipEnd * 3 + 2] = 0
+  }
+
+  // Side walls between consecutive rings + a tip fan at each extreme.
+  const indices = new Uint32Array((ringCount - 1) * ringSegs * 2 * 3 + ringSegs * 2 * 3)
   let k = 0
-  for (let i = 0; i < n - 1; i++) {
+  for (let i = 0; i < ringCount - 1; i++) {
     for (let j = 0; j < ringSegs; j++) {
       const j1 = (j + 1) % ringSegs
       const a = i * ringSegs + j
       const b = i * ringSegs + j1
       const c2 = (i + 1) * ringSegs + j
       const d = (i + 1) * ringSegs + j1
-      sideIndices[k++] = a
-      sideIndices[k++] = c2
-      sideIndices[k++] = b
-      sideIndices[k++] = b
-      sideIndices[k++] = c2
-      sideIndices[k++] = d
+      indices[k++] = a
+      indices[k++] = c2
+      indices[k++] = b
+      indices[k++] = b
+      indices[k++] = c2
+      indices[k++] = d
     }
   }
-
-  // Tip vertices for cap fans (geometric centers of endpoint rings).
-  const startCenter = centerlineWorld[0]
-  const endCenter = centerlineWorld[n - 1]
-  const tipPositions = new Float32Array(6)
-  tipPositions[0] = startCenter.x
-  tipPositions[1] = startCenter.y
-  tipPositions[2] = 0
-  tipPositions[3] = endCenter.x
-  tipPositions[4] = endCenter.y
-  tipPositions[5] = 0
-
-  const fullPositions = new Float32Array(positions.length + tipPositions.length)
-  fullPositions.set(positions, 0)
-  fullPositions.set(tipPositions, positions.length)
-  const tipStart = n * ringSegs
-  const tipEnd = n * ringSegs + 1
-
-  const fanIndices: number[] = []
   for (let j = 0; j < ringSegs; j++) {
     const j1 = (j + 1) % ringSegs
-    fanIndices.push(tipStart, j1, j)
-    fanIndices.push(tipEnd, (n - 1) * ringSegs + j, (n - 1) * ringSegs + j1)
-  }
-
-  const allIndices = new Uint32Array(sideIndices.length + fanIndices.length)
-  allIndices.set(sideIndices, 0)
-  for (let i = 0; i < fanIndices.length; i++) {
-    allIndices[sideIndices.length + i] = fanIndices[i]
+    indices[k++] = tipStart
+    indices[k++] = j1
+    indices[k++] = j
+    indices[k++] = tipEnd
+    indices[k++] = (ringCount - 1) * ringSegs + j
+    indices[k++] = (ringCount - 1) * ringSegs + j1
   }
 
   const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute(
-    "position",
-    new THREE.BufferAttribute(fullPositions, 3),
-  )
-  geometry.setIndex(new THREE.BufferAttribute(allIndices, 1))
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3))
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1))
   geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   return geometry
+}
+
+/**
+ * Crossing/overlap pressure bulge.
+ *
+ * A real inflated form MERGES where the stroke crosses itself or another
+ * stroke — the pressurized volumes fuse and the junction swells. A tube loft
+ * cannot re-topologize (that needs an implicit field + marching cubes), but
+ * it CAN reproduce the dominant visual cue: local swelling at the junction.
+ *
+ * For every centerline sample we find the nearest OTHER stroke body (any
+ * sample of another stroke, or a sample of the same stroke that is far away
+ * in arc length). If that body is within one merged diameter (2 * radiusXY),
+ * the local radius is scaled up smoothly — peaking where the centerlines
+ * actually cross. Both bodies swell symmetrically, so the junction reads as
+ * one fused pressurized mass instead of two hard pipes interpenetrating.
+ *
+ * Pure function of the resampled centerlines — shared by preview and export
+ * via inflateBuildStaticGeometries, so parity is automatic.
+ */
+function inflateComputeCrossingBulge(
+  centerlines: { x: number; y: number }[][],
+  radiusXY: number,
+  bulgeAmp: number,
+): Float32Array[] {
+  const reach = radiusXY * 2
+  if (reach <= 0) return centerlines.map((c) => new Float32Array(c.length).fill(1))
+
+  // Spatial hash of all samples (cell size = reach) for O(1) neighborhoods.
+  const cell = reach
+  const hash = new Map<string, [number, number][]>() // [strokeIdx, sampleIdx]
+  for (let s = 0; s < centerlines.length; s++) {
+    const pts = centerlines[s]
+    for (let i = 0; i < pts.length; i++) {
+      const key = `${Math.floor(pts[i].x / cell)},${Math.floor(pts[i].y / cell)}`
+      let bucket = hash.get(key)
+      if (!bucket) {
+        bucket = []
+        hash.set(key, bucket)
+      }
+      bucket.push([s, i])
+    }
+  }
+
+  const out: Float32Array[] = []
+  for (let s = 0; s < centerlines.length; s++) {
+    const pts = centerlines[s]
+    const mult = new Float32Array(pts.length).fill(1)
+    // Same-stroke samples closer than this along the chain are "the same
+    // body", not a crossing. Estimated from average sample spacing.
+    let avgSpacing = 0
+    for (let i = 1; i < pts.length; i++) {
+      avgSpacing += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)
+    }
+    avgSpacing = pts.length > 1 ? avgSpacing / (pts.length - 1) : 1
+    const minSep = Math.max(4, Math.ceil((radiusXY * 3) / Math.max(avgSpacing, 1e-9)))
+
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i]
+      const cx = Math.floor(p.x / cell)
+      const cy = Math.floor(p.y / cell)
+      let best = 0
+      for (let gx = cx - 1; gx <= cx + 1; gx++) {
+        for (let gy = cy - 1; gy <= cy + 1; gy++) {
+          const bucket = hash.get(`${gx},${gy}`)
+          if (!bucket) continue
+          for (const [s2, i2] of bucket) {
+            if (s2 === s && Math.abs(i2 - i) < minSep) continue
+            const q = centerlines[s2][i2]
+            const d = Math.hypot(q.x - p.x, q.y - p.y)
+            if (d < reach) {
+              const t = 1 - d / reach // 1 at exact crossing, 0 at the reach edge
+              if (t > best) best = t
+            }
+          }
+        }
+      }
+      if (best > 0) {
+        const sm = best * best * (3 - 2 * best) // smoothstep
+        mult[i] = 1 + bulgeAmp * sm
+      }
+    }
+
+    // Smooth the multiplier along the stroke so the swell ramps organically.
+    for (let pass = 0; pass < 2; pass++) {
+      const prev = Float32Array.from(mult)
+      for (let i = 0; i < pts.length; i++) {
+        const a = prev[Math.max(0, i - 1)]
+        const b = prev[i]
+        const c = prev[Math.min(pts.length - 1, i + 1)]
+        mult[i] = a * 0.25 + b * 0.5 + c * 0.25
+      }
+    }
+    out.push(mult)
+  }
+  return out
 }
 
 /**
@@ -4346,23 +4497,43 @@ function inflateBuildStaticGeometries(
   let totalTris = 0
   const bbox = new THREE.Box3()
 
+  // Phase 1: resample ALL centerlines first — the crossing bulge needs the
+  // full set to detect stroke-vs-stroke and self-crossing proximity.
+  const resampledAll: { si: number; filteredCount: number; pts: { x: number; y: number }[] }[] = []
   for (let si = 0; si < strokes.length; si++) {
     const s = strokes[si]
     if (!s.points || s.points.length < 2) continue
     const worldPts = s.points.map((p) => px2w(p.x, p.y))
     const resampled = inflateResampleCenterline(worldPts, sampleSpacing)
     if (resampled.length < 2) continue
+    resampledAll.push({ si, filteredCount: s.points.length, pts: resampled })
     totalSamples += resampled.length
+  }
+
+  // Phase 2: crossing/overlap pressure bulge (amplitude grows with Puff —
+  // higher pressure fuses harder).
+  const crossingBulgeAmp = 0.22 + puffEased * 0.18 // 0.22 → 0.40
+  const bulgeMults = inflateComputeCrossingBulge(
+    resampledAll.map((r) => r.pts),
+    inflateStrokeRadiusXY,
+    crossingBulgeAmp,
+  )
+
+  // Phase 3: sweep each tube with its per-sample radius multipliers.
+  for (let ri = 0; ri < resampledAll.length; ri++) {
+    const { si, filteredCount, pts } = resampledAll[ri]
+    const mults = bulgeMults[ri]
 
     let geometry: THREE.BufferGeometry | null = null
     try {
-      geometry = inflateBuildEllipticalTube(resampled, inflateStrokeRadiusXY, radiusZ, {
+      geometry = inflateBuildEllipticalTube(pts, inflateStrokeRadiusXY, radiusZ, {
         ringSegs: ringSampleCount,
         profileExponent,
         crossSectionBulge,
         capRoundness,
         tangentSmoothingPasses,
         joinSoftness,
+        radiusMultipliers: mults,
       })
     } catch {
       geometry = null
@@ -4377,11 +4548,16 @@ function inflateBuildStaticGeometries(
     if (idx) totalTris += idx.count / 3
     if (geometry.boundingBox) bbox.union(geometry.boundingBox)
 
+    // The key must change when the bulge field changes (a NEW stroke crossing
+    // an OLD one changes the old tube's radii), so fold in a cheap checksum.
+    let multSum = 0
+    for (let i = 0; i < mults.length; i++) multSum += mults[i]
+
     geometries.push({
       geometry,
       strokeIndex: si,
-      filteredCount: s.points.length,
-      key: `inflate-svfi-${si}-${resampled.length}-${inflateStrokeRadiusXY.toFixed(4)}-${radiusZ.toFixed(4)}-${profileExponent.toFixed(2)}-${crossSectionBulge.toFixed(2)}-${capRoundness.toFixed(2)}-${joinSoftness.toFixed(2)}`,
+      filteredCount,
+      key: `inflate-svfi-${si}-${pts.length}-${inflateStrokeRadiusXY.toFixed(4)}-${radiusZ.toFixed(4)}-${profileExponent.toFixed(2)}-${crossSectionBulge.toFixed(2)}-${capRoundness.toFixed(2)}-${joinSoftness.toFixed(2)}-${multSum.toFixed(3)}`,
     })
   }
 

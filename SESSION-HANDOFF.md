@@ -2353,3 +2353,92 @@ each iterated live until it read.
 ### Final locked checkpoint label
 
 `CRAFT_PASS_STACK_AND_ALL_ANIMATION`
+
+---
+
+## LOCKED CHECKPOINT — `ENGINE_PASS_4_SOLID_PERFORMANCE_AND_INFLATE_FORM`
+
+**Status: the last two engines done. All four engines have now had a real pass.**
+
+### Another buried mistake, same species as Extrude's sin/cos
+
+`contourSelfIntersects()` ran an **O(n²) check every animation frame on the raw
+per-lattice-edge contour** (thousands of unit segments). On a traced
+grid-boundary loop a proper crossing is **geometrically impossible** — the edges
+are unit, axis-aligned, and each undirected edge is emitted at most once. So it
+was performing millions of segment-vs-segment tests per frame **to compute a
+constant `false`.** The gate now runs on the collinear-simplified loop (identical
+polygon, 10–30x fewer vertices).
+
+### Solid draw-in: ~17fps → smooth
+
+Measured headed with real rAF deltas via the actual Play button.
+
+| | before | after |
+| --- | --- | --- |
+| standard stroke | 57.4ms/frame busy mean (~17fps), 28 frames >40ms | **0 frames >40ms**, max 34ms, p99 26ms |
+| heavy 600-pt scribble | 66.5ms (~15fps) | 34.1ms (**~29fps**) |
+
+Causes fixed, all in `lib/solid-mask.ts` unless noted:
+- the impossible O(n²) self-intersection test above
+- both flood fills used `queue.shift()` — O(n) per pop → head-pointer queues
+- a fresh canvas + non-`willReadFrequently` 2D context per rasterize (2x/frame)
+  → cached module-level canvas with `willReadFrequently: true`
+- ~8 `console.log`s with object payloads per build per frame → gated to
+  animated builds only; static/export logging unchanged
+- animated builds rasterize at **384px instead of 512** (playback ONLY — static,
+  final committed frame and export stay at 512). Hole thresholds scale by
+  resScale so topology decisions stay resolution-independent.
+
+### Edge aliasing fixed — and Solid exports shrank 53–93%
+
+The raw 512-res marching boundary (pixel staircase) fed directly into earcut,
+the H3 walls and the silhouette. Now: exact collinear simplification → 3 Chaikin
+corner-cut passes → Douglas-Peucker at 0.45px, with guards (area retention
+90–105%, self-intersection check, fallback to the exact loop). Max deviation
+<0.9 mask px — inside the ≥1px filled wall separating hole from outer boundary,
+so smoothing can never fuse or create topology. Applied to the outer contour and
+every hole rim.
+
+### Inflate — honest verdict and two real fixes
+
+It remains a swept tube loft, not an inflated volume. Two genuine deficiencies
+fixed without a rewrite:
+- **End caps**: the old "hemisphere" faded the ring radius to zero ACROSS the
+  last in-stroke samples — shortening the form, making cap shape depend on
+  sample spacing, and leaving a degenerate final ring. Replaced with true
+  protruding ellipsoid domes appended beyond each endpoint.
+- **Crossings**: tubes previously hard-interpenetrated. New
+  `inflateComputeCrossingBulge` (spatial hash over samples) swells both tubes
+  smoothly where another body passes within a merged diameter — peak +22–40%
+  radius scaling with Puff. The circle's loop closure now reads as a fused
+  knuckle. Still an approximation: surfaces interpenetrate under the swell.
+
+**Recommendation on the field approach:** true merging needs an implicit field
+(per-sample anisotropic capsule field, smooth-min union, marching cubes ~96³,
+one Laplacian pass). A loft can never re-topologize at crossings. Deliberately
+NOT started — unfinishable in one pass.
+
+### Verification
+
+- Geometry net: **Rod and Extrude byte-identical (`=`) on all 8 shapes.**
+- Solid: loopyS −82%, openC −87%, closedO −83%, nearTouch −86%, zigzag −64%,
+  scribble −82%, twoStrokes −93%, tick −72%. Inflate +1–15%.
+- **Correctness confirmed by eye: closedO keeps its through-hole; openC stays
+  open; nearTouch keeps its gap. No false holes.**
+- Final animated frame still pixel-identical to the static build (sticky-hole
+  path intact).
+- `verify-gates.mjs` ALL PASS, 0 console errors.
+
+### Still weak
+
+- Heavy-scribble draw-in is ~29fps, not 60. Remaining cost is the per-tick full
+  pipeline. Next steps: typed-array masks (blocked by `boolean[]` in
+  `MaskSolidStages` consumed by the debug overlay) or Scene-side cadence and
+  interpolation.
+- Faint residual segment striping on Solid inner rim walls under grazing light.
+- Inflate crossings swell but do not truly fuse — see the field recommendation.
+
+### Final locked checkpoint label
+
+`ENGINE_PASS_4_SOLID_PERFORMANCE_AND_INFLATE_FORM`
