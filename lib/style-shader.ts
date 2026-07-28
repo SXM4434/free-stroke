@@ -28,7 +28,12 @@ import {
   TEXTURE_COMMON_GLSL,
   TEXTURE_MAP_GLSL,
   TEXTURE_LIGHTS_GLSL,
+  SWEEP_COMMON_GLSL,
+  SWEEP_EMISSIVE_GLSL,
+  SWEEP_LIGHTS_GLSL,
+  IRIDESCENCE_SWIRL_GLSL,
   type TextureUniforms,
+  type SweepUniforms,
 } from "./texture-shader"
 import { DITHER_COMMON_GLSL, DITHER_APPLY_GLSL, type DitherUniforms } from "./dither-shader"
 import { ASCII_COMMON_GLSL, ASCII_APPLY_GLSL, type AsciiUniforms } from "./ascii-shader"
@@ -45,6 +50,8 @@ export function createStackUniforms(): StackUniforms {
 
 export interface StyleShaderUniforms {
   texture: TextureUniforms
+  /** Travelling shine-sweep band (animated material "shineSweep"). */
+  sweep: SweepUniforms
   dither: DitherUniforms
   ascii: AsciiUniforms
   stack: StackUniforms
@@ -57,7 +64,7 @@ export interface StyleShaderUniforms {
  */
 export function applyStyleShader(material: THREE.Material, u: StyleShaderUniforms): void {
   material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, u.texture, u.dither, u.ascii, u.stack)
+    Object.assign(shader.uniforms, u.texture, u.sweep, u.dither, u.ascii, u.stack)
 
     // Object-space position varying, shared by every layer that can be
     // object-locked. `position` is the raw vertex attribute before any matrix
@@ -74,6 +81,7 @@ export function applyStyleShader(material: THREE.Material, u: StyleShaderUniform
           "varying vec3 vFsObjPos;",
           "uniform float uFsStackOrder;",
           TEXTURE_COMMON_GLSL,
+          SWEEP_COMMON_GLSL,
           DITHER_COMMON_GLSL,
           ASCII_COMMON_GLSL,
           // The blend helper must be declared before the apply functions use it.
@@ -83,9 +91,20 @@ export function applyStyleShader(material: THREE.Material, u: StyleShaderUniform
         ].join("\n"),
       )
       .replace("#include <map_fragment>", `#include <map_fragment>\n${TEXTURE_MAP_GLSL}`)
+      // Shine sweep half A: band value + additive glow. <emissivemap_fragment>
+      // runs BEFORE the lighting chunks, so `fsSweepB` computed here is in
+      // scope for the roughness modulation in half B below.
+      .replace(
+        "#include <emissivemap_fragment>",
+        `#include <emissivemap_fragment>\n${SWEEP_EMISSIVE_GLSL}`,
+      )
+      // Texture roughness first, then sweep half B: where the band passes it
+      // OVERRIDES the pattern's roughness toward mirror — a shine rolling over
+      // a textured surface momentarily "wets" the texture, which is exactly
+      // how a real gloss pass behaves.
       .replace(
         "#include <lights_physical_fragment>",
-        `#include <lights_physical_fragment>\n${TEXTURE_LIGHTS_GLSL}`,
+        `#include <lights_physical_fragment>\n${TEXTURE_LIGHTS_GLSL}\n${SWEEP_LIGHTS_GLSL}\n${IRIDESCENCE_SWIRL_GLSL}`,
       )
       // Post-lighting layers run in the stack's chosen order. Both are pure
       // vec3 -> vec3 functions, so swapping them is a genuine reorder rather
@@ -111,5 +130,5 @@ export function applyStyleShader(material: THREE.Material, u: StyleShaderUniform
       )
   }
   // One shared compiled program for every material carrying the style layers.
-  material.customProgramCacheKey = () => "freestroke-style-v4"
+  material.customProgramCacheKey = () => "freestroke-style-v5"
 }

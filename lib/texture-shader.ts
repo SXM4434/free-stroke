@@ -77,6 +77,194 @@ export function createTextureUniforms(): TextureUniforms {
   }
 }
 
+/* ====================================================================== */
+/* SHINE SWEEP — a positional travelling highlight band.                   */
+/* ---------------------------------------------------------------------- */
+/* The "Shine Sweep" animated material used to be a GLOBAL gloss wave      */
+/* (every material param oscillating together), which reads as the whole   */
+/* surface breathing, not as a shine PASSING OVER it. A real sweep is a    */
+/* soft-edged band of highlight that TRAVELS across the form — that needs  */
+/* per-fragment position, i.e. shader work, so it lives here next to the   */
+/* texture injection and rides the same onBeforeCompile composer.          */
+/*                                                                          */
+/* Mechanism (two halves, both inside the band):                           */
+/*   1. roughness/clearcoatRoughness are pulled toward mirror, so the band */
+/*      is a region of REAL specular response — the studio rig and the     */
+/*      analytic lights appear inside it and nowhere else.                 */
+/*   2. a soft additive glow guarantees the band also reads on bone-matte  */
+/*      presets (chalk/clay) whose env intensity is near zero.             */
+/* The band position is a plain uniform animated by the CPU clock in       */
+/* viewport-3d.tsx — same no-recompile / no-rebuild contract as texture.   */
+/* ====================================================================== */
+
+export interface SweepUniforms {
+  /** Band strength 0..1 (0 = sweep off; already intensity-scaled by caller). */
+  uFsSweepAmt: { value: number }
+  /** Band center along the sweep axis, in NORMALIZED units (see below). */
+  uFsSweepPos: { value: number }
+  /** Band half-width (normalized units). */
+  uFsSweepWidth: { value: number }
+  /** Unit direction of travel in object-space XY. */
+  uFsSweepDirX: { value: number }
+  uFsSweepDirY: { value: number }
+  /** Stroke bounds (object space) so the band position can be expressed in
+   *  size-independent units: -1..1 spans the stroke regardless of how large
+   *  the user drew. Without this the travel range is a guess that breaks on
+   *  small or huge strokes. */
+  uFsSweepCx: { value: number }
+  uFsSweepCy: { value: number }
+  uFsSweepR: { value: number }
+}
+
+export function createSweepUniforms(): SweepUniforms {
+  return {
+    uFsSweepAmt: { value: 0 },
+    uFsSweepPos: { value: -10 },
+    uFsSweepWidth: { value: 0.3 },
+    uFsSweepDirX: { value: 0.87 },
+    uFsSweepDirY: { value: 0.5 },
+    uFsSweepCx: { value: 0 },
+    uFsSweepCy: { value: 0 },
+    uFsSweepR: { value: 1 },
+  }
+}
+
+export const SWEEP_COMMON_GLSL = /* glsl */ `
+uniform float uFsSweepAmt;
+uniform float uFsSweepPos;
+uniform float uFsSweepWidth;
+uniform float uFsSweepDirX;
+uniform float uFsSweepDirY;
+uniform float uFsSweepCx;
+uniform float uFsSweepCy;
+uniform float uFsSweepR;
+
+// Soft-edged band with a selectable half-width: 1 at the center line,
+// feathering to 0 one half-width out. smoothstep has zero slope at both ends,
+// so the band has no hard edge and no visible crease at its peak. Position is
+// normalized by the stroke's bounding radius, so -1..1 always spans the
+// drawing. Parameterized width so the caller can evaluate the band TWICE:
+// once at full width (the broad glaze halo) and once tight (the hot core) —
+// a real light pass has both, and the two-lobe profile is what finally made
+// the sweep read at a glance instead of "detectable by diffing".
+float fsSweepBandW(vec3 objPos, float w) {
+  if (uFsSweepAmt <= 0.001) return 0.0;
+  vec2 n = (objPos.xy - vec2(uFsSweepCx, uFsSweepCy)) / max(uFsSweepR, 0.0001);
+  float along = dot(n, vec2(uFsSweepDirX, uFsSweepDirY));
+  float d = abs(along - uFsSweepPos);
+  return (1.0 - smoothstep(0.0, w, d)) * uFsSweepAmt;
+}
+`
+
+/**
+ * Injection point A (after <emissivemap_fragment>, BEFORE lighting): computes
+ * the band once into `fsSweepB` for reuse, and adds the glow floor. Additive
+ * light is what lets the sweep read on fully matte presets — a roughness dip
+ * alone has nothing to mirror when envMapIntensity is ~0.05 (chalk).
+ * The glow is deliberately modest: the specular half below carries the
+ * "expensive" read on every glossy/metal preset.
+ */
+export const SWEEP_EMISSIVE_GLSL = /* glsl */ `
+float fsSweepB = fsSweepBandW(vFsObjPos, uFsSweepWidth);
+float fsSweepCore = fsSweepBandW(vFsObjPos, uFsSweepWidth * 0.38);
+if (fsSweepB > 0.001) {
+  float fsSweepLum = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+  // Two-lobe glow. The HOT CORE is a genuinely bright streak on every body —
+  // it clips toward paper-white on light presets (against the darkened glaze
+  // halo from the lights-block diffuse eat) and blazes on dark ones. The old
+  // single-lobe glow scaled down to ~0.17 on ceramic (0.10 + 0.55*(1-lum)),
+  // which is why the sweep read as a faint warm tint instead of a light pass:
+  // measured live, 10 frames across a cycle produced only 4 distinct images.
+  // The core is luminance-INDEPENDENT at full strength: light bodies (ceramic
+  // lum ~0.78) need MORE added light than dark ones to clip visibly above
+  // their own near-white tone — a lum-scaled core measured near-invisible on
+  // ceramic (peak frame diff 9.5 vs 46+ after). Only the soft halo keeps a
+  // small dark-body bonus so ink's flanks glow without washing out.
+  // Light bodies get an EXTRA core boost: their rendered tone sits on the
+  // tonemapper's shoulder (~0.87 sRGB), so the core must push total radiance
+  // past ~4 to clip visibly to paper-white. Measured on ceramic: core*1.7
+  // still read as nothing (frame diff ~5) because the shoulder compressed it.
+  totalEmissiveRadiance +=
+    vec3(1.0, 0.99, 0.95) *
+    (fsSweepCore * (1.7 + 2.6 * smoothstep(0.45, 0.85, fsSweepLum)) +
+     fsSweepB * (0.08 + 0.30 * (1.0 - min(fsSweepLum, 1.0))));
+}
+`
+
+/**
+ * Injection point B (after <lights_physical_fragment>, where the material
+ * struct's roughness values are finalized — same reasoning as the texture
+ * roughness injection): inside the band the surface becomes near-mirror, so
+ * the highlight is a real specular event with structure (the env rig, the key
+ * light), not a flat painted stripe.
+ */
+export const SWEEP_LIGHTS_GLSL = /* glsl */ `
+if (fsSweepB > 0.001) {
+  float fsSweepK = min(fsSweepB * 1.4, 1.0);
+  material.roughness = mix(material.roughness, 0.03, fsSweepK);
+  // The band's F0 is pushed to full mirror. This is the contrast lever on
+  // LIGHT bodies (gel/ceramic/chalk): an additive white glow vanishes on a
+  // pale surface, but a mirror band reflects the env's bright slats AND its
+  // dark room — structure with contrast in both directions.
+  material.specularColor = mix(material.specularColor, vec3(1.0), fsSweepK);
+  // Energy conservation, and the contrast lever on WHITE bodies: a mirror
+  // reflects instead of scattering, so the band eats diffuse. On ceramic and
+  // chalk this is what makes the band exist at all — their diffuse is so
+  // bright that any additive term disappears into it, and their output sits
+  // on the tonemapper's shoulder where a mild linear darkening compresses to
+  // nothing (measured live: a 0.5 eat read as ~nothing on ceramic). The eat
+  // therefore SCALES WITH BODY LUMINANCE: dark bodies keep their glow-driven
+  // band, light bodies get a real glassy stripe gliding over the glaze.
+  float fsSwLum = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+  material.diffuseColor *=
+    (1.0 - fsSweepK * mix(0.4, 0.9, smoothstep(0.2, 0.8, fsSwLum)));
+  // LIGHT bodies are mirror-dominated (ceramic: env 1.8 at roughness 0.12), so
+  // eating diffuse alone gets refilled by the env reflection — measured live,
+  // the halo barely darkened (peak column diff ~30/255). The halo FLANKS
+  // (band minus core) therefore also pull specular down on light bodies, so
+  // the dark glaze dip really lands; the core keeps its mirror + emissive
+  // clip, giving "dark wet flanks around a white-hot streak".
+  float fsSwLight = smoothstep(0.45, 0.8, fsSwLum);
+  float fsSwFlank = clamp(fsSweepK - fsSweepCore * 1.2, 0.0, 1.0);
+  material.specularColor *= (1.0 - fsSwFlank * fsSwLight * 0.85);
+  #ifdef USE_SHEEN
+    // A wet shine kills the velvet locally: the sheen veil sits ON TOP of the
+    // specular and was measured (live, softGel) to wash the band to nothing.
+    material.sheenColor *= (1.0 - fsSweepK * 0.9);
+  #endif
+  #ifdef USE_CLEARCOAT
+    material.clearcoat = max(material.clearcoat, min(fsSweepB * 1.2, 1.0));
+    material.clearcoatRoughness = mix(material.clearcoatRoughness, 0.03, fsSweepK);
+    // Flank damp AFTER the max() push, or the push would undo it.
+    material.clearcoat *= (1.0 - fsSwFlank * fsSwLight * 0.7);
+  #endif
+}
+`
+
+/**
+ * Iridescence thickness swirl (injected with the lights block; compiled only
+ * for presets with iridescence > 0 via USE_IRIDESCENCE). Without a thickness
+ * MAP three.js uses one uniform thickness for the whole surface, so the film
+ * shows ONE hue head-on and only shifts on orbit — which is why the preset
+ * read as "dark tube with a copper stripe". A real oil slick has uneven film
+ * thickness, and every thickness is a different interference color. Two
+ * octaves of the existing value noise swirl the thickness across the
+ * min..max range, so several distinct hues band across the form at ONCE, at
+ * stroke scale, from any angle. `material.iridescenceThickness` is finalized
+ * in <lights_physical_fragment> and only READ in <lights_fragment_begin>
+ * (evalIridescence), so overriding it here is safe and per-fragment.
+ */
+export const IRIDESCENCE_SWIRL_GLSL = /* glsl */ `
+#ifdef USE_IRIDESCENCE
+{
+  float fsIriN = fsValueNoise(vFsObjPos.xy * 4.0) * 0.7
+               + fsValueNoise(vFsObjPos.xy * 11.0) * 0.3;
+  material.iridescenceThickness =
+    mix(iridescenceThicknessMinimum, iridescenceThicknessMaximum, fsIriN);
+}
+#endif
+`
+
 /**
  * GLSL pattern library injected into <common>. All functions return a pattern
  * value in [0,1].

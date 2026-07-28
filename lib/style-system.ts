@@ -449,6 +449,10 @@ export interface MaterialParams {
    *  "iridescent" preset uses it; absent means 0. */
   iridescence?: number
   iridescenceIOR?: number
+  /** Thin-film thickness range in nm. Wider range = the film sweeps through
+   *  more interference orders across the form, i.e. MORE distinct rainbow
+   *  hues visible at once. Absent = three.js default [100, 400]. */
+  iridescenceThicknessRange?: [number, number]
 }
 
 export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
@@ -554,44 +558,51 @@ export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
     emissiveIntensity: 1.0,
     envMapIntensity: 1.6,
   },
-  // White porcelain: the first LIGHT preset. Pale warm body under a hard
-  // glaze — the single biggest read against the dark family, and the glaze
-  // highlight is obvious on every mode.
+  // White porcelain: the first LIGHT preset. COOL blue-white body under a
+  // hard WET glaze — roughness low enough that the env rig's slats reflect as
+  // crisp shapes head-on, which is the glaze read. Separation from chalk is
+  // now double-coded so it survives a single head-on view: temperature (cool
+  // vs warm-dusty) AND surface (tight mirror glaze vs zero specular + powder
+  // bloom). Live-judged: at roughness 0.22 / env 1.3 the glaze only appeared
+  // on orbit and the two pale presets collapsed head-on.
   ceramic: {
-    color: "#e9e7e1",
-    roughness: 0.22,
+    color: "#e2e6ea",
+    roughness: 0.12,
     metalness: 0.0,
-    clearcoat: 0.85,
-    clearcoatRoughness: 0.08,
-    reflectivity: 0.7,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.03,
+    reflectivity: 0.9,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 1.3,
+    envMapIntensity: 1.8,
   },
-  // Bone-dry chalk/plaster: pale AND totally flat — the "no highlight at all"
-  // extreme. Pairs against ceramic (same lightness, opposite surface).
+  // Bone-dry chalk/plaster: warm dusty white, ZERO specular — and a soft
+  // powder sheen. Real chalk isn't just "no highlight": fine dust scatters
+  // light back at grazing angles, a faint velvety rim bloom. That bloom (a
+  // sheen lobe, nothing to do with gloss) is what makes chalk read as a
+  // SUBSTANCE head-on instead of "ceramic minus the highlight".
   chalk: {
-    color: "#dcd9d2",
+    color: "#e7e2d6",
     roughness: 1.0,
     metalness: 0.0,
     clearcoat: 0.0,
     clearcoatRoughness: 1.0,
     reflectivity: 0.03,
-    sheen: 0.0,
-    sheenRoughness: 0.5,
-    sheenColor: "#000000",
+    sheen: 0.4,
+    sheenRoughness: 0.85,
+    sheenColor: "#fdf8ee",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 0.06,
+    envMapIntensity: 0.05,
   },
   // Polished chrome: full metal, near-mirror. The surface IS the environment —
   // nothing else in the family behaves like this.
   chrome: {
     color: "#f4f5f7",
-    roughness: 0.06,
+    roughness: 0.03,
     metalness: 1.0,
     clearcoat: 0.0,
     clearcoatRoughness: 0.5,
@@ -601,7 +612,7 @@ export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
     sheenColor: "#000000",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 2.2,
+    envMapIntensity: 2.8,
   },
   // Brushed gold/brass: warm colored metal with a softer reflection than
   // chrome — reads as jewelry, not mirror.
@@ -652,23 +663,33 @@ export const MATERIAL_PARAMS: Record<MaterialPreset, MaterialParams> = {
     emissiveIntensity: 2.4,
     envMapIntensity: 0.4,
   },
-  // Oil-slick: thin-film iridescence over dark gloss — the reflection color
-  // shifts with view angle. Unique mechanism (iridescence), not a tint.
+  // Oil-slick: thin-film iridescence over dark METAL gloss — the reflection
+  // color shifts with view angle. Unique mechanism (iridescence), not a tint.
+  // Three levers make the rainbow read at stroke scale (live-judged; the old
+  // 0.15-rough / 0.3-metal / default-thickness version was a faint tint):
+  //   1. thickness range widened to 120–800 nm — the film sweeps several
+  //      interference ORDERS across one curved tube, so multiple distinct
+  //      hues are visible simultaneously instead of one slow shift;
+  //   2. metalness up — the colored film modulates a strong reflection
+  //      instead of a weak dielectric one;
+  //   3. roughness down — interference colors are coherent only on a smooth
+  //      film; roughness smears them back to gray.
   iridescent: {
     color: "#101216",
-    roughness: 0.15,
-    metalness: 0.3,
+    roughness: 0.06,
+    metalness: 0.65,
     clearcoat: 1.0,
-    clearcoatRoughness: 0.05,
+    clearcoatRoughness: 0.04,
     reflectivity: 0.9,
     sheen: 0.0,
     sheenRoughness: 0.5,
     sheenColor: "#000000",
     emissive: "#000000",
     emissiveIntensity: 0,
-    envMapIntensity: 2.0,
+    envMapIntensity: 2.6,
     iridescence: 1.0,
-    iridescenceIOR: 1.6,
+    iridescenceIOR: 1.8,
+    iridescenceThicknessRange: [120, 800],
   },
   // Custom — the editable base. Starts as a neutral mid surface; the actual
   // values come from styleState.customMaterial (merged in resolveMaterialParams).
@@ -835,12 +856,12 @@ export const MATERIAL_PRESET_DEFS: StylePreset[] = [
   { id: "rubber", label: "Rubber", family: "material", enabled: true, implemented: true, applies: { materialPreset: "rubber" }, bestModes: ["inflate", "rod"] },
   { id: "signal", label: "Signal", family: "material", enabled: true, implemented: true, applies: { materialPreset: "signal" }, bestModes: ["rod", "extrude"] },
   { id: "ceramic", label: "Ceramic", family: "material", enabled: true, implemented: true, description: "White porcelain under a hard glaze.", applies: { materialPreset: "ceramic" }, bestModes: ["solid", "inflate"] },
-  { id: "chalk", label: "Chalk", family: "material", enabled: true, implemented: true, description: "Bone-dry plaster. Pale and totally flat.", applies: { materialPreset: "chalk" }, bestModes: ["solid"] },
+  { id: "chalk", label: "Chalk", family: "material", enabled: true, implemented: true, description: "Bone-dry plaster — warm, dusty, zero shine.", applies: { materialPreset: "chalk" }, bestModes: ["solid"] },
   { id: "chrome", label: "Chrome", family: "material", enabled: true, implemented: true, description: "Full-metal mirror — the surface is the room.", applies: { materialPreset: "chrome" }, bestModes: ["extrude", "inflate"] },
   { id: "gold", label: "Gold", family: "material", enabled: true, implemented: true, description: "Warm polished brass-gold metal.", applies: { materialPreset: "gold" }, bestModes: ["extrude", "solid"] },
   { id: "wax", label: "Wax", family: "material", enabled: true, implemented: true, description: "Amber honey-wax with a soft bloom.", applies: { materialPreset: "wax" }, bestModes: ["inflate", "solid"] },
   { id: "neon", label: "Neon", family: "material", enabled: true, implemented: true, description: "Self-lit hot-pink tube (glow, no post bloom).", applies: { materialPreset: "neon" }, bestModes: ["rod"] },
-  { id: "iridescent", label: "Iridescent", family: "material", enabled: true, implemented: true, description: "Oil-slick thin film — color shifts with view angle.", applies: { materialPreset: "iridescent" }, bestModes: ["inflate", "extrude"] },
+  { id: "iridescent", label: "Iridescent", family: "material", enabled: true, implemented: true, description: "Oil-slick thin film — swirling multi-hue shift.", applies: { materialPreset: "iridescent" }, bestModes: ["inflate", "extrude"] },
 ]
 
 /* --- dither (IMPLEMENTED v1 — threshold renderer is live) ---
@@ -2008,6 +2029,16 @@ export interface MaterialAnimationInput {
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
 
+/** Scale a #rrggbb hex toward black (k=1 → unchanged, k=0 → black). Used by
+ *  the wet-look darkening in roughnessPulse; cheap enough for per-frame use. */
+function scaleHex(hex: string, k: number): string {
+  const n = parseInt(hex.slice(1), 16)
+  const r = Math.round(((n >> 16) & 0xff) * k)
+  const g = Math.round(((n >> 8) & 0xff) * k)
+  const b = Math.round((n & 0xff) * k)
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`
+}
+
 /* All animations below modulate ONLY physical material properties (clearcoat,
  * roughness, clearcoatRoughness, reflectivity, envMapIntensity, sheen,
  * metalness) — never the albedo color. The scene's studio Environment +
@@ -2025,24 +2056,19 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
     case "none":
       return p
 
-    // Gloss wave: the clearcoat layer sharpens and the environment reflection
-    // swells, so a wet specular "shine" rolls in and out. Pure reflectance —
-    // clearcoat up, clearcoat roughness toward mirror, reflectivity + env up,
-    // and the base roughness eased down so the reflection tightens.
-    // env swell is ADDITIVE as well as multiplicative: on matte bases
-    // (envMapIntensity ~0.1) a pure multiply had nothing to multiply, which is
-    // why this read as static in the live check. ~3.3s period: constant
-    // ambient surface motion, deliberately slower than UI timing — this is
-    // canvas decoration, not interface feedback.
+    // Shine sweep: the visible effect is a POSITIONAL band of highlight that
+    // travels across the form — that is per-fragment work and lives in the
+    // shader (lib/texture-shader.ts SWEEP_* injections, band center driven
+    // from viewport-3d's frame loop). The old version here was a global gloss
+    // wave — the whole surface brightening and dimming together — which never
+    // read as a "sweep" at all. This case now only holds the surface in a
+    // CONSTANT, slightly receptive state (a touch more coat + reflection) so
+    // the band has a live specular field to roll over; nothing oscillates
+    // globally anymore.
     case "shineSweep": {
-      const s = (Math.sin(t * 1.9) + 1) / 2 // 0..1
-      p.clearcoat = clamp01(base.clearcoat + s * 0.9 * k)
-      p.clearcoatRoughness = clamp01(
-        base.clearcoatRoughness - (base.clearcoatRoughness - 0.02) * s * k,
-      )
-      p.reflectivity = clamp01(base.reflectivity + s * 0.6 * k)
-      p.roughness = clamp01(base.roughness * (1 - s * 0.7 * k))
-      p.envMapIntensity = base.envMapIntensity * (1 + s * 3.2 * k) + s * 2.0 * k
+      p.clearcoat = clamp01(base.clearcoat + 0.25 * k)
+      p.reflectivity = clamp01(base.reflectivity + 0.2 * k)
+      p.envMapIntensity = base.envMapIntensity + 0.4 * k
       return p
     }
 
@@ -2054,12 +2080,23 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
       const s = (Math.sin(t * 2.4) + 1) / 2
       p.sheen = clamp01(Math.max(base.sheen, 0.5) + s * 0.5 * k)
       p.sheenRoughness = clamp01(base.sheenRoughness * (1 - s * 0.65 * k))
-      if (base.sheenColor === "#000000") p.sheenColor = "#b9c8dd"
+      const shimmerColor = base.sheenColor === "#000000" ? "#b9c8dd" : base.sheenColor
+      p.sheenColor = shimmerColor
       p.clearcoat = clamp01(base.clearcoat + s * 1.0 * k)
       p.clearcoatRoughness = clamp01(base.clearcoatRoughness * (1 - s * 0.8 * k))
       p.reflectivity = clamp01(base.reflectivity + s * 0.5 * k)
       p.roughness = clamp01(base.roughness * (1 - s * 0.5 * k))
       p.envMapIntensity = base.envMapIntensity * (1 + s * 2.2 * k) + s * 1.6 * k
+      // Inner glow: sheen/clearcoat/env are all VIEW-ANGLE dependent — at the
+      // scale a stroke occupies they were measured near-invisible live (mean
+      // frame delta ~0.02). A soft emissive breath in the sheen's own color is
+      // angle-independent: a gel genuinely reads as glowing faintly from
+      // within when light passes through it, so this is the material's own
+      // behavior, not a fake accent.
+      if (base.emissive === "#000000") {
+        p.emissive = shimmerColor
+        p.emissiveIntensity = s * 0.55 * k
+      }
       return p
     }
 
@@ -2080,6 +2117,13 @@ export function evaluateMaterialAnimation(input: MaterialAnimationInput): Materi
         base.clearcoatRoughness - (base.clearcoatRoughness - 0.03) * s * Math.min(1, 1.6 * k),
       )
       p.envMapIntensity = base.envMapIntensity * (1 + s * 2.0 * k) + s * 2.6 * k
+      // WET-LOOK darkening. All the reflectance levers above are view-angle
+      // dependent and were measured near-invisible at stroke scale in the
+      // live window (mean frame delta ≤0.03 across a full cycle). What is
+      // angle-independent — and what a matte surface genuinely does when it
+      // gets wet — is DARKEN: water fills the micro-pores and absorbs light.
+      // Dry clay ↔ dark wet gloss is the readable version of this pulse.
+      p.color = scaleHex(base.color, 1 - s * 0.45 * k)
       return p
     }
 

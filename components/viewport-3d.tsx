@@ -31,7 +31,13 @@ import {
   evaluateMaterialAnimation,
   MODE_MATERIAL_DEFAULTS,
 } from "@/lib/style-system"
-import { createTextureUniforms, TEXTURE_TYPE_INDEX, type TextureUniforms } from "@/lib/texture-shader"
+import {
+  createTextureUniforms,
+  createSweepUniforms,
+  TEXTURE_TYPE_INDEX,
+  type TextureUniforms,
+  type SweepUniforms,
+} from "@/lib/texture-shader"
 import {
   createDitherUniforms,
   DITHER_TYPE_INDEX,
@@ -380,6 +386,7 @@ function AnimatedStrokes({
   hybridBlend,
   exportGroupRef,
   styleState,
+  bounds,
 }: {
   meshes: StrokeMeshData[]
   timelines: StrokeTimeline[]
@@ -389,6 +396,9 @@ function AnimatedStrokes({
   hybridBlend: number
   exportGroupRef: React.RefObject<THREE.Group | null>
   styleState?: StyleState
+  /** Object-space stroke bounds — lets the shine-sweep band normalize its
+   *  travel to the drawing's actual size. Read-only; never drives geometry. */
+  bounds?: StrokeBounds | null
 }) {
   // Refs to all tube meshes for drawRange updates
   const tubeMeshRefs = useRef<(THREE.Mesh | null)[]>([])
@@ -412,6 +422,13 @@ function AnimatedStrokes({
   const textureUniformsRef = useRef<TextureUniforms | null>(null)
   if (textureUniformsRef.current === null) {
     textureUniformsRef.current = createTextureUniforms()
+  }
+  // Shine-sweep band uniforms (animated material "shineSweep"): the travelling
+  // highlight is positional, so it lives in the shader; the CPU only writes the
+  // band's center each frame. Same survives-material-recreation contract.
+  const sweepUniformsRef = useRef<SweepUniforms | null>(null)
+  if (sweepUniformsRef.current === null) {
+    sweepUniformsRef.current = createSweepUniforms()
   }
   const ditherUniformsRef = useRef<DitherUniforms | null>(null)
   if (ditherUniformsRef.current === null) {
@@ -455,10 +472,14 @@ function AnimatedStrokes({
       envMapIntensity: base.envMapIntensity,
       iridescence: base.iridescence ?? 0,
       iridescenceIOR: base.iridescenceIOR ?? 1.3,
+      // Wider film thickness = more interference orders = more simultaneous
+      // hues. Static per preset (no animation touches it), so creation-only.
+      iridescenceThicknessRange: base.iridescenceThicknessRange ?? [100, 400],
     })
     // Every style layer rides the same shared material across all four modes.
     applyStyleShader(mat, {
       texture: textureUniformsRef.current!,
+      sweep: sweepUniformsRef.current!,
       dither: ditherUniformsRef.current!,
       ascii: asciiUniformsRef.current!,
       stack: stackUniformsRef.current!,
@@ -674,6 +695,56 @@ function AnimatedStrokes({
     if (styleState) {
       const animOn =
         styleState.materialAnimationEnabled && styleState.materialAnimationType !== "none"
+      // ---- Shine sweep band (shader-level, positional) ------------------
+      // The travelling highlight itself is per-fragment (lib/texture-shader
+      // SWEEP_* injections); the CPU animates only the band's center.
+      // TIMING (measured failure of the old cycle): 2.5s with a smoothstep
+      // crossing over ±1.35 left the band's center on-form only ~40% of the
+      // time — smoothstep dwells at the travel ends, which are OFF-form, and
+      // the 28% rest phase added more dead time. 10 frames sampled across a
+      // cycle produced only 4 distinct images; two frames 950ms apart could
+      // both land off-form and come out pixel-identical. "An event that
+      // passes" is worthless if most moments are the gap between events.
+      // Now: LINEAR travel (per the design framework, constant motion —
+      // marquee-class — gets linear easing; ease-in-out only spent its slow
+      // ends where nothing was visible) over ±1.15, taking 85% of a ~2.6s
+      // cycle, with a short ~0.4s off-form beat between passes. The form is
+      // lit for ~3/4 of every cycle. Duration sits deliberately above the
+      // 300ms UI ceiling: this is decorative, rarely-configured canvas
+      // motion — the framework's "marketing/explanatory: can be longer" tier,
+      // not UI feedback.
+      const sw = sweepUniformsRef.current!
+      if (animOn && styleState.materialAnimationType === "shineSweep") {
+        const completion = playheadRef.current
+        const swTime =
+          styleState.motionMode === "syncToDraw"
+            ? completion * 6
+            : state.clock.elapsedTime
+        const k = Math.min(1, Math.max(0, styleState.materialAnimationIntensity))
+        const cyc =
+          ((((swTime * styleState.materialAnimationSpeed) / 2.6) % 1) + 1) % 1
+        const tf = Math.min(1, cyc / 0.88)
+        // Position is in NORMALIZED stroke units (bounds radius = 1); ±1.12
+        // just clears the drawing on both sides with the wider band, and a
+        // short amplitude envelope at the travel ends fades the band in/out
+        // instead of relying on extra off-form travel distance — so there is
+        // no pop at wrap AND no long dark stretch (measured: the wider ±1.35
+        // margin left glossyPlastic pixel-identical for 2-3 consecutive
+        // 260ms samples).
+        sw.uFsSweepPos.value = -1.12 + tf * 2.24
+        const env =
+          tf < 0.05 ? tf / 0.05 : tf > 0.95 ? (1 - tf) / 0.05 : 1
+        sw.uFsSweepAmt.value = k * (cyc >= 0.88 ? 0 : env)
+        // Broad halo (the core is derived in-shader at 0.38× this width).
+        sw.uFsSweepWidth.value = 0.3 + 0.18 * k
+        if (bounds) {
+          sw.uFsSweepCx.value = bounds.center.x
+          sw.uFsSweepCy.value = bounds.center.y
+          sw.uFsSweepR.value = Math.max(bounds.radius, 0.0001)
+        }
+      } else {
+        sw.uFsSweepAmt.value = 0
+      }
       if (animOn) {
         // Motion clock: "syncToDraw" ties the phase to draw-in progress so the
         // surface animation reads as part of the same gesture; otherwise it
@@ -1991,10 +2062,69 @@ function Scene({
             as metal instead of gray. */}
         <Lightformer
           form="rect"
-          intensity={3.5}
+          intensity={4.5}
           color="#f2ede4"
           position={[0, 0.4, -6]}
           scale={[14, 0.8, 1]}
+        />
+        {/* Three vertical "window" slats (front-right, camera side) → the
+            structure a mirror needs. A mirror only reads as a mirror when the
+            reflection has EDGES — distinct bright shapes separated by dark
+            gaps that stretch and slide over the curvature. Before these,
+            chrome had one soft key + one streak to reflect and read as dark
+            gray metal. Slats face the origin from the DEFAULT CAMERA side, so
+            the mirror read is head-on, not orbit-only. Matte presets are
+            shielded by their own envMapIntensity (chalk 0.05, clay 0.12) —
+            verified live that they do not wash out. */}
+        <Lightformer
+          form="rect"
+          intensity={6}
+          color="#ffffff"
+          position={[2.2, 1.6, 4.5]}
+          rotation={[0, -0.44, 0]}
+          scale={[0.5, 5, 1]}
+        />
+        <Lightformer
+          form="rect"
+          intensity={6}
+          color="#eef2f8"
+          position={[3.4, 1.6, 3.6]}
+          rotation={[0, -0.65, 0]}
+          scale={[0.5, 5, 1]}
+        />
+        <Lightformer
+          form="rect"
+          intensity={6}
+          color="#ffffff"
+          position={[4.4, 1.6, 2.4]}
+          rotation={[0, -0.9, 0]}
+          scale={[0.5, 5, 1]}
+        />
+        {/* Soft wall BEHIND the camera (+z, big, dim) → flat faces that look
+            straight at the viewer reflect straight back past the viewer, and
+            before this panel that direction was pure void: chrome/iridescent
+            front faces rendered as black holes head-on. A broad dim panel
+            gives them a gentle graded reflection (and gives the thin-film
+            preset a head-on signal to tint) while the slats keep supplying
+            the hard structure. Intensity kept low so glossy blacks stay
+            black-family. */}
+        <Lightformer
+          form="rect"
+          intensity={0.55}
+          color="#eef1f6"
+          position={[0, 1.2, 7]}
+          scale={[9, 6, 1]}
+        />
+        {/* Dim floor bounce (below) → separates a metal's dark underside from
+            plain black: the lower half of a chrome tube reflects a faint warm
+            floor instead of nothing, which sells "object in a room". */}
+        <Lightformer
+          form="rect"
+          intensity={1.2}
+          color="#b9a98f"
+          position={[0, -4, 1]}
+          rotation={[Math.PI / 2, 0, 0]}
+          scale={[10, 10, 1]}
         />
       </Environment>
 
@@ -2014,6 +2144,7 @@ function Scene({
             hybridBlend={hybridBlend}
             exportGroupRef={exportGroupRef}
             styleState={styleState}
+            bounds={bounds}
           />
 
       <PlaybackController

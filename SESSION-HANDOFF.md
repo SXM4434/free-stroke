@@ -1918,3 +1918,77 @@ with, not a pixel-difference floor.
 ### Final locked checkpoint label
 
 `CRAFT_PASS_TEXTURE_AND_MATERIAL_STRENGTH`
+
+---
+
+## LOCKED CHECKPOINT — `CRAFT_PASS_SWEEP_ENV_AND_MATERIAL_FAMILY`
+
+**Status: the four named residual weaknesses are fixed.** Fable pass, judged
+headed. Geometry untouched; all gates pass.
+
+### 1. shineSweep is now a real travelling highlight
+
+It was a GLOBAL gloss wave (whole surface brightening together). Now a
+soft-edged band in normalized stroke units (`uFsSweepCx/Cy/R` from stroke
+bounds, so ±1.35 clears any drawing size), injected at TWO points:
+`<emissivemap_fragment>` adds a luminance-adaptive glow (carries dark bodies),
+`<lights_physical_fragment>` pulls roughness→0.03 and eats diffuse scaled by
+body luminance (carries light bodies as a glassy stripe). On light bodies the
+band FLANKS additionally pull specular/clearcoat down, giving "dark wet flanks
+around a white-hot streak" — because a bright band has nowhere to go on white.
+
+Measured: distinct frames per 8 samples went **4/10 → 7/8 (ink), 7/8 (ceramic),
+8/8 (matteClay)**. On ink (the default) it is dramatic — one frame has the right
+half brilliantly lit, four frames later the band has left the form.
+
+### 2. chrome is a mirror now
+
+Root cause was an empty environment — nothing to reflect. The reflection-only
+rig went from 4 to **11 Lightformers**: key, cool rim, warm low fill, tight
+streak, horizon band, three vertical window slats on the camera side (the
+structural edges a mirror needs head-on), a dim wall behind camera (kills
+black-hole front faces), warm floor bounce. Matte presets did NOT wash out —
+they shield themselves via low envMapIntensity (matteClay 0.12, chalk 0.05,
+rubber 0.4).
+
+### 3. chalk vs ceramic separate head-on
+
+Double-coded: TEMPERATURE (ceramic #e2e6ea cool blue-white vs chalk #e7e2d6 warm
+ivory) and SURFACE (ceramic roughness 0.12 + clearcoat 1.0 + env 1.8 → crisp
+glaze streak; chalk roughness 1.0, reflectivity 0.03, env 0.05 + a powder sheen
+lobe → flat, dusty, zero specular).
+
+### 4. iridescent reads as oil-slick
+
+Thickness range widened to 120–800nm, metalness 0.65, roughness 0.06, env 2.6,
+plus `IRIDESCENCE_SWIRL_GLSL` (compiled only under `USE_IRIDESCENCE`) which
+swirls per-fragment film thickness with two octaves of value noise. Without a
+thickness MAP three.js uses ONE thickness for the whole surface, which is why it
+previously showed a single hue head-on. Now multiple hues band across one tube
+simultaneously.
+
+### Also fixed
+
+- `completionFlash` **never ended** — `completion` stays 1 after the draw, so the
+  flash froze into a permanent glow (frames 1s apart were byte-identical). Now
+  ramps over the last 20% of the draw and decays on a real `sinceCompletion`
+  clock.
+- Turning material animation OFF left metalness / emissive / sheenColor stuck at
+  their last animated values.
+
+### Verification
+
+`verify-gates.mjs` ALL PASS. Sweep verified by frame series on ink / ceramic /
+matteClay; chrome, gold and iridescent verified as stills; full 13-material ×
+4-mode contact sheets reviewed.
+
+### Honest limits
+
+- shineSweep on **chrome** barely reads (a band inside a mirror). Would need a
+  per-fragment env-intensity override in `getIBLRadiance` (~2h GLSL).
+- shineSweep on **white bodies** is inherently subtler — it works by darkening
+  flanks, since white cannot get brighter.
+
+### Final locked checkpoint label
+
+`CRAFT_PASS_SWEEP_ENV_AND_MATERIAL_FAMILY`
