@@ -13,8 +13,8 @@ import { chromium } from "playwright-core"
 
 const MODES = ["rod", "extrude", "solid", "inflate"]
 const TEXTURES = ["grain", "noise", "scanlines", "bands", "contour"]
-const DITHERS = ["bayer4", "bayer8", "blueNoise", "halftone", "lines"]
-const ASCII = ["classic", "blocks", "minimal", "dots", "custom"]
+const DITHERS = ["bayer4", "bayer8", "blueNoise", "halftone", "lines", "dotScreen", "hatch", "crosshatch", "diamond", "newsprint"]
+const ASCII = ["classic", "blocks", "minimal", "dots", "custom", "braille", "boxes", "arrows", "punct", "numeric"]
 
 function testStroke() {
   const pts = []

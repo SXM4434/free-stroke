@@ -31,8 +31,8 @@ const MOTION_FRAMES = parseInt(process.env.MOTION_FRAMES || "24", 10)
 
 const MODES = ["rod", "extrude", "solid", "inflate"]
 const TEXTURES = ["grain", "noise", "scanlines", "bands", "contour"]
-const DITHERS = ["bayer4", "bayer8", "blueNoise", "halftone", "lines"]
-const ASCII = ["classic", "blocks", "minimal", "dots", "custom"]
+const DITHERS = ["bayer4", "bayer8", "blueNoise", "halftone", "lines", "dotScreen", "hatch", "crosshatch", "diamond", "newsprint"]
+const ASCII = ["classic", "blocks", "minimal", "dots", "custom", "braille", "boxes", "arrows", "punct", "numeric"]
 // Which system this pass is exercising: texture | dither
 const SYSTEM = arg("system", "texture")
 
