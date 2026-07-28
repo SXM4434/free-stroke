@@ -31,7 +31,23 @@ import {
   evaluateMaterialAnimation,
   MODE_MATERIAL_DEFAULTS,
 } from "@/lib/style-system"
+import {
+  applyTextureShader,
+  createTextureUniforms,
+  TEXTURE_TYPE_INDEX,
+  type TextureUniforms,
+} from "@/lib/texture-shader"
 
+
+/**
+ * GEOM_BUILD_DEBUG — dev-only, mode-agnostic geometry build counter.
+ * `buildCount` increments once per actual geometry (re)build for ANY mode.
+ * The verification harness asserts this stays FLAT across style changes,
+ * which is the PRD's hard gate: "changing style state updates preview without
+ * rebuilding geometry". Unlike the Extrude-only `extrudeDebugRef`, this works
+ * for Rod / Solid / Inflate too.
+ */
+export const GEOM_BUILD_DEBUG = { buildCount: 0 }
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
 const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
@@ -357,9 +373,16 @@ function AnimatedStrokes({
   // surface, so every mesh in this component shares one preset-driven material.
   const materialPreset = styleState?.materialPreset ?? "ink"
   const customMaterial = styleState?.customMaterial
+  // Procedural texture v1: uniform objects live in a ref so they survive
+  // material re-creation (preset switches) and per-frame writes go straight to
+  // the GPU without touching React state or the material itself.
+  const textureUniformsRef = useRef<TextureUniforms | null>(null)
+  if (textureUniformsRef.current === null) {
+    textureUniformsRef.current = createTextureUniforms()
+  }
   const liveMaterial = useMemo(() => {
     const base = resolveMaterialParams(materialPreset, customMaterial)
-    return new THREE.MeshPhysicalMaterial({
+    const mat = new THREE.MeshPhysicalMaterial({
       color: new THREE.Color(base.color),
       roughness: base.roughness,
       metalness: base.metalness,
@@ -373,6 +396,9 @@ function AnimatedStrokes({
       emissiveIntensity: base.emissiveIntensity,
       envMapIntensity: base.envMapIntensity,
     })
+    // Texture layer rides the same shared material across all four modes.
+    applyTextureShader(mat, textureUniformsRef.current!)
+    return mat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [materialPreset, customMaterial])
 
@@ -390,7 +416,36 @@ function AnimatedStrokes({
     [materialPreset, customMaterial],
   )
 
-  useFrame((state) => {
+  useFrame((state, delta) => {
+    // ---- Procedural texture v1 (uniform writes only) --------------------
+    // Pattern selection + params + animation phase all flow through uniform
+    // values on the injected shader. No material swap, no recompile, no
+    // geometry rebuild — verified against the Extrude previewBuildCount.
+    if (styleState) {
+      const u = textureUniformsRef.current!
+      const texOn = styleState.textureEnabled && styleState.textureMode !== "none"
+      u.uFsTexType.value = texOn ? TEXTURE_TYPE_INDEX[styleState.textureMode] : 0
+      u.uFsTexScale.value = styleState.textureScale
+      u.uFsTexIntensity.value = styleState.textureIntensity
+      u.uFsTexContrast.value = styleState.textureContrast
+      u.uFsTexLockScreen.value = styleState.textureLockMode === "screen" ? 1 : 0
+      const dir = styleState.textureDirection
+      u.uFsTexDirX.value = dir === "vertical" ? 0 : dir === "diagonal" ? 0.7071 : 1
+      u.uFsTexDirY.value = dir === "horizontal" ? 0 : dir === "diagonal" ? 0.7071 : 1
+      const texAnim = texOn && styleState.textureAnimated && styleState.motionMode !== "off"
+      if (texAnim) {
+        if (styleState.motionMode === "syncToDraw") {
+          // Reveal progress IS the clock: the pattern travels with the draw.
+          u.uFsTexTime.value =
+            styleState.texturePhase + playheadRef.current * 4 * styleState.textureSpeed
+        } else {
+          u.uFsTexTime.value += delta * styleState.textureSpeed * 0.6
+        }
+      } else {
+        u.uFsTexTime.value = styleState.texturePhase
+      }
+    }
+
     // ---- Animated Material v1 (surface response only) -------------------
     // PREVIEW-ONLY: this modulates highlight/roughness/sheen/emissive each
     // frame. It NEVER touches geometry, the reveal clock, or export. When the
@@ -1573,6 +1628,12 @@ function Scene({
   // the rebuild path is broken. If it does fire and `bboxZ` matches the new
   // depth, the rebuild path is correct and any visible-staleness is downstream
   // (camera angle / material / R3F prop swap).
+  // Mode-agnostic build counter: `meshes` IS the geometry build output, so a
+  // change here means geometry was rebuilt. Style-only changes must not fire.
+  useEffect(() => {
+    GEOM_BUILD_DEBUG.buildCount += 1
+  }, [meshes])
+
   const extrudeBuildCountRef = useRef(0)
   useEffect(() => {
     if (!extrudeDebugRef) return
@@ -2081,87 +2142,109 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
    * Build a fresh export-only scene with merged geometry per stroke,
    * centered at origin, with deterministic naming. No viewer junk.
    */
-  const handleExportGLB = useCallback(async () => {
-    if (processedStrokes.length === 0) return
-
-    setExporting(true)
-    try {
-      const engine = getEngine(geometryMode)
-      const settings = settingsRef?.current
-
-      const exportResult = engine.buildExport(processedStrokes, {
-        canvasWidth,
-        canvasHeight,
-        exportName,
-        strokeCount,
-        totalPoints,
+  /**
+   * Builds the GLB ArrayBuffer for the current mode. Extracted from
+   * `handleExportGLB` so the download path and the dev verification hook run
+   * the EXACT same export code — a harness that exercised a parallel path
+   * would prove nothing about the real export.
+   * Returns null when there is nothing exportable.
+   */
+  const buildGLBBuffer = useCallback(async (): Promise<ArrayBuffer | null> => {
+    if (processedStrokes.length === 0) return null
+    const engine = getEngine(geometryMode)
+    const settings = settingsRef?.current
+    const exportResult = engine.buildExport(processedStrokes, {
+      canvasWidth,
+      canvasHeight,
+      exportName,
+      strokeCount,
+      totalPoints,
       extrudeParams,
       solidParams,
       settings: {
-          spacing: settings?.spacing ?? null,
-          smoothingEnabled: settings?.smoothing ?? null,
-          cornersEnabled: settings?.preserveCorners ?? null,
-        },
-      })
+        spacing: settings?.spacing ?? null,
+        smoothingEnabled: settings?.smoothing ?? null,
+        cornersEnabled: settings?.preserveCorners ?? null,
+      },
+    })
+    if (exportResult.objectCount === 0) return null
 
-      if (exportResult.objectCount === 0) {
-        setExporting(false)
-        return
-      }
+    const exportScene = new THREE.Scene()
+    exportScene.add(exportResult.group)
 
-      // Build export scene
-      const exportScene = new THREE.Scene()
-      exportScene.add(exportResult.group)
-
-      // Dev-only scene verification
-      if (process.env.NODE_ENV === "development") {
-        const FORBIDDEN_NAMES = ["grid", "helper", "cube", "debug", "controls"]
-        let meshCount = 0
-        exportScene.traverse((node) => {
-          if (node instanceof THREE.Mesh) meshCount++
-          const nameLower = (node.name || "").toLowerCase()
-          for (const f of FORBIDDEN_NAMES) {
-            if (nameLower.includes(f)) {
-              console.warn(`[FreeStroke Export] ASSERTION: found forbidden name "${node.name}" in export scene`)
-            }
-          }
-        })
-
-        if (exportScene.children.length !== 1 || exportScene.children[0].name !== "FreeStroke") {
-          console.warn("[FreeStroke Export] ASSERTION: root is not a single group named FreeStroke")
-        }
-        void meshCount
-      }
-
-      // Export to GLB
-      const exporter = new GLTFExporter()
-      const result = await new Promise<ArrayBuffer>((resolve, reject) => {
-        exporter.parse(
-          exportScene,
-          (gltf) => resolve(gltf as ArrayBuffer),
-          (error) => reject(error),
-          { binary: true }
-        )
-      })
-
-      // Dispose export-only resources
-      for (const g of exportResult.disposables) g.dispose()
+    if (process.env.NODE_ENV === "development") {
+      const FORBIDDEN_NAMES = ["grid", "helper", "cube", "debug", "controls"]
       exportScene.traverse((node) => {
-        if (node instanceof THREE.Mesh) {
-          node.geometry?.dispose()
-          if (node.material instanceof THREE.Material) node.material.dispose()
+        const nameLower = (node.name || "").toLowerCase()
+        for (const f of FORBIDDEN_NAMES) {
+          if (nameLower.includes(f)) {
+            console.warn(`[FreeStroke Export] ASSERTION: found forbidden name "${node.name}" in export scene`)
+          }
         }
       })
+      if (exportScene.children.length !== 1 || exportScene.children[0].name !== "FreeStroke") {
+        console.warn("[FreeStroke Export] ASSERTION: root is not a single group named FreeStroke")
+      }
+    }
 
-      // Build filename
+    const exporter = new GLTFExporter()
+    const buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+      exporter.parse(exportScene, (gltf) => resolve(gltf as ArrayBuffer), (error) => reject(error), {
+        binary: true,
+      })
+    })
+
+    for (const g of exportResult.disposables) g.dispose()
+    exportScene.traverse((node) => {
+      if (node instanceof THREE.Mesh) {
+        node.geometry?.dispose()
+        if (node.material instanceof THREE.Material) node.material.dispose()
+      }
+    })
+    return buffer
+  }, [
+    processedStrokes,
+    geometryMode,
+    extrudeParams,
+    solidParams,
+    exportName,
+    settingsRef,
+    strokeCount,
+    totalPoints,
+    canvasWidth,
+    canvasHeight,
+  ])
+
+  // DEV-ONLY verification hook: lets scripts/verify/verify-gates.mjs assert the
+  // geometry-rebuild gate and export health without clicking the UI.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return
+    const w = window as unknown as Record<string, unknown>
+    w.__geomDebug = {
+      buildCount: () => GEOM_BUILD_DEBUG.buildCount,
+      exportBytes: async () => (await buildGLBBuffer())?.byteLength ?? 0,
+    }
+    return () => {
+      delete w.__geomDebug
+    }
+  }, [buildGLBBuffer])
+
+  // Thin download wrapper: all export geometry/material logic lives in the
+  // shared `buildGLBBuffer` above, so the button and the verification harness
+  // exercise identical code.
+  const handleExportGLB = useCallback(async () => {
+    if (processedStrokes.length === 0) return
+    setExporting(true)
+    try {
+      const result = await buildGLBBuffer()
+      if (!result) return
+
       const now = new Date()
       const pad = (n: number) => String(n).padStart(2, "0")
       const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
       const safeName = exportName.trim().replace(/[^a-zA-Z0-9_-]/g, "-")
-      const prefix = safeName ? `${safeName}_` : "free-stroke_"
-      const filename = `${prefix}${ts}.glb`
+      const filename = `${safeName ? `${safeName}_` : "free-stroke_"}${ts}.glb`
 
-      // Download
       const blob = new Blob([result], { type: "application/octet-stream" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -2176,7 +2259,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
     } finally {
       setExporting(false)
     }
-  }, [processedStrokes, geometryMode, extrudeParams, solidParams, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
+  }, [processedStrokes, buildGLBBuffer, exportName])
 
   const formatDuration = (ms: number, frac: number) => {
     const sec = (ms * frac) / 1000
@@ -2417,9 +2500,29 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 )
               })()}
               <div className="mt-0.5 text-foreground/80">— Texture (procedural patterning only) —</div>
+              <div>textureRendererImplemented: YES (v1)</div>
               <div>textureMode: {styleState.textureMode}</div>
               <div>textureEnabled: {String(styleState.textureEnabled)}</div>
               <div>textureAnimated: {String(styleState.textureAnimated)}</div>
+              <div>textureTypeIndex: {TEXTURE_TYPE_INDEX[styleState.textureMode]}</div>
+              <div>textureScale: {styleState.textureScale.toFixed(2)}</div>
+              <div>textureIntensity: {styleState.textureIntensity.toFixed(2)}</div>
+              <div>textureContrast: {styleState.textureContrast.toFixed(2)}</div>
+              <div>textureSpeed: {styleState.textureSpeed.toFixed(2)}</div>
+              <div>textureDirection: {styleState.textureDirection}</div>
+              <div>textureLockMode: {styleState.textureLockMode}</div>
+              <div>textureAppliedToAllModes: YES (shared material)</div>
+              <div>textureDoesNotTouchGeometry: YES</div>
+              <div>
+                textureAnimationClock:{" "}
+                {styleState.motionMode === "syncToDraw"
+                  ? "revealProgress"
+                  : styleState.motionMode === "independent"
+                    ? "elapsedTime"
+                    : "off (static)"}
+              </div>
+              <div>textureIsNotDither: YES (pattern, no threshold logic)</div>
+              <div>textureIsNotAscii: YES (pattern, no glyphs)</div>
               <div className="mt-0.5 text-foreground/80">— Dither (separate system) —</div>
               <div>ditherEnabled: {String(styleState.ditherEnabled)}</div>
               <div>ditherAnimated: {String(styleState.ditherAnimated)}</div>

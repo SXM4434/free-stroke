@@ -141,6 +141,10 @@ export default function Home() {
         })),
       setCustom: (patch: Record<string, unknown>) =>
         setStyleState((s) => ({ ...s, customMaterial: { ...s.customMaterial, ...patch } })),
+      // DEV capture: drive any style state field directly (texture/dither/ascii
+      // params, motion mode, …) so verification captures can sweep the matrix
+      // without DOM clicks. Same state path the UI uses.
+      setStyle: (patch: Partial<StyleState>) => setStyleState((s) => ({ ...s, ...patch })),
       // DEV capture: inject a set of strokes deterministically (instead of
       // synthetic pointer events). Each entry is an array of {x,y} in canvas
       // pixel space; timestamps are baked sequentially so the draw-in reveal
@@ -390,8 +394,13 @@ export default function Home() {
           {
             id: "texture",
             label: "Texture",
-            value: TEXTURE_MODES.find((t) => t.id === styleState.textureMode)?.label ?? "—",
-            live: false,
+            value:
+              styleState.textureEnabled && styleState.textureMode !== "none"
+                ? `${TEXTURE_MODES.find((t) => t.id === styleState.textureMode)?.label ?? "On"}${
+                    styleState.textureAnimated ? " ·anim" : ""
+                  }`
+                : "None",
+            live: true,
           },
           {
             id: "dither",

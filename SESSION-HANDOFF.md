@@ -1193,3 +1193,106 @@ touched — capture tooling + stroke sources only.
 
 (supersedes `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`
 as the latest layer; all prior checkpoints remain in effect)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1_PASS`
+
+**Status: procedural texture + animated texture are LIVE on all four modes.**
+Renderer implemented (not rails). Geometry, geometry animation, and export
+geometry untouched.
+
+### What was built
+
+- **`lib/texture-shader.ts` (NEW)** — the pattern renderer. Injects GLSL into the
+  shared `MeshPhysicalMaterial` via `onBeforeCompile`, so all four modes get
+  texture from the one live material. Patterns are COMPUTED from position (no
+  UVs — Solid's raster/contour and Inflate's loft have no usable UV
+  parameterization, so image textures were never an option).
+  - Five patterns behind ONE shader, selected by the `uFsTexType` uniform:
+    grain (per-cell hash), noise (2-octave value noise), scanlines, bands,
+    contour (value noise sliced at even levels → topo lines).
+  - `fsHash` + `fsValueNoise` with smoothstep-eased bilinear blend (the
+    `f*f*(3-2f)` easing is what kills the value-noise grid seams).
+  - Coordinate source = object space (welded to the form) or screen space
+    (graphic overlay), per `textureLockMode`.
+  - Animation = sliding the sample coordinate along a unit direction vector.
+    Clock is elapsed time (`independent`) or reveal progress (`syncToDraw`).
+  - Constant `customProgramCacheKey` so every textured material shares one
+    compiled program.
+- **`lib/style-system.ts`** — added `TextureDirection` + `textureDirection`
+  state/default. TEXTURE_PRESET_DEFS and ANIMATED_TEXTURE_PRESET_DEFS are now
+  `implemented: true` with real `applies` patches (Fine Grain, Scanlines,
+  Contour Bands, Scratched Ink, Gel Bubbles / Grain Drift, Scanline Scroll,
+  Ripple Flow, Band Crawl, Bubble Drift). They only ever write `texture*`.
+- **`components/viewport-3d.tsx`** — texture uniforms in a ref (survive material
+  re-creation); per-frame uniform writes in `useFrame`; full texture debug
+  readout; NEW mode-agnostic `GEOM_BUILD_DEBUG.buildCount`; extracted
+  `buildGLBBuffer` so the export button and the verification harness run the
+  same export code; dev-only `window.__geomDebug`.
+- **`components/style-panel-scaffold.tsx`** — real Texture panel (pattern /
+  scale / intensity / contrast / lock mode + Texture Animation with speed and
+  direction). Panel + Animation-category status flipped from "reserved" to
+  "active".
+- **`app/page.tsx`** — Texture summary chip now live (shows pattern + `·anim`);
+  dev harness gained `setStyle(patch)` for verification sweeps.
+
+### Root cause found by visual verification (not code review)
+
+First implementation darkened albedo only. On the glossy near-black Extrude
+default this was **invisible** — multiplying near-black by <1 stays near-black,
+and on a glossy dark surface nearly all visible light is the specular lobe, not
+albedo. Fix: bidirectional albedo modulation (lift AND darken) plus modulating
+`material.roughness` and `material.clearcoatRoughness` right after
+`<lights_physical_fragment>` so the HIGHLIGHT carries the pattern.
+Measured: extrude/contour meanΔ 1.94 (below perceptual floor) → 10.74.
+
+### Verification tooling (NEW, reusable for every future style phase)
+
+- `scripts/verify/verify-style.mjs` — drives the running app through
+  (mode × pattern) stills and long consecutive-frame motion runs; writes to
+  `docs/verification/<pass>/`. `--only=still|motion` no longer wipes the other
+  family.
+- `scripts/verify/diff-frames.mjs` — measures each still against its mode's
+  texture-off baseline (reads / faint / TOO SUBTLE) and each motion cell for
+  consecutive-frame change (travels / jitters / STATIC).
+- `scripts/verify/verify-gates.mjs` — asserts the geometry-rebuild gate, export
+  health, and the taxonomy gate.
+
+### Test results (all captured evidence in `docs/verification/texture-v1/`)
+
+- **Stills — 20/20 read.** Every mode × every pattern above the perceptual
+  floor. Range meanΔ 7.39 (inflate/noise) to 31.43 (solid/contour). Zero
+  TOO SUBTLE, zero faint.
+- **Motion — 4/4 travel.** inflate/grain, inflate/scanlines, solid/grain,
+  solid/scanlines all show real consecutive-frame movement (consecΔ 17.2–56.9).
+- **Geometry-rebuild gate — PASS on all four modes.** buildCount flat across 10
+  style changes each: rod 2→2, extrude 4→4, solid 5→5, inflate 6→6.
+- **Export regression — PASS on all four.** rod 2.16 MB, extrude 29 KB,
+  solid 303 KB, inflate 261 KB, all non-empty with texture active.
+- **Taxonomy gate — PASS.** Texture never enables dither or ASCII.
+- **Console errors — 0** across every capture run.
+
+### Confirmations
+
+- Dither renderer NOT implemented. ASCII renderer NOT implemented.
+- Geometry untouched. Geometry animation untouched. Export GEOMETRY untouched
+  (only the GLB-building code path was extracted to a shared function; the
+  produced buffer is identical).
+- Texture is preview-only — no texture baking into GLB (per PRD: preview first,
+  bake later).
+
+### Docs
+
+- `docs/PRD.md` (the plan, now in-repo), `docs/README.md` (the loop + doc system)
+- `docs/explainers/01-procedural-texture.md` — code / tech / math / reasoning
+- `docs/research/texture-phase.md` — every source used, what it is, what we used it for
+
+### Next branch — `POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1`
+
+### Final locked checkpoint label
+
+`POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1_PASS`
+
+(supersedes `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`;
+all prior checkpoints remain in effect as underlying layers)

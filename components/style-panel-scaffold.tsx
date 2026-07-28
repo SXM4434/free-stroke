@@ -73,9 +73,9 @@ const PANELS: PanelDef[] = [
   {
     id: "texture",
     label: "Texture",
-    status: "reserved",
-    note: "Texture controls land here. Procedural texture renderer not implemented yet.",
-    futureControls: ["scale", "strength", "rotation", "blend mode"],
+    status: "active",
+    note: "Procedural pattern renderer is live on all four modes (grain / noise / scanlines / bands / contour). Patterns modulate ink tone + roughness only — never geometry, draw-in, or export geometry.",
+    futureControls: ["blend mode", "rotation", "per-axis scale", "second texture layer", "custom texture"],
   },
   {
     id: "dither",
@@ -144,9 +144,8 @@ const ANIMATION_CATEGORIES: {
   {
     key: "texture",
     label: "Texture Animation",
-    state: "reserved",
-    detail: "Grain drift, noise movement, scanline scroll, band crawl, ripple, bubble drift.",
-    futureBranch: "POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1",
+    state: "active",
+    detail: "Active now (v1). Pattern MOTION only — grain drift, noise movement, scanline scroll, band crawl, ripple. Configure it in the Texture panel.",
   },
   {
     key: "dither",
@@ -409,6 +408,192 @@ function MaterialControl({
   )
 }
 
+/* ---- Texture panel: procedural pattern renderer (IMPLEMENTED v1) ----
+ * Texture is PATTERN only. It never sets dither (threshold) or ASCII (glyph)
+ * state — those are sibling systems with their own panels. */
+function TextureControl({
+  styleState,
+  setStyleState,
+}: {
+  styleState: StyleState
+  setStyleState: (updater: (s: StyleState) => StyleState) => void
+}) {
+  const texOn = styleState.textureEnabled && styleState.textureMode !== "none"
+  const animOn = texOn && styleState.textureAnimated
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-foreground">Texture</span>
+          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+            {texOn ? "active" : "off"}
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+          Procedural pattern on the surface. Separate from Dither (threshold marks) and ASCII
+          (glyphs). Patterns modulate ink tone and roughness — they never change geometry.
+        </p>
+      </div>
+
+      <label className="flex flex-col gap-1">
+        <span className={fieldLabelClass}>Pattern</span>
+        <select
+          value={texOn ? styleState.textureMode : "none"}
+          onChange={(e) => {
+            const v = e.target.value as StyleState["textureMode"]
+            setStyleState((s) =>
+              v === "none"
+                ? { ...s, textureEnabled: false, textureMode: "none" }
+                : { ...s, textureEnabled: true, textureMode: v },
+            )
+          }}
+          className={selectClass}
+        >
+          {TEXTURE_MODES.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div className={`flex flex-col gap-3 ${texOn ? "" : "pointer-events-none opacity-50"}`}>
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Scale <span className="text-foreground">{styleState.textureScale.toFixed(2)}×</span>
+          </span>
+          <input
+            type="range"
+            min={0.2}
+            max={4}
+            step={0.05}
+            value={styleState.textureScale}
+            onChange={(e) => setStyleState((s) => ({ ...s, textureScale: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!texOn}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Intensity{" "}
+            <span className="text-foreground">{Math.round(styleState.textureIntensity * 100)}%</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={styleState.textureIntensity}
+            onChange={(e) => setStyleState((s) => ({ ...s, textureIntensity: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!texOn}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Contrast{" "}
+            <span className="text-foreground">{Math.round(styleState.textureContrast * 100)}%</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={styleState.textureContrast}
+            onChange={(e) => setStyleState((s) => ({ ...s, textureContrast: Number(e.target.value) }))}
+            className="w-48 accent-foreground"
+            disabled={!texOn}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>Lock mode</span>
+          <select
+            value={styleState.textureLockMode}
+            onChange={(e) =>
+              setStyleState((s) => ({
+                ...s,
+                textureLockMode: e.target.value as StyleState["textureLockMode"],
+              }))
+            }
+            className={selectClass}
+            disabled={!texOn}
+          >
+            <option value="object">Object (sticks to the form)</option>
+            <option value="screen">Screen (graphic overlay)</option>
+          </select>
+        </label>
+      </div>
+
+      {/* Animated texture — PATTERN MOTION only. */}
+      <div className="border-t border-border pt-3">
+        <label className={`flex items-center gap-2 ${texOn ? "" : "pointer-events-none opacity-50"}`}>
+          <input
+            type="checkbox"
+            checked={styleState.textureAnimated}
+            onChange={(e) =>
+              setStyleState((s) => ({
+                ...s,
+                textureAnimated: e.target.checked,
+                // Animation needs a running clock; don't silently do nothing.
+                motionMode: e.target.checked && s.motionMode === "off" ? "independent" : s.motionMode,
+              }))
+            }
+            className="h-3.5 w-3.5 accent-foreground"
+            disabled={!texOn}
+          />
+          <span className="text-xs font-medium text-foreground">Texture Animation</span>
+        </label>
+
+        <div className={`mt-3 flex flex-col gap-3 ${animOn ? "" : "pointer-events-none opacity-50"}`}>
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>
+              Speed <span className="text-foreground">{styleState.textureSpeed.toFixed(2)}×</span>
+            </span>
+            <input
+              type="range"
+              min={0.1}
+              max={3}
+              step={0.05}
+              value={styleState.textureSpeed}
+              onChange={(e) => setStyleState((s) => ({ ...s, textureSpeed: Number(e.target.value) }))}
+              className="w-48 accent-foreground"
+              disabled={!animOn}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>Direction</span>
+            <select
+              value={styleState.textureDirection}
+              onChange={(e) =>
+                setStyleState((s) => ({
+                  ...s,
+                  textureDirection: e.target.value as StyleState["textureDirection"],
+                }))
+              }
+              className={selectClass}
+              disabled={!animOn}
+            >
+              <option value="horizontal">Horizontal</option>
+              <option value="vertical">Vertical</option>
+              <option value="diagonal">Diagonal</option>
+            </select>
+          </label>
+
+          <p className="text-[10px] leading-relaxed text-muted-foreground">
+            Pattern motion only. Timing follows the{" "}
+            <span className="font-medium text-foreground">Animation</span> panel&apos;s motion mode:
+            &ldquo;Sync to Draw&rdquo; makes the pattern travel with the reveal.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ---- Animation panel: full IA, only Material is functional ---- */
 function AnimationControl({
   styleState,
@@ -498,24 +683,8 @@ function PanelControl({
     case "animation":
       return <AnimationControl styleState={styleState} setStyleState={setStyleState} />
     case "texture":
-      return (
-        <label className="flex flex-col gap-1">
-          <span className={fieldLabelClass}>Texture mode</span>
-          <select
-            value={styleState.textureMode}
-            onChange={(e) =>
-              setStyleState((s) => ({ ...s, textureMode: e.target.value as StyleState["textureMode"] }))
-            }
-            className={selectClass}
-          >
-            {TEXTURE_MODES.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      )
+      return <TextureControl styleState={styleState} setStyleState={setStyleState} />
+
     case "dither":
       return (
         <label className="flex flex-col gap-1">

@@ -77,6 +77,9 @@ export type TextureMode =
 /** How a texture/effect is anchored as the camera or geometry moves. */
 export type TextureLockMode = "screen" | "object" | "surface" | "stroke"
 
+/** Direction an animated texture pattern travels. */
+export type TextureDirection = "horizontal" | "vertical" | "diagonal"
+
 /** How style animation phase relates to the geometry reveal/animation clock. */
 export type StyleSyncMode =
   | "independent"
@@ -151,6 +154,7 @@ export interface StyleState {
   textureContrast: number
   textureSpeed: number
   texturePhase: number
+  textureDirection: TextureDirection
 
   /* --- dither --- */
   ditherEnabled: boolean
@@ -239,6 +243,7 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   textureContrast: 0.5,
   textureSpeed: 1,
   texturePhase: 0,
+  textureDirection: "horizontal",
 
   ditherEnabled: false,
   ditherAnimated: false,
@@ -629,22 +634,189 @@ export const ANIMATED_ASCII_PRESET_DEFS: StylePreset[] = [
   { id: "slowCodeCrawl", label: "Slow Code Crawl", family: "animatedAscii", enabled: true, implemented: false },
 ]
 
-/* --- texture (definitions only) --- */
+/* --- texture (IMPLEMENTED v1 — procedural pattern renderer is live) ---
+ * Each preset enables the texture layer and picks a pattern + tuning. They
+ * only touch texture* state: never material, never dither, never ascii. */
 export const TEXTURE_PRESET_DEFS: StylePreset[] = [
-  { id: "fineGrain", label: "Fine Grain", family: "texture", enabled: true, implemented: false },
-  { id: "scanlines", label: "Scanlines", family: "texture", enabled: true, implemented: false },
-  { id: "contourBands", label: "Contour Bands", family: "texture", enabled: true, implemented: false },
-  { id: "scratchedInk", label: "Scratched Ink", family: "texture", enabled: true, implemented: false },
-  { id: "gelBubbles", label: "Gel Bubbles", family: "texture", enabled: true, implemented: false },
+  {
+    id: "fineGrain",
+    label: "Fine Grain",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Subtle per-cell speckle. Safe default on every mode.",
+    applies: {
+      textureEnabled: true,
+      textureMode: "grain",
+      textureScale: 1.6,
+      textureIntensity: 0.35,
+      textureContrast: 0.45,
+    },
+  },
+  {
+    id: "scanlines",
+    label: "Scanlines",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Directional line pattern. Reads best on broad faces.",
+    bestModes: ["extrude", "solid"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "scanlines",
+      textureScale: 1.0,
+      textureIntensity: 0.5,
+      textureContrast: 0.6,
+    },
+  },
+  {
+    id: "contourBands",
+    label: "Contour Bands",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Broad soft stripes wrapping the volume.",
+    bestModes: ["solid", "inflate"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "bands",
+      textureScale: 0.8,
+      textureIntensity: 0.45,
+      textureContrast: 0.4,
+    },
+  },
+  {
+    id: "scratchedInk",
+    label: "Scratched Ink",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Irregular topo-like contour marks across the surface.",
+    bestModes: ["rod", "extrude"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "contour",
+      textureScale: 1.4,
+      textureIntensity: 0.55,
+      textureContrast: 0.5,
+    },
+  },
+  {
+    id: "gelBubbles",
+    label: "Gel Bubbles",
+    family: "texture",
+    enabled: true,
+    implemented: true,
+    description: "Soft blobby value-noise field, like bubbles under the skin.",
+    bestModes: ["inflate"],
+    applies: {
+      textureEnabled: true,
+      textureMode: "noise",
+      textureScale: 0.7,
+      textureIntensity: 0.4,
+      textureContrast: 0.35,
+    },
+  },
 ]
 
-/* --- animated texture (definitions only) --- */
+/* --- animated texture (IMPLEMENTED v1) ---
+ * Animated presets set the SAME texture* fields plus animation params. They
+ * are pattern MOTION only — never threshold motion (dither) or glyph motion
+ * (ascii). */
 export const ANIMATED_TEXTURE_PRESET_DEFS: StylePreset[] = [
-  { id: "grainDrift", label: "Grain Drift", family: "animatedTexture", enabled: true, implemented: false },
-  { id: "scanlineScroll", label: "Scanline Scroll", family: "animatedTexture", enabled: true, implemented: false },
-  { id: "rippleFlow", label: "Ripple Flow", family: "animatedTexture", enabled: true, implemented: false },
-  { id: "bandCrawl", label: "Band Crawl", family: "animatedTexture", enabled: true, implemented: false },
-  { id: "bubbleDrift", label: "Bubble Drift", family: "animatedTexture", enabled: true, implemented: false },
+  {
+    id: "grainDrift",
+    label: "Grain Drift",
+    family: "animatedTexture",
+    enabled: true,
+    implemented: true,
+    description: "Grain crawls slowly across the surface.",
+    applies: {
+      textureEnabled: true,
+      textureAnimated: true,
+      textureMode: "grain",
+      textureScale: 1.6,
+      textureIntensity: 0.35,
+      textureSpeed: 0.5,
+      textureDirection: "diagonal",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "scanlineScroll",
+    label: "Scanline Scroll",
+    family: "animatedTexture",
+    enabled: true,
+    implemented: true,
+    description: "Scanlines travel in one direction.",
+    bestModes: ["extrude", "solid"],
+    applies: {
+      textureEnabled: true,
+      textureAnimated: true,
+      textureMode: "scanlines",
+      textureScale: 1.0,
+      textureIntensity: 0.5,
+      textureSpeed: 1.2,
+      textureDirection: "vertical",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "rippleFlow",
+    label: "Ripple Flow",
+    family: "animatedTexture",
+    enabled: true,
+    implemented: true,
+    description: "Contour ripples travel across the form.",
+    applies: {
+      textureEnabled: true,
+      textureAnimated: true,
+      textureMode: "contour",
+      textureScale: 1.2,
+      textureIntensity: 0.5,
+      textureSpeed: 0.8,
+      textureDirection: "horizontal",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "bandCrawl",
+    label: "Band Crawl",
+    family: "animatedTexture",
+    enabled: true,
+    implemented: true,
+    description: "Broad bands slide slowly along the stroke.",
+    bestModes: ["solid", "inflate"],
+    applies: {
+      textureEnabled: true,
+      textureAnimated: true,
+      textureMode: "bands",
+      textureScale: 0.8,
+      textureIntensity: 0.45,
+      textureSpeed: 0.4,
+      textureDirection: "vertical",
+      motionMode: "independent",
+    },
+  },
+  {
+    id: "bubbleDrift",
+    label: "Bubble Drift",
+    family: "animatedTexture",
+    enabled: true,
+    implemented: true,
+    description: "Soft noise blobs drift under the surface.",
+    bestModes: ["inflate"],
+    applies: {
+      textureEnabled: true,
+      textureAnimated: true,
+      textureMode: "noise",
+      textureScale: 0.7,
+      textureIntensity: 0.4,
+      textureSpeed: 0.35,
+      textureDirection: "diagonal",
+      motionMode: "independent",
+    },
+  },
 ]
 
 /* --- layer stack (definitions only) --- */
