@@ -14,6 +14,11 @@ import { writeFileSync, mkdirSync } from "node:fs"
 const OUT = "/Users/sebs/free-stroke/docs/verification/texture-motion"
 mkdirSync(OUT, { recursive: true })
 const PATTERNS = ["grain","noise","scanlines","bands","contour","crosshatch","dots","woodgrain","cellular","brushed","craquelure","ripple"]
+// The degenerate case: a direction parallel to a pattern's own invariant axis.
+// scanlines/bands/woodgrain/brushed all vary in y, so "horizontal" travel used
+// to move the sample point along a line the pattern is constant on -> zero
+// visible motion. Every direction must animate every pattern.
+const DIRECTIONS = ["horizontal","vertical","diagonal"]
 const DEAD = 1.0      // below this: does nothing
 const WEAK = 4.0      // below this: "hard to notice" — still fails the complaint
 
@@ -33,15 +38,17 @@ await page.waitForTimeout(900)
 await page.evaluate(()=>window.__captureHarness.frontView(1))
 
 let fail=0
+for (const DIR of DIRECTIONS) {
+console.log(`\n--- travel: ${DIR} ---`)
 console.log("pattern        consecΔ   verdict")
 for (const p of PATTERNS) {
-  await page.evaluate(t=>window.__styleHarness.setStyle({
+  await page.evaluate(([t,DIR])=>window.__styleHarness.setStyle({
     textureEnabled:true, textureMode:t, textureAnimated:true,
     textureScale:1.2, textureIntensity:0.7, textureContrast:0.55,
-    textureSpeed:1, textureDirection:"diagonal", textureLockMode:"object",
+    textureSpeed:1, textureDirection:DIR, textureLockMode:"object",
     motionMode:"independent", textureSyncMode:"independent",
     ditherEnabled:false, asciiEnabled:false, layerStackEnabled:false,
-  }), p)
+  }), [p,DIR])
   await page.waitForTimeout(600)
   const shots=[]
   for(let i=0;i<6;i++){await page.waitForTimeout(180);const u=await page.evaluate(()=>window.__captureHarness.grab());shots.push(Buffer.from(u.match(/base64,(.+)/)[1],"base64"))}
@@ -50,9 +57,9 @@ for (const p of PATTERNS) {
   const m=tot/(shots.length-1)
   const verdict = m<DEAD ? "DOES NOTHING" : m<WEAK ? "HARD TO NOTICE" : "clearly moves"
   if (m<WEAK) fail++
-  writeFileSync(`${OUT}/${p}_0.png`,shots[0]); writeFileSync(`${OUT}/${p}_3.png`,shots[3])
   console.log(`${p.padEnd(13)} ${m.toFixed(2).padStart(6)}   ${verdict}`)
 }
+}
 await b.close()
-console.log(fail===0 ? "\nALL TEXTURE ANIMATIONS CLEARLY MOVE" : `\n${fail}/12 STILL FAIL THE USER'S COMPLAINT`)
+console.log(fail===0 ? "\nALL TEXTURE ANIMATIONS CLEARLY MOVE IN EVERY DIRECTION" : `\n${fail}/36 STILL FAIL THE USER'S COMPLAINT`)
 process.exit(fail===0?0:1)

@@ -323,6 +323,31 @@ vec2 fsVoronoi(vec2 p) {
   return vec2(sqrt(f1), sqrt(f2));
 }
 
+/**
+ * Some patterns vary along ONE axis only: scanlines and bands are functions of
+ * co.y alone, and woodgrain and brushed are strongly y-dominant. Sliding such a
+ * pattern along its INVARIANT axis produces literally zero visible motion — the
+ * user picks "horizontal", the coordinate really does move, and the image does
+ * not change by a single pixel. That is the worst kind of control: one that
+ * responds to nothing.
+ *
+ * Rather than silently ignoring the choice, guarantee a component ACROSS the
+ * varying axis while keeping the user's intended sense. "Horizontal" on
+ * scanlines becomes a shallow diagonal: still reads as travelling sideways, but
+ * the lines actually sweep.
+ */
+vec2 fsTravelDir(vec2 d, float type) {
+  bool yVarying =
+    (type > 2.5 && type < 4.5) ||   // scanlines, bands
+    (type > 7.5 && type < 8.5) ||   // woodgrain
+    (type > 9.5 && type < 10.5);    // brushed
+  if (yVarying && abs(d.y) < 0.35) {
+    float sx = d.x >= 0.0 ? 1.0 : -1.0;
+    return normalize(vec2(d.x, 0.6 * sx));
+  }
+  return d;
+}
+
 float fsTexPattern(vec2 co, float type) {
   if (type < 1.5) {
     // grain: independent random value per tiny cell (film-grain speckle).
@@ -419,7 +444,9 @@ if (uFsTexType > 0.5) {
   vec2 fsCo = uFsTexLockScreen > 0.5
     ? gl_FragCoord.xy * 0.012
     : vFsObjPos.xy * 4.0;
-  vec2 fsDir = vec2(uFsTexDirX, uFsTexDirY);
+  // Guaranteed to have a component across the pattern's varying axis, so no
+  // direction choice can silently produce zero motion (see fsTravelDir).
+  vec2 fsDir = fsTravelDir(vec2(uFsTexDirX, uFsTexDirY), uFsTexType);
   fsCo = fsCo * uFsTexScale + fsDir * uFsTexTime;
   fsPat = fsTexPattern(fsCo, uFsTexType);
   // Contrast: expand/compress the pattern around mid-gray.
