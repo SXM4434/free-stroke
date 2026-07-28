@@ -985,328 +985,56 @@ export const RodEngine: GeometryEngine = {
 /* ------------------------------------------------------------------ */
 
 /* ============================================================
- * RASTERIZED RIBBON BUILDER (preferred path)
+ * EXTRUDE = CONTINUOUS RIBBON STRIP (the single strategy)
  *
- * The previous parametric offset (`buildRibbonShape`, retained below
- * as a last-resort fallback) computes left/right perpendicular offsets
- * of the polyline using average normals. For any handwriting stroke
- * with meaningful curvature whose segment lengths are short relative
- * to halfWidth, the inner-side offset edges fold over each other,
- * producing a self-intersecting polygon. `validateShapeContour` then
- * (correctly) rejected those polygons as "bad contour", and Extrude
- * silently fell back to Rod for nearly every normal stroke, giving
- * Z-extent = stroke diameter (NOT depth).
+ * HISTORY (2026-07): Extrude used to carry a four-deep strategy chain:
+ *   1. legacy parametric offset ribbon → THREE.ExtrudeGeometry
+ *   2. experimental rasterize-and-trace ribbon (behind a compile-time flag)
+ *   3. continuous-ribbon strip fallback
+ *   4. Rod emergency fallback
+ * Instrumentation across the full geometry-baseline battery (open C,
+ * closed O, near-touch, zigzag, scribble, loopy S, straight strokes,
+ * degenerate tick) showed the legacy path NEVER succeeded — every single
+ * stroke, including straight lines, fell through to continuous-ribbon.
+ * The raster path was unreachable (compile-time const never flipped).
+ * So the chain was collapsed: continuous-ribbon IS the Extrude engine,
+ * and Rod remains only for truly degenerate input (<2 usable samples).
  *
- * The rasterize-and-trace approach below is robust by construction:
- *   1. Rasterize the polyline at halfWidth thickness using a
- *      circular-disk brush stamped along every segment.
- *   2. Trace the outer boundary of the resulting filled region using
- *      Marching Squares (already used by SolidEngine — defined later
- *      in this file as `traceOuterBoundaryMarchingSquares`).
- *   3. Light Douglas-Peucker simplification (already defined later
- *      as `dpSimplify`) to remove jaggies.
- *   4. Wrap as a THREE.Shape, ensure CCW winding for ExtrudeGeometry.
+ * The strip builder was upgraded at the same time:
+ *   • JOINS   — proper miter offsets (halfWidth / cos(turn/2), clamped
+ *               at 2×halfWidth). The deprecated segmented builder used
+ *               halfWidth / sin(turn/2), which explodes on NEARLY
+ *               STRAIGHT vertices (sin→0) — that was the real cause of
+ *               the historical "spikes at every vertex" blob. cos(φ/2)
+ *               is ≈1 on smooth curves and only grows at genuine corners,
+ *               so the zigzag no longer pinches and smooth strokes are
+ *               untouched.
+ *   • CAPS    — rounded half-disk end caps (profile revolved around the
+ *               stroke endpoint), replacing the flat chopped-off quads.
+ *   • BEVEL   — the UI bevel toggle now does something again: it chamfers
+ *               the four long edges of the ribbon cross-section (octagonal
+ *               profile), carried around the end caps too.
  *
- * The mask is the union of disks stamped along the polyline, which
- * is always a connected, simply-connected region for a single
- * non-crossing stroke. Marching Squares on such a region returns a
- * simple closed polygon by construction — so triangulation never
- * fails on self-intersection.
+ * Output is centered on z=0 (range [-halfDepth, +halfDepth]); the caller
+ * does not translate. `halfWidth` IS the half-width: total cross-section
+ * width on a straight segment is exactly 2 × halfWidth.
  *
- * NOTE: The existing slider/visual convention treats `userWidth` as
- * the perpendicular offset (i.e., full ribbon = 2 × userWidth). The
- * rasterized builder preserves that convention to avoid changing the
- * visual size of strokes that were already working.
+ * Visual identity vs Rod: Rod is a circular tube; this ribbon has a
+ * rectangular (or chamfered-rectangular) cross-section, so silhouettes
+ * stay clearly distinct. Vs Solid: Solid is a depth-blind raster mask
+ * extrusion; the ribbon cross-section follows the stroke tangent, giving
+ * a calligraphic directionality Solid never produces.
  * ============================================================ */
 
-const RIBBON_RASTER_RESOLUTION = 256
-// World-space step along each polyline segment when stamping disks.
-// Smaller = smoother contour, more compute. ~0.35 of halfWidth ensures
-// every disk overlaps its neighbor enough that the union has no gaps.
-const RIBBON_RASTER_STEP_FRAC = 0.35
-// DP simplification tolerance in PIXELS (raster space). 0.6 keeps the
-// outline crisp without leaving tiny jitter spikes from the marching
-// squares mid-edge sampling.
-const RIBBON_RASTER_DP_TOLERANCE_PX = 0.6
-
-/* ============================================================
- * EXTRUDE GEOMETRY STRATEGY SWITCH
- *
- * Controls which shape-construction path Extrude uses.
- *
- *   LEGACY_OFFSET_RIBBON  (default)
- *     The original parametric perpendicular-offset ribbon. Produces a
- *     smooth, calligraphic-feeling extrusion with thin variable-width
- *     edges. May fall back to Rod on tightly curved strokes whose
- *     inner-side offsets self-intersect (caught by validateShapeContour).
- *     Visually closer to a "drawn" stroke than the Solid silhouette.
- *
- *   RASTER_TRACE_RIBBON   (experimental)
- *     Stamps a circular disk along the polyline at halfWidth, traces
- *     the union with marching squares, simplifies, and extrudes. Always
- *     produces a simple polygon so Extrude never falls back to Rod for
- *     normal handwriting. However it produces a chunkier, more uniform
- *     silhouette that visually resembles Solid mode (Solid uses the same
- *     rasterize-and-trace approach for its outer cap). Use only when the
- *     legacy path's rod-fallback rate is unacceptable for a given input.
- *
- *   ROD_FALLBACK_ONLY     (debug)
- *     Skips Extrude entirely; every stroke goes through buildRodGeometryData.
- *     Depth slider does NOT apply. For diagnostic comparison only.
- *
- * Default is LEGACY_OFFSET_RIBBON because (a) it preserves the previous
- * Extrude visual style users were accustomed to, and (b) it does not
- * make Extrude visually indistinguishable from Solid. The rasterized path
- * remains available behind this flag for evaluation.
- * ============================================================ */
-export const EXTRUDE_GEOMETRY_STRATEGY:
-  | "LEGACY_OFFSET_RIBBON"
-  | "RASTER_TRACE_RIBBON"
-  | "ROD_FALLBACK_ONLY" = "LEGACY_OFFSET_RIBBON"
-
-function strategyTag(): ExtrudeStrategyTag {
-  switch (EXTRUDE_GEOMETRY_STRATEGY) {
-    case "RASTER_TRACE_RIBBON": return "raster"
-    case "ROD_FALLBACK_ONLY":   return "rod-only"
-    case "LEGACY_OFFSET_RIBBON":
-    default:                    return "legacy"
-  }
+/** Clamp the chamfer (bevel) so the cross-section stays a valid octagon:
+ *  the chamfer eats `b` from each corner of the (2·halfWidth × depth)
+ *  profile, so it must stay well below both half-extents. */
+function clampChamfer(ep: ExtrudeParams, effectiveDepth: number, halfWidth: number): number {
+  const halfDepth = effectiveDepth / 2
+  const cap = 0.6 * Math.min(halfWidth, halfDepth)
+  if (!isFinite(ep.bevelSize)) return 0
+  return Math.max(0, Math.min(ep.bevelSize, cap))
 }
-
-/**
- * Rasterize a polyline at given perpendicular thickness into a binary mask.
- * Returns the mask and the world↔pixel transform (uniform scale + offset).
- */
-function rasterizeStrokeToRibbonMask(
-  pts: THREE.Vector3[],
-  halfWidth: number,
-  S: number = RIBBON_RASTER_RESOLUTION
-): { mask: boolean[]; minX: number; minY: number; scale: number } | null {
-  if (pts.length < 2 || halfWidth <= 0) return null
-
-  // World bbox of polyline + padding so the round brush never clips.
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-  for (const p of pts) {
-    if (p.x < minX) minX = p.x
-    if (p.x > maxX) maxX = p.x
-    if (p.y < minY) minY = p.y
-    if (p.y > maxY) maxY = p.y
-  }
-  const pad = halfWidth * 1.5
-  minX -= pad; maxX += pad
-  minY -= pad; maxY += pad
-
-  const sizeMax = Math.max(maxX - minX, maxY - minY)
-  if (!isFinite(sizeMax) || sizeMax <= 0) return null
-
-  // Uniform scale fits bbox into S-2 pixels (1px safety margin per side).
-  const scale = (S - 2) / sizeMax
-  const radiusPx = halfWidth * scale
-  if (radiusPx < 0.5) return null  // sub-pixel ribbon — not enough resolution
-
-  const mask = new Array(S * S).fill(false)
-  const r2 = radiusPx * radiusPx
-
-  const stampDisk = (wx: number, wy: number) => {
-    const cx = (wx - minX) * scale
-    const cy = (wy - minY) * scale
-    const x0 = Math.max(0, Math.floor(cx - radiusPx))
-    const x1 = Math.min(S - 1, Math.ceil(cx + radiusPx))
-    const y0 = Math.max(0, Math.floor(cy - radiusPx))
-    const y1 = Math.min(S - 1, Math.ceil(cy + radiusPx))
-    for (let y = y0; y <= y1; y++) {
-      const dy = y + 0.5 - cy
-      const dy2 = dy * dy
-      const row = y * S
-      for (let x = x0; x <= x1; x++) {
-        const dx = x + 0.5 - cx
-        if (dx * dx + dy2 <= r2) mask[row + x] = true
-      }
-    }
-  }
-
-  // Walk each segment, stamp disks at sub-halfWidth intervals so
-  // consecutive disks overlap and the union is gap-free.
-  const stepWorld = Math.max(1e-6, halfWidth * RIBBON_RASTER_STEP_FRAC)
-  // Always stamp at the very first vertex.
-  stampDisk(pts[0].x, pts[0].y)
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i]
-    const b = pts[i + 1]
-    const dx = b.x - a.x
-    const dy = b.y - a.y
-    const len = Math.sqrt(dx * dx + dy * dy)
-    if (len < 1e-9) continue
-    const steps = Math.max(1, Math.ceil(len / stepWorld))
-    for (let s = 1; s <= steps; s++) {
-      const t = s / steps
-      stampDisk(a.x + t * dx, a.y + t * dy)
-    }
-  }
-
-  return { mask, minX, minY, scale }
-}
-
-/**
- * Robust ribbon shape via rasterize → marching-squares → simplify.
- * Always returns a simple (non-self-intersecting) polygon for any single
- * stroke whose polyline does not self-cross, or null if the stroke is
- * too small to rasterize at the chosen resolution.
- *
- * NOTE: The slider convention here is `halfWidth` as perpendicular offset,
- * matching the legacy `buildRibbonShape` for visual compatibility. The
- * caller passes `userWidth` (slider value) as `halfWidth`, producing a
- * ribbon of full width 2 × userWidth — same as before.
- */
-function buildRasterizedRibbonShape(
-  pts: THREE.Vector3[],
-  halfWidth: number
-): THREE.Shape | null {
-  const raster = rasterizeStrokeToRibbonMask(pts, halfWidth)
-  if (!raster) return null
-
-  const pxContour = traceOuterBoundaryMarchingSquares(raster.mask, RIBBON_RASTER_RESOLUTION)
-  if (pxContour.length < 3) return null
-
-  // Light DP simplification in pixel space.
-  const simplifiedPx = dpSimplify(pxContour, RIBBON_RASTER_DP_TOLERANCE_PX)
-  if (simplifiedPx.length < 3) return null
-
-  // Pixel → world transform.
-  const worldPts = simplifiedPx.map((p) => ({
-    x: p.x / raster.scale + raster.minX,
-    y: p.y / raster.scale + raster.minY,
-  }))
-
-  // Marching squares traces clockwise in raster (Y-down) coords. Since we
-  // map raster-Y directly to world-Y (no flip), the resulting polygon's
-  // winding may be clockwise in math sense (negative signed area). THREE
-  // ExtrudeGeometry expects CCW outer contour. Reverse if needed.
-  let signed = 0
-  for (let i = 0, j = worldPts.length - 1; i < worldPts.length; j = i++) {
-    signed += (worldPts[j].x - worldPts[i].x) * (worldPts[j].y + worldPts[i].y)
-  }
-  signed *= 0.5
-  const ordered = signed < 0 ? worldPts : worldPts.slice().reverse()
-
-  const shape = new THREE.Shape()
-  shape.moveTo(ordered[0].x, ordered[0].y)
-  for (let i = 1; i < ordered.length; i++) {
-    shape.lineTo(ordered[i].x, ordered[i].y)
-  }
-  shape.closePath()
-  return shape
-}
-
-/**
- * Build a 2D ribbon outline (offset left/right of polyline by `halfWidth`).
- * Returns an array of 2D points forming a closed polygon.
- *
- * LEGACY parametric-offset implementation. Retained as last-resort fallback
- * only; the rasterized builder above is the primary path. See the comment
- * block above `rasterizeStrokeToRibbonMask` for why this approach fails on
- * normal handwriting strokes.
- */
-function buildRibbonShape(pts: THREE.Vector3[], halfWidth: number): THREE.Shape | null {
-  if (pts.length < 2) return null
-
-  const left: THREE.Vector2[] = []
-  const right: THREE.Vector2[] = []
-
-  for (let i = 0; i < pts.length; i++) {
-    let nx: number, ny: number
-
-    if (i === 0) {
-      // First point: normal from first segment
-      const dx = pts[1].x - pts[0].x
-      const dy = pts[1].y - pts[0].y
-      const len = Math.sqrt(dx * dx + dy * dy) || 1e-6
-      nx = -dy / len
-      ny = dx / len
-    } else if (i === pts.length - 1) {
-      // Last point: normal from last segment
-      const dx = pts[i].x - pts[i - 1].x
-      const dy = pts[i].y - pts[i - 1].y
-      const len = Math.sqrt(dx * dx + dy * dy) || 1e-6
-      nx = -dy / len
-      ny = dx / len
-    } else {
-      // Middle: average normals of adjacent segments
-      const dx1 = pts[i].x - pts[i - 1].x
-      const dy1 = pts[i].y - pts[i - 1].y
-      const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1e-6
-      const nx1 = -dy1 / len1
-      const ny1 = dx1 / len1
-
-      const dx2 = pts[i + 1].x - pts[i].x
-      const dy2 = pts[i + 1].y - pts[i].y
-      const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1e-6
-      const nx2 = -dy2 / len2
-      const ny2 = dx2 / len2
-
-      // Average
-      nx = (nx1 + nx2) * 0.5
-      ny = (ny1 + ny2) * 0.5
-      const nlen = Math.sqrt(nx * nx + ny * ny) || 1e-6
-      nx /= nlen
-      ny /= nlen
-    }
-
-    left.push(new THREE.Vector2(pts[i].x + nx * halfWidth, pts[i].y + ny * halfWidth))
-    right.push(new THREE.Vector2(pts[i].x - nx * halfWidth, pts[i].y - ny * halfWidth))
-  }
-
-  // Build closed polygon: left forward + right backward
-  const shape = new THREE.Shape()
-  shape.moveTo(left[0].x, left[0].y)
-  for (let i = 1; i < left.length; i++) {
-    shape.lineTo(left[i].x, left[i].y)
-  }
-  // Round end cap (semicircle at end)
-  const endCenter = new THREE.Vector2(
-    (left[left.length - 1].x + right[right.length - 1].x) / 2,
-    (left[left.length - 1].y + right[right.length - 1].y) / 2
-  )
-  shape.absarc(endCenter.x, endCenter.y, halfWidth, 
-    Math.atan2(left[left.length - 1].y - endCenter.y, left[left.length - 1].x - endCenter.x),
-    Math.atan2(right[right.length - 1].y - endCenter.y, right[right.length - 1].x - endCenter.x),
-    true
-  )
-  for (let i = right.length - 1; i >= 0; i--) {
-    shape.lineTo(right[i].x, right[i].y)
-  }
-  // Round start cap (semicircle at start)
-  const startCenter = new THREE.Vector2(
-    (left[0].x + right[0].x) / 2,
-    (left[0].y + right[0].y) / 2
-  )
-  shape.absarc(startCenter.x, startCenter.y, halfWidth,
-    Math.atan2(right[0].y - startCenter.y, right[0].x - startCenter.x),
-    Math.atan2(left[0].y - startCenter.y, left[0].x - startCenter.x),
-    true
-  )
-  shape.closePath()
-
-  return shape
-}
-
-/** Auto-clamp bevel so it doesn't exceed half the extrusion depth */
-function clampBevel(
-  ep: ExtrudeParams,
-  effectiveDepth: number,
-  effectiveWidth: number,
-): { bevelSize: number; bevelThickness: number; bevelSegments: number } {
-  // bevelSize: outward-radius. bevelThickness: per-end Z eat-in.
-  // Cap by BOTH the effective world depth (so end-caps don't collapse) AND
-  // the effective width (so bevel doesn't visually swallow a thin ribbon).
-  const maxByDepth = effectiveDepth * 0.4
-  const maxByWidth = effectiveWidth * 0.4
-  const cap = Math.min(maxByDepth, maxByWidth)
-  const bevelSize = Math.max(0, Math.min(ep.bevelSize, cap))
-  const bevelThickness = Math.max(0, Math.min(ep.bevelSize, bevelSize))
-  const bevelSegments = Math.min(ep.bevelSegments, 6)
-  return { bevelSize, bevelThickness, bevelSegments }
-  }
 
 /**
  * Map the slider width to an effective half-width used by geometry. Currently
@@ -1321,9 +1049,8 @@ function computeEffectiveWidth(_filtered: THREE.Vector3[], userWidth: number): n
   return Math.min(EXTRUDE_EFFECTIVE_WIDTH_CEILING, Math.max(EXTRUDE_EFFECTIVE_WIDTH_FLOOR, userWidth))
 }
 
-/* ---- Contour validation ---- */
-
-const EXTRUDE_CURVE_SEGMENTS = 12
+/* ---- Segment intersection (shared helper — also used by Solid via
+ *      segmentsIntersectPts) ---- */
 
 /** Proper segment-segment intersection test (excluding shared endpoints). */
 function segmentsIntersect(
@@ -1343,353 +1070,40 @@ function segmentsIntersect(
   return t > eps && t < 1 - eps && u > eps && u < 1 - eps
 }
 
-/** Check if a 2D contour has self-intersections (O(n^2) segment test). */
-function contourSelfIntersects(pts: THREE.Vector2[]): boolean {
-  const n = pts.length
-  if (n < 4) return false
-
-  for (let i = 0; i < n; i++) {
-    const a1 = pts[i]
-    const a2 = pts[(i + 1) % n]
-    for (let j = i + 2; j < n; j++) {
-      if (i === 0 && j === n - 1) continue // skip wrap-around adjacent
-      const b1 = pts[j]
-      const b2 = pts[(j + 1) % n]
-      if (segmentsIntersect(a1.x, a1.y, a2.x, a2.y, b1.x, b1.y, b2.x, b2.y)) {
-        return true
-      }
-    }
-  }
-  return false
-}
-
-/** Signed area of a 2D contour. */
-function contourSignedArea(pts: THREE.Vector2[]): number {
-  let area = 0
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y)
-  }
-  return area / 2
-}
-
-/** Remove near-duplicate consecutive points from a contour. */
-function deduplicateContour(pts: THREE.Vector2[], minDist = 1e-6): THREE.Vector2[] {
-  if (pts.length < 2) return pts
-  const out = [pts[0]]
-  for (let i = 1; i < pts.length; i++) {
-    if (pts[i].distanceTo(out[out.length - 1]) > minDist) {
-      out.push(pts[i])
-    }
-  }
-  return out
-}
+// Miter length capped at halfWidth / RIBBON_MITER_COS_MIN = 2 × halfWidth.
+// Beyond ~120° turns the miter stops growing (acts like a bevel join); on
+// smooth curves cos(turn/2) ≈ 1 so the offset stays exactly halfWidth.
+const RIBBON_MITER_COS_MIN = 0.5
+// Half-disk end-cap resolution (quad columns per cap).
+const RIBBON_CAP_SEGMENTS = 8
+// Subdivide segments whose endpoint turn exceeds 25° (single pass).
+const RIBBON_DENSIFY_ANGLE_THRESHOLD = 0.436
 
 /**
- * Validate a shape's flattened contour: no self-intersections, non-degenerate area,
- * enough unique vertices, reasonable edge lengths. Returns the deduplicated contour or null if invalid.
- */
-function validateShapeContour(shape: THREE.Shape): THREE.Vector2[] | null {
-  const raw = shape.getPoints(EXTRUDE_CURVE_SEGMENTS)
-  const pts = deduplicateContour(raw)
-  if (pts.length < 3) return null
-
-  // Reject near-zero area shapes
-  const area = Math.abs(contourSignedArea(pts))
-  if (area < 1e-6) return null
-
-  // Reject shapes where any edge is extremely short (causes triangulation issues)
-  const minEdge = 1e-5
-  for (let i = 0; i < pts.length; i++) {
-    const j = (i + 1) % pts.length
-    if (pts[i].distanceTo(pts[j]) < minEdge) return null
-  }
-
-  if (contourSelfIntersects(pts)) return null
-  return pts
-}
-
-/**
- * Post-extrude sanity check: detect degenerate "sheet" triangles by comparing
- * bounding box dimensions. A valid extrude should have reasonable XY extent
- * relative to its Z extent. If the geometry has huge flat triangles, the
- * XY bbox will be disproportionately large relative to what the stroke covers.
- */
-function isExtrudeGeometryDegenerate(
-  geo: THREE.BufferGeometry,
-  filtered: THREE.Vector3[],
-  depth: number
-): boolean {
-  geo.computeBoundingBox()
-  const bb = geo.boundingBox
-  if (!bb) return true
-
-  const sizeX = bb.max.x - bb.min.x
-  const sizeY = bb.max.y - bb.min.y
-  const sizeZ = bb.max.z - bb.min.z
-
-  // Compute expected stroke extent (from the filtered polyline)
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-  for (const p of filtered) {
-    if (p.x < minX) minX = p.x
-    if (p.x > maxX) maxX = p.x
-    if (p.y < minY) minY = p.y
-    if (p.y > maxY) maxY = p.y
-  }
-  const strokeExtentX = maxX - minX
-  const strokeExtentY = maxY - minY
-
-  // If the extruded geo is >3x the stroke extent in XY, it's probably a sheet
-  const margin = 3.0
-  if (sizeX > (strokeExtentX + 0.5) * margin) return true
-  if (sizeY > (strokeExtentY + 0.5) * margin) return true
-
-  // Z should be roughly depth (with bevel) — if it's wildly off, something broke
-  if (sizeZ > depth * 5) return true
-
-  return false
-}
-
-/**
- * Safely build an ExtrudeGeometry, catching any THREE.js triangulation errors.
- * Returns the geometry or null if construction fails or result is degenerate.
- */
-function safeExtrude(
-  shape: THREE.Shape,
-  options: THREE.ExtrudeGeometryOptions,
-  filtered: THREE.Vector3[],
-  depth: number
-): THREE.BufferGeometry | null {
-  try {
-    const geo = new THREE.ExtrudeGeometry(shape, options)
-    // Check for empty geometry
-    const posAttr = geo.attributes.position
-    if (!posAttr || posAttr.count < 3) {
-      geo.dispose()
-      return null
-    }
-    // Check for degenerate sheet artifacts
-    if (isExtrudeGeometryDegenerate(geo, filtered, depth)) {
-      geo.dispose()
-      return null
-    }
-    return geo
-  } catch {
-    return null
-  }
-}
-
-
-/**
- * @deprecated — replaced by `buildContinuousRibbonStripGeometry`.
+ * Build the Extrude ribbon: a single continuous shared-vertex strip mesh
+ * with mitered joins, rounded end caps, and an optional chamfered profile.
  *
- * Kept here only as historical reference. The implementation below
- * computed a per-vertex miter offset with `halfWidth / sin(angle/2)`
- * scaling clamped at ~2.86×halfWidth. That formula produces visible
- * spikes (up to ~2.86×halfWidth wide) at every sharp-turn vertex on
- * a loopy stroke, which compounded into the "blob" the user observed
- * even at low width/depth. The replacement clamps the offset at
- * exactly halfWidth, eliminating spikes.
- *
- * NOT CALLED. Safe to delete after one stable release.
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function _deprecatedBuildSegmentedRibbonGeometry(
-  pts: THREE.Vector3[],
-  halfWidth: number,
-  depth: number
-): THREE.BufferGeometry | null {
-  if (pts.length < 2 || halfWidth <= 0 || depth <= 0) return null
-
-  const halfDepth = depth / 2
-  const N = pts.length
-
-  // Per-vertex offset = perpendicular direction × miter length.
-  //
-  // For a vertex shared by tangents t1 (incoming) and t2 (outgoing), the
-  // CORRECT offset for an offset-curve ribbon is along the bisector NORMAL,
-  // with length = halfWidth / sin(angle/2). The previous implementation
-  // averaged the two unit perpendiculars and renormalized to halfWidth —
-  // which under-offsets the OUTER edge at sharp turns (creating notches)
-  // while the inner offsets self-overlap (creating chunky spikes). The
-  // miter formula fixes both.
-  //
-  // Sharp turns would otherwise produce a miter length that diverges as
-  // angle → 0. We clamp sin(angle/2) at MITER_CLAMP_SIN so the miter
-  // length is bounded at halfWidth / MITER_CLAMP_SIN. The visual cost of
-  // the clamp at very sharp corners is a slight inner overlap, which is
-  // already invisible inside a solid mesh body. The benefit is dramatic:
-  // no more corner explosions at moderate widths on loopy handwriting.
-  const MITER_CLAMP_SIN = 0.35  // ≈20° half-angle ⇒ miter capped at ~2.86×halfWidth
-  const perpX: number[] = new Array(N)
-  const perpY: number[] = new Array(N)
-  for (let i = 0; i < N; i++) {
-    // Incoming-segment tangent
-    let t1x = 0, t1y = 0, l1 = 0
-    if (i > 0) {
-      const dx = pts[i].x - pts[i - 1].x
-      const dy = pts[i].y - pts[i - 1].y
-      l1 = Math.hypot(dx, dy)
-      if (l1 > 0) { t1x = dx / l1; t1y = dy / l1 }
-    }
-    // Outgoing-segment tangent
-    let t2x = 0, t2y = 0, l2 = 0
-    if (i < N - 1) {
-      const dx = pts[i + 1].x - pts[i].x
-      const dy = pts[i + 1].y - pts[i].y
-      l2 = Math.hypot(dx, dy)
-      if (l2 > 0) { t2x = dx / l2; t2y = dy / l2 }
-    }
-
-    let pX = 0, pY = 0, miterLen = halfWidth
-    if (l1 > 0 && l2 > 0) {
-      // Both segments exist → proper miter at the join.
-      const bx = t1x + t2x
-      const by = t1y + t2y
-      const bLen = Math.hypot(bx, by)
-      if (bLen < 1e-6) {
-        // 180° reversal — bisector is undefined; fall back to first perp.
-        pX = -t1y
-        pY = t1x
-        miterLen = halfWidth
-      } else {
-        const ubx = bx / bLen
-        const uby = by / bLen
-        // Miter normal = bisector rotated 90° CCW
-        pX = -uby
-        pY = ubx
-        // sin(angle/2): half-angle between t1 and the bisector unit vector.
-        // dot(t1, bisector_unit) = cos(angle/2); sin = sqrt(1 - cos²).
-        const cosHalf = t1x * ubx + t1y * uby
-        const sinHalf = Math.sqrt(Math.max(0, 1 - cosHalf * cosHalf))
-        const effSin = Math.max(sinHalf, MITER_CLAMP_SIN)
-        miterLen = halfWidth / effSin
-      }
-    } else if (l1 > 0) {
-      // End vertex — perpendicular to incoming segment.
-      pX = -t1y
-      pY = t1x
-      miterLen = halfWidth
-    } else if (l2 > 0) {
-      // Start vertex — perpendicular to outgoing segment.
-      pX = -t2y
-      pY = t2x
-      miterLen = halfWidth
-    }
-
-    perpX[i] = pX * miterLen
-    perpY[i] = pY * miterLen
-  }
-
-  const positions: number[] = []
-  const indices: number[] = []
-
-  const pushV = (x: number, y: number, z: number): number => {
-    const idx = positions.length / 3
-    positions.push(x, y, z)
-    return idx
-  }
-
-  // CCW quad: a→b→c→d emits triangles (a,b,c) and (a,c,d). Caller is
-  // responsible for ordering vertices so cross(b-a, c-a) points outward.
-  const quad = (a: number, b: number, c: number, d: number) => {
-    indices.push(a, b, c, a, c, d)
-  }
-
-  // 4 vertices per polyline point: top (+Z) and bottom (-Z) on each side
-  //   Lp = left +halfDepth   Rp = right +halfDepth
-  //   Lm = left -halfDepth   Rm = right -halfDepth
-  // "Left" = the +perpendicular side, "right" = the -perpendicular side.
-  const Lp: number[] = new Array(N)
-  const Rp: number[] = new Array(N)
-  const Lm: number[] = new Array(N)
-  const Rm: number[] = new Array(N)
-  for (let i = 0; i < N; i++) {
-    const px = pts[i].x
-    const py = pts[i].y
-    const dx = perpX[i]
-    const dy = perpY[i]
-    Lp[i] = pushV(px + dx, py + dy, +halfDepth)
-    Rp[i] = pushV(px - dx, py - dy, +halfDepth)
-    Lm[i] = pushV(px + dx, py + dy, -halfDepth)
-    Rm[i] = pushV(px - dx, py - dy, -halfDepth)
-  }
-
-  // Four side faces between every consecutive pair of polyline vertices.
-  for (let i = 0; i < N - 1; i++) {
-    // Top face (z=+halfDepth, normal +Z)
-    quad(Lp[i], Rp[i], Rp[i + 1], Lp[i + 1])
-    // Bottom face (z=-halfDepth, normal -Z)
-    quad(Lm[i], Lm[i + 1], Rm[i + 1], Rm[i])
-    // Left side wall (+perp side, normal +perp)
-    quad(Lp[i], Lp[i + 1], Lm[i + 1], Lm[i])
-    // Right side wall (-perp side, normal -perp)
-    quad(Rp[i], Rm[i], Rm[i + 1], Rp[i + 1])
-  }
-
-  // Stroke end caps. The polyline only has two true ends; intermediate
-  // segment joints share verts via the miter-join offset above, so no
-  // intra-stroke caps are emitted.
-  quad(Lp[0], Lm[0], Rm[0], Rp[0])                       // start cap, normal -dir
-  quad(Lp[N - 1], Rp[N - 1], Rm[N - 1], Lm[N - 1])       // end cap, normal +dir
-
-  const geo = new THREE.BufferGeometry()
-  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
-  geo.setIndex(indices)
-  geo.computeVertexNormals()
-  geo.computeBoundingBox()
-  geo.computeBoundingSphere()
-
-  return geo
-}
-
-
-/* ============================================================
- * CONTINUOUS_RIBBON_STRIP — depth-aware shared-vertex strip
- *
- * This is the preferred Extrude fallback when the parametric offset
- * polygon self-intersects. It builds a SINGLE continuous extruded
- * ribbon — NOT a sequence of independent per-segment prisms — by
- * sharing the four cross-section vertices (top-left, top-right,
- * bottom-left, bottom-right) across consecutive polyline samples.
+ *   pts       — polyline samples (z ignored for offsets; strokes live in XY)
+ *   halfWidth — perpendicular offset; full ribbon width = 2 × halfWidth
+ *   depth     — total Z extent (output spans [-depth/2, +depth/2])
+ *   chamfer   — edge chamfer size (0 = sharp rectangular profile); callers
+ *               should pre-clamp via `clampChamfer`, but the builder clamps
+ *               defensively again.
  *
  * Why it doesn't blob:
- *   • Vertices are shared between adjacent quads → no overlapping
- *     "boxes" stacking up at every sample (the visual symptom the
- *     legacy implementation showed at loops).
- *   • Offset MAGNITUDE at each vertex is clamped to halfWidth.
- *     We deliberately do NOT use the geometric miter length
- *     halfWidth / sin(angle/2): at sharp turns sin(angle/2) → 0,
- *     so that formula produces spikes up to several × halfWidth
- *     at every vertex on a loop's curve. Clamping at halfWidth
- *     means the OUTER edge has a tiny inward notch at sharp turns
- *     (acceptable for MVP) while the per-vertex maximum offset
- *     stays constant — no spikes, no piling.
- *   • Zero-length input segments are filtered, which prevents NaN
- *     perpendiculars at duplicate samples (a common cause of
- *     degenerate triangles that render as black slivers).
- *   • Tight-turn densification subdivides any segment where the
- *     bisector turn at an endpoint exceeds DENSIFY_ANGLE_THRESHOLD,
- *     so the ribbon's outer-edge "notch" is small enough to be
- *     visually unnoticeable.
- *
- * Output is centered on z=0 (range [-halfDepth, +halfDepth]). The
- * caller does NOT need to translate the resulting geometry.
- *
- * Width semantics: `halfWidth` IS the half-width — total cross-section
- * width on a straight segment is exactly 2 × halfWidth.
- *
- * Visual identity vs Rod: Rod is a circular tube (radius ≈ halfWidth);
- * this ribbon has a rectangular cross-section (full 2×halfWidth wide,
- * `depth` tall), so even at the same width slider the silhouettes are
- * clearly distinct. Visual identity vs Solid: Solid is a depth-blind
- * raster→marching-squares mask extrusion; this ribbon preserves
- * directionality (the cross-section follows the stroke tangent),
- * giving it a calligraphic feel Solid never produces.
- * ============================================================ */
+ *   • Vertices are shared between adjacent quads → no overlapping boxes
+ *     stacking up at every sample.
+ *   • The miter uses halfWidth / cos(turn/2): ≈halfWidth on smooth curves,
+ *     growing only at genuine corners, clamped at 2×halfWidth.
+ *   • Zero-length input segments are filtered (prevents NaN perpendiculars).
+ *   • Tight-turn densification keeps per-vertex turns small so joins stay
+ *     visually smooth on loopy handwriting.
+ */
 function buildContinuousRibbonStripGeometry(
   pts: THREE.Vector3[],
   halfWidth: number,
-  depth: number
+  depth: number,
+  chamfer = 0
 ): THREE.BufferGeometry | null {
   if (pts.length < 2 || halfWidth <= 0 || depth <= 0) return null
 
@@ -1706,12 +1120,8 @@ function buildContinuousRibbonStripGeometry(
   if (filtered.length < 2) return null
 
   // 2) Tight-turn densification: subdivide segments whose endpoint
-  //    bisectors turn by more than DENSIFY_ANGLE_THRESHOLD radians.
-  //    A single pass of midpoint subdivision halves the per-segment
-  //    turn; for typical handwriting one pass is sufficient.
-  //    Threshold = 25° ≈ 0.436 rad.
-  const DENSIFY_ANGLE_THRESHOLD = 0.436
-  // Compute per-vertex turn angle (between incoming and outgoing tangents).
+  //    bisectors turn by more than the threshold. A single midpoint pass
+  //    halves the per-segment turn; for handwriting one pass suffices.
   const turnAngleAt = (arr: THREE.Vector3[], i: number): number => {
     if (i <= 0 || i >= arr.length - 1) return 0
     const ax = arr[i].x - arr[i - 1].x, ay = arr[i].y - arr[i - 1].y
@@ -1723,13 +1133,11 @@ function buildContinuousRibbonStripGeometry(
     if (cos < -1) cos = -1
     return Math.acos(cos)
   }
-  // Single subdivision pass. Insert midpoint of (i, i+1) when either
-  // endpoint exhibits a sharp turn.
   const densified: THREE.Vector3[] = [filtered[0]]
   for (let i = 0; i < filtered.length - 1; i++) {
     const ta = turnAngleAt(filtered, i)
     const tb = turnAngleAt(filtered, i + 1)
-    if (ta > DENSIFY_ANGLE_THRESHOLD || tb > DENSIFY_ANGLE_THRESHOLD) {
+    if (ta > RIBBON_DENSIFY_ANGLE_THRESHOLD || tb > RIBBON_DENSIFY_ANGLE_THRESHOLD) {
       const mx = (filtered[i].x + filtered[i + 1].x) * 0.5
       const my = (filtered[i].y + filtered[i + 1].y) * 0.5
       const mz = (filtered[i].z + filtered[i + 1].z) * 0.5
@@ -1741,77 +1149,154 @@ function buildContinuousRibbonStripGeometry(
   const samples = densified
   const N = samples.length
   const halfDepth = depth / 2
+  const b = Math.max(0, Math.min(chamfer, 0.6 * Math.min(halfWidth, halfDepth)))
 
-  // 3) Per-vertex offset: averaged unit perpendicular × halfWidth.
-  //    No 1/sin(angle/2) scaling — that produced spikes at sharp turns.
-  //    Magnitude is always exactly halfWidth, regardless of curvature.
+  // 3) Per-vertex MITERED offset along the averaged unit perpendicular.
+  //    For unit segment normals n1, n2: |n1 + n2| = 2·cos(turn/2), so the
+  //    averaged-normal length directly gives us the miter scale factor
+  //    1 / cos(turn/2) — no extra trig. Ends get plain halfWidth.
   const perpX: number[] = new Array(N)
   const perpY: number[] = new Array(N)
   for (let i = 0; i < N; i++) {
     let nx = 0, ny = 0
+    let hasIn = false, hasOut = false
     if (i > 0) {
       const dx = samples[i].x - samples[i - 1].x
       const dy = samples[i].y - samples[i - 1].y
       const l = Math.hypot(dx, dy)
-      if (l > 0) { nx += -dy / l; ny += dx / l }
+      if (l > 0) { nx += -dy / l; ny += dx / l; hasIn = true }
     }
     if (i < N - 1) {
       const dx = samples[i + 1].x - samples[i].x
       const dy = samples[i + 1].y - samples[i].y
       const l = Math.hypot(dx, dy)
-      if (l > 0) { nx += -dy / l; ny += dx / l }
+      if (l > 0) { nx += -dy / l; ny += dx / l; hasOut = true }
     }
     const len = Math.hypot(nx, ny)
     if (len > 1e-6) {
-      perpX[i] = (nx / len) * halfWidth
-      perpY[i] = (ny / len) * halfWidth
+      let scale = halfWidth
+      if (hasIn && hasOut) {
+        const cosHalf = Math.min(1, len / 2)
+        scale = halfWidth / Math.max(cosHalf, RIBBON_MITER_COS_MIN)
+      }
+      perpX[i] = (nx / len) * scale
+      perpY[i] = (ny / len) * scale
     } else {
-      // Truly degenerate vertex (no neighbors with length). Reuse
-      // previous vertex's perp if available; else zero.
+      // Truly degenerate vertex (180° reversal or no valid neighbors).
+      // Reuse previous vertex's perp if available; else zero.
       perpX[i] = i > 0 ? perpX[i - 1] : 0
       perpY[i] = i > 0 ? perpY[i - 1] : 0
     }
   }
 
-  // 4) Emit 4 vertices per sample: (left/right) × (top/bottom).
+  // 4) Cross-section profile rows, top → bottom, defined at the nominal
+  //    halfWidth as (inset from the offset edge, z). With chamfer b > 0 the
+  //    profile is an octagon; with b = 0 it is the plain rectangle.
+  const rows: { inset: number; z: number }[] = b > 0
+    ? [
+        { inset: b, z: +halfDepth },
+        { inset: 0, z: +halfDepth - b },
+        { inset: 0, z: -halfDepth + b },
+        { inset: b, z: -halfDepth },
+      ]
+    : [
+        { inset: 0, z: +halfDepth },
+        { inset: 0, z: -halfDepth },
+      ]
+  const RJ = rows.length
+
   const positions: number[] = []
-  const Lp: number[] = new Array(N)
-  const Rp: number[] = new Array(N)
-  const Lm: number[] = new Array(N)
-  const Rm: number[] = new Array(N)
+  const indices: number[] = []
   const pushV = (x: number, y: number, z: number): number => {
     const idx = positions.length / 3
     positions.push(x, y, z)
     return idx
   }
+  const quad = (a: number, b2: number, c: number, d: number) => {
+    indices.push(a, b2, c, a, c, d)
+  }
+  const quadF = (a: number, b2: number, c: number, d: number, flip: boolean) => {
+    if (flip) quad(d, c, b2, a)
+    else quad(a, b2, c, d)
+  }
+  const triF = (a: number, b2: number, c: number, flip: boolean) => {
+    if (flip) indices.push(c, b2, a)
+    else indices.push(a, b2, c)
+  }
+
+  // 5) Strip columns: L[row][sample] / R[row][sample]. Chamfer inset is
+  //    ABSOLUTE (b along the offset direction), applied to the mitered
+  //    magnitude m — m ≥ halfWidth > b so the inset never crosses center.
+  const L: number[][] = rows.map(() => new Array(N))
+  const R: number[][] = rows.map(() => new Array(N))
   for (let i = 0; i < N; i++) {
-    const x = samples[i].x, y = samples[i].y, dx = perpX[i], dy = perpY[i]
-    Lp[i] = pushV(x + dx, y + dy, +halfDepth)
-    Rp[i] = pushV(x - dx, y - dy, +halfDepth)
-    Lm[i] = pushV(x + dx, y + dy, -halfDepth)
-    Rm[i] = pushV(x - dx, y - dy, -halfDepth)
+    const x = samples[i].x, y = samples[i].y
+    const m = Math.hypot(perpX[i], perpY[i])
+    const ux = m > 0 ? perpX[i] / m : 0
+    const uy = m > 0 ? perpY[i] / m : 0
+    for (let j = 0; j < RJ; j++) {
+      const rad = m - rows[j].inset
+      L[j][i] = pushV(x + ux * rad, y + uy * rad, rows[j].z)
+      R[j][i] = pushV(x - ux * rad, y - uy * rad, rows[j].z)
+    }
   }
 
-  // 5) Faces between every consecutive pair of samples. The four quads
-  //    share their endpoints with the next pair → continuous strip,
-  //    no internal duplicated faces. Winding chosen so each face's
-  //    outward normal points away from the ribbon interior; verified
-  //    by right-hand rule on a +X-direction test segment.
-  const indices: number[] = []
-  const quad = (a: number, b: number, c: number, d: number) => {
-    indices.push(a, b, c, a, c, d)
-  }
+  // 6) Faces between consecutive samples. Shared endpoints → continuous
+  //    strip, no internal duplicated faces. Winding chosen so each face's
+  //    outward normal points away from the ribbon interior (verified by
+  //    right-hand rule on a +X-direction test segment).
   for (let i = 0; i < N - 1; i++) {
-    quad(Lp[i], Rp[i], Rp[i + 1], Lp[i + 1])   // top  face  (+Z normal)
-    quad(Lm[i], Lm[i + 1], Rm[i + 1], Rm[i])   // bot  face  (-Z normal)
-    quad(Lp[i], Lp[i + 1], Lm[i + 1], Lm[i])   // left wall  (+perp normal)
-    quad(Rp[i], Rm[i], Rm[i + 1], Rp[i + 1])   // right wall (-perp normal)
+    quad(L[0][i], R[0][i], R[0][i + 1], L[0][i + 1])                     // top    (+Z)
+    quad(L[RJ - 1][i], L[RJ - 1][i + 1], R[RJ - 1][i + 1], R[RJ - 1][i]) // bottom (-Z)
+    for (let j = 0; j < RJ - 1; j++) {
+      quad(L[j][i], L[j][i + 1], L[j + 1][i + 1], L[j + 1][i])           // left strips
+      quad(R[j][i], R[j + 1][i], R[j + 1][i + 1], R[j][i + 1])           // right strips
+    }
   }
 
-  // 6) Start / end caps. Strip ends only — intermediate samples share
-  //    cross-section vertices so no intra-strip caps are needed.
-  quad(Lp[0], Lm[0], Rm[0], Rp[0])
-  quad(Lp[N - 1], Rp[N - 1], Rm[N - 1], Lm[N - 1])
+  // 7) Rounded end caps: revolve the profile's outer edge half a turn
+  //    around the endpoint (from the L column, through the outward
+  //    tangent, to the R column), then close top/bottom with fans.
+  //    k=0 / k=K reuse the strip's own end-column vertices so the mesh
+  //    stays watertight and normal-smooth across the seam.
+  const addCap = (endIndex: number) => {
+    const e = samples[endIndex]
+    const m = Math.hypot(perpX[endIndex], perpY[endIndex])
+    if (m <= 0) return
+    const ux = perpX[endIndex] / m, uy = perpY[endIndex] / m
+    const nb = endIndex === 0 ? samples[1] : samples[endIndex - 1]
+    let dx = e.x - nb.x, dy = e.y - nb.y
+    const dl = Math.hypot(dx, dy)
+    if (dl <= 0) return
+    dx /= dl; dy /= dl
+    // Sweep handedness decides face winding (start cap mirrors end cap).
+    const flip = (ux * dy - uy * dx) > 0
+    const K = RIBBON_CAP_SEGMENTS
+    const cols: number[][] = []
+    cols.push(rows.map((_, j) => L[j][endIndex]))
+    for (let k = 1; k < K; k++) {
+      const th = (k / K) * Math.PI
+      const rx = ux * Math.cos(th) + dx * Math.sin(th)
+      const ry = uy * Math.cos(th) + dy * Math.sin(th)
+      cols.push(rows.map((row) => {
+        const rad = halfWidth - row.inset
+        return pushV(e.x + rx * rad, e.y + ry * rad, row.z)
+      }))
+    }
+    cols.push(rows.map((_, j) => R[j][endIndex]))
+    const top = pushV(e.x, e.y, +halfDepth)
+    const bot = pushV(e.x, e.y, -halfDepth)
+    for (let k = 0; k < K; k++) {
+      const a = cols[k], c = cols[k + 1]
+      triF(top, c[0], a[0], flip)                                 // top fan   (+Z)
+      triF(bot, a[RJ - 1], c[RJ - 1], flip)                       // bottom fan (-Z)
+      for (let j = 0; j < RJ - 1; j++) {
+        quadF(a[j], c[j], c[j + 1], a[j + 1], flip)               // cap wall/chamfer
+      }
+    }
+  }
+  addCap(0)
+  addCap(N - 1)
 
   const geo = new THREE.BufferGeometry()
   geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
@@ -1824,11 +1309,14 @@ function buildContinuousRibbonStripGeometry(
 
 
 /**
- * Try to build a valid ExtrudeGeometry for a stroke.
- * 1) If width < TINY_WIDTH_THRESHOLD, force bevel OFF to avoid degenerate extrusions.
- * 2) Try with bevel ON (if enabled and width not tiny).
- * 3) If fails and bevel was ON, retry with bevel OFF.
- * 4) If still fails, return rodFallback.
+ * Build the Extrude geometry for a stroke. Single strategy: the continuous
+ * ribbon strip (see block comment above). Rod fallback only fires for truly
+ * degenerate input (<2 usable samples after duplicate filtering) — for any
+ * real stroke the ribbon builder cannot fail.
+ *
+ * Bevel semantics: for widths under TINY_WIDTH_THRESHOLD the chamfer is
+ * forced off (a chamfer on a hairline ribbon just eats the whole profile);
+ * status reports `bevelOffTinyWidth` so the debug overlay can show why.
  */
 function tryBuildExtrudeGeometry(
   filtered: THREE.Vector3[],
@@ -1836,199 +1324,44 @@ function tryBuildExtrudeGeometry(
   userWidth: number,
   _si: number,
 ): { geometry: THREE.BufferGeometry | null; status: StrokeBuildStatus } {
-  // ---- Compute calibrated effective depth from multiplier ----
   // extrudeParams.depth is a width-relative multiplier; convert to world-space.
   const depthMultiplier = extrudeParams.depth
   const effectiveDepth = computeEffectiveExtrudeDepth(depthMultiplier, userWidth)
-  const halfDepth = effectiveDepth / 2
-  const bevel = clampBevel(extrudeParams, effectiveDepth, userWidth)
-  const fbRadius = fallbackRodRadius(userWidth)
-  const tag = strategyTag()
 
-  // ROD_FALLBACK_ONLY (debug strategy): never run Extrude; always emit a
-  // rodFallback status so the caller renders a TubeGeometry. Depth has no
-  // effect in this path — that is intentional and is the correct way to
-  // verify "this is what rod looks like" for visual comparison.
-  if (EXTRUDE_GEOMETRY_STRATEGY === "ROD_FALLBACK_ONLY") {
-    console.log(`[v0] stroke ${_si} final: rodFallback (strategy=rod-only)`)
-    return {
-      geometry: null,
-      status: {
-        type: "rodFallback",
-        reason: "strategy=rod-only",
-        fallbackRadius: fbRadius,
-        strategy: tag,
-        depthMultiplier,
-        effectiveDepth,
-      },
-    }
-  }
-
-  // Build the ribbon shape according to the active strategy.
-  //
-  // LEGACY_OFFSET_RIBBON (default):
-  //   - Try parametric offset builder. If it produces a simple polygon, use
-  //     THREE.ExtrudeGeometry → smooth calligraphic ribbon (the preferred
-  //     visual style).
-  //   - If contour self-intersects ("bad contour") OR extrusion fails, fall
-  //     back to the DEPTH-AWARE segmented builder, NOT Rod. This is the
-  //     critical fix: previously every loopy handwriting stroke fell back
-  //     to a depth-blind Rod tube and the Depth slider had no visible effect.
-  //   - Rod only remains as final fallback if BOTH parametric and segmented
-  //     refuse (essentially only for truly degenerate input).
-  //
-  // RASTER_TRACE_RIBBON:
-  //   - Use the rasterize-and-trace builder first (always simple by
-  //     construction). If raster declines (sub-pixel ribbon at 256-px
-  //     resolution), fall back to parametric, then validate; on bad contour,
-  //     also falls back to segmented; then Rod.
-  let shape: THREE.Shape | null = null
-  let shapeSource: "parametric" | "rasterized" = "parametric"
-
-  if (EXTRUDE_GEOMETRY_STRATEGY === "RASTER_TRACE_RIBBON") {
-    shape = buildRasterizedRibbonShape(filtered, userWidth)
-    if (shape) {
-      shapeSource = "rasterized"
-    } else {
-      shape = buildRibbonShape(filtered, userWidth)
-      shapeSource = "parametric"
-    }
-  } else {
-    // LEGACY_OFFSET_RIBBON
-    shape = buildRibbonShape(filtered, userWidth)
-    shapeSource = "parametric"
-  }
-
-  // Helper: depth-aware CONTINUOUS RIBBON STRIP fallback used when the
-  // parametric ribbon contour self-intersects or extrusion fails.
-  // Preserves Depth (Z extent ≈ effectiveDepth) and keeps a directional
-  // ribbon feel. Crucially, this is NOT a per-segment-prism builder —
-  // it produces a single shared-vertex strip mesh that does NOT visually
-  // blob at loops the way independent boxes would. See
-  // `buildContinuousRibbonStripGeometry` for the construction.
-  //
-  // Rod fallback is reserved for truly degenerate input (continuous-ribbon
-  // refused, i.e. <2 valid samples or zero depth/width).
-  const tryContinuousRibbonFallback = (reason: string): {
-    geometry: THREE.BufferGeometry | null
-    status: StrokeBuildStatus
-  } => {
-    const ribGeo = buildContinuousRibbonStripGeometry(filtered, userWidth, effectiveDepth)
-    if (ribGeo) {
-      console.log(`[v0] stroke ${_si} final: extrude(continuous-ribbon) (strategy=${tag}→continuous-ribbon)`, {
-        width: userWidth,
-        depthMultiplier,
-        effectiveDepth,
-        reason,
-      })
-      // bevelEnabled reported as false because the strip's side walls are
-      // perpendicular to the front/back faces with no rounded bevel; bevel
-      // slider does not affect this path.
-      return {
-        geometry: ribGeo,
-        status: {
-          type: "ok",
-          width: userWidth,
-          depth: effectiveDepth,
-          bevelEnabled: false,
-          strategy: "continuous-ribbon",
-          depthMultiplier,
-          effectiveDepth,
-        },
-      }
-    }
-    console.log(`[v0] stroke ${_si} final: rodFallback (strategy=${tag}, continuous-ribbon declined)`, { reason })
-    return {
-      geometry: null,
-      status: {
-        type: "rodFallback",
-        reason: `continuous-ribbon declined: ${reason}`,
-        fallbackRadius: fbRadius,
-        strategy: tag,
-        depthMultiplier,
-        effectiveDepth,
-      },
-    }
-  }
-
-  if (!shape) {
-    // Truly degenerate input — both shape builders refused. Try segmented
-    // (it accepts any polyline with ≥2 distinct points), else Rod.
-    return tryContinuousRibbonFallback("no shape")
-  }
-
-  // Validate contour ONLY for the parametric path. The rasterized polygon
-  // is simple by construction.
-  if (shapeSource === "parametric") {
-    const contour = validateShapeContour(shape)
-    if (!contour) {
-      // Legacy contour self-intersects. Previously this fell back to Rod
-      // (depth-blind). Now fall back to the depth-aware segmented builder
-      // so normal loopy handwriting still responds to the Depth slider.
-      return tryContinuousRibbonFallback("bad contour")
-    }
-  }
-
-  // For tiny widths, skip bevel entirely to avoid degenerate geometry
   const isTinyWidth = userWidth < TINY_WIDTH_THRESHOLD
   const useBevel = extrudeParams.bevelEnabled && !isTinyWidth
+  const chamfer = useBevel ? clampChamfer(extrudeParams, effectiveDepth, userWidth) : 0
 
-  // Attempt 1: with bevel (if enabled and not tiny)
-  if (useBevel) {
-    const geo1 = safeExtrude(shape, {
-      depth: effectiveDepth,
-      bevelEnabled: true,
-      bevelSize: bevel.bevelSize,
-      bevelThickness: bevel.bevelThickness,
-      bevelSegments: bevel.bevelSegments,
-      curveSegments: EXTRUDE_CURVE_SEGMENTS,
-    }, filtered, effectiveDepth)
-
-    if (geo1) {
-      geo1.translate(0, 0, -halfDepth)
-      console.log(`[v0] stroke ${_si} final: extrude (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth, bevelEnabled: true })
-      return {
-        geometry: geo1,
-        status: { type: "ok", width: userWidth, depth: effectiveDepth, bevelEnabled: true, strategy: tag, depthMultiplier, effectiveDepth },
-      }
-    }
-  }
-
-  // Attempt 2: bevel OFF (either because tiny width, or bevel attempt failed)
-  const geo2 = safeExtrude(shape, {
-    depth: effectiveDepth,
-    bevelEnabled: false,
-    curveSegments: EXTRUDE_CURVE_SEGMENTS,
-  }, filtered, effectiveDepth)
-
-  if (geo2) {
-    geo2.translate(0, 0, -halfDepth)
+  const geo = buildContinuousRibbonStripGeometry(filtered, userWidth, effectiveDepth, chamfer)
+  if (geo) {
     if (isTinyWidth && extrudeParams.bevelEnabled) {
-      console.log(`[v0] stroke ${_si} final: extrude(bevelOffTinyWidth) (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth })
+      console.log(`[v0] stroke ${_si} final: extrude(bevelOffTinyWidth) (strategy=continuous-ribbon)`, { width: userWidth, depthMultiplier, effectiveDepth })
       return {
-        geometry: geo2,
-        status: { type: "bevelOffTinyWidth", width: userWidth, depth: effectiveDepth, strategy: tag, depthMultiplier, effectiveDepth },
+        geometry: geo,
+        status: { type: "bevelOffTinyWidth", width: userWidth, depth: effectiveDepth, strategy: "continuous-ribbon", depthMultiplier, effectiveDepth },
       }
     }
-    if (useBevel) {
-      console.log(`[v0] stroke ${_si} final: extrude(bevelOff) (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth })
-      return {
-        geometry: geo2,
-        status: { type: "bevelOff", width: userWidth, depth: effectiveDepth, strategy: tag, depthMultiplier, effectiveDepth },
-      }
-    }
-    console.log(`[v0] stroke ${_si} final: extrude (strategy=${tag})`, { width: userWidth, depthMultiplier, effectiveDepth, bevelEnabled: false })
+    console.log(`[v0] stroke ${_si} final: extrude(continuous-ribbon)`, { width: userWidth, depthMultiplier, effectiveDepth, chamfer })
     return {
-      geometry: geo2,
-      status: { type: "ok", width: userWidth, depth: effectiveDepth, bevelEnabled: false, strategy: tag, depthMultiplier, effectiveDepth },
+      geometry: geo,
+      status: { type: "ok", width: userWidth, depth: effectiveDepth, bevelEnabled: chamfer > 0, strategy: "continuous-ribbon", depthMultiplier, effectiveDepth },
     }
   }
 
-  // safeExtrude returned null even with bevel off and a valid contour.
-  // This is rare (degenerate triangulation in THREE.ExtrudeGeometry). Use
-  // segmented as a final depth-aware fallback before resorting to Rod, so
-  // even pathological strokes still respond to the Depth slider.
-  return tryContinuousRibbonFallback("extrude failed")
+  // Truly degenerate input — render a Rod tube so SOMETHING shows.
+  const fbRadius = fallbackRodRadius(userWidth)
+  console.log(`[v0] stroke ${_si} final: rodFallback (continuous-ribbon declined: degenerate input)`)
+  return {
+    geometry: null,
+    status: {
+      type: "rodFallback",
+      reason: "continuous-ribbon declined: degenerate input",
+      fallbackRadius: fbRadius,
+      strategy: "continuous-ribbon",
+      depthMultiplier,
+      effectiveDepth,
+    },
+  }
 }
 
 /** Derive fallback rod radius from extrude width so Width slider affects fallback strokes too */

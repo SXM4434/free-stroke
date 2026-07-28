@@ -2136,3 +2136,75 @@ scroll 60.0, cycle 46.1, rain 35.5, flicker 13.7.
 ### Final locked checkpoint label
 
 `CRAFT_PASS_DITHER_AND_ASCII_STRENGTH`
+
+---
+
+## LOCKED CHECKPOINT — `ENGINE_PASS_2_EXTRUDE_JOINS_CAPS_AND_STRATEGY_COLLAPSE`
+
+**Status: Extrude polished and its dead strategy chain removed.** 885 lines
+deleted, 218 added. Rod / Solid / Inflate untouched and byte-identical.
+
+### The strategy chain was 100% dead weight
+
+Instrumented live across all 8 baseline shapes: **every stroke — including
+straight lines and the 6-point degenerate tick — ran `legacy → continuous-ribbon`.**
+The "preferred" legacy parametric `buildRibbonShape` → `THREE.ExtrudeGeometry`
+path **never once succeeded** (its self-built contour always failed
+`validateShapeContour`); the raster-trace strategy was **unreachable** (a
+compile-time const never flipped); Rod fallback effectively never fired.
+
+Continuous-ribbon IS the Extrude engine now. Removed: `rasterizeStrokeToRibbonMask`,
+`buildRasterizedRibbonShape`, `buildRibbonShape`, `EXTRUDE_GEOMETRY_STRATEGY`,
+`validateShapeContour` + four contour helpers, `safeExtrude`,
+`isExtrudeGeometryDegenerate`, `_deprecatedBuildSegmentedRibbonGeometry`. Kept
+`segmentsIntersect` (Solid uses it), the `ExtrudeStrategyTag` type (debug
+overlay), and Rod fallback strictly for <2-sample input.
+
+### The years-old "spikes/blob" mystery, solved
+
+The deprecated miter used `halfWidth / sin(φ/2)` — which **DIVERGES on
+nearly-straight vertices** — where it needed `halfWidth / cos(φ/2)`. That single
+error is why miters were abandoned in this codebase and replaced with the
+pinch-prone clamp that has been degrading corners ever since.
+
+### Fixes
+
+- **Joins**: correct miter (`halfWidth / cos(φ/2)`, clamped 2x, obtained free
+  from the averaged-normal length since `|n1+n2| = 2cos(φ/2)`). Corners were
+  pinching to ~70% width with bright artifacts; they are now full-width and
+  sharp. Compare `extrude_before/zigzag_extrude.png` → `extrude_after/`.
+- **Caps**: flat chopped quads → rounded half-disks (profile revolved around the
+  endpoint, watertight, winding handled per cap handedness).
+- **Twist**: impossible by construction (offsets planar XY, Z constant);
+  confirmed edge-on.
+- **Bevel toggle was doing NOTHING** — continuous-ribbon ignored it. It now
+  switches a sharp rectangular profile against a chamfered octagonal one,
+  carried around the caps too. Verified by clicking the real button.
+
+### Cost
+
+Extrude export bytes roughly doubled (openC 28→57 KB, scribble 131→262 KB).
+That is the octagonal chamfer (4→8 verts/sample, bevel ON by default) plus round
+caps — bought function, not waste. Extrude remains by far the lightest mode
+(59 KB vs Rod's 704 KB on the gate export).
+
+### Verification
+
+`verify-gates.mjs` ALL PASS. Geometry net: Rod/Solid/Inflate `=` on every metric
+for every shape. Live headed orbit inspection (front, ~50° right, upper grazing,
+edge-on) on zigzag / loopyS / scribble, plus a bevel-off pass and a
+25/50/75/100% reveal sweep — partial reveals cap correctly, so the animation
+contract holds. Stills in `docs/verification/geometry/extrude_orbit/`.
+
+### Still weak
+
+- Tiny tan flecks at extreme corner tips (pre-existing, present in the before
+  PNGs). Mesh is watertight there; reads as clamped-miter chamfer normals
+  catching the warm ground reflection. A true fix is arc-fan round JOINS at
+  clamp-triggering corners (~40 lines).
+- Overlapping scribble regions are coplanar overlap, not a real union. Invisible
+  today; a CSG union is the principled fix if styles ever make it show.
+
+### Final locked checkpoint label
+
+`ENGINE_PASS_2_EXTRUDE_JOINS_CAPS_AND_STRATEGY_COLLAPSE`
