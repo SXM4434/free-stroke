@@ -61,6 +61,7 @@ import {
   resolveSyncMode,
   type StyleClock,
 } from "@/lib/style-clock"
+import { evaluateFusion } from "@/lib/style-fusion"
 
 
 /**
@@ -472,6 +473,14 @@ function AnimatedStrokes({
   // behaviours (fade, drift, loop) measure from here, so enabling one mid-session
   // actually plays instead of starting already finished.
   const stackArmRef = useRef<{ key: string; at: number }>({ key: "", at: 0 })
+  // When the current FUSION preset (or its animated flag) was selected.
+  // Choreographies measure from here as well as from the reveal, so picking an
+  // animated fusion on a long-finished stroke still PLAYS its build instead of
+  // showing a build that had always already finished.
+  const fusionArmRef = useRef<{ key: string; at: number }>({ key: "", at: 0 })
+  // True while fusion has overridden the sweep-band direction — lets the next
+  // non-fusion frame restore the default axis instead of leaking it.
+  const fusionSweepDirRef = useRef(false)
   const styleClockRef = useRef<StyleClock | null>(null)
   if (styleClockRef.current === null) {
     styleClockRef.current = createStyleClock()
@@ -737,6 +746,52 @@ function AnimatedStrokes({
       a.uFsAscBlend.value = stack ? stack.asciiBlend : 0
     }
 
+    // ---- FUSION (PRD phases 20/21) --------------------------------------
+    // Fusion = systems influencing each other: a modulation layer computed on
+    // the CPU each frame (lib/style-fusion.ts) and applied ON TOP of the
+    // uniform values the three systems just resolved above. It never forks a
+    // renderer and never touches geometry — same uniforms-only contract as
+    // everything else in this loop. The `signals` argument hands the engine
+    // the values the layers are ACTUALLY rendering with this frame, so a
+    // driven parameter is literally derived from the driver's live output.
+    let fusionFrame: ReturnType<typeof evaluateFusion> = null
+    if (styleState && styleState.fusionPreset !== "none") {
+      const fuseKey = `${styleState.fusionPreset}:${styleState.fusionAnimationEnabled}`
+      if (fusionArmRef.current.key !== fuseKey) {
+        fusionArmRef.current = { key: fuseKey, at: clock.elapsed }
+      }
+      fusionFrame = evaluateFusion(
+        styleState,
+        clock,
+        {
+          asciiTime: asciiUniformsRef.current!.uFsAscTime.value,
+          ditherTime: ditherUniformsRef.current!.uFsDitTime.value,
+          textureTime: textureUniformsRef.current!.uFsTexTime.value,
+        },
+        clock.elapsed - fusionArmRef.current.at,
+      )
+    } else {
+      fusionArmRef.current = { key: "", at: 0 }
+    }
+    if (fusionFrame) {
+      const fz = fusionFrame
+      const u = textureUniformsRef.current!
+      const d = ditherUniformsRef.current!
+      const a = asciiUniformsRef.current!
+      u.uFsTexIntensity.value *= fz.textureIntensityMul
+      u.uFsTexScale.value *= fz.textureScaleMul
+      u.uFsTexTime.value += fz.textureTimeAdd
+      d.uFsDitIntensity.value *= fz.ditherIntensityMul
+      d.uFsDitThreshold.value += fz.ditherThresholdAdd
+      d.uFsDitScale.value *= fz.ditherScaleMul
+      d.uFsDitTime.value += fz.ditherTimeAdd
+      a.uFsAscDensity.value = Math.min(
+        1,
+        Math.max(0, a.uFsAscDensity.value + fz.asciiDensityAdd),
+      )
+      a.uFsAscTime.value += fz.asciiTimeAdd
+    }
+
     // ---- Animated Material v1 (surface response only) -------------------
     // PREVIEW-ONLY: this modulates highlight/roughness/sheen/emissive each
     // frame. It NEVER touches geometry, the reveal clock, or export. When the
@@ -831,7 +886,10 @@ function AnimatedStrokes({
         // Animation off → pin the surface to its static base so it never
         // freezes on the last animated frame. Pins EVERY field an animation
         // can touch (metalness/emissive/sheenColor were previously left
-        // stuck at their last animated values).
+        // stuck at their last animated values). Color is pinned too:
+        // roughnessPulse darkens it (wet look) and fusion scales it, so
+        // without the pin either would leak into later frames.
+        liveMaterial.color.set(baseParams.color)
         liveMaterial.roughness = baseParams.roughness
         liveMaterial.metalness = baseParams.metalness
         liveMaterial.clearcoat = baseParams.clearcoat
@@ -844,6 +902,59 @@ function AnimatedStrokes({
         liveMaterial.emissiveIntensity = baseParams.emissiveIntensity
         liveMaterial.envMapIntensity = baseParams.envMapIntensity
         liveMaterial.iridescence = baseParams.iridescence ?? 0
+      }
+
+      // ---- Fusion: material half of the relationships -------------------
+      // Applied AFTER the animated-material/base writes above, so fusion's
+      // surface response (shine following a threshold signal, wet darkening,
+      // glow surges) modulates whatever this frame's surface already is.
+      // Color/emissive are safe to scale because both branches above set
+      // them fresh every frame — nothing accumulates.
+      if (fusionFrame) {
+        const fz = fusionFrame
+        const c01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
+        liveMaterial.clearcoat = c01(liveMaterial.clearcoat + fz.clearcoatAdd)
+        liveMaterial.roughness = c01(liveMaterial.roughness + fz.roughnessAdd)
+        liveMaterial.envMapIntensity += fz.envMapAdd
+        liveMaterial.sheen = c01(liveMaterial.sheen + fz.sheenAdd)
+        liveMaterial.metalness = c01(liveMaterial.metalness + fz.metalnessAdd)
+        if (fz.colorScale !== 1) liveMaterial.color.multiplyScalar(fz.colorScale)
+        if (fz.emissiveAdd > 0) {
+          // Give black-emissive bases the preset's own glow colour, so the
+          // angle-independent half of every shine relationship actually reads.
+          const em = liveMaterial.emissive
+          if (em.r === 0 && em.g === 0 && em.b === 0 && fz.emissiveColor) {
+            em.set(fz.emissiveColor)
+          }
+          liveMaterial.emissiveIntensity += fz.emissiveAdd
+        }
+        // Shine band locked to a moving layer field (ASCII Rubber): position,
+        // direction and strength come from the fusion frame — overriding the
+        // material-animation sweep, which fusion supersedes while active.
+        const sw = sweepUniformsRef.current!
+        if (fz.sweep) {
+          sw.uFsSweepPos.value = fz.sweep.pos
+          sw.uFsSweepAmt.value = fz.sweep.amt
+          sw.uFsSweepWidth.value = fz.sweep.width
+          sw.uFsSweepDirX.value = fz.sweep.dirX
+          sw.uFsSweepDirY.value = fz.sweep.dirY
+          if (bounds) {
+            sw.uFsSweepCx.value = bounds.center.x
+            sw.uFsSweepCy.value = bounds.center.y
+            sw.uFsSweepR.value = Math.max(bounds.radius, 0.0001)
+          }
+          fusionSweepDirRef.current = true
+        } else if (fusionSweepDirRef.current) {
+          // Restore the default sweep axis once fusion stops driving it.
+          sw.uFsSweepDirX.value = 0.87
+          sw.uFsSweepDirY.value = 0.5
+          fusionSweepDirRef.current = false
+        }
+      } else if (fusionSweepDirRef.current) {
+        const sw = sweepUniformsRef.current!
+        sw.uFsSweepDirX.value = 0.87
+        sw.uFsSweepDirY.value = 0.5
+        fusionSweepDirRef.current = false
       }
     }
 

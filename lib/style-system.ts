@@ -169,12 +169,25 @@ export type AsciiAnimationType =
   | "flicker"
   | "revealDensity"
 
+/**
+ * FusionPreset — FUSION (IMPLEMENTED, PRD phases 20/21). Fusion is systems
+ * INFLUENCING each other — one layer's per-frame output value becomes another
+ * layer's input (glyph density driving dither threshold, a threshold signal
+ * driving material shine). Distinct from the layer stack (coexistence) and
+ * stack animation (the group moves uniformly). The relationships live in
+ * lib/style-fusion.ts (`evaluateFusion`); each id below names ONE authored
+ * relationship, not a bag of saved sliders.
+ */
 export type FusionPreset =
   | "none"
-  | "inkBleed"
-  | "gelMelt"
-  | "claySinter"
-  | "signalGlitch"
+  | "terminalGel"
+  | "ditherBloom"
+  | "signalInk"
+  | "asciiRubber"
+  | "scanlineBalloon"
+  | "pixelClay"
+  | "codeBloom"
+  | "glitchRibbon"
 
 /**
  * StackAnimationType — how the WHOLE layer group animates as a container.
@@ -840,10 +853,14 @@ export const ASCII_PRESETS: PresetShell<AsciiCharset>[] = [
 
 export const FUSION_PRESETS: PresetShell<FusionPreset>[] = [
   { id: "none", label: "None" },
-  { id: "inkBleed", label: "Ink Bleed" },
-  { id: "gelMelt", label: "Gel Melt" },
-  { id: "claySinter", label: "Clay Sinter" },
-  { id: "signalGlitch", label: "Signal Glitch" },
+  { id: "terminalGel", label: "Terminal Gel" },
+  { id: "ditherBloom", label: "Dither Bloom" },
+  { id: "signalInk", label: "Signal Ink" },
+  { id: "asciiRubber", label: "ASCII Rubber" },
+  { id: "scanlineBalloon", label: "Scanline Balloon" },
+  { id: "pixelClay", label: "Pixel Clay" },
+  { id: "codeBloom", label: "Code Bloom" },
+  { id: "glitchRibbon", label: "Glitch Ribbon" },
 ]
 
 /* ====================================================================== */
@@ -2219,27 +2236,347 @@ export const STACK_ANIMATION_PRESET_DEFS: StylePreset[] = [
   },
 ]
 
-/* --- fusion (definitions only) --- */
+/* --- fusion (IMPLEMENTED — PRD phase 20) ---
+ * Each preset is a CONCEPT: a base composition (reusing numbers validated in
+ * the stack/dither/ascii craft passes — glyph cells >=13px, explicit
+ * ditherExposure everywhere dither is on, densities matched to the body's
+ * real brightness) PLUS one authored relationship evaluated per frame in
+ * lib/style-fusion.ts. The `applies` patch sets the composition and selects
+ * the relationship via `fusionPreset`; the engine does the linking. Every
+ * patch also resets the systems the concept does NOT use, so a fusion preset
+ * is a complete look, not an additive pile. */
+const FUSION_BASE: Partial<StyleState> = {
+  fusionAnimationEnabled: false,
+  fusionAnimationSpeed: 1,
+  fusionIntensity: 0.6,
+  // Fusion's ambient drives need a running style clock; "off" freezes them.
+  motionMode: "independent",
+  textureEnabled: false,
+  textureMode: "none",
+  textureAnimated: false,
+  ditherEnabled: false,
+  ditherAnimated: false,
+  asciiEnabled: false,
+  asciiAnimated: false,
+  asciiAnimationType: "none",
+  layerStackEnabled: false,
+  stackAnimationEnabled: false,
+}
+
 export const FUSION_PRESET_DEFS: StylePreset[] = [
-  { id: "terminalGel", label: "Terminal Gel", family: "fusion", enabled: true, implemented: false },
-  { id: "ditherBloom", label: "Dither Bloom", family: "fusion", enabled: true, implemented: false },
-  { id: "signalInk", label: "Signal Ink", family: "fusion", enabled: true, implemented: false },
-  { id: "asciiRubber", label: "ASCII Rubber", family: "fusion", enabled: true, implemented: false },
-  { id: "scanlineBalloon", label: "Scanline Balloon", family: "fusion", enabled: true, implemented: false },
-  { id: "pixelClay", label: "Pixel Clay", family: "fusion", enabled: true, implemented: false },
-  { id: "codeBloom", label: "Code Bloom", family: "fusion", enabled: true, implemented: false },
-  { id: "glitchRibbon", label: "Glitch Ribbon", family: "fusion", enabled: true, implemented: false },
+  {
+    id: "terminalGel",
+    label: "Terminal Gel",
+    family: "fusion",
+    enabled: true,
+    implemented: true,
+    description:
+      "A terminal readout suspended in gel: glyph density drives the gel's shine — the surface glosses and glows exactly as the characters thicken.",
+    bestModes: ["inflate"],
+    applies: {
+      ...FUSION_BASE,
+      fusionPreset: "terminalGel",
+      materialPreset: "softGel",
+      materialUserOverride: true,
+      asciiEnabled: true,
+      asciiCharset: "classic",
+      asciiCellSize: 13,
+      asciiDensity: 0.5,
+      asciiContrast: 0.6,
+      asciiLockMode: "screen",
+    },
+  },
+  {
+    id: "ditherBloom",
+    label: "Dither Bloom",
+    family: "fusion",
+    enabled: true,
+    implemented: true,
+    description:
+      "Wet print: the halftone threshold blooms open and closed, and the surface wets and gloss-darkens from the same threshold signal.",
+    bestModes: ["solid", "extrude"],
+    applies: {
+      ...FUSION_BASE,
+      fusionPreset: "ditherBloom",
+      materialPreset: "matteClay",
+      materialUserOverride: true,
+      ditherEnabled: true,
+      ditherType: "halftone",
+      ditherScale: 6,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherContrast: 0.5,
+      ditherThreshold: 0.5,
+      // The tone-mapped clay body reads far brighter than its albedo (the
+      // Woodcut lesson): at 0.58 the dots pooled only in the shadows and the
+      // bloom had nothing to flood. 0.42 spreads dot structure across the
+      // whole form so the ink visibly floods and recedes (judged live).
+      ditherExposure: 0.42,
+      ditherAngle: 45,
+      ditherLockMode: "screen",
+    },
+  },
+  {
+    id: "signalInk",
+    label: "Signal Ink",
+    family: "fusion",
+    enabled: true,
+    implemented: true,
+    description:
+      "Ink carrying a live signal: each energy burst washes the data pattern out of the ink, and the pattern floods back as the glow decays — one wire, two systems on opposite ends.",
+    bestModes: ["rod", "extrude"],
+    applies: {
+      ...FUSION_BASE,
+      fusionPreset: "signalInk",
+      materialPreset: "signal",
+      materialUserOverride: true,
+      ditherEnabled: true,
+      ditherAnimated: true,
+      ditherType: "bayer8",
+      ditherScale: 5,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherContrast: 0.6,
+      ditherThreshold: 0.5,
+      // Signal's emissive-lit teal body reads bright: keep the ramp high side.
+      ditherExposure: 0.65,
+      ditherSpeed: 0.5,
+      ditherDirection: "horizontal",
+      ditherLockMode: "screen",
+    },
+  },
+  {
+    id: "asciiRubber",
+    label: "ASCII Rubber",
+    family: "fusion",
+    enabled: true,
+    implemented: true,
+    description:
+      "A rubber skin with a current of characters under it: the shine band is positioned from the glyph grid's own scroll phase, so light travels WITH the characters.",
+    bestModes: ["inflate", "rod"],
+    applies: {
+      ...FUSION_BASE,
+      fusionPreset: "asciiRubber",
+      materialPreset: "rubber",
+      materialUserOverride: true,
+      asciiEnabled: true,
+      asciiAnimated: true,
+      asciiAnimationType: "scroll",
+      asciiCharset: "minimal",
+      asciiCellSize: 13,
+      // Dark rubber body needs the dense end of the ramp (Soft Signal pass).
+      asciiDensity: 0.9,
+      asciiContrast: 0.55,
+      asciiScrollSpeed: 0.9,
+      asciiDirection: "horizontal",
+      asciiLockMode: "screen",
+    },
+  },
+  {
+    id: "scanlineBalloon",
+    label: "Scanline Balloon",
+    family: "fusion",
+    enabled: true,
+    implemented: true,
+    description:
+      "An inflated skin with scanlines printed on it: one breath signal spreads and packs the lines while the stretched skin shines and glows.",
+    bestModes: ["inflate"],
+    applies: {
+      ...FUSION_BASE,
+      fusionPreset: "scanlineBalloon",
+      materialPreset: "softGel",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "scanlines",
+      textureScale: 1.0,
+      textureIntensity: 0.75,
+      textureContrast: 0.7,
+    },
+  },
+  {
+    id: "pixelClay",
+    label: "Pixel Clay",
+    family: "fusion",
+    enabled: true,
+    implemented: true,
+    description:
+      "Clay mid-digitisation: one signal chunks the dither pixels, dissolves the grain, and sinters the surface wet-dark — three systems on one driver.",
+    bestModes: ["solid"],
+    applies: {
+      ...FUSION_BASE,
+      fusionPreset: "pixelClay",
+      materialPreset: "matteClay",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "grain",
+      textureScale: 1.6,
+      textureIntensity: 0.6,
+      textureContrast: 0.6,
+      ditherEnabled: true,
+      ditherType: "bayer8",
+      ditherScale: 5,
+      ditherLevels: 2,
+      ditherIntensity: 0.9,
+      ditherContrast: 0.45,
+      ditherThreshold: 0.5,
+      ditherExposure: 0.58,
+      ditherLockMode: "screen",
+      layerStackEnabled: true,
+      stackTextureOpacity: 0.6,
+      stackDitherOpacity: 0.95,
+      stackDitherBlend: "normal",
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "codeBloom",
+    label: "Code Bloom",
+    family: "fusion",
+    enabled: true,
+    implemented: true,
+    description:
+      "Source code blooming on the surface: glyph density DRIVES the dither threshold — the stipple under the characters densifies exactly as they thicken.",
+    bestModes: ["extrude", "solid"],
+    applies: {
+      ...FUSION_BASE,
+      fusionPreset: "codeBloom",
+      materialPreset: "ink",
+      materialUserOverride: true,
+      asciiEnabled: true,
+      asciiCharset: "custom",
+      asciiCellSize: 13,
+      // Ink-dark body: dense end of the ramp (Soft Signal pass lesson).
+      asciiDensity: 0.85,
+      asciiContrast: 0.55,
+      asciiLockMode: "screen",
+      ditherEnabled: true,
+      ditherType: "blueNoise",
+      ditherScale: 2,
+      ditherLevels: 3,
+      ditherIntensity: 0.7,
+      ditherContrast: 0.45,
+      ditherThreshold: 0.5,
+      // Dark ink body sits below every threshold without a hard exposure lift.
+      ditherExposure: 0.9,
+      ditherLockMode: "screen",
+      layerStackEnabled: true,
+      stackDitherOpacity: 0.55,
+      stackAsciiOpacity: 0.95,
+      stackDitherBlend: "normal",
+      stackAsciiBlend: "normal",
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "glitchRibbon",
+    label: "Glitch Ribbon",
+    family: "fusion",
+    enabled: true,
+    implemented: true,
+    description:
+      "A ribbon of signal that keeps breaking: one shared impulse jolts the dither matrix, re-rolls the glyphs, shears the pattern and spikes the glow — simultaneously.",
+    bestModes: ["extrude"],
+    applies: {
+      ...FUSION_BASE,
+      fusionPreset: "glitchRibbon",
+      materialPreset: "signal",
+      materialUserOverride: true,
+      ditherEnabled: true,
+      ditherType: "bayer4",
+      ditherScale: 4,
+      ditherLevels: 2,
+      ditherIntensity: 0.9,
+      ditherContrast: 0.6,
+      ditherThreshold: 0.5,
+      ditherExposure: 0.65,
+      ditherLockMode: "screen",
+      asciiEnabled: true,
+      asciiAnimated: true,
+      asciiAnimationType: "flicker",
+      asciiCharset: "minimal",
+      asciiCellSize: 13,
+      asciiDensity: 0.6,
+      asciiContrast: 0.5,
+      asciiScrollSpeed: 1,
+      asciiLockMode: "screen",
+      layerStackEnabled: true,
+      stackDitherOpacity: 0.85,
+      stackAsciiOpacity: 0.6,
+      stackDitherBlend: "normal",
+      stackAsciiBlend: "normal",
+      stackOrder: "ditherFirst",
+    },
+  },
 ]
 
-/* --- animated fusion (definitions only) --- */
+/* --- animated fusion (IMPLEMENTED — PRD phase 21) ---
+ * Each variant = the matching fusion preset's composition + choreography: the
+ * RELATIONSHIP evolves over time (build, open, flow, decelerate, settle,
+ * break) instead of idling on its ambient drive. Selecting one re-arms the
+ * choreography in the engine (see `sinceArmed` in lib/style-fusion.ts), so it
+ * plays even on a long-finished stroke. */
+function animatedFusionVariant(
+  baseId: string,
+  id: string,
+  label: string,
+  description: string,
+): StylePreset {
+  const base = FUSION_PRESET_DEFS.find((p) => p.id === baseId)!
+  return {
+    id,
+    label,
+    family: "animatedFusion",
+    enabled: true,
+    implemented: true,
+    description,
+    bestModes: base.bestModes,
+    applies: { ...base.applies, fusionAnimationEnabled: true },
+  }
+}
+
 export const ANIMATED_FUSION_PRESET_DEFS: StylePreset[] = [
-  { id: "terminalGelRevealBuild", label: "Terminal Gel Reveal Build", family: "animatedFusion", enabled: true, implemented: false },
-  { id: "ditherBloomThresholdOpen", label: "Dither Bloom Threshold Open", family: "animatedFusion", enabled: true, implemented: false },
-  { id: "signalInkDataFlow", label: "Signal Ink Data Flow", family: "animatedFusion", enabled: true, implemented: false },
-  { id: "asciiRubberSlowdown", label: "ASCII Rubber Slowdown", family: "animatedFusion", enabled: true, implemented: false },
-  { id: "scanlineBalloonSoftPulse", label: "Scanline Balloon Soft Pulse", family: "animatedFusion", enabled: true, implemented: false },
-  { id: "glitchRibbonControlledBreak", label: "Glitch Ribbon Controlled Break", family: "animatedFusion", enabled: true, implemented: false },
-  { id: "codeBloomCharacterReveal", label: "Code Bloom Character Reveal", family: "animatedFusion", enabled: true, implemented: false },
+  animatedFusionVariant(
+    "terminalGel",
+    "terminalGelRevealBuild",
+    "Terminal Gel Reveal Build",
+    "The characters build from sparse to full with the draw-in, the gel's glow building with them; completion fires the shared pulse.",
+  ),
+  animatedFusionVariant(
+    "ditherBloom",
+    "ditherBloomThresholdOpen",
+    "Dither Bloom Threshold Open",
+    "The screen starts fully closed and OPENS once — over the reveal — wetting the surface as it opens, then settles into a residual breath.",
+  ),
+  animatedFusionVariant(
+    "signalInk",
+    "signalInkDataFlow",
+    "Signal Ink Data Flow",
+    "The matrix's travel speed itself surges with the burst signal — packets of pattern accelerate through the stroke as the glow spikes.",
+  ),
+  animatedFusionVariant(
+    "asciiRubber",
+    "asciiRubberSlowdown",
+    "ASCII Rubber Slowdown",
+    "When the draw completes, the character current decelerates elastically to rest — and the shine band glides to a stop with it.",
+  ),
+  animatedFusionVariant(
+    "scanlineBalloon",
+    "scanlineBalloonSoftPulse",
+    "Scanline Balloon Soft Pulse",
+    "After the draw, gentle recurring swells every few seconds, slowly settling — a balloon coming to rest, lines and shine breathing together.",
+  ),
+  animatedFusionVariant(
+    "glitchRibbon",
+    "glitchRibbonControlledBreak",
+    "Glitch Ribbon Controlled Break",
+    "A choreographed cycle: calm, escalating stutters, one big tear at the peak, recovery — every system breaking on the same impulse.",
+  ),
+  animatedFusionVariant(
+    "codeBloom",
+    "codeBloomCharacterReveal",
+    "Code Bloom Character Reveal",
+    "Character density strictly follows the draw-in, the threshold opening beneath the characters as they arrive; completion flares the phosphor.",
+  ),
 ]
 
 /* --- geometry animation (definitions only) --- */

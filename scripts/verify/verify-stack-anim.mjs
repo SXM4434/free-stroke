@@ -66,7 +66,7 @@ async function main() {
   rmSync(OUT, { recursive: true, force: true })
   mkdirSync(OUT, { recursive: true })
 
-  const browser = await chromium.launch({ channel: "chrome", headless: true })
+  const browser = await chromium.launch({ channel: "chrome", headless: false, args: ["--use-angle=metal"] })
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } })
   const errors = []
   page.on("console", (m) => {

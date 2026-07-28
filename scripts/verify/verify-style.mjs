@@ -65,7 +65,7 @@ async function main() {
     }
   }
 
-  const browser = await chromium.launch({ channel: "chrome", headless: true })
+  const browser = await chromium.launch({ channel: "chrome", headless: false, args: ["--use-angle=metal"] })
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } })
   const errors = []
   page.on("console", (m) => {

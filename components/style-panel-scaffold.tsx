@@ -101,8 +101,8 @@ const PANELS: PanelDef[] = [
   {
     id: "fusion",
     label: "Fusion",
-    status: "reserved",
-    note: "Authored looks where the systems drive each other. Coming soon.",
+    status: "active",
+    note: "Authored looks where the systems drive each other — one layer's output is another's input.",
     futureControls: [],
   },
 ]
@@ -165,8 +165,8 @@ const ANIMATION_CATEGORIES: {
   {
     key: "fusion",
     label: "Fusion",
-    state: "reserved",
-    detail: "Authored looks where the systems drive each other over time.",
+    state: "active",
+    detail: "The relationships between systems evolve over time — build, open, flow, break. Lives in the Fusion panel.",
   },
 ]
 
@@ -1378,6 +1378,151 @@ function LayersControl({
   )
 }
 
+/* ---- Fusion panel: relationships between systems (PRD phases 20/21) ---- */
+function FusionControl({
+  styleState,
+  setStyleState,
+  onSelectPreset,
+}: {
+  styleState: StyleState
+  setStyleState: (updater: (s: StyleState) => StyleState) => void
+  onSelectPreset: (family: PresetFamily, id: string) => void
+}) {
+  const on = styleState.fusionPreset !== "none"
+  // The description shown reflects what is actually running: the animated
+  // variant's text when its choreography is on, else the base relationship.
+  const activeDef =
+    (styleState.fusionAnimationEnabled
+      ? PRESET_REGISTRY.animatedFusion.find(
+          (p) => p.applies?.fusionPreset === styleState.fusionPreset,
+        )
+      : undefined) ??
+    PRESET_REGISTRY.fusion.find((p) => p.id === styleState.fusionPreset)
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-[10px] leading-relaxed text-muted-foreground">
+        The layer stack lets systems coexist; stack animation moves them together. Fusion is the
+        third thing: systems <span className="font-medium text-foreground">drive each other</span> —
+        glyph density setting the dither threshold, a threshold signal wetting the surface, one
+        impulse breaking every layer at once.
+      </p>
+
+      <div>
+        <span className={fieldLabelClass}>Fusion preset</span>
+        <div className="mt-2 flex max-w-lg flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() =>
+              setStyleState((s) => ({
+                ...s,
+                fusionPreset: "none",
+                fusionAnimationEnabled: false,
+              }))
+            }
+            className={pillClass(!on)}
+            title="No fusion — layers keep their own settings."
+          >
+            None
+          </button>
+          {PRESET_REGISTRY.fusion.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => onSelectPreset("fusion", p.id)}
+              className={pillClass(
+                styleState.fusionPreset === p.id && !styleState.fusionAnimationEnabled,
+              )}
+              title={p.description}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {activeDef?.description && (
+        <p className="max-w-lg rounded-md border border-border bg-muted/20 p-2.5 text-[11px] leading-relaxed text-muted-foreground">
+          <span className="font-medium text-foreground">{activeDef.label}.</span>{" "}
+          {activeDef.description}
+        </p>
+      )}
+
+      <div className={on ? "" : "pointer-events-none opacity-50"}>
+        <label className="flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Intensity <span className="text-foreground">{styleState.fusionIntensity.toFixed(2)}</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={styleState.fusionIntensity}
+            onChange={(e) => setStyleState((s) => ({ ...s, fusionIntensity: Number(e.target.value) }))}
+            className={sliderClass}
+            disabled={!on}
+          />
+          <span className="text-[10px] leading-relaxed text-muted-foreground">
+            How deeply the systems drive each other. 0 keeps the look but unlinks them.
+          </span>
+        </label>
+      </div>
+
+      <div className={`border-t border-border pt-3 ${on ? "" : "pointer-events-none opacity-50"}`}>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={styleState.fusionAnimationEnabled}
+            onChange={(e) =>
+              setStyleState((s) => ({ ...s, fusionAnimationEnabled: e.target.checked }))
+            }
+            className={switchClass}
+            disabled={!on}
+          />
+          <span className="text-xs font-medium text-foreground">Animated fusion</span>
+        </label>
+        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+          The relationships themselves evolve — build with the reveal, open once, surge, decelerate
+          to rest, break and recover.
+        </p>
+        <div className="mt-2 flex max-w-lg flex-wrap gap-1.5">
+          {PRESET_REGISTRY.animatedFusion.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => onSelectPreset("animatedFusion", p.id)}
+              className={pillClass(
+                styleState.fusionAnimationEnabled &&
+                  p.applies?.fusionPreset === styleState.fusionPreset,
+              )}
+              title={p.description}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <label className="mt-3 flex flex-col gap-1">
+          <span className={fieldLabelClass}>
+            Speed <span className="text-foreground">{styleState.fusionAnimationSpeed.toFixed(2)}×</span>
+          </span>
+          <input
+            type="range"
+            min={0.1}
+            max={3}
+            step={0.05}
+            value={styleState.fusionAnimationSpeed}
+            onChange={(e) =>
+              setStyleState((s) => ({ ...s, fusionAnimationSpeed: Number(e.target.value) }))
+            }
+            className={sliderClass}
+            disabled={!on}
+          />
+        </label>
+      </div>
+    </div>
+  )
+}
+
 /* ---- Animation panel: full IA, only Material is functional ---- */
 function AnimationControl({
   styleState,
@@ -1495,6 +1640,14 @@ function PanelControl({
           onSelectPreset={onSelectPreset}
         />
       )
+    case "fusion":
+      return (
+        <FusionControl
+          styleState={styleState}
+          setStyleState={setStyleState}
+          onSelectPreset={onSelectPreset}
+        />
+      )
     case "presets": {
       const family = styleState.activePresetFamily
       const presets = (PRESET_REGISTRY[family] ?? []).filter((p) => p.enabled)
@@ -1566,8 +1719,8 @@ export function StylePanelScaffold({
   onActiveIdChange: (id: StylePanelId) => void
 }) {
   const active = PANELS.find((p) => p.id === activeId) ?? PANELS[0]
-  // Fusion is the only panel with no live control yet.
-  const hasControl = active.id !== "fusion"
+  // Every panel now has a live control (Fusion landed in phases 20/21).
+  const hasControl = true
   // The summary strip in page.tsx is the drawer's header, so the drawer itself
   // renders nothing when closed — no second header competing with the strip.
   void onOpenChange

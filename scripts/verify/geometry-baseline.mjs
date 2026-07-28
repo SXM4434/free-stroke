@@ -112,7 +112,7 @@ async function capture(label) {
   const OUT = join(BASE, label)
   mkdirSync(OUT, { recursive: true })
 
-  const browser = await chromium.launch({ channel: "chrome", headless: true })
+  const browser = await chromium.launch({ channel: "chrome", headless: false, args: ["--use-angle=metal"] })
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
   const errors = []
   page.on("console", (m) => {

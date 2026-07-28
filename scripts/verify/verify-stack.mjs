@@ -10,7 +10,7 @@ import { writeFileSync, mkdirSync } from "node:fs"
 const OUT = "/Users/sebs/free-stroke/docs/verification/stack-v1"
 mkdirSync(OUT, { recursive: true })
 const stroke = () => { const p=[]; for(let i=0;i<=120;i++){const t=i/120; p.push({x:120+t*620,y:330+Math.sin(t*Math.PI*2.2)*130+Math.sin(t*Math.PI*6)*22})} return [p] }
-const b = await chromium.launch({ channel: "chrome", headless: true })
+const b = await chromium.launch({ channel: "chrome", headless: false, args: ["--use-angle=metal"] })
 const page = await b.newPage({ viewport: { width: 1600, height: 1000 } })
 await page.goto("http://localhost:3000", { waitUntil: "networkidle" })
 await page.waitForFunction(() => window.__styleHarness && window.__captureHarness)
