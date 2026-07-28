@@ -574,6 +574,10 @@ function AnimatedStrokes({
       frozenPhaseRef.current = null
     }
     const frozen = frozenPhaseRef.current
+    // True while a group drift/loop offset is actively sliding the stack.
+    // Layers with no motion of their own read this to keep formation (see the
+    // dither direction fallback and the ASCII scroll fallback below).
+    const groupSliding = gOff !== 0 && !frozen
     STYLE_CLOCK_DEBUG.groupAmount = gAmt
     STYLE_CLOCK_DEBUG.groupOffset = gOff
     STYLE_CLOCK_DEBUG.groupFrozen = !!groupAnim?.frozen
@@ -639,8 +643,20 @@ function AnimatedStrokes({
       d.uFsDitAngle.value = ((styleState.ditherAngle ?? 45) * Math.PI) / 180
       d.uFsDitLockScreen.value = styleState.ditherLockMode === "screen" ? 1 : 0
       const [ddx, ddy] = DITHER_DIRECTION_VEC[styleState.ditherDirection]
-      d.uFsDitDirX.value = ddx
-      d.uFsDitDirY.value = ddy
+      // Group drift/loop add a shared time offset — but a STATIC dither
+      // direction is the zero vector, so `dir * time` discarded the offset and
+      // the dither layer sat still while the group "drifted" (measured
+      // consecutive-frame Δ 0.00 on Terminal Stack + Stack Drift). When the
+      // group is sliding and the layer has no travel direction of its own,
+      // borrow the classic diagonal so the whole stack actually moves in
+      // formation.
+      if (groupSliding && styleState.ditherDirection === "static") {
+        d.uFsDitDirX.value = 0.7071
+        d.uFsDitDirY.value = 0.7071
+      } else {
+        d.uFsDitDirX.value = ddx
+        d.uFsDitDirY.value = ddy
+      }
 
       const ditSync = resolveSyncMode(styleState.motionMode, styleState.ditherSyncMode)
       const ditT = evaluateLayerTime(clock, {
@@ -701,7 +717,17 @@ function AnimatedStrokes({
         loopSeconds: styleState.styleLoopSeconds,
         revealScale: 8,
       })
-      a.uFsAscAnim.value = ascT.active ? ASCII_ANIM_INDEX[styleState.asciiAnimationType] : 0
+      // A non-animated ASCII layer ignores uFsAscTime entirely (the shader
+      // only reads it inside the animation branches), which silently discarded
+      // the group drift/loop offset — the glyph grid sat still while the rest
+      // of the stack slid (the same invisibility bug as the dither direction
+      // above). While the group is sliding, drive the grid through the SCROLL
+      // branch with only the shared offset, so the stack moves as one.
+      a.uFsAscAnim.value = ascT.active
+        ? ASCII_ANIM_INDEX[styleState.asciiAnimationType]
+        : groupSliding && ascOn
+          ? ASCII_ANIM_INDEX.scroll
+          : 0
       // revealDensity reads uFsAscReveal directly, so it needs no phase of its
       // own; every other behaviour rides the shared clock.
       a.uFsAscTime.value = frozen ? frozen.asc : ascT.active ? ascT.time + gOff : gOff
@@ -1173,6 +1199,57 @@ function SolidAnimationTick({
  *   6. Original stroke data is never mutated; partial strokes are shallow-copied
  *      and only the new points array is freshly constructed.
  */
+/* ---- Pen-timing map for the partial-rebuild reveal (stack craft pass) ----
+ *
+ * `filterStrokesByProgress` cuts by ARC LENGTH, so feeding it the raw playhead
+ * fraction gives a constant-speed reveal — every hesitation, dwell and flick
+ * in the recorded pen timing was flattened out, and the Natural / Authentic
+ * toggle silently did NOTHING in Solid, Extrude and Inflate (it only reached
+ * Rod's drawRange path). A control that renders identically whatever you set
+ * it to is this codebase's cardinal sin.
+ *
+ * This helper converts a TIME fraction into the DISTANCE fraction the pen had
+ * actually covered at that moment, walking the processed points' own
+ * timestamps (which survive resampling). Gaps between strokes naturally hold
+ * — nothing advances while the pen was in the air, exactly like Rod.
+ * Returns null when the strokes carry no usable timing (degenerate range).
+ */
+function penTimeDistanceFraction(
+  strokes: ProcessedStroke[],
+  timeFrac: number,
+): number | null {
+  let t0 = Infinity
+  let t1 = -Infinity
+  for (const s of strokes) {
+    const pts = s.points
+    if (pts.length === 0) continue
+    t0 = Math.min(t0, pts[0].t)
+    t1 = Math.max(t1, pts[pts.length - 1].t)
+  }
+  if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 - t0 <= 0) return null
+  const now = t0 + (t1 - t0) * Math.max(0, Math.min(1, timeFrac))
+  let total = 0
+  let revealed = 0
+  for (const s of strokes) {
+    const pts = s.points
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x
+      const dy = pts[i].y - pts[i - 1].y
+      const seg = Math.sqrt(dx * dx + dy * dy)
+      total += seg
+      const ta = pts[i - 1].t
+      const tb = pts[i].t
+      if (tb <= now) {
+        revealed += seg
+      } else if (ta < now && tb > ta) {
+        revealed += (seg * (now - ta)) / (tb - ta)
+      }
+    }
+  }
+  if (total <= 0) return null
+  return revealed / total
+}
+
 function filterStrokesByProgress(
   strokes: ProcessedStroke[],
   progress: number,
@@ -1444,7 +1521,21 @@ function Scene({
       geometryMode !== "inflate"
     )
       return strokes
-    const out = filterStrokesByProgress(strokes, solidAnimProgress)
+    // Honour the pen's recorded timing (see penTimeDistanceFraction): map the
+    // playhead TIME fraction to the DISTANCE the pen had covered, respecting
+    // the same Natural (hybrid) / Authentic (raw) / Smooth semantics as Rod.
+    // Smooth remains the old constant-speed arc reveal.
+    let revealFrac = solidAnimProgress
+    if (revealMode !== "smooth" && solidAnimProgress > 0 && solidAnimProgress < 1) {
+      const raw = penTimeDistanceFraction(strokes, solidAnimProgress)
+      if (raw !== null) {
+        revealFrac =
+          revealMode === "hybrid"
+            ? raw + (solidAnimProgress - raw) * hybridBlend
+            : raw
+      }
+    }
+    const out = filterStrokesByProgress(strokes, revealFrac)
 
     // ---- Diagnostics ----
     // Total arc length across the full strokes prop (denominator).
@@ -1482,7 +1573,7 @@ function Scene({
     // identical to the static H3 path. We mark YES; any lower progress -> NO.
     SOLID_ANIM_DEBUG.finalFrameMatchesStatic = solidAnimProgress >= 1 ? "YES" : "NO"
     return out
-  }, [strokes, geometryMode, solidAnimProgress])
+  }, [strokes, geometryMode, solidAnimProgress, revealMode, hybridBlend])
 
   // Animation active flag tracked alongside `playing` so the debug overlay
   // can distinguish "playback running" from "playback paused mid-reveal".

@@ -1728,18 +1728,23 @@ export const LAYER_STACK_PRESET_DEFS: StylePreset[] = [
     family: "layerStack",
     enabled: true,
     implemented: true,
-    description: "Ink with a whisper of grain. Nothing dominates — the form leads.",
+    description: "Ink with a visible tooth of grain. Nothing dominates — the form leads.",
     applies: {
       layerStackEnabled: true,
       materialPreset: "ink",
+      materialUserOverride: true,
       textureEnabled: true,
       textureMode: "grain",
-      textureScale: 1.6,
-      textureIntensity: 0.3,
-      textureContrast: 0.45,
+      textureScale: 2.0,
+      // Retuned after the texture strengthening pass: 0.3 x 0.7 = 0.21
+      // effective was a whisper nobody could hear — the stroke read as plain
+      // ink (verified live, stack craft pass). 0.5 x 0.85 keeps the form
+      // leading but the paper tooth actually exists.
+      textureIntensity: 0.5,
+      textureContrast: 0.55,
       ditherEnabled: false,
       asciiEnabled: false,
-      stackTextureOpacity: 0.7,
+      stackTextureOpacity: 0.85,
       stackOrder: "ditherFirst",
     },
   },
@@ -1792,9 +1797,13 @@ export const LAYER_STACK_PRESET_DEFS: StylePreset[] = [
       ditherEnabled: false,
       asciiEnabled: true,
       asciiCharset: "classic",
-      asciiCellSize: 11,
+      // 11px cells sat below the 13px glyph-legibility floor found in the
+      // ASCII craft pass — the terminal read as woven mesh, not characters.
+      // Contrast up so the shading walks several characters instead of the
+      // whole body resolving to one glyph (a uniform dot grid, not text).
+      asciiCellSize: 13,
       asciiDensity: 0.55,
-      asciiContrast: 0.5,
+      asciiContrast: 0.65,
       asciiLockMode: "screen",
       stackTextureOpacity: 0.4,
       stackAsciiOpacity: 0.95,
@@ -1817,16 +1826,23 @@ export const LAYER_STACK_PRESET_DEFS: StylePreset[] = [
       textureEnabled: true,
       textureMode: "bands",
       textureScale: 0.8,
-      textureIntensity: 0.4,
+      textureIntensity: 0.6,
       ditherEnabled: true,
       ditherType: "bayer4",
-      ditherScale: 3.5,
+      ditherScale: 4,
       ditherLevels: 2,
       ditherIntensity: 1,
-      ditherContrast: 0.6,
+      // Retuned (stack craft pass): at contrast 0.6 / exposure default the
+      // matte-clay body clamped below every threshold and only the pattern
+      // FLOOR rendered — a flat uniform checker with zero tonal modelling
+      // (and 0.85 overshot to a washed-out near-empty stroke). 0.65 puts the
+      // clay's real range mid-ramp so the Bayer checker MODELS the form —
+      // dense in shadow, open in light — instead of wallpapering it.
+      ditherContrast: 0.45,
+      ditherExposure: 0.58,
       ditherLockMode: "screen",
       asciiEnabled: false,
-      stackTextureOpacity: 0.45,
+      stackTextureOpacity: 0.6,
       stackDitherOpacity: 1,
       stackOrder: "ditherFirst",
     },
@@ -1837,8 +1853,8 @@ export const LAYER_STACK_PRESET_DEFS: StylePreset[] = [
     family: "layerStack",
     enabled: true,
     implemented: true,
-    description: "All three layers, deliberately restrained — binary glyphs lead, dither and scanlines whisper.",
-    bestModes: ["rod", "inflate"],
+    description: "All three layers, deliberately restrained — sparse glyphs lead, dither and scanlines whisper.",
+    bestModes: ["inflate", "solid"],
     applies: {
       layerStackEnabled: true,
       materialPreset: "rubber",
@@ -1846,27 +1862,251 @@ export const LAYER_STACK_PRESET_DEFS: StylePreset[] = [
       textureEnabled: true,
       textureMode: "scanlines",
       textureScale: 1.1,
-      textureIntensity: 0.35,
+      textureIntensity: 0.5,
       ditherEnabled: true,
       ditherType: "blueNoise",
       ditherScale: 2,
       ditherLevels: 5,
-      ditherIntensity: 0.5,
+      ditherIntensity: 0.6,
       ditherContrast: 0.4,
+      // Dark rubber body: without exposure the whole form sits below every
+      // threshold and the supporting dither never renders.
+      ditherExposure: 0.9,
       ditherLockMode: "screen",
       asciiEnabled: true,
       asciiCharset: "minimal",
-      asciiCellSize: 10,
-      asciiDensity: 0.5,
-      asciiContrast: 0.5,
+      // Retuned (stack craft pass): the original 10px cells / density 0.5 on
+      // the post-strengthening (darker) rubber landed the body at ramp level
+      // 0 — every cell drew the BLANK glyph and the preset collapsed into a
+      // plain black stroke with all three layers invisible. Density 0.9 puts
+      // the dark body mid-ramp so the sparse minimal glyphs actually appear.
+      asciiCellSize: 12,
+      asciiDensity: 0.9,
+      asciiContrast: 0.55,
       asciiLockMode: "screen",
       // The taste rule in numbers: ASCII leads, the other two support.
-      stackTextureOpacity: 0.3,
-      stackDitherOpacity: 0.35,
-      stackAsciiOpacity: 0.85,
+      stackTextureOpacity: 0.45,
+      stackDitherOpacity: 0.5,
+      stackAsciiOpacity: 0.9,
       stackDitherBlend: "multiply",
       stackAsciiBlend: "normal",
       stackOrder: "asciiFirst",
+    },
+  },
+  /* --- second wave (stack craft pass) ---
+   * Authored AFTER the texture/dither/ASCII strengthening passes, composing
+   * from the new print screens, charsets and materials. Same taste rule:
+   * each is a CONCEPT with one dominant graphic layer. */
+  {
+    id: "newsprintStack",
+    label: "Newsprint Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "A press photo: newsprint screen doing the tone work over warm paper, grain in the sheet.",
+    bestModes: ["solid", "extrude"],
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "chalk",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "grain",
+      textureScale: 1.8,
+      textureIntensity: 0.4,
+      textureContrast: 0.5,
+      ditherEnabled: true,
+      ditherType: "newsprint",
+      ditherScale: 3.5,
+      ditherLevels: 2,
+      ditherIntensity: 0.95,
+      ditherContrast: 0.5,
+      // Bright chalk body: pull the ramp DOWN hard so the dot structure
+      // spreads across the whole form instead of only pooling in the shadows
+      // (0.35 still left the sheet nearly empty).
+      ditherExposure: 0.22,
+      ditherAngle: 45,
+      ditherLockMode: "screen",
+      asciiEnabled: false,
+      stackTextureOpacity: 0.35,
+      stackDitherOpacity: 0.95,
+      stackDitherBlend: "normal",
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "woodcutStack",
+    label: "Woodcut Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "An engraving: crosshatch screen carves the tone, woodgrain runs under it.",
+    bestModes: ["solid", "extrude"],
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "wax",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "woodgrain",
+      textureScale: 1.2,
+      textureIntensity: 0.65,
+      textureContrast: 0.55,
+      ditherEnabled: true,
+      ditherType: "crosshatch",
+      ditherScale: 3.5,
+      ditherLevels: 2,
+      ditherIntensity: 1,
+      ditherContrast: 0.4,
+      // The tone-mapped wax body reads far brighter than its albedo suggests:
+      // at exposure 0.8 the whole form sat above every threshold and ZERO
+      // hatch rendered (pale lemon stroke, judged live). 0.38 lands it
+      // mid-ramp so hatch density follows the shading like a real engraving.
+      ditherExposure: 0.38,
+      ditherAngle: 45,
+      ditherLockMode: "screen",
+      asciiEnabled: false,
+      stackTextureOpacity: 0.6,
+      stackDitherOpacity: 1,
+      stackDitherBlend: "normal",
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "porcelainPrintStack",
+    label: "Porcelain Print Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "Transferware: a 45-degree dot screen fired into white porcelain glaze.",
+    bestModes: ["solid", "inflate"],
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "ceramic",
+      materialUserOverride: true,
+      textureEnabled: false,
+      textureMode: "none",
+      ditherEnabled: true,
+      ditherType: "dotScreen",
+      ditherScale: 4,
+      ditherLevels: 2,
+      ditherIntensity: 0.95,
+      ditherContrast: 0.55,
+      // Porcelain is the brightest body in the family — the ramp has to be
+      // pulled down hardest of all or the glaze sits above every threshold
+      // and the print vanishes (0.4 rendered a blank stroke, judged live).
+      ditherExposure: 0.18,
+      ditherAngle: 45,
+      ditherLockMode: "screen",
+      asciiEnabled: false,
+      stackDitherOpacity: 0.9,
+      stackDitherBlend: "normal",
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "marqueeStack",
+    label: "Marquee Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "A bulb sign: braille dot-cells light up along the neon tube.",
+    bestModes: ["solid", "inflate"],
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "neon",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "scanlines",
+      textureScale: 1.0,
+      textureIntensity: 0.3,
+      textureContrast: 0.5,
+      ditherEnabled: false,
+      asciiEnabled: true,
+      asciiCharset: "braille",
+      // 22px cells: braille dots need ~4px each plus real gaps to read as
+      // round BULBS — at 13-18px the dot rows merged into vertical stripes
+      // (judged live, twice).
+      asciiCellSize: 22,
+      // Neon's emissive body is HOT (raw luminance ~1) and UNIFORM, so the
+      // whole sign resolves to one glyph — the only lever on which glyph is
+      // density, and only the sparse end reads as separate bulbs (judged
+      // live at 0.65, 0.35 and 0.22).
+      asciiDensity: 0.15,
+      asciiContrast: 0.25,
+      asciiLockMode: "screen",
+      stackTextureOpacity: 0.35,
+      stackAsciiOpacity: 1,
+      stackAsciiBlend: "normal",
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "blueprintStack",
+    label: "Blueprint Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "A drafting table: box-drawing lines trace the gel form, contour bands underneath.",
+    bestModes: ["inflate", "solid"],
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "softGel",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "contour",
+      textureScale: 1.0,
+      textureIntensity: 0.45,
+      textureContrast: 0.5,
+      ditherEnabled: false,
+      asciiEnabled: true,
+      asciiCharset: "boxes",
+      // 15px cells so the box-drawing strokes read as LINES, not weave.
+      asciiCellSize: 15,
+      // The post-strengthening gel is brighter than its albedo suggests: at
+      // density 0.85 every cell saturated to the densest box glyph (judged
+      // live — a uniform speck grid, no line work; 0.55 was still block-
+      // heavy). 0.4 lands the body mid-ramp so lighter line glyphs appear.
+      asciiDensity: 0.4,
+      asciiContrast: 0.45,
+      asciiLockMode: "screen",
+      stackTextureOpacity: 0.4,
+      stackAsciiOpacity: 0.9,
+      stackAsciiBlend: "normal",
+      stackOrder: "ditherFirst",
+    },
+  },
+  {
+    id: "gildedStack",
+    label: "Gilded Stack",
+    family: "layerStack",
+    enabled: true,
+    implemented: true,
+    description: "Aged gilt: craquelure cracks the gold leaf, a faint hatch plate darkens the recesses.",
+    bestModes: ["extrude", "solid"],
+    applies: {
+      layerStackEnabled: true,
+      materialPreset: "gold",
+      materialUserOverride: true,
+      textureEnabled: true,
+      textureMode: "craquelure",
+      textureScale: 1.4,
+      textureIntensity: 0.85,
+      textureContrast: 0.6,
+      ditherEnabled: true,
+      ditherType: "hatch",
+      ditherScale: 3,
+      ditherLevels: 3,
+      ditherIntensity: 0.3,
+      ditherContrast: 0.35,
+      ditherExposure: 0.6,
+      ditherAngle: 45,
+      ditherLockMode: "screen",
+      asciiEnabled: false,
+      // Texture-dominant: the cracked leaf IS the composition; the hatch
+      // plate only weights the shadows (multiply can only darken).
+      stackTextureOpacity: 1,
+      stackDitherOpacity: 0.35,
+      stackDitherBlend: "multiply",
+      stackOrder: "ditherFirst",
     },
   },
 ]
@@ -1905,6 +2145,23 @@ export const STACK_ANIMATION_PRESET_DEFS: StylePreset[] = [
     },
   },
   {
+    // The pulse behaviour existed in the engine and the behaviour dropdown but
+    // had NO preset chip — the rail silently skipped one of the seven
+    // behaviours (stack craft pass).
+    id: "stackPulse",
+    label: "Stack Pulse",
+    family: "stackAnimation",
+    enabled: true,
+    implemented: true,
+    description: "The whole composition breathes together.",
+    applies: {
+      layerStackEnabled: true,
+      stackAnimationEnabled: true,
+      stackAnimationType: "pulse",
+      stackAnimationSpeed: 1,
+    },
+  },
+  {
     id: "stackDrift",
     label: "Stack Drift",
     family: "stackAnimation",
@@ -1938,7 +2195,7 @@ export const STACK_ANIMATION_PRESET_DEFS: StylePreset[] = [
     family: "stackAnimation",
     enabled: true,
     implemented: true,
-    description: "The whole stack repeats on the shared loop.",
+    description: "The whole stack slides out and back on the shared loop.",
     applies: {
       layerStackEnabled: true,
       stackAnimationEnabled: true,

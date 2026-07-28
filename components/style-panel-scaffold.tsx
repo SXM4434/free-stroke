@@ -1318,7 +1318,7 @@ function LayersControl({
               <option value="delayAfterReveal">Delay — lands after the form is drawn</option>
               <option value="completionPulse">Completion pulse — swell at the end</option>
               <option value="freezeOnComplete">Freeze on complete — hold the final frame</option>
-              <option value="loop">Loop — the stack repeats</option>
+              <option value="loop">Loop — out and back on the shared loop</option>
             </select>
           </label>
           <label className="flex flex-col gap-1">

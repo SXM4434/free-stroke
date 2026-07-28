@@ -53,6 +53,15 @@ export const STACK_ORDER_INDEX: Record<StackOrder, number> = {
  * ever add) — the two classic complements. `amount` then mixes the blended
  * result back toward the untouched input, which is what makes a layer's
  * contribution dialable rather than all-or-nothing.
+ *
+ * OVERDRIVE HEADROOM (stack craft pass): `amount` clamps at 1.6, not 1.0.
+ * Only the group animation can push above 1 (completionPulse's swell). With a
+ * hard 1.0 clamp the swell was ARCHITECTURALLY INVISIBLE on any preset whose
+ * stack opacity already sat near 1 — amount went 1.0 → 1.6 → 1.0 and every
+ * frame rendered identically (measured: settled-vs-peak Δ ≈ 0 on Terminal
+ * Stack). Extrapolating the mix past 1 briefly EXAGGERATES the layer beyond
+ * its resting look, which is what a completion swell is; the final clamp
+ * keeps the result displayable.
  */
 export const STACK_BLEND_GLSL = /* glsl */ `
 vec3 fsStackBlend(vec3 base, vec3 layer, float mode, float amount) {
@@ -62,7 +71,7 @@ vec3 fsStackBlend(vec3 base, vec3 layer, float mode, float amount) {
   } else if (mode > 1.5) {
     mixed = 1.0 - (1.0 - base) * (1.0 - layer); // screen: lighten only
   }
-  return mix(base, mixed, clamp(amount, 0.0, 1.0));
+  return clamp(mix(base, mixed, clamp(amount, 0.0, 1.6)), 0.0, 1.0);
 }
 `
 
@@ -186,7 +195,10 @@ export function evaluateStackAnimation(opts: {
 
     case "drift":
       // One shared phase offset added to every layer -> the whole stack slides.
-      return { amount: 1, timeOffset: elapsed * speed * 0.6 + phase, frozen: false }
+      // Rate 0.6 -> 1.1 (stack craft pass): at 0.6 x the default preset speed
+      // the ASCII grid moved ~0.2 cell/s, which read as STATIC in live
+      // viewing. Decorative canvas motion is allowed to be present.
+      return { amount: 1, timeOffset: elapsed * speed * 1.1 + phase, frozen: false }
 
     case "delayAfterReveal": {
       // The style stack lands AFTER the form is drawn.
@@ -209,9 +221,19 @@ export function evaluateStackAnimation(opts: {
       return { amount: 1, timeOffset: 0, frozen: reveal >= 1 }
 
     case "loop": {
-      // Wrapped shared offset: the whole stack repeats seamlessly.
+      // Shared PING-PONG offset on the loop clock: the stack slides out and
+      // returns home once per cycle.
+      //
+      // Why not a plain wrapped offset (the v1 behaviour): between wraps a
+      // wrap is indistinguishable from `drift` (judged live — same slide,
+      // same look), and AT the wrap the offset snapped N units back, which
+      // is only seamless for patterns that happen to be periodic in the
+      // offset. A there-and-back cycle is visibly a REPEATING figure, never
+      // jumps, and stays honest about riding the shared loop clock.
       const loop = Math.max(loopSeconds, 0.1)
-      return { amount: 1, timeOffset: ((elapsed * speed) % loop) + phase, frozen: false }
+      const t = (((elapsed * speed) % loop) + loop) % loop
+      const tri = t < loop / 2 ? t : loop - t // 0 -> loop/2 -> 0
+      return { amount: 1, timeOffset: tri + phase, frozen: false }
     }
 
     default:

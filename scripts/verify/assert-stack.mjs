@@ -77,7 +77,7 @@ async function main() {
   }
   say(
     worst.v > DIFFERENT,
-    "stack presets / all five are distinct compositions",
+    "stack presets / all are pairwise-distinct compositions",
     `closest: ${worst.pair} Δ ${worst.v.toFixed(2)}`,
   )
 

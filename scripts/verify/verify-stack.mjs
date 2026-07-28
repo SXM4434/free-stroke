@@ -59,7 +59,10 @@ const cases = [
 for (const [n, p] of cases) { await set(p); await page.waitForTimeout(500); await grab(n); console.log("captured", n) }
 
 // Stack PRESETS, applied through the real preset-selection path.
-const PRESETS = ["cleanInkStack", "ditheredGelStack", "terminalStack", "graphicSlabStack", "softSignalStack"]
+const PRESETS = [
+  "cleanInkStack", "ditheredGelStack", "terminalStack", "graphicSlabStack", "softSignalStack",
+  "newsprintStack", "woodcutStack", "porcelainPrintStack", "marqueeStack", "blueprintStack", "gildedStack",
+]
 for (const id of PRESETS) {
   await set(OFF)
   await page.waitForTimeout(200)

@@ -2267,3 +2267,89 @@ human in the loop.
 ### Final locked checkpoint label
 
 `ENGINE_PASS_3_STROKE_PROCESSING_MATH`
+
+---
+
+## LOCKED CHECKPOINT — `CRAFT_PASS_STACK_AND_ALL_ANIMATION`
+
+**Status: stack presets rebuilt, three animation bugs fixed, and a headline
+feature found silently dead in 3 of 4 modes.** Fable pass, judged headed.
+
+### THE BIG ONE: Natural/Authentic did nothing in Solid, Extrude and Inflate
+
+`filterStrokesByProgress` cuts the reveal by **raw arc length**, so those three
+modes always played back at constant speed regardless of how the stroke was
+actually drawn — and the Natural/Authentic toggle, a user-facing control, was
+**silently inert in three of the four modes**. Only Rod honoured pen timing.
+
+Fixed with `penTimeDistanceFraction` in `viewport-3d.tsx`: maps the playhead's
+time fraction through the processed points' own timestamps, with the same
+hybrid/raw/smooth semantics Rod already used. Verified deterministically — the
+same time fraction now produces different fronts per mode (Authentic 934 vs
+Natural 950 at t=0.5), both correctly lagging linear through a slow section,
+with the final frame still bit-identical to the static preview.
+
+**Natural vs Authentic is real but conditional**: measured within-stroke speed
+contrast ~4x (Authentic) vs ~2.7x (Natural) on a hesitating stroke; on evenly
+paced strokes they are identical BY CONSTRUCTION. Nothing in the UI says this.
+
+### Two more "technically correct, perceptually absent" bugs
+
+- **`drift` was completely static in the real user flow** (consecutive-frame
+  Δ 0.00). Static ASCII ignored the group offset entirely, static dither had a
+  zero direction vector, and horizontal scanlines are invariant along their own
+  travel axis — so the one behaviour whose entire job is moving the group moved
+  nothing. Now static dither borrows the diagonal travel vector and static ASCII
+  rides the scroll branch on the shared offset; rate 0.6→1.1. Δ ~48/frame.
+- **`completionPulse`'s swell was architecturally invisible**: `fsStackBlend`
+  clamped `amount` at 1.0, so a 1.0 → 1.6 → 1.0 envelope rendered IDENTICAL
+  frames on any preset with near-1 opacities. Fixed with overdrive headroom
+  (amount clamps at 1.6, output still clamps to 1). Peak now Δ34.
+- `pulse` had **no preset chip at all** — the only behaviour missing from the
+  rail. Added.
+- `loop` was indistinguishable from drift and snapped N units at the wrap on
+  non-periodic patterns. Rewritten as a **ping-pong** on the shared loop clock:
+  continuous Δ ~45 with a smooth velocity dip at the turnaround, no snap.
+
+### Three of five stack presets had ROTTED
+
+They were authored before the material/dither/ASCII strengthening passes AND
+before `ditherExposure` existed, so none set exposure — bright bodies sat above
+every threshold, dark bodies below.
+
+- `cleanInkStack` — grain fully invisible (0.3 × 0.7 = 0.21 effective).
+- `terminalStack` — glyphs below the 13px legibility floor; woven mesh.
+- `graphicSlabStack` — worst case: matte clay clamped below every threshold, so
+  only the shader's pattern floor rendered — flat checker wallpaper, zero tonal
+  modelling.
+- `softSignalStack` — **completely dead**: darker rubber sat at ramp level 0, so
+  every ASCII cell drew the blank glyph and the "all three layers" preset
+  rendered as a plain black stroke.
+- `ditheredGelStack` — the one that survived. Untouched.
+
+All retuned live. **6 new presets** (11 total): newsprintStack, woodcutStack,
+porcelainPrintStack, marqueeStack, blueprintStack, gildedStack — each a concept,
+each iterated live until it read.
+
+### Verification (all re-run independently by me)
+
+- `assert-stack.mjs` **9/9** — 11 presets pairwise distinct, closest Δ 60.08
+  (was 22.37 with five).
+- `assert-stack-anim.mjs` **6/6** — drift consecΔ 86.02, freeze exactly 0.00.
+- `assert-timing.mjs` **10/10**.
+- `verify-gates.mjs` **ALL PASS**.
+
+### Still weak
+
+- **Solid draw-in runs at ~6–10 fps** — the per-tick geometry rebuild. Pacing is
+  correct but choppy. Fix lives in the raster/contour rebuild path.
+- Texture whose travel axis is degenerate for its own pattern (horizontal travel
+  on horizontal scanlines) still doesn't slide under group drift; dither and
+  ASCII carry it. A per-pattern "natural travel axis" would fix it.
+- Marquee bulbs read as square dots — 5x5 glyph bitmaps have no sub-pixel
+  roundness at any cell size.
+- Natural/Authentic has no UI explanation of when it matters.
+
+### Final locked checkpoint label
+
+`CRAFT_PASS_STACK_AND_ALL_ANIMATION`
