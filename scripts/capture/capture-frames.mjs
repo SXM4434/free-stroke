@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process"
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
+import { layoutWord } from "./letters.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const FRAMES = join(__dirname, "frames")
@@ -12,6 +13,8 @@ const STROKES = join(__dirname, "logo-strokes.json")
 
 const DRAW_FRAMES = parseInt(process.env.DRAW_FRAMES || "60", 10)
 const ROUGHNESS = parseFloat(process.env.ROUGHNESS || "0.35")
+// STROKE_SOURCE=font (Variant B, clean hand font) | trace (Variant A, traced logo skeleton)
+const STROKE_SOURCE = process.env.STROKE_SOURCE || "font"
 
 function ab(args) {
   return execFileSync("agent-browser", args, { encoding: "utf8" }).trim()
