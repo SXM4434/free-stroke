@@ -28,8 +28,22 @@ function setup() {
   mkdirSync(FRAMES, { recursive: true })
 }
 
-function injectAndStyle() {
+function getPolylines() {
+  if (STROKE_SOURCE === "font") {
+    // Variant B: clean hand font, centered around the origin so frontView
+    // framing (which centers on the geometry bounds) lines it up nicely.
+    const { polylines, width, height } = layoutWord("Desk Doodles", { x: 0, y: 0, size: 120 })
+    const cx = width / 2
+    const cy = height / 2
+    return polylines.map((pl) => pl.map((p) => ({ x: p.x - cx, y: p.y - cy })))
+  }
+  // Variant A: traced logo skeleton
   const { polylines } = JSON.parse(readFileSync(STROKES, "utf8"))
+  return polylines
+}
+
+function injectAndStyle() {
+  const polylines = getPolylines()
   const poly = JSON.stringify(polylines)
   // Ink material but with a slightly higher roughness via the custom path,
   // since the "ink" preset is locked to 0.3 and the user asked for ~0.35.
