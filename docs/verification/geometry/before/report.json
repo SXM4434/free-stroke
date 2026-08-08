@@ -1,0 +1,99 @@
+{
+  "loopyS/rod": {
+    "exportBytes": 2452872
+  },
+  "loopyS/extrude": {
+    "exportBytes": 33788
+  },
+  "loopyS/solid": {
+    "exportBytes": 328224
+  },
+  "loopyS/inflate": {
+    "exportBytes": 302812
+  },
+  "openC/rod": {
+    "exportBytes": 2096280
+  },
+  "openC/extrude": {
+    "exportBytes": 28312
+  },
+  "openC/solid": {
+    "exportBytes": 272924
+  },
+  "openC/inflate": {
+    "exportBytes": 251776
+  },
+  "closedO/rod": {
+    "exportBytes": 3554400
+  },
+  "closedO/extrude": {
+    "exportBytes": 40272
+  },
+  "closedO/solid": {
+    "exportBytes": 299276
+  },
+  "closedO/inflate": {
+    "exportBytes": 363320
+  },
+  "nearTouch/rod": {
+    "exportBytes": 3450288
+  },
+  "nearTouch/extrude": {
+    "exportBytes": 38976
+  },
+  "nearTouch/solid": {
+    "exportBytes": 384288
+  },
+  "nearTouch/inflate": {
+    "exportBytes": 351224
+  },
+  "zigzag/rod": {
+    "exportBytes": 6226616
+  },
+  "zigzag/extrude": {
+    "exportBytes": 77568
+  },
+  "zigzag/solid": {
+    "exportBytes": 611236
+  },
+  "zigzag/inflate": {
+    "exportBytes": 684512
+  },
+  "scribble/rod": {
+    "exportBytes": 10749704
+  },
+  "scribble/extrude": {
+    "exportBytes": 130848
+  },
+  "scribble/solid": {
+    "exportBytes": 633220
+  },
+  "scribble/inflate": {
+    "exportBytes": 1201956
+  },
+  "twoStrokes/rod": {
+    "exportBytes": 1815364
+  },
+  "twoStrokes/extrude": {
+    "exportBytes": 31144
+  },
+  "twoStrokes/solid": {
+    "exportBytes": 287516
+  },
+  "twoStrokes/inflate": {
+    "exportBytes": 271472
+  },
+  "tick/rod": {
+    "exportBytes": 80548
+  },
+  "tick/extrude": {
+    "exportBytes": 2960
+  },
+  "tick/solid": {
+    "exportBytes": 23700
+  },
+  "tick/inflate": {
+    "exportBytes": 15224
+  },
+  "__consoleErrors": 0
+}

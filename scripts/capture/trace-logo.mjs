@@ -89,6 +89,10 @@ function tracePaths(bmp, w, h) {
   const degree = (x, y) => nbrs(x, y).length
   const paths = []
 
+  // Walk THROUGH junctions by picking the straightest continuation (highest
+  // dot product with the recent heading). Stopping at junctions is what
+  // shredded the word into dozens of fragments before — a pen stroke crosses
+  // junctions (loops, crossbars) without lifting.
   const walk = (sx, sy) => {
     const path = [[sx, sy]]
     visited[idx(sx, sy)] = 1
@@ -97,14 +101,32 @@ function tracePaths(bmp, w, h) {
     while (true) {
       const options = nbrs(cx, cy).filter(([nx, ny]) => !visited[idx(nx, ny)])
       if (!options.length) break
-      // prefer straight continuation: pick neighbor with lowest degree change
-      options.sort((a, b) => degree(a[0], a[1]) - degree(b[0], b[1]))
-      const [nx, ny] = options[0]
+      // heading = direction over the last few skeleton pixels (smooths staircase)
+      const back = path[Math.max(0, path.length - 5)]
+      let hx = cx - back[0],
+        hy = cy - back[1]
+      const hl = Math.hypot(hx, hy)
+      let best = options[0]
+      if (hl > 0) {
+        hx /= hl
+        hy /= hl
+        let bestDot = -Infinity
+        for (const [nx, ny] of options) {
+          const dx = nx - cx,
+            dy = ny - cy
+          const dl = Math.hypot(dx, dy)
+          const dot = (dx * hx + dy * hy) / dl
+          if (dot > bestDot) {
+            bestDot = dot
+            best = [nx, ny]
+          }
+        }
+      }
+      const [nx, ny] = best
       visited[idx(nx, ny)] = 1
       path.push([nx, ny])
       cx = nx
       cy = ny
-      if (degree(cx, cy) > 2) break // stop at junctions
     }
     return path
   }
@@ -123,6 +145,50 @@ function tracePaths(bmp, w, h) {
         if (p.length > 2) paths.push(p)
       }
   return paths
+}
+
+// Greedy endpoint-joining of skeleton fragments. Two fragments merge when a
+// pair of their endpoints is within maxGap px AND the jump direction roughly
+// continues the tail heading of the fragment being extended (or the gap is
+// tiny). Repeats until no more merges apply.
+function mergePaths(paths, maxGap) {
+  const pts = paths.map((p) => p.slice())
+
+  const tailDir = (p) => {
+    const a = p[Math.max(0, p.length - 6)]
+    const b = p[p.length - 1]
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+    return [(b[0] - a[0]) / l, (b[1] - a[1]) / l]
+  }
+  const rev = (p) => p.slice().reverse()
+
+  let merged = true
+  while (merged) {
+    merged = false
+    outer: for (let i = 0; i < pts.length; i++) {
+      for (let j = 0; j < pts.length; j++) {
+        if (i === j) continue
+        const a = pts[i]
+        // candidate orientations of b: as-is (head joins a's tail) or reversed
+        for (const b of [pts[j], rev(pts[j])]) {
+          const ae = a[a.length - 1]
+          const bs = b[0]
+          const gap = Math.hypot(bs[0] - ae[0], bs[1] - ae[1])
+          if (gap > maxGap) continue
+          const [tx, ty] = tailDir(a)
+          const gx = gap > 0 ? (bs[0] - ae[0]) / gap : tx
+          const gy = gap > 0 ? (bs[1] - ae[1]) / gap : ty
+          const cont = tx * gx + ty * gy
+          if (gap > 2 && cont < 0.2) continue // must continue, not double back
+          pts[i] = a.concat(gap > 0 ? b : b.slice(1))
+          pts.splice(j, 1)
+          merged = true
+          break outer
+        }
+      }
+    }
+  }
+  return pts
 }
 
 // Ramer-Douglas-Peucker simplify
@@ -171,8 +237,15 @@ async function main() {
   for (let i = 0; i < bmp.length; i++) skel += bmp[i]
   console.log(`[trace] skeleton px=${skel}`)
 
-  const paths = tracePaths(bmp, w, h)
-  console.log(`[trace] raw paths=${paths.length}`)
+  const paths0 = tracePaths(bmp, w, h)
+  console.log(`[trace] raw paths=${paths0.length}`)
+
+  // Merge fragments whose endpoints nearly touch (thinning dropouts + walks
+  // that consumed a junction pixel another branch needed). The gap vector must
+  // roughly continue the fragment's tail direction so we never bridge between
+  // neighbouring letters.
+  const paths = mergePaths(paths0, 6)
+  console.log(`[trace] merged paths=${paths.length}`)
 
   // Normalize into a compact target coordinate space (~TARGET_W wide). The
   // inflate rasterizer uses a fixed ~22px lineWidth, so a smaller span makes
@@ -208,6 +281,10 @@ async function main() {
 
   const kept = polylines0.filter((p) => lenOf(p) > 18 * norm).map(densify)
   console.log(`[trace] kept polylines=${kept.length} (dropped ${polylines0.length - kept.length}), target width=${TARGET_W}`)
+
+  // Draw-in order: left to right, like writing the word.
+  const minX = (p) => p.reduce((m, q) => Math.min(m, q.x), Infinity)
+  kept.sort((a, b) => minX(a) - minX(b))
 
   writeFileSync(OUT, JSON.stringify({ width: TARGET_W, height: Math.round((h / scale) * norm), polylines: kept }))
   console.log(`[trace] wrote ${OUT}`)

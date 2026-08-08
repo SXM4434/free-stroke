@@ -19,6 +19,7 @@ import {
   TUBE_RADIUS,
   RADIAL_SEGMENTS,
   SPHERE_SEGMENTS,
+  JOINT_SPHERE_SEGMENTS,
   SOLID_DEBUG,
   SOLID_ANIM_DEBUG,
   SOLID_STAGE_DEBUG,
@@ -31,7 +32,63 @@ import {
   evaluateMaterialAnimation,
   MODE_MATERIAL_DEFAULTS,
 } from "@/lib/style-system"
+import {
+  createTextureUniforms,
+  createSweepUniforms,
+  TEXTURE_TYPE_INDEX,
+  type TextureUniforms,
+  type SweepUniforms,
+} from "@/lib/texture-shader"
+import {
+  createDitherUniforms,
+  DITHER_TYPE_INDEX,
+  DITHER_DIRECTION_VEC,
+  type DitherUniforms,
+} from "@/lib/dither-shader"
+import {
+  createAsciiUniforms,
+  ASCII_CHARSET_INDEX,
+  ASCII_ANIM_INDEX,
+  ASCII_DIRECTION_VEC,
+  type AsciiUniforms,
+} from "@/lib/ascii-shader"
+import { applyStyleShader, createStackUniforms, type StackUniforms } from "@/lib/style-shader"
+import { resolveStack, evaluateStackAnimation } from "@/lib/style-stack"
+import {
+  createStyleClock,
+  advanceStyleClock,
+  evaluateLayerTime,
+  resolveSyncMode,
+  type StyleClock,
+} from "@/lib/style-clock"
+import { evaluateFusion } from "@/lib/style-fusion"
 
+
+/**
+ * GEOM_BUILD_DEBUG — dev-only, mode-agnostic geometry build counter.
+ * `buildCount` increments once per actual geometry (re)build for ANY mode.
+ * The verification harness asserts this stays FLAT across style changes,
+ * which is the PRD's hard gate: "changing style state updates preview without
+ * rebuilding geometry". Unlike the Extrude-only `extrudeDebugRef`, this works
+ * for Rod / Solid / Inflate too.
+ */
+export const GEOM_BUILD_DEBUG = { buildCount: 0 }
+
+/**
+ * STYLE_CLOCK_DEBUG — the shared style clock lives inside <AnimatedStrokes>
+ * (it must, to be advanced from useFrame), but the Debug panel renders in
+ * <Viewport3D>. Mirroring the values into a module singleton is the same
+ * pattern SOLID_ANIM_DEBUG uses, and avoids threading a ref through props for
+ * a Debug-only readout.
+ */
+export const STYLE_CLOCK_DEBUG = {
+  elapsed: 0,
+  reveal: 0,
+  sinceCompletion: Infinity as number,
+  groupAmount: 1,
+  groupOffset: 0,
+  groupFrozen: false,
+}
 
 const INITIAL_CAMERA_POSITION = new THREE.Vector3(0, 0, 5)
 const INITIAL_CAMERA_TARGET = new THREE.Vector3(0, 0, 0)
@@ -100,6 +157,14 @@ function useStrokeMeshes(
 
 /* ---- Shared geometries ---- */
 const sphereGeometry = new THREE.SphereGeometry(TUBE_RADIUS, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+// Joint spheres are mostly buried inside the tube (see JOINT_SPHERE_SEGMENTS in
+// geometry-engines). Preview uses the same reduced resolution as export so the
+// two stay in visual parity.
+const jointSphereGeometry = new THREE.SphereGeometry(
+  TUBE_RADIUS,
+  JOINT_SPHERE_SEGMENTS,
+  JOINT_SPHERE_SEGMENTS,
+)
 
 /* Stroke materials are no longer module-level singletons. As of the
  * POST_MVP material work, the preview material is created inside
@@ -230,15 +295,27 @@ function AutoFrameOnFirstDraw({
       prevCountRef.current = 0
       return
     }
-    if (prevCountRef.current === 0 && strokeCount > 0 && !hasFramedRef.current && bounds) {
-      hasFramedRef.current = true
+    // Frame the first stroke once bounds AND controls are actually available.
+    //
+    // This used to also require `prevCountRef.current === 0`, while
+    // `prevCountRef.current = strokeCount` ran unconditionally at the end. So
+    // if geometry had not finished building when the first stroke arrived
+    // (bounds still null — the common case, since the mesh is built in a memo
+    // downstream of this effect), the one-shot was CONSUMED without ever
+    // framing: prevCount became 1, the condition could never be true again, and
+    // the user was left staring at an empty grid until they found "Reset
+    // camera". `hasFramedRef` is the real one-shot gate, so gate on that alone
+    // and let the effect re-attempt on the next render that has bounds.
+    if (strokeCount > 0 && !hasFramedRef.current && bounds && bounds.radius > 0) {
       const controls = controlsRef.current
-      if (!controls) return
-      const dir = new THREE.Vector3(1, 1, 1).normalize()
-      const pos = bounds.center.clone().add(dir.multiplyScalar(bounds.radius * FRAME_K))
-      camera.position.copy(pos)
-      controls.target.copy(bounds.center)
-      controls.update()
+      if (controls) {
+        hasFramedRef.current = true
+        const dir = new THREE.Vector3(1, 1, 1).normalize()
+        const pos = bounds.center.clone().add(dir.multiplyScalar(bounds.radius * FRAME_K))
+        camera.position.copy(pos)
+        controls.target.copy(bounds.center)
+        controls.update()
+      }
     }
     prevCountRef.current = strokeCount
   }, [strokeCount, bounds, camera, controlsRef])
@@ -331,6 +408,7 @@ function AnimatedStrokes({
   hybridBlend,
   exportGroupRef,
   styleState,
+  bounds,
 }: {
   meshes: StrokeMeshData[]
   timelines: StrokeTimeline[]
@@ -340,6 +418,9 @@ function AnimatedStrokes({
   hybridBlend: number
   exportGroupRef: React.RefObject<THREE.Group | null>
   styleState?: StyleState
+  /** Object-space stroke bounds — lets the shine-sweep band normalize its
+   *  travel to the drawing's actual size. Read-only; never drives geometry. */
+  bounds?: StrokeBounds | null
 }) {
   // Refs to all tube meshes for drawRange updates
   const tubeMeshRefs = useRef<(THREE.Mesh | null)[]>([])
@@ -357,9 +438,56 @@ function AnimatedStrokes({
   // surface, so every mesh in this component shares one preset-driven material.
   const materialPreset = styleState?.materialPreset ?? "ink"
   const customMaterial = styleState?.customMaterial
+  // Procedural texture v1: uniform objects live in a ref so they survive
+  // material re-creation (preset switches) and per-frame writes go straight to
+  // the GPU without touching React state or the material itself.
+  const textureUniformsRef = useRef<TextureUniforms | null>(null)
+  if (textureUniformsRef.current === null) {
+    textureUniformsRef.current = createTextureUniforms()
+  }
+  // Shine-sweep band uniforms (animated material "shineSweep"): the travelling
+  // highlight is positional, so it lives in the shader; the CPU only writes the
+  // band's center each frame. Same survives-material-recreation contract.
+  const sweepUniformsRef = useRef<SweepUniforms | null>(null)
+  if (sweepUniformsRef.current === null) {
+    sweepUniformsRef.current = createSweepUniforms()
+  }
+  const ditherUniformsRef = useRef<DitherUniforms | null>(null)
+  if (ditherUniformsRef.current === null) {
+    ditherUniformsRef.current = createDitherUniforms()
+  }
+  const asciiUniformsRef = useRef<AsciiUniforms | null>(null)
+  if (asciiUniformsRef.current === null) {
+    asciiUniformsRef.current = createAsciiUniforms()
+  }
+  // ONE clock for every animated style layer. Each layer asks it for a phase
+  // rather than accumulating its own time, so layers can share a loop, stagger
+  // by delay, or fire together on reveal completion.
+  const stackUniformsRef = useRef<StackUniforms | null>(null)
+  if (stackUniformsRef.current === null) {
+    stackUniformsRef.current = createStackUniforms()
+  }
+  // Holds each layer's phase at the moment freezeOnComplete engaged.
+  const frozenPhaseRef = useRef<{ tex: number; dit: number; asc: number } | null>(null)
+  // When the current stack-animation behaviour was switched on. Scene-relative
+  // behaviours (fade, drift, loop) measure from here, so enabling one mid-session
+  // actually plays instead of starting already finished.
+  const stackArmRef = useRef<{ key: string; at: number }>({ key: "", at: 0 })
+  // When the current FUSION preset (or its animated flag) was selected.
+  // Choreographies measure from here as well as from the reveal, so picking an
+  // animated fusion on a long-finished stroke still PLAYS its build instead of
+  // showing a build that had always already finished.
+  const fusionArmRef = useRef<{ key: string; at: number }>({ key: "", at: 0 })
+  // True while fusion has overridden the sweep-band direction — lets the next
+  // non-fusion frame restore the default axis instead of leaking it.
+  const fusionSweepDirRef = useRef(false)
+  const styleClockRef = useRef<StyleClock | null>(null)
+  if (styleClockRef.current === null) {
+    styleClockRef.current = createStyleClock()
+  }
   const liveMaterial = useMemo(() => {
     const base = resolveMaterialParams(materialPreset, customMaterial)
-    return new THREE.MeshPhysicalMaterial({
+    const mat = new THREE.MeshPhysicalMaterial({
       color: new THREE.Color(base.color),
       roughness: base.roughness,
       metalness: base.metalness,
@@ -372,7 +500,21 @@ function AnimatedStrokes({
       emissive: new THREE.Color(base.emissive),
       emissiveIntensity: base.emissiveIntensity,
       envMapIntensity: base.envMapIntensity,
+      iridescence: base.iridescence ?? 0,
+      iridescenceIOR: base.iridescenceIOR ?? 1.3,
+      // Wider film thickness = more interference orders = more simultaneous
+      // hues. Static per preset (no animation touches it), so creation-only.
+      iridescenceThicknessRange: base.iridescenceThicknessRange ?? [100, 400],
     })
+    // Every style layer rides the same shared material across all four modes.
+    applyStyleShader(mat, {
+      texture: textureUniformsRef.current!,
+      sweep: sweepUniformsRef.current!,
+      dither: ditherUniformsRef.current!,
+      ascii: asciiUniformsRef.current!,
+      stack: stackUniformsRef.current!,
+    })
+    return mat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [materialPreset, customMaterial])
 
@@ -390,7 +532,266 @@ function AnimatedStrokes({
     [materialPreset, customMaterial],
   )
 
-  useFrame((state) => {
+  useFrame((state, delta) => {
+    // ---- Shared style clock (advance ONCE, before any layer reads it) ---
+    const clock = styleClockRef.current!
+    advanceStyleClock(clock, delta, playheadRef.current, totalDuration)
+    STYLE_CLOCK_DEBUG.elapsed = clock.elapsed
+    STYLE_CLOCK_DEBUG.reveal = clock.reveal
+    STYLE_CLOCK_DEBUG.sinceCompletion = clock.sinceCompletion
+
+    // Layer stack: composition-level opacity / blend / order, resolved once.
+    const stack = styleState ? resolveStack(styleState) : null
+    if (stack) stackUniformsRef.current!.uFsStackOrder.value = stack.order
+
+    // Stack-level animation: the whole GROUP as one container. Produces a
+    // group amount (fades/pulses) and a shared time offset (the stack drifts
+    // together), both applied uniformly below so layers keep their relative
+    // balance — a preset tuned "ASCII dominant, others supporting" stays that
+    // way while the group fades in.
+    // Re-arm whenever the behaviour (or its enabled state) changes.
+    const armKey = styleState
+      ? `${styleState.layerStackEnabled && styleState.stackAnimationEnabled}:${styleState.stackAnimationType}`
+      : ""
+    if (stackArmRef.current.key !== armKey) {
+      stackArmRef.current = { key: armKey, at: clock.elapsed }
+    }
+    const groupAnim = styleState
+      ? evaluateStackAnimation({
+          enabled: styleState.layerStackEnabled && styleState.stackAnimationEnabled,
+          behaviour: styleState.stackAnimationType,
+          speed: styleState.stackAnimationSpeed,
+          phase: styleState.stackAnimationPhase,
+          sinceArmed: clock.elapsed - stackArmRef.current.at,
+          reveal: clock.reveal,
+          sinceCompletion: clock.sinceCompletion,
+          loopSeconds: styleState.styleLoopSeconds,
+        })
+      : null
+    const gAmt = groupAnim ? groupAnim.amount : 1
+    const gOff = groupAnim ? groupAnim.timeOffset : 0
+    // freezeOnComplete holds every layer's phase at the frame the reveal ended.
+    if (groupAnim?.frozen) {
+      if (frozenPhaseRef.current === null) {
+        frozenPhaseRef.current = {
+          tex: textureUniformsRef.current!.uFsTexTime.value,
+          dit: ditherUniformsRef.current!.uFsDitTime.value,
+          asc: asciiUniformsRef.current!.uFsAscTime.value,
+        }
+      }
+    } else {
+      frozenPhaseRef.current = null
+    }
+    const frozen = frozenPhaseRef.current
+    // True while a group drift/loop offset is actively sliding the stack.
+    // Layers with no motion of their own read this to keep formation (see the
+    // dither direction fallback and the ASCII scroll fallback below).
+    const groupSliding = gOff !== 0 && !frozen
+    STYLE_CLOCK_DEBUG.groupAmount = gAmt
+    STYLE_CLOCK_DEBUG.groupOffset = gOff
+    STYLE_CLOCK_DEBUG.groupFrozen = !!groupAnim?.frozen
+
+    // ---- Procedural texture v1 (uniform writes only) --------------------
+    // Pattern selection + params + animation phase all flow through uniform
+    // values on the injected shader. No material swap, no recompile, no
+    // geometry rebuild — verified against the Extrude previewBuildCount.
+    if (styleState) {
+      const u = textureUniformsRef.current!
+      const texOn = styleState.textureEnabled && styleState.textureMode !== "none"
+      u.uFsTexType.value = texOn ? TEXTURE_TYPE_INDEX[styleState.textureMode] : 0
+      u.uFsTexScale.value = styleState.textureScale
+      u.uFsTexIntensity.value = styleState.textureIntensity
+      u.uFsTexContrast.value = styleState.textureContrast
+      u.uFsTexLockScreen.value = styleState.textureLockMode === "screen" ? 1 : 0
+      const dir = styleState.textureDirection
+      u.uFsTexDirX.value = dir === "vertical" ? 0 : dir === "diagonal" ? 0.7071 : 1
+      u.uFsTexDirY.value = dir === "horizontal" ? 0 : dir === "diagonal" ? 0.7071 : 1
+      // Phase comes from the shared clock (lib/style-clock.ts), not a local
+      // accumulator — see the timing explainer for why the three renderers no
+      // longer each roll their own.
+      const texSync = resolveSyncMode(styleState.motionMode, styleState.textureSyncMode)
+      const texT = evaluateLayerTime(clock, {
+        animated: texOn && styleState.textureAnimated && texSync.animated,
+        syncMode: texSync.syncMode,
+        // Base rate 0.6 → 1.2 after live judging: at 0.6 a default-speed
+        // pattern took ~4s to travel one feature width and read as static.
+        // Decorative surface motion on the canvas object is allowed to be
+        // present — it is not UI-chrome motion that must stay out of the way.
+        speed: styleState.textureSpeed * 1.2,
+        phase: styleState.texturePhase,
+        delay: styleState.textureDelay,
+        loopSeconds: styleState.styleLoopSeconds,
+        revealScale: 4,
+      })
+      u.uFsTexTime.value = frozen
+        ? frozen.tex
+        : texT.active
+          ? texT.time + gOff
+          : styleState.texturePhase + gOff
+      // One-shot / delayed modes fade the layer in and out via `amount`.
+      // Stack opacity multiplies the layer's own intensity; the timing
+      // envelope (`amount`) then scales one-shot / delayed modes on top.
+      const texBase = stack ? stack.textureAmount : styleState.textureIntensity
+      u.uFsTexIntensity.value =
+        (texT.active && texT.amount < 1 ? texBase * texT.amount : texBase) * gAmt
+    }
+
+    // ---- Dither v1 (uniform writes only) --------------------------------
+    // Dither is a SEPARATE system from texture: it reduces final shaded tone
+    // through a threshold map. Same no-rebuild contract — uniforms only.
+    if (styleState) {
+      const d = ditherUniformsRef.current!
+      const ditOn = styleState.ditherEnabled
+      d.uFsDitType.value = ditOn ? DITHER_TYPE_INDEX[styleState.ditherType] : 0
+      d.uFsDitScale.value = styleState.ditherScale
+      d.uFsDitContrast.value = styleState.ditherContrast
+      d.uFsDitIntensity.value = stack ? stack.ditherAmount : styleState.ditherIntensity
+      d.uFsDitBlend.value = stack ? stack.ditherBlend : 0
+      d.uFsDitLevels.value = styleState.ditherLevels
+      d.uFsDitExposure.value = styleState.ditherExposure ?? 0.5
+      d.uFsDitAngle.value = ((styleState.ditherAngle ?? 45) * Math.PI) / 180
+      d.uFsDitLockScreen.value = styleState.ditherLockMode === "screen" ? 1 : 0
+      const [ddx, ddy] = DITHER_DIRECTION_VEC[styleState.ditherDirection]
+      // Group drift/loop add a shared time offset — but a STATIC dither
+      // direction is the zero vector, so `dir * time` discarded the offset and
+      // the dither layer sat still while the group "drifted" (measured
+      // consecutive-frame Δ 0.00 on Terminal Stack + Stack Drift). When the
+      // group is sliding and the layer has no travel direction of its own,
+      // borrow the classic diagonal so the whole stack actually moves in
+      // formation.
+      if (groupSliding && styleState.ditherDirection === "static") {
+        d.uFsDitDirX.value = 0.7071
+        d.uFsDitDirY.value = 0.7071
+      } else {
+        d.uFsDitDirX.value = ddx
+        d.uFsDitDirY.value = ddy
+      }
+
+      const ditSync = resolveSyncMode(styleState.motionMode, styleState.ditherSyncMode)
+      const ditT = evaluateLayerTime(clock, {
+        animated: ditOn && styleState.ditherAnimated && ditSync.animated,
+        syncMode: ditSync.syncMode,
+        speed: styleState.ditherSpeed * 6,
+        delay: styleState.ditherDelay,
+        loopSeconds: styleState.styleLoopSeconds,
+        revealScale: 6,
+      })
+      // MATRIX motion: shift which threshold cell each pixel samples.
+      d.uFsDitTime.value = frozen ? frozen.dit : ditT.active ? ditT.time + gOff : gOff
+      if (ditT.active && ditT.amount < 1) d.uFsDitIntensity.value *= ditT.amount
+      d.uFsDitIntensity.value *= gAmt
+      // THRESHOLD-BIAS motion: with no travel direction the matrix cannot move,
+      // so animation instead sweeps the bias — tone opens and closes in place.
+      // This is what distinguishes "Threshold Sweep" from "Dither Crawl".
+      if (ditT.active && styleState.ditherDirection === "static") {
+        const revealDriven =
+          ditSync.syncMode === "revealSynced" || ditSync.syncMode === "strokeTimeSynced"
+        const sweep = revealDriven
+          ? // reveal-driven: the threshold opens as the stroke draws in
+            (1 - clock.reveal) * 0.42
+          : Math.sin(ditT.time * 0.27) * 0.22
+        d.uFsDitThreshold.value = styleState.ditherThreshold + sweep * ditT.amount
+      } else {
+        d.uFsDitThreshold.value = styleState.ditherThreshold
+      }
+    }
+
+    // ---- ASCII v1 (uniform writes only) ---------------------------------
+    // ASCII is the THIRD system: glyph rendering, distinct from texture
+    // (pattern) and dither (threshold). Same no-rebuild contract.
+    if (styleState) {
+      const a = asciiUniformsRef.current!
+      const ascOn = styleState.asciiEnabled
+      a.uFsAscOn.value = ascOn ? 1 : 0
+      a.uFsAscCharset.value = ASCII_CHARSET_INDEX[styleState.asciiCharset]
+      a.uFsAscCell.value = styleState.asciiCellSize
+      a.uFsAscDensity.value = styleState.asciiDensity
+      a.uFsAscContrast.value = styleState.asciiContrast
+      a.uFsAscLockScreen.value = styleState.asciiLockMode === "screen" ? 1 : 0
+      a.uFsAscReveal.value = playheadRef.current
+      const [adx, ady] = ASCII_DIRECTION_VEC[styleState.asciiDirection]
+      a.uFsAscDirX.value = adx
+      a.uFsAscDirY.value = ady
+
+      const ascSync = resolveSyncMode(styleState.motionMode, styleState.asciiSyncMode)
+      const ascT = evaluateLayerTime(clock, {
+        animated:
+          ascOn &&
+          styleState.asciiAnimated &&
+          styleState.asciiAnimationType !== "none" &&
+          ascSync.animated,
+        syncMode: ascSync.syncMode,
+        speed: styleState.asciiScrollSpeed * 1.6,
+        delay: styleState.asciiDelay,
+        loopSeconds: styleState.styleLoopSeconds,
+        revealScale: 8,
+      })
+      // A non-animated ASCII layer ignores uFsAscTime entirely (the shader
+      // only reads it inside the animation branches), which silently discarded
+      // the group drift/loop offset — the glyph grid sat still while the rest
+      // of the stack slid (the same invisibility bug as the dither direction
+      // above). While the group is sliding, drive the grid through the SCROLL
+      // branch with only the shared offset, so the stack moves as one.
+      a.uFsAscAnim.value = ascT.active
+        ? ASCII_ANIM_INDEX[styleState.asciiAnimationType]
+        : groupSliding && ascOn
+          ? ASCII_ANIM_INDEX.scroll
+          : 0
+      // revealDensity reads uFsAscReveal directly, so it needs no phase of its
+      // own; every other behaviour rides the shared clock.
+      a.uFsAscTime.value = frozen ? frozen.asc : ascT.active ? ascT.time + gOff : gOff
+      const ascBase = stack ? stack.asciiAmount : 1
+      a.uFsAscAmount.value =
+        (ascT.active && ascT.amount < 1 ? ascBase * ascT.amount : ascBase) * gAmt
+      a.uFsAscBlend.value = stack ? stack.asciiBlend : 0
+    }
+
+    // ---- FUSION (PRD phases 20/21) --------------------------------------
+    // Fusion = systems influencing each other: a modulation layer computed on
+    // the CPU each frame (lib/style-fusion.ts) and applied ON TOP of the
+    // uniform values the three systems just resolved above. It never forks a
+    // renderer and never touches geometry — same uniforms-only contract as
+    // everything else in this loop. The `signals` argument hands the engine
+    // the values the layers are ACTUALLY rendering with this frame, so a
+    // driven parameter is literally derived from the driver's live output.
+    let fusionFrame: ReturnType<typeof evaluateFusion> = null
+    if (styleState && styleState.fusionPreset !== "none") {
+      const fuseKey = `${styleState.fusionPreset}:${styleState.fusionAnimationEnabled}`
+      if (fusionArmRef.current.key !== fuseKey) {
+        fusionArmRef.current = { key: fuseKey, at: clock.elapsed }
+      }
+      fusionFrame = evaluateFusion(
+        styleState,
+        clock,
+        {
+          asciiTime: asciiUniformsRef.current!.uFsAscTime.value,
+          ditherTime: ditherUniformsRef.current!.uFsDitTime.value,
+          textureTime: textureUniformsRef.current!.uFsTexTime.value,
+        },
+        clock.elapsed - fusionArmRef.current.at,
+      )
+    } else {
+      fusionArmRef.current = { key: "", at: 0 }
+    }
+    if (fusionFrame) {
+      const fz = fusionFrame
+      const u = textureUniformsRef.current!
+      const d = ditherUniformsRef.current!
+      const a = asciiUniformsRef.current!
+      u.uFsTexIntensity.value *= fz.textureIntensityMul
+      u.uFsTexScale.value *= fz.textureScaleMul
+      u.uFsTexTime.value += fz.textureTimeAdd
+      d.uFsDitIntensity.value *= fz.ditherIntensityMul
+      d.uFsDitThreshold.value += fz.ditherThresholdAdd
+      d.uFsDitScale.value *= fz.ditherScaleMul
+      d.uFsDitTime.value += fz.ditherTimeAdd
+      a.uFsAscDensity.value = Math.min(
+        1,
+        Math.max(0, a.uFsAscDensity.value + fz.asciiDensityAdd),
+      )
+      a.uFsAscTime.value += fz.asciiTimeAdd
+    }
+
     // ---- Animated Material v1 (surface response only) -------------------
     // PREVIEW-ONLY: this modulates highlight/roughness/sheen/emissive each
     // frame. It NEVER touches geometry, the reveal clock, or export. When the
@@ -398,6 +799,56 @@ function AnimatedStrokes({
     if (styleState) {
       const animOn =
         styleState.materialAnimationEnabled && styleState.materialAnimationType !== "none"
+      // ---- Shine sweep band (shader-level, positional) ------------------
+      // The travelling highlight itself is per-fragment (lib/texture-shader
+      // SWEEP_* injections); the CPU animates only the band's center.
+      // TIMING (measured failure of the old cycle): 2.5s with a smoothstep
+      // crossing over ±1.35 left the band's center on-form only ~40% of the
+      // time — smoothstep dwells at the travel ends, which are OFF-form, and
+      // the 28% rest phase added more dead time. 10 frames sampled across a
+      // cycle produced only 4 distinct images; two frames 950ms apart could
+      // both land off-form and come out pixel-identical. "An event that
+      // passes" is worthless if most moments are the gap between events.
+      // Now: LINEAR travel (per the design framework, constant motion —
+      // marquee-class — gets linear easing; ease-in-out only spent its slow
+      // ends where nothing was visible) over ±1.15, taking 85% of a ~2.6s
+      // cycle, with a short ~0.4s off-form beat between passes. The form is
+      // lit for ~3/4 of every cycle. Duration sits deliberately above the
+      // 300ms UI ceiling: this is decorative, rarely-configured canvas
+      // motion — the framework's "marketing/explanatory: can be longer" tier,
+      // not UI feedback.
+      const sw = sweepUniformsRef.current!
+      if (animOn && styleState.materialAnimationType === "shineSweep") {
+        const completion = playheadRef.current
+        const swTime =
+          styleState.motionMode === "syncToDraw"
+            ? completion * 6
+            : state.clock.elapsedTime
+        const k = Math.min(1, Math.max(0, styleState.materialAnimationIntensity))
+        const cyc =
+          ((((swTime * styleState.materialAnimationSpeed) / 2.6) % 1) + 1) % 1
+        const tf = Math.min(1, cyc / 0.88)
+        // Position is in NORMALIZED stroke units (bounds radius = 1); ±1.12
+        // just clears the drawing on both sides with the wider band, and a
+        // short amplitude envelope at the travel ends fades the band in/out
+        // instead of relying on extra off-form travel distance — so there is
+        // no pop at wrap AND no long dark stretch (measured: the wider ±1.35
+        // margin left glossyPlastic pixel-identical for 2-3 consecutive
+        // 260ms samples).
+        sw.uFsSweepPos.value = -1.12 + tf * 2.24
+        const env =
+          tf < 0.05 ? tf / 0.05 : tf > 0.95 ? (1 - tf) / 0.05 : 1
+        sw.uFsSweepAmt.value = k * (cyc >= 0.88 ? 0 : env)
+        // Broad halo (the core is derived in-shader at 0.38× this width).
+        sw.uFsSweepWidth.value = 0.3 + 0.18 * k
+        if (bounds) {
+          sw.uFsSweepCx.value = bounds.center.x
+          sw.uFsSweepCy.value = bounds.center.y
+          sw.uFsSweepR.value = Math.max(bounds.radius, 0.0001)
+        }
+      } else {
+        sw.uFsSweepAmt.value = 0
+      }
       if (animOn) {
         // Motion clock: "syncToDraw" ties the phase to draw-in progress so the
         // surface animation reads as part of the same gesture; otherwise it
@@ -414,6 +865,9 @@ function AnimatedStrokes({
           speed: styleState.materialAnimationSpeed,
           intensity: styleState.materialAnimationIntensity,
           completion,
+          // Real post-completion clock so one-shot accents (completionFlash)
+          // can decay instead of freezing at their completion-1.0 value.
+          sinceCompletion: clock.sinceCompletion,
         })
         liveMaterial.color.set(next.color)
         liveMaterial.roughness = next.roughness
@@ -427,17 +881,80 @@ function AnimatedStrokes({
         liveMaterial.emissive.set(next.emissive)
         liveMaterial.emissiveIntensity = next.emissiveIntensity
         liveMaterial.envMapIntensity = next.envMapIntensity
+        liveMaterial.iridescence = next.iridescence ?? 0
       } else {
         // Animation off → pin the surface to its static base so it never
-        // freezes on the last animated frame.
+        // freezes on the last animated frame. Pins EVERY field an animation
+        // can touch (metalness/emissive/sheenColor were previously left
+        // stuck at their last animated values). Color is pinned too:
+        // roughnessPulse darkens it (wet look) and fusion scales it, so
+        // without the pin either would leak into later frames.
+        liveMaterial.color.set(baseParams.color)
         liveMaterial.roughness = baseParams.roughness
+        liveMaterial.metalness = baseParams.metalness
         liveMaterial.clearcoat = baseParams.clearcoat
         liveMaterial.clearcoatRoughness = baseParams.clearcoatRoughness
         liveMaterial.reflectivity = baseParams.reflectivity
         liveMaterial.sheen = baseParams.sheen
         liveMaterial.sheenRoughness = baseParams.sheenRoughness
+        liveMaterial.sheenColor.set(baseParams.sheenColor)
+        liveMaterial.emissive.set(baseParams.emissive)
         liveMaterial.emissiveIntensity = baseParams.emissiveIntensity
         liveMaterial.envMapIntensity = baseParams.envMapIntensity
+        liveMaterial.iridescence = baseParams.iridescence ?? 0
+      }
+
+      // ---- Fusion: material half of the relationships -------------------
+      // Applied AFTER the animated-material/base writes above, so fusion's
+      // surface response (shine following a threshold signal, wet darkening,
+      // glow surges) modulates whatever this frame's surface already is.
+      // Color/emissive are safe to scale because both branches above set
+      // them fresh every frame — nothing accumulates.
+      if (fusionFrame) {
+        const fz = fusionFrame
+        const c01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
+        liveMaterial.clearcoat = c01(liveMaterial.clearcoat + fz.clearcoatAdd)
+        liveMaterial.roughness = c01(liveMaterial.roughness + fz.roughnessAdd)
+        liveMaterial.envMapIntensity += fz.envMapAdd
+        liveMaterial.sheen = c01(liveMaterial.sheen + fz.sheenAdd)
+        liveMaterial.metalness = c01(liveMaterial.metalness + fz.metalnessAdd)
+        if (fz.colorScale !== 1) liveMaterial.color.multiplyScalar(fz.colorScale)
+        if (fz.emissiveAdd > 0) {
+          // Give black-emissive bases the preset's own glow colour, so the
+          // angle-independent half of every shine relationship actually reads.
+          const em = liveMaterial.emissive
+          if (em.r === 0 && em.g === 0 && em.b === 0 && fz.emissiveColor) {
+            em.set(fz.emissiveColor)
+          }
+          liveMaterial.emissiveIntensity += fz.emissiveAdd
+        }
+        // Shine band locked to a moving layer field (ASCII Rubber): position,
+        // direction and strength come from the fusion frame — overriding the
+        // material-animation sweep, which fusion supersedes while active.
+        const sw = sweepUniformsRef.current!
+        if (fz.sweep) {
+          sw.uFsSweepPos.value = fz.sweep.pos
+          sw.uFsSweepAmt.value = fz.sweep.amt
+          sw.uFsSweepWidth.value = fz.sweep.width
+          sw.uFsSweepDirX.value = fz.sweep.dirX
+          sw.uFsSweepDirY.value = fz.sweep.dirY
+          if (bounds) {
+            sw.uFsSweepCx.value = bounds.center.x
+            sw.uFsSweepCy.value = bounds.center.y
+            sw.uFsSweepR.value = Math.max(bounds.radius, 0.0001)
+          }
+          fusionSweepDirRef.current = true
+        } else if (fusionSweepDirRef.current) {
+          // Restore the default sweep axis once fusion stops driving it.
+          sw.uFsSweepDirX.value = 0.87
+          sw.uFsSweepDirY.value = 0.5
+          fusionSweepDirRef.current = false
+        }
+      } else if (fusionSweepDirRef.current) {
+        const sw = sweepUniformsRef.current!
+        sw.uFsSweepDirX.value = 0.87
+        sw.uFsSweepDirY.value = 0.5
+        fusionSweepDirRef.current = false
       }
     }
 
@@ -638,7 +1155,10 @@ function AnimatedStrokes({
             })()}
             {data.mode === "rod" && data.jointPositions && (() => {
               const r = data.capRadius ?? TUBE_RADIUS
-              const jointGeo = r === TUBE_RADIUS ? sphereGeometry : new THREE.SphereGeometry(r, SPHERE_SEGMENTS, SPHERE_SEGMENTS)
+              const jointGeo =
+                r === TUBE_RADIUS
+                  ? jointSphereGeometry
+                  : new THREE.SphereGeometry(r, JOINT_SPHERE_SEGMENTS, JOINT_SPHERE_SEGMENTS)
               return (
                 <group ref={(el) => { jointGroupRefs.current[si] = el }}>
                   {data.jointPositions.map((pos, ji) => (
@@ -790,6 +1310,57 @@ function SolidAnimationTick({
  *   6. Original stroke data is never mutated; partial strokes are shallow-copied
  *      and only the new points array is freshly constructed.
  */
+/* ---- Pen-timing map for the partial-rebuild reveal (stack craft pass) ----
+ *
+ * `filterStrokesByProgress` cuts by ARC LENGTH, so feeding it the raw playhead
+ * fraction gives a constant-speed reveal — every hesitation, dwell and flick
+ * in the recorded pen timing was flattened out, and the Natural / Authentic
+ * toggle silently did NOTHING in Solid, Extrude and Inflate (it only reached
+ * Rod's drawRange path). A control that renders identically whatever you set
+ * it to is this codebase's cardinal sin.
+ *
+ * This helper converts a TIME fraction into the DISTANCE fraction the pen had
+ * actually covered at that moment, walking the processed points' own
+ * timestamps (which survive resampling). Gaps between strokes naturally hold
+ * — nothing advances while the pen was in the air, exactly like Rod.
+ * Returns null when the strokes carry no usable timing (degenerate range).
+ */
+function penTimeDistanceFraction(
+  strokes: ProcessedStroke[],
+  timeFrac: number,
+): number | null {
+  let t0 = Infinity
+  let t1 = -Infinity
+  for (const s of strokes) {
+    const pts = s.points
+    if (pts.length === 0) continue
+    t0 = Math.min(t0, pts[0].t)
+    t1 = Math.max(t1, pts[pts.length - 1].t)
+  }
+  if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 - t0 <= 0) return null
+  const now = t0 + (t1 - t0) * Math.max(0, Math.min(1, timeFrac))
+  let total = 0
+  let revealed = 0
+  for (const s of strokes) {
+    const pts = s.points
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x
+      const dy = pts[i].y - pts[i - 1].y
+      const seg = Math.sqrt(dx * dx + dy * dy)
+      total += seg
+      const ta = pts[i - 1].t
+      const tb = pts[i].t
+      if (tb <= now) {
+        revealed += seg
+      } else if (ta < now && tb > ta) {
+        revealed += (seg * (now - ta)) / (tb - ta)
+      }
+    }
+  }
+  if (total <= 0) return null
+  return revealed / total
+}
+
 function filterStrokesByProgress(
   strokes: ProcessedStroke[],
   progress: number,
@@ -1061,7 +1632,21 @@ function Scene({
       geometryMode !== "inflate"
     )
       return strokes
-    const out = filterStrokesByProgress(strokes, solidAnimProgress)
+    // Honour the pen's recorded timing (see penTimeDistanceFraction): map the
+    // playhead TIME fraction to the DISTANCE the pen had covered, respecting
+    // the same Natural (hybrid) / Authentic (raw) / Smooth semantics as Rod.
+    // Smooth remains the old constant-speed arc reveal.
+    let revealFrac = solidAnimProgress
+    if (revealMode !== "smooth" && solidAnimProgress > 0 && solidAnimProgress < 1) {
+      const raw = penTimeDistanceFraction(strokes, solidAnimProgress)
+      if (raw !== null) {
+        revealFrac =
+          revealMode === "hybrid"
+            ? raw + (solidAnimProgress - raw) * hybridBlend
+            : raw
+      }
+    }
+    const out = filterStrokesByProgress(strokes, revealFrac)
 
     // ---- Diagnostics ----
     // Total arc length across the full strokes prop (denominator).
@@ -1099,7 +1684,7 @@ function Scene({
     // identical to the static H3 path. We mark YES; any lower progress -> NO.
     SOLID_ANIM_DEBUG.finalFrameMatchesStatic = solidAnimProgress >= 1 ? "YES" : "NO"
     return out
-  }, [strokes, geometryMode, solidAnimProgress])
+  }, [strokes, geometryMode, solidAnimProgress, revealMode, hybridBlend])
 
   // Animation active flag tracked alongside `playing` so the debug overlay
   // can distinguish "playback running" from "playback paused mid-reveal".
@@ -1573,6 +2158,12 @@ function Scene({
   // the rebuild path is broken. If it does fire and `bboxZ` matches the new
   // depth, the rebuild path is correct and any visible-staleness is downstream
   // (camera angle / material / R3F prop swap).
+  // Mode-agnostic build counter: `meshes` IS the geometry build output, so a
+  // change here means geometry was rebuilt. Style-only changes must not fire.
+  useEffect(() => {
+    GEOM_BUILD_DEBUG.buildCount += 1
+  }, [meshes])
+
   const extrudeBuildCountRef = useRef(0)
   useEffect(() => {
     if (!extrudeDebugRef) return
@@ -1650,12 +2241,17 @@ function Scene({
           preset collapses to "dark + slightly different roughness", which is
           exactly why all four modes looked identical. resolution kept small;
           frames=1 bakes it once (static, no per-frame cost). */}
+      {/* Rig strengthened after live judging: at the old intensities the
+          glossy presets were indistinguishable from ink at real stroke sizes —
+          almost nothing bright existed to reflect. Matte presets are shielded
+          by their own low envMapIntensity, so the hot rig does not wash them
+          out; it is exactly the glossy/metal family that picks it up. */}
       <Environment resolution={256} frames={1} background={false}>
-        <color attach="background" args={["#15171a"]} />
+        <color attach="background" args={["#1a1d22"]} />
         {/* Big soft key panel (top-front) → broad clearcoat/gloss highlight */}
         <Lightformer
           form="rect"
-          intensity={3}
+          intensity={5}
           color="#ffffff"
           position={[2.5, 4, 3]}
           rotation={[-Math.PI / 3, 0, 0]}
@@ -1664,7 +2260,7 @@ function Scene({
         {/* Cool rim panel (back-left) → separates dark surfaces from dark bg */}
         <Lightformer
           form="rect"
-          intensity={1.6}
+          intensity={2.5}
           color="#9fc4ff"
           position={[-4, 1.5, -3]}
           rotation={[0, Math.PI / 2.2, 0]}
@@ -1673,20 +2269,90 @@ function Scene({
         {/* Warm low fill (front-low) → gives sheen/rubber a soft underside glow */}
         <Lightformer
           form="rect"
-          intensity={1.1}
+          intensity={1.8}
           color="#ffd9b0"
           position={[1, -2.5, 2]}
           rotation={[Math.PI / 2.5, 0, 0]}
           scale={[6, 3, 1]}
         />
-        {/* Tight bright streak → crisp moving specular for Shine Sweep / gloss */}
+        {/* Tight bright streak → crisp specular line for gloss/chrome. The
+            thing a "wet" surface visibly mirrors. */}
         <Lightformer
           form="rect"
-          intensity={4}
+          intensity={8}
           color="#ffffff"
           position={[-1.5, 3, 2.5]}
           rotation={[-Math.PI / 4, 0, 0]}
-          scale={[0.6, 5, 1]}
+          scale={[0.4, 6, 1]}
+        />
+        {/* Long horizon band (eye level, behind) → gives chrome/gold/glossy a
+            classic studio horizon to reflect, which is what makes metal read
+            as metal instead of gray. */}
+        <Lightformer
+          form="rect"
+          intensity={4.5}
+          color="#f2ede4"
+          position={[0, 0.4, -6]}
+          scale={[14, 0.8, 1]}
+        />
+        {/* Three vertical "window" slats (front-right, camera side) → the
+            structure a mirror needs. A mirror only reads as a mirror when the
+            reflection has EDGES — distinct bright shapes separated by dark
+            gaps that stretch and slide over the curvature. Before these,
+            chrome had one soft key + one streak to reflect and read as dark
+            gray metal. Slats face the origin from the DEFAULT CAMERA side, so
+            the mirror read is head-on, not orbit-only. Matte presets are
+            shielded by their own envMapIntensity (chalk 0.05, clay 0.12) —
+            verified live that they do not wash out. */}
+        <Lightformer
+          form="rect"
+          intensity={6}
+          color="#ffffff"
+          position={[2.2, 1.6, 4.5]}
+          rotation={[0, -0.44, 0]}
+          scale={[0.5, 5, 1]}
+        />
+        <Lightformer
+          form="rect"
+          intensity={6}
+          color="#eef2f8"
+          position={[3.4, 1.6, 3.6]}
+          rotation={[0, -0.65, 0]}
+          scale={[0.5, 5, 1]}
+        />
+        <Lightformer
+          form="rect"
+          intensity={6}
+          color="#ffffff"
+          position={[4.4, 1.6, 2.4]}
+          rotation={[0, -0.9, 0]}
+          scale={[0.5, 5, 1]}
+        />
+        {/* Soft wall BEHIND the camera (+z, big, dim) → flat faces that look
+            straight at the viewer reflect straight back past the viewer, and
+            before this panel that direction was pure void: chrome/iridescent
+            front faces rendered as black holes head-on. A broad dim panel
+            gives them a gentle graded reflection (and gives the thin-film
+            preset a head-on signal to tint) while the slats keep supplying
+            the hard structure. Intensity kept low so glossy blacks stay
+            black-family. */}
+        <Lightformer
+          form="rect"
+          intensity={0.55}
+          color="#eef1f6"
+          position={[0, 1.2, 7]}
+          scale={[9, 6, 1]}
+        />
+        {/* Dim floor bounce (below) → separates a metal's dark underside from
+            plain black: the lower half of a chrome tube reflects a faint warm
+            floor instead of nothing, which sells "object in a room". */}
+        <Lightformer
+          form="rect"
+          intensity={1.2}
+          color="#b9a98f"
+          position={[0, -4, 1]}
+          rotation={[Math.PI / 2, 0, 0]}
+          scale={[10, 10, 1]}
         />
       </Environment>
 
@@ -1706,6 +2372,7 @@ function Scene({
             hybridBlend={hybridBlend}
             exportGroupRef={exportGroupRef}
             styleState={styleState}
+            bounds={bounds}
           />
 
       <PlaybackController
@@ -2081,87 +2748,109 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
    * Build a fresh export-only scene with merged geometry per stroke,
    * centered at origin, with deterministic naming. No viewer junk.
    */
-  const handleExportGLB = useCallback(async () => {
-    if (processedStrokes.length === 0) return
-
-    setExporting(true)
-    try {
-      const engine = getEngine(geometryMode)
-      const settings = settingsRef?.current
-
-      const exportResult = engine.buildExport(processedStrokes, {
-        canvasWidth,
-        canvasHeight,
-        exportName,
-        strokeCount,
-        totalPoints,
+  /**
+   * Builds the GLB ArrayBuffer for the current mode. Extracted from
+   * `handleExportGLB` so the download path and the dev verification hook run
+   * the EXACT same export code — a harness that exercised a parallel path
+   * would prove nothing about the real export.
+   * Returns null when there is nothing exportable.
+   */
+  const buildGLBBuffer = useCallback(async (): Promise<ArrayBuffer | null> => {
+    if (processedStrokes.length === 0) return null
+    const engine = getEngine(geometryMode)
+    const settings = settingsRef?.current
+    const exportResult = engine.buildExport(processedStrokes, {
+      canvasWidth,
+      canvasHeight,
+      exportName,
+      strokeCount,
+      totalPoints,
       extrudeParams,
       solidParams,
       settings: {
-          spacing: settings?.spacing ?? null,
-          smoothingEnabled: settings?.smoothing ?? null,
-          cornersEnabled: settings?.preserveCorners ?? null,
-        },
-      })
+        spacing: settings?.spacing ?? null,
+        smoothingEnabled: settings?.smoothing ?? null,
+        cornersEnabled: settings?.preserveCorners ?? null,
+      },
+    })
+    if (exportResult.objectCount === 0) return null
 
-      if (exportResult.objectCount === 0) {
-        setExporting(false)
-        return
-      }
+    const exportScene = new THREE.Scene()
+    exportScene.add(exportResult.group)
 
-      // Build export scene
-      const exportScene = new THREE.Scene()
-      exportScene.add(exportResult.group)
-
-      // Dev-only scene verification
-      if (process.env.NODE_ENV === "development") {
-        const FORBIDDEN_NAMES = ["grid", "helper", "cube", "debug", "controls"]
-        let meshCount = 0
-        exportScene.traverse((node) => {
-          if (node instanceof THREE.Mesh) meshCount++
-          const nameLower = (node.name || "").toLowerCase()
-          for (const f of FORBIDDEN_NAMES) {
-            if (nameLower.includes(f)) {
-              console.warn(`[FreeStroke Export] ASSERTION: found forbidden name "${node.name}" in export scene`)
-            }
-          }
-        })
-
-        if (exportScene.children.length !== 1 || exportScene.children[0].name !== "FreeStroke") {
-          console.warn("[FreeStroke Export] ASSERTION: root is not a single group named FreeStroke")
-        }
-        void meshCount
-      }
-
-      // Export to GLB
-      const exporter = new GLTFExporter()
-      const result = await new Promise<ArrayBuffer>((resolve, reject) => {
-        exporter.parse(
-          exportScene,
-          (gltf) => resolve(gltf as ArrayBuffer),
-          (error) => reject(error),
-          { binary: true }
-        )
-      })
-
-      // Dispose export-only resources
-      for (const g of exportResult.disposables) g.dispose()
+    if (process.env.NODE_ENV === "development") {
+      const FORBIDDEN_NAMES = ["grid", "helper", "cube", "debug", "controls"]
       exportScene.traverse((node) => {
-        if (node instanceof THREE.Mesh) {
-          node.geometry?.dispose()
-          if (node.material instanceof THREE.Material) node.material.dispose()
+        const nameLower = (node.name || "").toLowerCase()
+        for (const f of FORBIDDEN_NAMES) {
+          if (nameLower.includes(f)) {
+            console.warn(`[FreeStroke Export] ASSERTION: found forbidden name "${node.name}" in export scene`)
+          }
         }
       })
+      if (exportScene.children.length !== 1 || exportScene.children[0].name !== "FreeStroke") {
+        console.warn("[FreeStroke Export] ASSERTION: root is not a single group named FreeStroke")
+      }
+    }
 
-      // Build filename
+    const exporter = new GLTFExporter()
+    const buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+      exporter.parse(exportScene, (gltf) => resolve(gltf as ArrayBuffer), (error) => reject(error), {
+        binary: true,
+      })
+    })
+
+    for (const g of exportResult.disposables) g.dispose()
+    exportScene.traverse((node) => {
+      if (node instanceof THREE.Mesh) {
+        node.geometry?.dispose()
+        if (node.material instanceof THREE.Material) node.material.dispose()
+      }
+    })
+    return buffer
+  }, [
+    processedStrokes,
+    geometryMode,
+    extrudeParams,
+    solidParams,
+    exportName,
+    settingsRef,
+    strokeCount,
+    totalPoints,
+    canvasWidth,
+    canvasHeight,
+  ])
+
+  // DEV-ONLY verification hook: lets scripts/verify/verify-gates.mjs assert the
+  // geometry-rebuild gate and export health without clicking the UI.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return
+    const w = window as unknown as Record<string, unknown>
+    w.__geomDebug = {
+      buildCount: () => GEOM_BUILD_DEBUG.buildCount,
+      exportBytes: async () => (await buildGLBBuffer())?.byteLength ?? 0,
+    }
+    return () => {
+      delete w.__geomDebug
+    }
+  }, [buildGLBBuffer])
+
+  // Thin download wrapper: all export geometry/material logic lives in the
+  // shared `buildGLBBuffer` above, so the button and the verification harness
+  // exercise identical code.
+  const handleExportGLB = useCallback(async () => {
+    if (processedStrokes.length === 0) return
+    setExporting(true)
+    try {
+      const result = await buildGLBBuffer()
+      if (!result) return
+
       const now = new Date()
       const pad = (n: number) => String(n).padStart(2, "0")
       const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
       const safeName = exportName.trim().replace(/[^a-zA-Z0-9_-]/g, "-")
-      const prefix = safeName ? `${safeName}_` : "free-stroke_"
-      const filename = `${prefix}${ts}.glb`
+      const filename = `${safeName ? `${safeName}_` : "free-stroke_"}${ts}.glb`
 
-      // Download
       const blob = new Blob([result], { type: "application/octet-stream" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -2176,7 +2865,7 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
     } finally {
       setExporting(false)
     }
-  }, [processedStrokes, geometryMode, extrudeParams, solidParams, exportName, settingsRef, strokeCount, totalPoints, canvasWidth, canvasHeight])
+  }, [processedStrokes, buildGLBBuffer, exportName])
 
   const formatDuration = (ms: number, frac: number) => {
     const sec = (ms * frac) / 1000
@@ -2417,19 +3106,107 @@ export default function Viewport3D({ processedStrokes, rawStrokes, geometryMode,
                 )
               })()}
               <div className="mt-0.5 text-foreground/80">— Texture (procedural patterning only) —</div>
+              <div>textureRendererImplemented: YES (v1)</div>
               <div>textureMode: {styleState.textureMode}</div>
               <div>textureEnabled: {String(styleState.textureEnabled)}</div>
               <div>textureAnimated: {String(styleState.textureAnimated)}</div>
+              <div>textureTypeIndex: {TEXTURE_TYPE_INDEX[styleState.textureMode]}</div>
+              <div>textureScale: {styleState.textureScale.toFixed(2)}</div>
+              <div>textureIntensity: {styleState.textureIntensity.toFixed(2)}</div>
+              <div>textureContrast: {styleState.textureContrast.toFixed(2)}</div>
+              <div>textureSpeed: {styleState.textureSpeed.toFixed(2)}</div>
+              <div>textureDirection: {styleState.textureDirection}</div>
+              <div>textureLockMode: {styleState.textureLockMode}</div>
+              <div>textureAppliedToAllModes: YES (shared material)</div>
+              <div>textureDoesNotTouchGeometry: YES</div>
+              <div>
+                textureAnimationClock:{" "}
+                {styleState.motionMode === "syncToDraw"
+                  ? "revealProgress"
+                  : styleState.motionMode === "independent"
+                    ? "elapsedTime"
+                    : "off (static)"}
+              </div>
+              <div>textureIsNotDither: YES (pattern, no threshold logic)</div>
+              <div>textureIsNotAscii: YES (pattern, no glyphs)</div>
               <div className="mt-0.5 text-foreground/80">— Dither (separate system) —</div>
+              <div>ditherRendererImplemented: YES (v1)</div>
               <div>ditherEnabled: {String(styleState.ditherEnabled)}</div>
               <div>ditherAnimated: {String(styleState.ditherAnimated)}</div>
               <div>ditherType: {styleState.ditherType}</div>
+              <div>ditherTypeIndex: {DITHER_TYPE_INDEX[styleState.ditherType]}</div>
+              <div>ditherScale (cell): {styleState.ditherScale.toFixed(1)}</div>
+              <div>ditherLevels: {styleState.ditherLevels}</div>
+              <div>ditherThreshold: {styleState.ditherThreshold.toFixed(2)}</div>
+              <div>ditherContrast: {styleState.ditherContrast.toFixed(2)}</div>
+              <div>ditherIntensity: {styleState.ditherIntensity.toFixed(2)}</div>
+              <div>ditherDirection: {styleState.ditherDirection}</div>
+              <div>ditherLockMode: {styleState.ditherLockMode}</div>
+              <div>ditherStage: after lighting (dithering_fragment)</div>
+              <div>
+                ditherAnimationKind:{" "}
+                {styleState.ditherDirection === "static" ? "threshold-bias sweep" : "matrix crawl"}
+              </div>
+              <div>ditherAppliedToAllModes: YES (shared material)</div>
+              <div>ditherDoesNotTouchGeometry: YES</div>
+              <div>ditherIsNotTexture: YES (threshold, not pattern)</div>
+              <div>ditherIsNotAscii: YES (threshold, not glyphs)</div>
               <div className="mt-0.5 text-foreground/80">— ASCII (separate system) —</div>
+              <div>asciiRendererImplemented: YES (v1)</div>
               <div>asciiEnabled: {String(styleState.asciiEnabled)}</div>
               <div>asciiAnimated: {String(styleState.asciiAnimated)}</div>
               <div>asciiCharset: {styleState.asciiCharset}</div>
+              <div>asciiCharsetIndex: {ASCII_CHARSET_INDEX[styleState.asciiCharset]}</div>
+              <div>asciiAnimationType: {styleState.asciiAnimationType}</div>
+              <div>asciiCellSize: {styleState.asciiCellSize}</div>
+              <div>asciiDensity: {styleState.asciiDensity.toFixed(2)}</div>
+              <div>asciiContrast: {styleState.asciiContrast.toFixed(2)}</div>
+              <div>asciiScrollSpeed: {styleState.asciiScrollSpeed.toFixed(2)}</div>
+              <div>asciiDirection: {styleState.asciiDirection}</div>
+              <div>asciiLockMode: {styleState.asciiLockMode}</div>
+              <div>asciiGlyphSource: 5x5 bitfield (no font, no atlas)</div>
+              <div>asciiStage: after dither (glyphs represent reduced tone)</div>
+              <div>asciiAppliedToAllModes: YES (shared material)</div>
+              <div>asciiDoesNotTouchGeometry: YES</div>
+              <div>asciiIsNotTexture: YES (glyphs, not pattern)</div>
+              <div>asciiIsNotDither: YES (glyphs, not threshold)</div>
               <div className="mt-0.5 text-foreground/80">— Motion (style animation) —</div>
+              <div>timingSystemImplemented: YES (v1, shared clock)</div>
               <div>motionMode: {styleState.motionMode}</div>
+              <div>styleClockElapsed: {STYLE_CLOCK_DEBUG.elapsed.toFixed(2)}</div>
+              <div>styleClockReveal: {STYLE_CLOCK_DEBUG.reveal.toFixed(3)}</div>
+              <div>
+                sinceCompletion:{" "}
+                {STYLE_CLOCK_DEBUG.sinceCompletion !== Infinity
+                  ? STYLE_CLOCK_DEBUG.sinceCompletion.toFixed(2) + "s"
+                  : "not complete"}
+              </div>
+              <div>styleLoopSeconds: {styleState.styleLoopSeconds.toFixed(1)}</div>
+              <div>textureSyncMode: {styleState.textureSyncMode} (+{styleState.textureDelay.toFixed(1)}s)</div>
+              <div>ditherSyncMode: {styleState.ditherSyncMode} (+{styleState.ditherDelay.toFixed(1)}s)</div>
+              <div>asciiSyncMode: {styleState.asciiSyncMode} (+{styleState.asciiDelay.toFixed(1)}s)</div>
+              <div>layersShareOneClock: YES</div>
+              <div className="mt-0.5 text-foreground/80">— Layer stack —</div>
+              <div>stackRendererImplemented: YES (v1)</div>
+              <div>layerStackEnabled: {String(styleState.layerStackEnabled)}</div>
+              <div>stackOrder: {styleState.stackOrder}</div>
+              <div>stackTextureOpacity: {styleState.stackTextureOpacity.toFixed(2)}</div>
+              <div>
+                stackDither: {styleState.stackDitherOpacity.toFixed(2)} / {styleState.stackDitherBlend}
+              </div>
+              <div>
+                stackAscii: {styleState.stackAsciiOpacity.toFixed(2)} / {styleState.stackAsciiBlend}
+              </div>
+              <div>textureIsAlwaysBase: YES (pre-lighting, not reorderable)</div>
+              <div className="mt-0.5 text-foreground/80">— Stack animation (the GROUP) —</div>
+              <div>stackAnimationImplemented: YES (v1)</div>
+              <div>stackAnimationEnabled: {String(styleState.stackAnimationEnabled)}</div>
+              <div>stackAnimationType: {styleState.stackAnimationType}</div>
+              <div>stackAnimationSpeed: {styleState.stackAnimationSpeed.toFixed(2)}</div>
+              <div>groupAmount: {STYLE_CLOCK_DEBUG.groupAmount.toFixed(3)}</div>
+              <div>groupTimeOffset: {STYLE_CLOCK_DEBUG.groupOffset.toFixed(2)}</div>
+              <div>groupFrozen: {String(STYLE_CLOCK_DEBUG.groupFrozen)}</div>
+              <div>stackAnimIsNotPerLayerAnim: YES (moves the group, not one layer)</div>
               <div>syncMode: {styleState.syncMode}</div>
               <div>syncToReveal: {String(styleState.syncToReveal)}</div>
               <div className="mt-0.5 text-foreground/80">— Composite (renderers later) —</div>

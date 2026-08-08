@@ -118,8 +118,147 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    -webkit-tap-highlight-color: transparent;
   }
   body {
     @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    -webkit-text-size-adjust: 100%;
+  }
+  ::selection {
+    background: oklch(0.145 0 0 / 0.9);
+    color: oklch(1 0 0);
+  }
+  .dark ::selection {
+    background: oklch(0.985 0 0 / 0.9);
+    color: oklch(0.145 0 0);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Motion + control substrate for the product shell.
+ *
+ * Easing: the built-in CSS easings are too weak to read as intentional, so all
+ * shell motion uses strong custom curves (emil-design-eng):
+ *   --ease-out-strong   entering / exiting / feedback  (starts fast)
+ *   --ease-in-out-strong on-screen movement            (natural accel/decel)
+ * ------------------------------------------------------------------------- */
+:root {
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-strong: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+/* Pressable: instant press feedback (emil: buttons must feel responsive;
+ * press feedback 100–160ms, ease-out, subtle 0.95–0.98 scale). */
+.fs-press {
+  transition: transform 160ms var(--ease-out-strong);
+  user-select: none;
+}
+.fs-press:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Soft slider: one consistent slider across the whole app. */
+.fs-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--border);
+  cursor: pointer;
+  outline-offset: 4px;
+}
+.fs-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--background);
+  border: 1px solid oklch(0 0 0 / 0.18);
+  box-shadow:
+    0 1px 2px oklch(0 0 0 / 0.12),
+    0 1px 4px oklch(0 0 0 / 0.08);
+  transition: transform 160ms var(--ease-out-strong);
+}
+.fs-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--background);
+  border: 1px solid oklch(0 0 0 / 0.18);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.12);
+  transition: transform 160ms var(--ease-out-strong);
+}
+.fs-slider:active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.fs-slider:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* iOS-style switch built on a native checkbox (keyboard + a11y for free). */
+.fs-switch {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  width: 30px;
+  height: 18px;
+  border-radius: 9999px;
+  background: var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 160ms var(--ease-out-strong);
+}
+.fs-switch::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--background);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.2);
+  /* State morph on screen → strong ease-out, 160ms (state-change feedback). */
+  transition: transform 160ms var(--ease-out-strong);
+}
+.fs-switch:checked {
+  background: var(--foreground);
+}
+.fs-switch:checked::before {
+  transform: translateX(12px);
+}
+.fs-switch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* Panel content entrance: tab switches are frequent (tens/day), so the motion
+ * is drastically reduced — 120ms, 3px rise, strong ease-out (entering). */
+.fs-panel-enter {
+  animation: fs-panel-enter 120ms var(--ease-out-strong);
+}
+@keyframes fs-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fs-panel-enter {
+    animation-duration: 1ms;
+  }
+  .fs-press,
+  .fs-press:active:not(:disabled) {
+    transition: none;
+    transform: none;
   }
 }

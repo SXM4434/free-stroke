@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process"
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
+import { layoutWord } from "./letters.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const FRAMES = join(__dirname, "frames")
@@ -12,6 +13,8 @@ const STROKES = join(__dirname, "logo-strokes.json")
 
 const DRAW_FRAMES = parseInt(process.env.DRAW_FRAMES || "60", 10)
 const ROUGHNESS = parseFloat(process.env.ROUGHNESS || "0.35")
+// STROKE_SOURCE=font (Variant B, clean hand font) | trace (Variant A, traced logo skeleton)
+const STROKE_SOURCE = process.env.STROKE_SOURCE || "font"
 
 function ab(args) {
   return execFileSync("agent-browser", args, { encoding: "utf8" }).trim()
@@ -25,8 +28,22 @@ function setup() {
   mkdirSync(FRAMES, { recursive: true })
 }
 
-function injectAndStyle() {
+function getPolylines() {
+  if (STROKE_SOURCE === "font") {
+    // Variant B: clean hand font, centered around the origin so frontView
+    // framing (which centers on the geometry bounds) lines it up nicely.
+    const { polylines, width, height } = layoutWord("Desk Doodles", { x: 0, y: 0, size: 120 })
+    const cx = width / 2
+    const cy = height / 2
+    return polylines.map((pl) => pl.map((p) => ({ x: p.x - cx, y: p.y - cy })))
+  }
+  // Variant A: traced logo skeleton
   const { polylines } = JSON.parse(readFileSync(STROKES, "utf8"))
+  return polylines
+}
+
+function injectAndStyle() {
+  const polylines = getPolylines()
   const poly = JSON.stringify(polylines)
   // Ink material but with a slightly higher roughness via the custom path,
   // since the "ink" preset is locked to 0.3 and the user asked for ~0.35.
