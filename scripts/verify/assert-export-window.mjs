@@ -541,7 +541,7 @@ if (MODEL_ONLY) {
  * ======================================================================== */
 console.log("\n──── §B · THE REAL APP ─────────────────────────────────────────────\n")
 
-const MODULES = ["frame-plan", "webm", "apng", "encoders", "recorder", "index"]
+const MODULES = ["frame-plan", "webm", "apng", "gif", "encoders", "recorder", "index"]
 function transpiled(name, dir) {
   const src = readFileSync(join(dir, `${name}.ts`), "utf8")
   const js = ts.transpileModule(src, {

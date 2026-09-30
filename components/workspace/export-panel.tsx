@@ -41,6 +41,10 @@ export type ExportPanelProps = {
   setPngPanelOpen: (f: (v: boolean) => boolean) => void
   // Video
   onExportVideo: () => void
+  /** GIF shares Video's render path, guard, cancel and settings. */
+  onExportGif: () => void
+  /** Which of Video and GIF started the running export. */
+  animKind: "video" | "gif"
   onAbortVideo: () => void
   exportingVideo: boolean
   videoDone: number
@@ -148,7 +152,7 @@ export function ExportPanel(p: ExportPanelProps) {
       <div className="flex items-center">
       <button
         type="button"
-        onClick={p.exportingVideo ? p.onAbortVideo : p.onExportVideo}
+        onClick={p.exportingVideo && p.animKind === "video" ? p.onAbortVideo : p.onExportVideo}
         /* THE PROGRESS IS THE LABEL, AND THE LABEL IS THE CANCEL. A
            hundred-and-forty-frame render is the one export long enough to
            look hung, so the button counts frames while it works, and the
@@ -156,7 +160,7 @@ export function ExportPanel(p: ExportPanelProps) {
            defect a spinner hides rather than solves. */
         disabled={p.strokeCount === 0 || (p.compare3Up && !p.exportingVideo)}
         title={
-          p.exportingVideo
+          p.exportingVideo && p.animKind === "video"
             ? "Stop the export"
             : p.compare3Up
               ? "Leave 3-Up compare to save a film. An export is one view, not three"
@@ -164,7 +168,7 @@ export function ExportPanel(p: ExportPanelProps) {
         }
         className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium tabular-nums text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {p.exportingVideo
+        {p.exportingVideo && p.animKind === "video"
           ? p.videoTotal > 0
             ? `${Math.round((p.videoDone / p.videoTotal) * 100)}%`
             : "…"
@@ -185,6 +189,29 @@ export function ExportPanel(p: ExportPanelProps) {
         </svg>
       </button>
       </div>
+      {/* GIF: THE SAME FILM IN THE CONTAINER THAT PLAYS INLINE EVERYWHERE.
+          It reads the Video settings' clock, frame rate and resolution (one
+          set of film settings, not two), is always on paper, and counts and
+          cancels exactly as Video does. */}
+      <button
+        type="button"
+        onClick={p.exportingVideo && p.animKind === "gif" ? p.onAbortVideo : p.onExportGif}
+        disabled={p.strokeCount === 0 || (p.compare3Up && !p.exportingVideo)}
+        title={
+          p.exportingVideo && p.animKind === "gif"
+            ? "Stop the export"
+            : p.compare3Up
+              ? "Leave 3-Up compare to save a GIF. An export is one view, not three"
+              : `Save a GIF of the animation, on paper, 256 colours, with the Video settings. ${p.videoPlanNote}`
+        }
+        className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium tabular-nums text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {p.exportingVideo && p.animKind === "gif"
+          ? p.videoTotal > 0
+            ? `${Math.round((p.videoDone / p.videoTotal) * 100)}%`
+            : "…"
+          : "GIF"}
+      </button>
       <div className="mx-0.5 h-5 w-px bg-border" />
       <button
         type="button"
@@ -270,6 +297,10 @@ export function ExportPanel(p: ExportPanelProps) {
             {p.videoTransparent
               ? "Animated PNG (.png), lossless, keeps alpha, no contact shadow. Larger than a video, and the only format that can carry a see-through ground."
               : "WebM video (.webm) on the studio ground, exactly as you see it."}
+          </div>
+          <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">
+            GIF uses these settings too: always on paper, 256 colours picked
+            from the film itself, at most 50 fps.
           </div>
           {p.hasAnimatedStyleLayer && (
             <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">

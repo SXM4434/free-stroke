@@ -33,6 +33,16 @@
 import type { FramePlan } from "./frame-plan"
 import type { AnimationEncoder, FrameSource } from "./encoders"
 
+/** `n` frame indices spread over `total`, always holding the first and last. */
+export function sampleIndices(total: number, n: number): number[] {
+  if (total <= 0) return []
+  const k = Math.max(1, Math.min(total, Math.floor(n)))
+  if (k === 1) return [total - 1]
+  const out = new Set<number>()
+  for (let j = 0; j < k; j++) out.add(Math.round((j * (total - 1)) / (k - 1)))
+  return [...out].sort((a, b) => a - b)
+}
+
 export interface GrabOptions {
   /** Device pixels per CSS pixel, as the still export's `scale`. */
   scale: number
@@ -156,58 +166,76 @@ export async function recordAnimation(opts: RecordOptions): Promise<RecordResult
   let height = 0
   let crop: { canvas: HTMLCanvasElement | OffscreenCanvas; ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D } | null = null
 
+  /* THE ODD-PIXEL CROP AND THE GROUND, in one pass over one scratch canvas.
+   * Done here rather than inside an encoder so every encoder sees identical
+   * pixels. An APNG one pixel wider than its WebM sibling is the kind of
+   * difference nobody notices until two exports of the same mark refuse to
+   * line up. The sampling pass below goes through the same function, so a GIF
+   * palette is built from exactly the pixels the GIF then encodes. */
+  const normalize = async (src: FrameSource): Promise<FrameSource> => {
+    const bg = opts.background ?? null
+    if (bg === null && src.width === width && src.height === height) return src
+    if (!crop) {
+      const c =
+        typeof OffscreenCanvas !== "undefined"
+          ? new OffscreenCanvas(width, height)
+          : Object.assign(document.createElement("canvas"), { width, height })
+      const ctx = (c as HTMLCanvasElement | OffscreenCanvas).getContext("2d") as
+        | CanvasRenderingContext2D
+        | OffscreenCanvasRenderingContext2D
+        | null
+      if (!ctx) throw new Error("export: no 2d context for the size fix")
+      crop = { canvas: c as HTMLCanvasElement | OffscreenCanvas, ctx }
+    }
+    const paintable =
+      src.kind === "blob" ? await createImageBitmap(src.blob) : src.kind === "bitmap" ? src.bitmap : src.canvas
+    crop.ctx.clearRect(0, 0, width, height)
+    if (bg !== null) {
+      crop.ctx.fillStyle = bg
+      crop.ctx.fillRect(0, 0, width, height)
+    }
+    crop.ctx.drawImage(paintable as CanvasImageSource, 0, 0)
+    if (src.kind === "blob" && "close" in paintable) (paintable as ImageBitmap).close()
+    return { kind: "canvas", canvas: crop.canvas, width, height }
+  }
+
+  const renderAt = async (i: number): Promise<FrameSource> => {
+    const f = plan.frames[i]
+    await host.seek(ease(f.clock))
+    host.setSceneTimeMs?.(f.timeMs)
+    if (host.settle) await host.settle()
+    const src = await host.grabFrame(grab)
+    if (!src) throw new Error(`export: the renderer returned no frame at index ${i}`)
+    if (width === 0) {
+      width = evenDown(src.width)
+      height = evenDown(src.height)
+      if (width < 2 || height < 2) throw new Error(`export: frame is ${src.width}x${src.height}`)
+      if (width !== src.width || height !== src.height) {
+        warnings.push(`Output trimmed to ${width}×${height}. Video codecs need even dimensions.`)
+      }
+    }
+    return src
+  }
+
   try {
+    /* ── THE SAMPLING PASS, only for an encoder that asks for one ─────────
+     * A GIF's palette has to exist before its first frame and has to fit the
+     * whole film, so the frames it is built from are rendered first: the
+     * first and the last planned instant always, the rest spread evenly
+     * between. Each is rendered through the same seek, clock and grab as the
+     * frame it stands for, then rendered AGAIN in the main loop; the scene is
+     * deterministic, so the second render is the same picture. */
+    if (encoder.sample && encoder.samplesWanted) {
+      for (const i of sampleIndices(plan.frames.length, encoder.samplesWanted)) {
+        if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError")
+        await encoder.sample(await normalize(await renderAt(i)))
+      }
+    }
+
     for (let i = 0; i < plan.frames.length; i++) {
       if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError")
       const f = plan.frames[i]
-
-      await host.seek(ease(f.clock))
-      host.setSceneTimeMs?.(f.timeMs)
-      if (host.settle) await host.settle()
-
-      const src = await host.grabFrame(grab)
-      if (!src) throw new Error(`export: the renderer returned no frame at index ${i}`)
-
-      if (i === 0) {
-        width = evenDown(src.width)
-        height = evenDown(src.height)
-        if (width < 2 || height < 2) throw new Error(`export: frame is ${src.width}x${src.height}`)
-        if (width !== src.width || height !== src.height) {
-          warnings.push(`Output trimmed to ${width}×${height}. Video codecs need even dimensions.`)
-        }
-      }
-
-      /* THE ODD-PIXEL CROP AND THE GROUND, in one pass over one scratch canvas.
-       * Done here rather than inside an encoder so both encoders see identical
-       * pixels — an APNG one pixel wider than its WebM sibling is the kind of
-       * difference nobody notices until two exports of the same mark refuse to
-       * line up. */
-      const bg = opts.background ?? null
-      let source = src
-      if (bg !== null || src.width !== width || src.height !== height) {
-        if (!crop) {
-          const c =
-            typeof OffscreenCanvas !== "undefined"
-              ? new OffscreenCanvas(width, height)
-              : Object.assign(document.createElement("canvas"), { width, height })
-          const ctx = (c as HTMLCanvasElement | OffscreenCanvas).getContext("2d") as
-            | CanvasRenderingContext2D
-            | OffscreenCanvasRenderingContext2D
-            | null
-          if (!ctx) throw new Error("export: no 2d context for the size fix")
-          crop = { canvas: c as HTMLCanvasElement | OffscreenCanvas, ctx }
-        }
-        const paintable =
-          src.kind === "blob" ? await createImageBitmap(src.blob) : src.kind === "bitmap" ? src.bitmap : src.canvas
-        crop.ctx.clearRect(0, 0, width, height)
-        if (bg !== null) {
-          crop.ctx.fillStyle = bg
-          crop.ctx.fillRect(0, 0, width, height)
-        }
-        crop.ctx.drawImage(paintable as CanvasImageSource, 0, 0)
-        if (src.kind === "blob" && "close" in paintable) (paintable as ImageBitmap).close()
-        source = { kind: "canvas", canvas: crop.canvas, width, height }
-      }
+      const source = await normalize(await renderAt(i))
 
       await encoder.addFrame({
         source,
