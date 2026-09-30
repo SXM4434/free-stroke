@@ -59,6 +59,18 @@
    assert-dock-shell can still compare their buffers and frames with a
    reference tree.
 
+   L5 ADDS MAXIMIZE (BUILD-PLAN.md §3 "Maximize and restore", §5 row L5; his
+   call: any panel maximizes, the dock above all). Every panel has the one
+   28 px header §2 describes, name on the left, maximize and hide on the
+   right; the dock's header is its transport row, with maximize beside the
+   fold. Ways in: the header button, a double-click on the header, Shift+Space
+   over the panel under the pointer. Out: the same three, and Esc. Built as a
+   layout, not a mode: maximize keeps the current `toJSON()` in memory, hides
+   every other group and, when the panel is not the 3D view, floats the 3D
+   view as a 360x216 preview 12 px in from the bottom right; restore loads
+   the kept layout back with `reuseExistingPanels`. No animation either way.
+   Maximize is never saved: a reload while maximized comes back restored.
+
    MUST-FAIL ARMS, read once at mount from `window.__fsDockMutant`, which the
    gate sets before navigation and nothing else ever sets:
      "header"          group headers stay visible (the 28 px strip IDENTICAL
@@ -78,6 +90,13 @@
      "silent"          a saved layout that cannot load falls back with no toast
      "nosave"          a switch does not save the workspace it leaves (the
                        round trip must go red)
+     L5, read by scripts/verify/assert-maximize.mjs:
+     "restoreDefault"  restore loads the workspace's default, not the kept
+                       layout (the round trip must go red)
+     "nopreview"       no floating 3D preview while another panel is maximized
+     "nokeys"          Shift+Space and Esc do nothing
+     "savemax"         the maximized layout is saved (a reload must come back
+                       maximized)
    ================================================================== */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
@@ -113,8 +132,8 @@ import {
 } from "@/components/workspace/workspaces"
 
 type Slots = { drawing: ReactNode; view: ReactNode; style: ReactNode }
-type Mutant = "header" | "onlyWhenVisible" | "noReuse" | "stale" | "nodock" | "toast182" | "nosync" | "unguarded" | "silent" | "nosave" | null
-const MUTANTS: readonly string[] = ["header", "onlyWhenVisible", "noReuse", "stale", "nodock", "toast182", "nosync", "unguarded", "silent", "nosave"]
+type Mutant = "header" | "onlyWhenVisible" | "noReuse" | "stale" | "nodock" | "toast182" | "nosync" | "unguarded" | "silent" | "nosave" | "restoreDefault" | "nopreview" | "nokeys" | "savemax" | null
+const MUTANTS: readonly string[] = ["header", "onlyWhenVisible", "noReuse", "stale", "nodock", "toast182", "nosync", "unguarded", "silent", "nosave", "restoreDefault", "nopreview", "nokeys", "savemax"]
 
 const SlotContext = createContext<Slots>({ drawing: null, view: null, style: null })
 
@@ -237,12 +256,16 @@ const COMPONENTS = { drawing: DrawingPanel, view3d: ViewPanel, style: StylePanel
    two moves it makes. Provided by `DockShell`, read by the tabs and the
    header's actions, which dockview renders outside the shell's own tree. */
 type DockControl = {
+  /** The panel id maximized, or null. */
+  maximized: string | null
+  toggleMax: (panelId: string) => void
+  hide: (panelId: string) => void
   collapsed: boolean
   /** Open the dock if it is folded, and show `id`. */
   show: (id: DockPanelId) => void
   toggleCollapsed: () => void
 }
-const DockControlContext = createContext<DockControl>({ collapsed: true, show: () => {}, toggleCollapsed: () => {} })
+const DockControlContext = createContext<DockControl>({ maximized: null, toggleMax: () => {}, hide: () => {}, collapsed: true, show: () => {}, toggleCollapsed: () => {} })
 
 /* THE TABS. dockview's own tab activates on pointerdown; these take the
    pointerdown themselves and act on click, so a click on a folded dock opens
@@ -296,7 +319,39 @@ function DockTab({ api }: IDockviewPanelHeaderProps) {
     </button>
   )
 }
-const TAB_COMPONENTS = { dock: DockTab }
+/* THE HEADER OF EVERY OTHER PANEL (L5): its name, in the dock tabs' type.
+   The name is not a control; a drag on the header would move the panel,
+   and dragging is off (`disableDnd`) until his eye decides it is wanted. */
+function PanelTab({ api }: IDockviewPanelHeaderProps) {
+  return (
+    <div data-panel-tab={api.id} className="flex h-full select-none items-center px-2 text-[11px] font-medium text-muted-foreground">
+      {api.title}
+    </div>
+  )
+}
+
+const TAB_COMPONENTS = { dock: DockTab, panel: PanelTab }
+
+const MAX_ICON = "M1.5 3.5V1.5h2M6.5 1.5h2v2M8.5 6.5v2h-2M3.5 8.5h-2v-2"
+const RESTORE_ICON = "M3.5 1.5v2h-2M6.5 1.5v2h2M6.5 8.5v-2h2M3.5 8.5v-2h-2"
+function HeaderButton({ label, onClick, path, data }: { label: string; onClick: () => void; path: string; data: Record<string, string> }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      {...data}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={onClick}
+      className="fs-press flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d={path} />
+      </svg>
+    </button>
+  )
+}
 
 /* THE HEADER ROW BEFORE THE TABS: the transport's host, in the dock group
    only. Other groups keep their headers hidden and render nothing here. */
@@ -304,26 +359,50 @@ function DockHeaderPrefix({ group }: IDockviewHeaderActionsProps) {
   if (!isDockGroup(group)) return null
   return <DockHost name="transport" className="flex h-full min-w-0 flex-1 items-center" />
 }
-/* THE HEADER ROW AFTER THE TABS: the chevron that folds and opens the dock. */
+/* THE HEADER ROW AFTER THE TABS. Every group: maximize (restore while it is
+   the maximized one). The dock: the fold chevron after it. Every other
+   panel: hide, which is the rail's show / hide for that panel. */
 function DockHeaderActions({ group }: IDockviewHeaderActionsProps) {
-  const { collapsed, toggleCollapsed } = useContext(DockControlContext)
-  if (!isDockGroup(group)) return null
+  const { collapsed, toggleCollapsed, maximized, toggleMax, hide } = useContext(DockControlContext)
+  const dock = isDockGroup(group)
+  const id = dock ? "timeline" : group.activePanel?.id
+  if (!id) return null
+  const isMax = maximized !== null && (dock ? (DOCK_PANELS as readonly string[]).includes(maximized) : maximized === id)
   return (
-    <div className="flex h-full items-center px-2">
-      <button
-        type="button"
-        data-dock-collapse
-        aria-expanded={!collapsed}
-        aria-label={collapsed ? "Open the dock" : "Fold the dock to its header"}
-        title={collapsed ? "Open the dock" : "Fold the dock to its header"}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={toggleCollapsed}
-        className="fs-press flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      >
-        <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d={collapsed ? "M1.5 6.5L5 3l3.5 3.5" : "M1.5 3.5L5 7l3.5-3.5"} />
-        </svg>
-      </button>
+    <div className={`flex h-full items-center gap-0.5 ${dock ? "px-2" : "px-1"}`}>
+      <HeaderButton
+        label={isMax ? "Restore the layout" : `Maximize ${dock ? "the dock" : (group.activePanel?.title ?? id)}`}
+        onClick={() => toggleMax(dock ? (group.activePanel?.id ?? "timeline") : id)}
+        path={isMax ? RESTORE_ICON : MAX_ICON}
+        data={{ "data-maximize": dock ? "dock" : id, "aria-pressed": String(isMax) }}
+      />
+      {dock ? (
+        <button
+          type="button"
+          data-dock-collapse
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "Open the dock" : "Fold the dock to its header"}
+          title={collapsed ? "Open the dock" : "Fold the dock to its header"}
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onClick={toggleCollapsed}
+          disabled={isMax}
+          className="fs-press flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+        >
+          <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <path d={collapsed ? "M1.5 6.5L5 3l3.5 3.5" : "M1.5 3.5L5 7l3.5-3.5"} />
+          </svg>
+        </button>
+      ) : (
+        !isMax && (
+          <HeaderButton
+            label={`Hide ${group.activePanel?.title ?? id}`}
+            onClick={() => hide(id)}
+            path="M2 2l6 6M8 2l-6 6"
+            data={{ "data-hide": id }}
+          />
+        )
+      )}
     </div>
   )
 }
@@ -434,6 +513,12 @@ export type DockHarness = {
      *  Style hidden). For assert-dock-shell's BUFFERS and FRAMES only. */
     today: () => void
   }
+  /** Maximize (L5). */
+  maximize: {
+    toggle: (panelId: string) => void
+    restore: () => void
+    current: () => string | null
+  }
 }
 
 export function DockShell(slots: Slots) {
@@ -485,6 +570,10 @@ function DockShellInner({ drawing, view, style }: Slots) {
   const loadingRef = useRef(false)
   /** Today's split held (assert-dock-shell only, see `today`). */
   const todayRef = useRef(false)
+  /* THE MAXIMIZED PANEL (L5) and the layout it came from, kept in memory
+     only: maximize is never saved. */
+  const maxRef = useRef<{ id: string; from: SerializedDockview } | null>(null)
+  const [maximized, setMaximizedState] = useState<string | null>(null)
   const saveTimer = useRef<number | null>(null)
   /** The layout as it stood once the last load settled. A save that would
    *  write exactly this is skipped: only a change is saved, so a Reset leaves
@@ -535,6 +624,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
   const save = useCallback(() => {
     const api = apiRef.current
     if (!api || loadingRef.current || !window.matchMedia(LG).matches || api.hasMaximizedGroup() || todayRef.current || mutantRef.current === "nosave") return
+    if (maxRef.current && mutantRef.current !== "savemax") return
     const now = api.toJSON()
     if (loadedJson.current === null || JSON.stringify(now) === loadedJson.current) return
     const r = writeSaved(wsRef.current, now)
@@ -610,17 +700,33 @@ function DockShellInner({ drawing, view, style }: Slots) {
   if (frozen.current === null) frozen.current = { drawing, view, style }
   const slots = mutantRef.current === "stale" ? frozen.current : { drawing, view, style }
 
-  /* Every group but the dock keeps its header hidden (L1). The dock's header
-     is the transport row and the tabs, and it is marked for `dock.css`. */
+  /* HEADERS (L5): every group shows the one 28 px header of §2; the dock's is
+     its transport row and tabs, marked for `dock.css`. Hidden only on the
+     floating 3D preview, and under `today()` (the pre-L4 page, for
+     assert-dock-shell, whose "header" arm keeps them). A double-click on a
+     header, off its buttons, maximizes that panel or restores. */
   const dressGroup = useCallback((g: DockviewGroupPanel) => {
+    const head = g.element.querySelector(":scope > .dv-tabs-and-actions-container") as HTMLElement | null
+    if (head && !head.dataset.fsDbl) {
+      head.dataset.fsDbl = "1"
+      head.addEventListener("dblclick", (e) => {
+        if ((e.target as HTMLElement).closest("button, input, select, textarea, a")) return
+        const id = isDockGroup(g) ? (g.activePanel?.id ?? "timeline") : g.activePanel?.id
+        if (id) toggleMaxRef.current(id)
+      })
+    }
     if (isDockGroup(g)) {
       g.model.header.hidden = false
       g.element.setAttribute("data-fs-dock", "")
       return
     }
     g.element.removeAttribute("data-fs-dock")
-    if (mutantRef.current !== "header") g.model.header.hidden = true
+    const preview = g.api.location.type === "floating"
+    if (preview) g.element.setAttribute("data-fs-preview", "")
+    else g.element.removeAttribute("data-fs-preview")
+    g.model.header.hidden = preview || (todayRef.current && mutantRef.current !== "header")
   }, [])
+  const toggleMaxRef = useRef<(id: string) => void>(() => {})
   const hideHeaders = useCallback((api: DockviewApi) => {
     for (const g of api.groups) dressGroup(g)
   }, [dressGroup])
@@ -682,7 +788,67 @@ function DockShellInner({ drawing, view, style }: Slots) {
     return saved.layout as SerializedDockview
   }, [])
 
+  /* ---- MAXIMIZE (L5) ---------------------------------------------------- */
+
+  const setMax = (v: { id: string; from: SerializedDockview } | null) => {
+    maxRef.current = v
+    setMaximizedState(v ? v.id : null)
+    const dockMax = !!v && (DOCK_PANELS as readonly string[]).includes(v.id)
+    // The dock maximized draws its key rows at 36 px (§4, hit targets).
+    if (dockMax) document.documentElement.dataset.fsDockMax = "1"
+    else delete document.documentElement.dataset.fsDockMax
+  }
+
+  const restore = useCallback(() => {
+    const m = maxRef.current
+    if (!m) return
+    setMax(null)
+    const { w, h, wide } = shellSize()
+    loadLayout(mutantRef.current === "restoreDefault" ? defaultLayout(wsRef.current, w, h, wide) : m.from)
+  }, [loadLayout])
+
+  const maximizePanel = useCallback((id: string) => {
+    const api = apiRef.current
+    if (!api) return
+    if (maxRef.current) {
+      const same = maxRef.current.id === id || ((DOCK_PANELS as readonly string[]).includes(maxRef.current.id) && (DOCK_PANELS as readonly string[]).includes(id))
+      restore()
+      if (same) return
+    }
+    const panel = api.getPanel(id)
+    if (!panel) return
+    const from = api.toJSON()
+    setMax({ id, from })
+    const target = panel.group
+    if (isDockGroup(target)) {
+      setCollapsed(false)
+      panel.api.setActive()
+    }
+    for (const g of api.groups) if (g !== target && g.api.location.type === "grid" && g.api.isVisible) g.api.setVisible(false)
+    if (!target.api.isVisible) target.api.setVisible(true)
+    if (id !== "view3d" && mutantRef.current !== "nopreview") {
+      const v = api.getPanel("view3d")
+      // `tabbar`: no 22 px floating titlebar, so the preview's box is the 3D view's own 360x216.
+      if (v) api.addFloatingGroup(v, { position: { right: 12, bottom: 12 }, width: 360, height: 216, dragHandle: "tabbar" })
+    }
+    hideHeaders(api)
+    hold()
+    syncDrawIn()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restore, hideHeaders, hold, setCollapsed])
+  toggleMaxRef.current = maximizePanel
+
+  const hidePanel = useCallback((id: string) => {
+    const api = apiRef.current
+    const g = api?.getPanel(id)?.group
+    if (!g || !g.api.isVisible) return
+    g.api.setVisible(false)
+    hold()
+    saveSoon()
+  }, [hold, saveSoon])
+
   const switchTo = useCallback((ws: WorkspaceId) => {
+    if (maxRef.current) restore()
     if (saveTimer.current !== null) {
       window.clearTimeout(saveTimer.current)
       saveTimer.current = null
@@ -693,9 +859,10 @@ function DockShellInner({ drawing, view, style }: Slots) {
     setWorkspaceState(ws)
     writeCurrent(ws)
     loadLayout(layoutFor(ws))
-  }, [save, loadLayout, layoutFor])
+  }, [save, loadLayout, layoutFor, restore])
 
   const reset = useCallback(() => {
+    if (maxRef.current) setMax(null)
     const ws = wsRef.current
     const r = deleteSaved(ws)
     if (!r.ok) sayStorageBlocked(r.why)
@@ -706,6 +873,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
   const toggle = useCallback((id: RailPanel) => {
     const api = apiRef.current
     if (!api) return
+    if (maxRef.current) restore()
     if (id === "export") {
       const g = dockGroup()
       const on = !!g && g.api.isVisible && !collapsedRef.current && g.activePanel?.id === "export"
@@ -721,7 +889,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
     // Showing or hiding a group fires no layout change, so it saves here.
     saveSoon()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [show, hold, saveSoon])
+  }, [show, hold, saveSoon, restore])
 
   const today = useCallback(() => {
     const api = apiRef.current
@@ -732,8 +900,9 @@ function DockShellInner({ drawing, view, style }: Slots) {
       if (g && !g.api.isVisible) g.api.setVisible(true)
     }
     for (const g of [api.getPanel("style")?.group, dockGroup()]) if (g && g.api.isVisible) g.api.setVisible(false)
+    hideHeaders(api)
     hold()
-  }, [hold])
+  }, [hold, hideHeaders])
 
   const onReady = useCallback((e: DockviewReadyEvent) => {
     const api = e.api
@@ -808,11 +977,16 @@ function DockShellInner({ drawing, view, style }: Slots) {
           },
           today,
         },
+        maximize: {
+          toggle: (id) => toggleMaxRef.current(id),
+          restore: () => restore(),
+          current: () => maxRef.current?.id ?? null,
+        },
       }
       ;(window as unknown as { __dockHarness?: DockHarness }).__dockHarness = harness
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hideHeaders, dressGroup, hold, publishEdge, setCollapsed, loadLayout, layoutFor, saveSoon, switchTo, reset, toggle, today, readShown])
+  }, [hideHeaders, dressGroup, hold, publishEdge, setCollapsed, loadLayout, layoutFor, saveSoon, switchTo, reset, toggle, today, readShown, restore])
 
   /* Crossing `lg` reloads the workspace: below it every workspace is the
      stacked arrangement (never saved); above it, the saved one. */
@@ -827,6 +1001,47 @@ function DockShellInner({ drawing, view, style }: Slots) {
     if (boxRef.current) ro.observe(boxRef.current)
     return () => { mq.removeEventListener("change", onChange); ro.disconnect() }
   }, [hold, loadLayout, layoutFor])
+
+  /* SHIFT+SPACE OVER A PANEL, AND ESC (L5). Blender 2.7's key: it maximizes
+     the panel under the pointer, or restores. Esc restores. Not while typing.
+     Grepped first: nothing in app/ or components/ bound Shift+Space; Space
+     alone is left as it was. */
+  const pointer = useRef<{ x: number; y: number } | null>(null)
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => { pointer.current = { x: e.clientX, y: e.clientY } }
+    const panelAt = (x: number, y: number): string | null => {
+      const el = document.elementFromPoint(x, y) as HTMLElement | null
+      const p = el?.closest("[data-dock-panel]")?.getAttribute("data-dock-panel")
+      if (p) return p
+      const g = el?.closest(".dv-groupview") as HTMLElement | null
+      if (!g) return null
+      const api = apiRef.current
+      const grp = api?.groups.find((x) => x.element === g)
+      return grp?.activePanel?.id ?? null
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (mutantRef.current === "nokeys") return
+      const t = e.target as HTMLElement | null
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
+      if (e.key === "Escape" && maxRef.current) {
+        restore()
+        return
+      }
+      if (e.code === "Space" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const at = pointer.current
+        const id = maxRef.current ? maxRef.current.id : at ? panelAt(at.x, at.y) : null
+        if (!id) return
+        e.preventDefault()
+        toggleMaxRef.current(id)
+      }
+    }
+    window.addEventListener("pointermove", onMove, { passive: true })
+    window.addEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [restore])
 
   /* 1, 2 and 3 switch the workspace, as the rail's tooltips say. Not while
      typing, and not with a modifier (⌘1 and the rest stay the browser's).
@@ -847,7 +1062,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
 
   return (
     <SlotContext.Provider value={slots}>
-      <DockControlContext.Provider value={{ collapsed, show, toggleCollapsed }}>
+      <DockControlContext.Provider value={{ collapsed, show, toggleCollapsed, maximized, toggleMax: maximizePanel, hide: hidePanel }}>
         <div className="flex min-h-0 min-w-0 flex-1">
           <Rail workspace={workspace} onWorkspace={switchTo} shown={shown} onToggle={toggle} onReset={reset} />
           <div ref={boxRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden" style={QUIET}>
@@ -862,7 +1077,6 @@ function DockShellInner({ drawing, view, style }: Slots) {
               defaultRenderer={readMutant() === "onlyWhenVisible" ? "onlyWhenVisible" : "always"}
               hideBorders
               disableDnd
-              disableFloatingGroups
               locked
             />
           </div>

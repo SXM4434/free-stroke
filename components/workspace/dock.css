@@ -35,3 +35,35 @@
 .fs-dock-theme .dv-groupview[data-fs-dock] > .dv-content-container {
   background: var(--background);
 }
+
+/* EVERY OTHER PANEL'S HEADER (L5): 28 px, the panel's name on the left, maximize
+   and hide on the right, one 1 px rule under it. */
+.fs-dock-theme .dv-groupview:not([data-fs-dock]) > .dv-tabs-and-actions-container {
+  height: 28px;
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+  background: var(--background);
+}
+.fs-dock-theme .dv-groupview:not([data-fs-dock]) .dv-tab {
+  padding: 0;
+  background: transparent;
+}
+.fs-dock-theme .dv-groupview:not([data-fs-dock]) > .dv-tabs-and-actions-container .dv-void-container {
+  flex: 1 1 auto;
+}
+
+/* THE FLOATING 3D PREVIEW (L5): 360x216, 12 px in from the bottom right, a
+   1 px edge and the export cards' shadow; no header of its own. */
+.fs-dock-theme .dv-resize-container:has([data-fs-preview]) {
+  border: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  /* The edge is a ring, not a border, so the 3D view keeps the whole 360x216. */
+  box-shadow: 0 0 0 1px var(--border), 0 8px 24px rgb(0 0 0 / 0.12);
+  background: var(--background);
+}
+/* The preview is a view, not a place to work: Top and Reset camera stay on
+   the 3D view's own panel and are not drawn over the 360x216 preview. */
+.fs-dock-theme .dv-render-overlay-float [data-camera-bar] {
+  display: none;
+}

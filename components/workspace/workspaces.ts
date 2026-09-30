@@ -53,9 +53,9 @@ export const ANIMATE_DOCK_PX = 390
 const DRAW_SHARE = 872 / 1464
 
 export const PANEL_META: Record<PanelId, { component: string; title: string; tabComponent?: string; minimumHeight?: number; minimumWidth?: number }> = {
-  drawing: { component: "drawing", title: "Drawing" },
-  view3d: { component: "view3d", title: "3D view" },
-  style: { component: "style", title: "Style", minimumWidth: 280 },
+  drawing: { component: "drawing", title: "Drawing", tabComponent: "panel" },
+  view3d: { component: "view3d", title: "3D view", tabComponent: "panel" },
+  style: { component: "style", title: "Style", tabComponent: "panel", minimumWidth: 280 },
   timeline: { component: "timeline", title: "Timeline", tabComponent: "dock", minimumHeight: DOCK_HEADER_PX },
   drawin: { component: "drawin", title: "Draw-in", tabComponent: "dock", minimumHeight: DOCK_HEADER_PX },
   export: { component: "export", title: "Export", tabComponent: "dock", minimumHeight: DOCK_HEADER_PX },
@@ -112,9 +112,9 @@ export function defaultLayout(ws: WorkspaceId, w: number, h: number, wide = true
       type: "branch",
       size: topH,
       data: [
-        leaf(GROUP_IDS.drawing, ["drawing"], drawW, drawing, true),
-        leaf(GROUP_IDS.view3d, ["view3d"], viewW, true, true),
-        leaf(GROUP_IDS.style, ["style"], STYLE_PX, style, true),
+        leaf(GROUP_IDS.drawing, ["drawing"], drawW, drawing, false),
+        leaf(GROUP_IDS.view3d, ["view3d"], viewW, true, false),
+        leaf(GROUP_IDS.style, ["style"], STYLE_PX, style, false),
       ],
     }
   } else {
@@ -127,9 +127,9 @@ export function defaultLayout(ws: WorkspaceId, w: number, h: number, wide = true
           type: "branch",
           size: W,
           data: [
-            leaf(GROUP_IDS.drawing, ["drawing"], half, true, true),
-            leaf(GROUP_IDS.view3d, ["view3d"], topH - half, true, true),
-            leaf(GROUP_IDS.style, ["style"], STYLE_PX, false, true),
+            leaf(GROUP_IDS.drawing, ["drawing"], half, true, false),
+            leaf(GROUP_IDS.view3d, ["view3d"], topH - half, true, false),
+            leaf(GROUP_IDS.style, ["style"], STYLE_PX, false, false),
             leaf(GROUP_IDS.dock, ["timeline", "drawin", "export"], dockPx, true, false, "timeline"),
           ],
         },
