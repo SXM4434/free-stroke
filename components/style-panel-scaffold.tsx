@@ -21,6 +21,8 @@ import {
   presetStateGap,
   type FusionDrive,
 } from "@/lib/style-system"
+import { KeySpot, isKeyablePath } from "@/components/key-button"
+import { KEY_UI_MUTANT } from "@/lib/style-key-meta"
 import {
   resolveFusionDrive,
   FUSION_SOURCES,
@@ -476,7 +478,8 @@ function MaterialControl({
               ["Reflection", "envMapIntensity", 0, 3, 0.05],
             ] as const
           ).map(([label, key, min, max, step]) => (
-            <label key={key} className="flex flex-col gap-1">
+            <SliderKey key={key} path={`customMaterial.${key}`}>
+            <label className="flex flex-col gap-1">
               <span className={fieldLabelClass}>
                 {label}{" "}
                 <span className="text-foreground">{styleState.customMaterial[key].toFixed(2)}</span>
@@ -491,6 +494,7 @@ function MaterialControl({
                 className="fs-slider w-full max-w-sm"
               />
             </label>
+            </SliderKey>
           ))}
         </div>
       )}
@@ -3184,6 +3188,12 @@ const MOTION_FIELD_KEYS: PresetFieldKey[] = [
 /** DrawInTimingControls lives in its own file, so it takes <Field> as a prop. */
 const fieldWrap = (keys: string[], node: React.ReactNode) => <Field k={keys as PresetFieldKey[]}>{node}</Field>
 
+/* K3 · THE KEY BUTTON IN FIELD (BUILD-PLAN.md §4). Outside Customize, a field
+   whose keys hold exactly one keyable style value (`KEYABLE_PATHS`) draws its
+   key button 8 px after its slider's label text (`KeySpot`,
+   components/key-button.tsx). A group, a field with no slider, and a field
+   holding several keyable values (the custom material's, which place their
+   own) draw none here. */
 function Field({
   k,
   group,
@@ -3194,7 +3204,12 @@ function Field({
   children: React.ReactNode
 }) {
   const scope = useContext(FieldScopeCtx)
-  if (!scope) return <>{children}</>
+  if (!scope) {
+    const keyable = group ? [] : (Array.isArray(k) ? k : [k]).filter((x) => isKeyablePath(x))
+    // "dropfield" is assert-key-buttons' must-fail: textureScale's Field draws no button.
+    const drop = KEY_UI_MUTANT === "dropfield" && keyable[0] === "textureScale"
+    return keyable.length === 1 && !drop ? <KeySpot path={keyable[0]}>{children}</KeySpot> : <>{children}</>
+  }
   const keys = (Array.isArray(k) ? k : [k]).filter((x) => scope.keys.has(x))
   if (!keys.length) return null
   if (group) return <>{children}</>
@@ -3204,6 +3219,14 @@ function Field({
       {children}
     </ScopedField>
   )
+}
+
+/** A slider's key button where no single-value Field places one (the custom
+ *  material's six). None inside Customize, as with Field. */
+function SliderKey({ path, children }: { path: string; children: React.ReactNode }) {
+  const scope = useContext(FieldScopeCtx)
+  if (scope) return <>{children}</>
+  return <KeySpot path={path}>{children}</KeySpot>
 }
 
 /* F124. An edited field's dot and Reset sit 8 px after the end of its label's

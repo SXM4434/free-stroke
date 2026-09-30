@@ -115,6 +115,7 @@ import {
 } from "@/lib/stroke-schedule"
 import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, clockUnderTake, clockKeyOf, carryTimeByArc, rateScaled } from "@/lib/stroke-timing"
 import { StrokeTakeProvider } from "@/components/stroke-strip"
+import { KeyedStyle, keyedStyleEdit } from "@/components/key-button"
 import { TakeTransportProvider } from "@/lib/take-transport"
 import { compactKeys, validateKeys, type TakeKeys } from "@/lib/keyframes"
 
@@ -1156,6 +1157,11 @@ export default function Home() {
    * variable instead would record a stale document whenever two writes land in
    * one event.
    */
+  /* K3 · THE KEY CLOCK, for the style setter below. `KeyedStyle` (inside the
+   * transport's provider, which this component renders) points it at the
+   * transport's playhead times the keyed length, the clock the frame samples
+   * keys on. */
+  const keyClockRef = useRef<() => number>(() => 0)
   const setStyleStateRecorded = useCallback(
     (action: StyleState | ((s: StyleState) => StyleState)) => {
       const prev = docRef.current.styleState
@@ -1175,10 +1181,13 @@ export default function Home() {
         applyPatch({ styleState: next })
         return
       }
+      /* K3 · EDITING A KEYED VALUE WRITES A KEY AT THE PLAYHEAD, in the same
+       * step as the edit, so one drag is one undo (`keyedStyleEdit`). */
+      const keyed = keyedStyleEdit(prev, next, docRef.current.keys, keyClockRef.current())
       edit(
         styleChangeLabel(prev, next, changed),
         styleCoalesceKey(prev, next, changed),
-        { styleState: next },
+        keyed ? { styleState: next, keys: keyed } : { styleState: next },
       )
     },
     [applyPatch, edit],
@@ -2516,36 +2525,40 @@ export default function Home() {
           <Viewport3DWrapper processedStrokes={viewportStrokes} rawStrokes={clocked.raw} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} inflateParams={geometryMode === "inflate" ? inflateParams : undefined} styleState={styleState} engineFamily={engineFamily} drawIn={drawIn} onDrawInChange={handleDrawInChange} revealWindow={revealWindow} onRevealWindowChange={handleRevealWindowChange} revealEnvelope={revealEnvelope} onRevealEnvelopeChange={handleRevealEnvelopeChange} take={take} onTakeChange={handleTakeChange} flatten={flatten} onFlattenChange={handleFlattenChange} settingsRef={settingsRef} apiRef={viewportApiRef} />
         }
         style={
-          <StylePanelScaffold
-            docked
-            summary={styleSummary}
-            open
-            activeId={activePanelId}
-            styleState={styleState}
-            setStyleState={setStyleStateRecorded}
-            onSelectPreset={handleSelectPreset}
-            onOpenChange={() => {}}
-            onActiveIdChange={setActivePanelId}
-            cameraSpin={cameraSpin}
-            onSpin={applySpin}
-            onSelectCombo={handleSelectCombo}
-            drawInTiming={{
-              drawIn,
-              patchDrawIn: handleDrawInChange,
-              drawInUnitCount: countDrawInUnits(
-                viewportStrokes,
-                drawIn.unit,
-                geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined,
-              ),
-              strokeCount: viewportStrokes.length,
-              revealWindow,
-              patchWindow: handleRevealWindowChange,
-              envelope: revealEnvelope,
-              patchEnvelope: handleRevealEnvelopeChange,
-              flatten,
-              patchFlatten: handleFlattenChange,
-            }}
-          />
+          <KeyedStyle styleState={styleState} clockRef={keyClockRef}>
+            {(shown) => (
+              <StylePanelScaffold
+                docked
+                summary={styleSummary}
+                open
+                activeId={activePanelId}
+                styleState={shown}
+                setStyleState={setStyleStateRecorded}
+                onSelectPreset={handleSelectPreset}
+                onOpenChange={() => {}}
+                onActiveIdChange={setActivePanelId}
+                cameraSpin={cameraSpin}
+                onSpin={applySpin}
+                onSelectCombo={handleSelectCombo}
+                drawInTiming={{
+                  drawIn,
+                  patchDrawIn: handleDrawInChange,
+                  drawInUnitCount: countDrawInUnits(
+                    viewportStrokes,
+                    drawIn.unit,
+                    geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined,
+                  ),
+                  strokeCount: viewportStrokes.length,
+                  revealWindow,
+                  patchWindow: handleRevealWindowChange,
+                  envelope: revealEnvelope,
+                  patchEnvelope: handleRevealEnvelopeChange,
+                  flatten,
+                  patchFlatten: handleFlattenChange,
+                }}
+              />
+            )}
+          </KeyedStyle>
         }
       />
 

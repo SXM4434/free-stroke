@@ -45,10 +45,12 @@ import {
   type EaseOut,
   type Handle,
   type Key,
+  type KeyPath,
   type KeyProperty,
   type TakeKeys,
   type Track,
 } from "@/lib/keyframes"
+import { KEY_FAMILIES, KEY_UI_MUTANT, STYLE_KEY_META, styleKeyMeta } from "@/lib/style-key-meta"
 import { CAMERA_MOVES, tryCameraMove, type CameraMove } from "@/lib/camera-moves"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import type { StrokeTakeContextValue } from "@/components/stroke-strip"
@@ -98,15 +100,18 @@ const Y_MIN = -BOX_PAD / BOX_H
 const Y_MAX = 1 + BOX_PAD / BOX_H
 
 interface LaneMeta {
-  prop: KeyProperty
+  prop: KeyPath
   label: string
   unit: string
   /** Shown value = stored value times this. */
   scale: number
   digits: number
   title: string
+  /** K3: a keyed style value's Style panel family (`lib/style-key-meta.ts`); absent on the take's lanes. */
+  family?: string
 }
 
+/** The take's own lanes, the draw-in and the camera: always listed, keyed from their "+". */
 const LANES: LaneMeta[] = [
   { prop: "drawProgress", label: "Draw", unit: "%", scale: 100, digits: 0, title: "How much of the drawing shows. Two keys at the same value hold the pen still." },
   { prop: "depth", label: "Depth", unit: "%", scale: 100, digits: 0, title: "How deep the mark is. 100% is full depth, 0% is flat." },
@@ -116,7 +121,23 @@ const LANES: LaneMeta[] = [
   { prop: "distance", label: "Distance", unit: "x", scale: 1, digits: 2, title: "How far away the camera is. Lower is closer." },
   { prop: "width", label: "Width", unit: "x", scale: 1, digits: 2, title: "How wide the mark is, times the width it ships at. 0.5x to 2x." },
 ]
-const metaOf = (p: KeyProperty) => LANES.find((m) => m.prop === p)!
+/** K3 · A KEYED STYLE VALUE'S LANE, named by its slider in the Style panel. */
+function styleLane(path: string): LaneMeta | undefined {
+  const m = styleKeyMeta(path)
+  if (!m) return undefined
+  return {
+    prop: m.path,
+    label: m.label,
+    unit: m.unit,
+    scale: m.scale,
+    digits: m.digits,
+    title: `${m.family.label}: ${m.label}, ${fmt(m.min * m.scale, m.digits)} to ${fmt(m.max * m.scale, m.digits)}${m.unit}.`,
+    family: m.family.id,
+  }
+}
+const metaOf = (p: KeyPath): LaneMeta => LANES.find((m) => m.prop === p) ?? styleLane(p)!
+/** The height of a family's heading row, shown once any style value is keyed. */
+const GROUP_H = 18
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
 const fmt = (v: number, d: number) => {
@@ -503,12 +524,12 @@ function CameraPicker({
  * ────────────────────────────────────────────────────────────────────────── */
 
 interface Sel {
-  prop: KeyProperty
+  prop: KeyPath
   i: number
 }
 
 interface KeyDrag {
-  prop: KeyProperty
+  prop: KeyPath
   i: number
   x0: number
   width: number
@@ -546,16 +567,27 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
   const [picking, setPicking] = useState(false)
 
   const bad = keys === undefined ? [] : validateKeys(keys)
-  const trackOf = (p: KeyProperty): Track => keys?.[p] ?? []
+  const trackOf = (p: KeyPath): Track => (keys?.[p] as Track | undefined) ?? []
+  /* K3 · THE LANES, GROUPED BY FAMILY. The take's seven lanes always; a style
+   * value only once it holds a key, under its Style panel family, in the
+   * panel's order. With no style value keyed there are no headings, and the
+   * lanes are the seven they were. */
+  const styleLanes = STYLE_KEY_META.filter((m) => KEY_UI_MUTANT === "alllanes" || trackOf(m.path).length > 0).map((m) => styleLane(m.path)!)
+  const groups: { id: string; label: string; lanes: LaneMeta[] }[] = [
+    { id: "take", label: "Draw-in and camera", lanes: LANES },
+    ...KEY_FAMILIES.map((f) => ({ id: f.id, label: f.label, lanes: styleLanes.filter((l) => l.family === f.id) })).filter((g) => g.lanes.length > 0),
+  ]
+  const headed = groups.length > 1
+  const allLanes = groups.flatMap((g) => g.lanes)
   // A selection or span past the end of its track, after an undo, reads as none.
   const selKey = sel && trackOf(sel.prop)[sel.i] ? sel : null
   const openSpan = span && trackOf(span.prop)[span.i + 1] ? span : null
-  const keyed = LANES.filter((m) => trackOf(m.prop).length > 0)
+  const keyed = allLanes.filter((m) => trackOf(m.prop).length > 0)
   const count = keyed.reduce((n, m) => n + trackOf(m.prop).length, 0)
   const x = (tMs: number) => (lengthMs > 0 ? tMs / lengthMs : 0)
 
   /** Every edit ends here: validate the track, write it, or show why not. */
-  const commit = (prop: KeyProperty, next: Key[], gesture: string | null): boolean => {
+  const commit = (prop: KeyPath, next: Key[], gesture: string | null): boolean => {
     const r = validateTrack(next, prop)
     if (r.length) {
       setReason(`${metaOf(prop).label}: ${r.join("; ")}`)
@@ -606,8 +638,10 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
       return
     }
     let value: number | undefined
-    if (track.length && validateTrack(track, m.prop).length === 0) value = sampleTrack(track, tMs, m.prop)
-    else value = live ? live[m.prop] : undefined
+    // A style lane is keyed by the time it shows, so it always samples its own track.
+    const take = m.family ? undefined : (m.prop as KeyProperty)
+    if (track.length && validateTrack(track, m.prop).length === 0) value = sampleTrack(track, tMs, take)
+    else value = live && take ? live[take] : undefined
     if (value === undefined || !Number.isFinite(value)) {
       setReason(`${m.label}: the view has no ${m.label.toLowerCase()} to read yet, so no key was added. Play or scrub once, then press + again.`)
       return
@@ -657,7 +691,7 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
     return commit(s.prop, trackOf(s.prop).map((k, j) => (j === s.i ? { ...k, value } : k)), null)
   }
 
-  const setEase = (prop: KeyProperty, i: number, out: EaseOut, inn: EaseIn, gesture: string | null) =>
+  const setEase = (prop: KeyPath, i: number, out: EaseOut, inn: EaseIn, gesture: string | null) =>
     commit(
       prop,
       trackOf(prop).map((k, j) => (j === i ? { ...k, easeOut: out } : j === i + 1 ? { ...k, easeIn: inn } : k)),
@@ -770,7 +804,7 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
   const clampShown = clamp !== null && (widthTrack?.length ?? 0) > 0
   // The Width row's note line is always reserved (see its render), so it always counts: a clamp
   // appearing must not change the lanes' height and reframe the canvas.
-  const bodyH = LANES.length * PITCH + (curveShown ? CURVE_H : 0) + NOTE_H
+  const bodyH = allLanes.length * PITCH + (headed ? groups.length * GROUP_H : 0) + (curveShown ? CURVE_H : 0) + NOTE_H
   const spanKey = curveShown ? `${openSpan.prop}:${openSpan.i}` : ""
   useEffect(() => {
     const body = bodyRef.current
@@ -981,7 +1015,20 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
               <div key={q} className="absolute inset-y-0 w-px bg-border/70" style={{ left: `${q * 100}%` }} />
             ))}
           </div>
-          {LANES.map(lane)}
+          {headed
+            ? groups.map((g) => (
+                <div key={g.id} data-key-group={g.id}>
+                  <div
+                    data-key-group-head
+                    className="flex items-end truncate pb-0.5 text-[10px] font-medium text-muted-foreground"
+                    style={{ height: `${GROUP_H}px` }}
+                  >
+                    {g.label}
+                  </div>
+                  {g.lanes.map(lane)}
+                </div>
+              ))
+            : LANES.map(lane)}
           {/* Clipped to the lane column, as the band clips its clock line, so the
               playhead at 100% hides in both instead of showing only here. */}
           <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 z-20 overflow-hidden" style={{ left: `${KEY_GUTTER_PX}px` }}>

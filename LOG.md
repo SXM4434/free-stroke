@@ -324,3 +324,9 @@ K2 checks (lane = this code served from a second worktree on :3141, reference = 
 Questions for the owner (K2):
 1. Loop-period rounding for a looping export (BUILD-PLAN.md §4) is not built: the export has no "loop" setting beyond the seamless Travel, so which exports count as looping is his call.
 2. The stack's and fusion's speeds are on the disabled list rather than made into running sums (a larger change inside lib/style-stack.ts and lib/style-fusion.ts). Worth doing next, or leave them unkeyable?
+
+## K3 · key buttons and keyed lanes
+- New `components/key-button.tsx` (key button, placement after the slider label, keyed-edit helper), `lib/style-key-meta.ts` (family and label per path). `Field` in `components/style-panel-scaffold.tsx` draws the button for a single keyable value; the custom material sliders place their own. Editing a keyed value writes a key at the playhead in the same undo step (`app/page.tsx`). `components/key-lanes.tsx` lists keyed style values under their family headings; unkeyed values show no lane.
+- tsc: 6. New gate `scripts/verify/assert-key-buttons.mjs`, one run on :3140: 11 of 12, all 5 must-fails FIRED. B1 FAILS: 29 of 30 buttons, ditherAngle's slider draws none (not fixed; stopped at the owner's request). B2 one lane added under Texture, B3 no unkeyed lanes, B4 24x24 hit boxes, B5 an edit keys at the playhead, B6 the three looks, G1 0 page errors.
+- Not run for K3: the paired regression batch.
+- Question: the take's seven lanes always show; only style values are keyed-only. Keep that?
