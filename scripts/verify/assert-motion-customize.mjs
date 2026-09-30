@@ -22,6 +22,7 @@ const jiti = createJiti(import.meta.url, { alias: { "@": new URL("../..", import
 const S = await jiti.import("../../lib/style-system.ts")
 const { chromium } = await import("./lib/browser.mjs")
 const { LAB_URL } = await import("./lib/dev-server.mjs")
+const { openStyle } = await import("./lib/dock.mjs")
 const OUT = new URL("../../docs/verification/motion-customize/", import.meta.url).pathname
 mkdirSync(OUT, { recursive: true })
 const sha = (x) => createHash("sha256").update(x).digest("hex").slice(0, 12)
@@ -68,7 +69,8 @@ async function pass(mode) {
     await page.evaluate((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys)
     await page.waitForTimeout(1500)
     await page.evaluate(() => window.__revealHarness.setPlaying(false))
-    await page.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click()
+    // L4: the Style panel on Presets, from the rail (the style bar's Preset pill until L4).
+    await openStyle(page, "presets")
     await settle(600)
     await page.locator("select").filter({ has: page.locator('option[value="geometryAnimation"]') }).first().selectOption("geometryAnimation")
     await settle(500)

@@ -1101,18 +1101,23 @@ async function uiPart() {
    * click the pill. Calling the router directly would assert nothing about
    * whether a human can get there, and this project has shipped a panel that
    * rendered zero controls while harness assertions passed. */
+  /* L4: the style bar and its Preset chip are gone. A person shows the Style
+   * panel from the rail and picks Presets in the panel's family list. */
   await page.evaluate(() => {
-    const chip = [...document.querySelectorAll("button")].find((b) => /^Preset/.test((b.textContent ?? "").trim()))
-    chip?.click()
+    const rail = document.querySelector('[data-rail] button[data-rail-panel="style"]')
+    if (rail && rail.getAttribute("aria-pressed") !== "true") rail.click()
+    const fam = document.querySelector('[data-dock-panel="style"] nav [data-style-family="presets"]')?.closest("button")
+    fam?.click()
   })
   await page.waitForTimeout(400)
   await shot("04a-presets-panel")
   /* The families sit behind their own tabs inside the panel; open the one that
    * owns the layer-stack compositions if it is not already showing. */
   await page.evaluate(() => {
-    const tab = [...document.querySelectorAll("button")].find((b) =>
-      /^(Layers|Layer stack|Stack)$/i.test((b.textContent ?? "").trim()),
-    )
+    // Since L4 the family button reads its name over its value, so it is found by its family id.
+    const tab =
+      document.querySelector('[data-dock-panel="style"] nav [data-style-family="layers"]')?.closest("button") ??
+      [...document.querySelectorAll("button")].find((b) => /^(Layers|Layer stack|Stack)$/i.test((b.textContent ?? "").trim()))
     tab?.click()
   })
   await page.waitForTimeout(400)
@@ -1172,8 +1177,9 @@ async function uiPart() {
    * targeting bug, which is why the "did the pointer land on a range input"
    * row below exists. */
   await page.evaluate(() => {
-    const hide = [...document.querySelectorAll("button")].find((b) => /^Hide panel$/.test((b.textContent ?? "").trim()))
-    hide?.click()
+    // L4: hidden from the rail, as the style bar's Hide panel did until L4.
+    const rail = document.querySelector('[data-rail] button[data-rail-panel="style"]')
+    if (rail && rail.getAttribute("aria-pressed") === "true") rail.click()
   })
   /* Dismiss any toasts still on screen, by clicking their close buttons — the
    * way a person clears them. With the offset fix they no longer cover the
@@ -1308,7 +1314,10 @@ async function uiPart() {
    * drawing. Deleting one was immediate, unconfirmed, and persisted on the next
    * tick. Created and deleted here through the panel's own buttons. */
   await page.evaluate(() => {
-    const chip = [...document.querySelectorAll("button")].find((b) => /^Fusion/.test((b.textContent ?? "").trim()))
+    // L4: the Style panel shown from the rail, then its Fusion family (the style bar's chip until L4).
+    const rail = document.querySelector('[data-rail] button[data-rail-panel="style"]')
+    if (rail && rail.getAttribute("aria-pressed") !== "true") rail.click()
+    const chip = document.querySelector('[data-dock-panel="style"] nav [data-style-family="fusion"]')?.closest("button")
     chip?.click()
   })
   await page.waitForTimeout(600)
@@ -1367,7 +1376,10 @@ async function uiPart() {
    * panel undoable without touching a file this lane does not own — so it has
    * to be proved on a real panel slider, not only on the canvas one. */
   await page.evaluate(() => {
-    const chip = [...document.querySelectorAll("button")].find((b) => /^Texture/.test((b.textContent ?? "").trim()))
+    // L4: the Style panel shown from the rail, then its Texture family (the style bar's chip until L4).
+    const rail = document.querySelector('[data-rail] button[data-rail-panel="style"]')
+    if (rail && rail.getAttribute("aria-pressed") !== "true") rail.click()
+    const chip = document.querySelector('[data-dock-panel="style"] nav [data-style-family="texture"]')?.closest("button")
     chip?.click()
   })
   await page.waitForTimeout(600)
@@ -1415,7 +1427,10 @@ async function uiPart() {
 
   /* ---- 3.13 A LAYER STACK EDIT ----------------------------------------- */
   await page.evaluate(() => {
-    const chip = [...document.querySelectorAll("button")].find((b) => /^Layers/.test((b.textContent ?? "").trim()))
+    // L4: the Style panel shown from the rail, then its Layers family (the style bar's chip until L4).
+    const rail = document.querySelector('[data-rail] button[data-rail-panel="style"]')
+    if (rail && rail.getAttribute("aria-pressed") !== "true") rail.click()
+    const chip = document.querySelector('[data-dock-panel="style"] nav [data-style-family="layers"]')?.closest("button")
     chip?.click()
   })
   await page.waitForTimeout(600)

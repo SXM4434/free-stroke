@@ -40,6 +40,25 @@
    (to the height it last had open), the chevron at the header's right end
    folds and opens it, and a drag on the edge between them sizes it.
 
+   L4 ADDS THE RAIL AND THE WORKSPACES (BUILD-PLAN.md §3, §5 row L4; his
+   rulings of 2026-09-26). The shell is now the rail on the left and the
+   panels beside it. Draw, Style and Animate are saved arrangements of the
+   same six panels (`components/workspace/workspaces.ts`), loaded with
+   `fromJSON(..., { reuseExistingPanels: true })` over the panels already
+   open, so a switch never removes one and the 3D view keeps its context. A
+   panel a workspace does not show is hidden, never removed. Every change is
+   saved to the current workspace 300 ms after the last one; Reset puts the
+   current workspace back to its default and deletes its save. Storage that
+   throws, or a saved layout that cannot load, falls back to the default and
+   is said once in a toast. The Style panel (the drawer under the old style
+   bar) is the sixth panel.
+
+   Today's split (`holdTodaysSplit`) is no longer the page's: Draw is 872 to
+   592 by design. It is kept for one caller, `workspace.today()` on the
+   harness, which shows the two canvases alone at the pre-L4 split so
+   assert-dock-shell can still compare their buffers and frames with a
+   reference tree.
+
    MUST-FAIL ARMS, read once at mount from `window.__fsDockMutant`, which the
    gate sets before navigation and nothing else ever sets:
      "header"          group headers stay visible (the 28 px strip IDENTICAL
@@ -54,6 +73,11 @@
                        (a toast must land on a dock control)
      "nosync"          the store's `drawInOpen` no longer drives the tab (the
                        drawer's "Show in dock" must go red)
+     L4, read by scripts/verify/assert-workspaces.mjs:
+     "unguarded"       storage read bare at mount (blocked storage must throw)
+     "silent"          a saved layout that cannot load falls back with no toast
+     "nosave"          a switch does not save the workspace it leaves (the
+                       round trip must go red)
    ================================================================== */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
@@ -71,16 +95,33 @@ import "dockview-react/dist/styles/dockview.css"
 import "./workspace/dock.css"
 import { DockHostProvider, useDockHostRef, type DockHostName } from "@/components/workspace/dock-hosts"
 import { useTakeTransport } from "@/lib/take-transport"
+import { toast } from "sonner"
+import { Rail, type RailPanel } from "@/components/workspace/rail"
+import {
+  CURRENT_KEY,
+  DOCK_HEADER_PX,
+  WORKSPACES,
+  defaultLayout,
+  deleteSaved,
+  layoutProblem,
+  readCurrent,
+  readSaved,
+  storageKey,
+  writeCurrent,
+  writeSaved,
+  type WorkspaceId,
+} from "@/components/workspace/workspaces"
 
-type Slots = { drawing: ReactNode; view: ReactNode }
-type Mutant = "header" | "onlyWhenVisible" | "noReuse" | "stale" | "nodock" | "toast182" | "nosync" | null
+type Slots = { drawing: ReactNode; view: ReactNode; style: ReactNode }
+type Mutant = "header" | "onlyWhenVisible" | "noReuse" | "stale" | "nodock" | "toast182" | "nosync" | "unguarded" | "silent" | "nosave" | null
+const MUTANTS: readonly string[] = ["header", "onlyWhenVisible", "noReuse", "stale", "nodock", "toast182", "nosync", "unguarded", "silent", "nosave"]
 
-const SlotContext = createContext<Slots>({ drawing: null, view: null })
+const SlotContext = createContext<Slots>({ drawing: null, view: null, style: null })
 
 const readMutant = (): Mutant => {
   if (typeof window === "undefined") return null
   const m = (window as unknown as { __fsDockMutant?: string }).__fsDockMutant
-  return m === "header" || m === "onlyWhenVisible" || m === "noReuse" || m === "stale" || m === "nodock" || m === "toast182" || m === "nosync" ? m : null
+  return m && MUTANTS.includes(m) ? (m as Mutant) : null
 }
 
 /* Same classes as the two columns they replace. The border stays on the
@@ -144,9 +185,10 @@ function ViewPanel(_: IDockviewPanelProps) {
 export const DOCK_PANELS = ["timeline", "drawin", "export"] as const
 type DockPanelId = (typeof DOCK_PANELS)[number]
 const DOCK_TITLES: Record<DockPanelId, string> = { timeline: "Timeline", drawin: "Draw-in", export: "Export" }
-/** The dock's header, and so its collapsed height: the transport's 28 px Play
- *  button with 4 px above and below. */
-export const DOCK_HEADER_PX = 36
+/* The dock's header, and so its collapsed height, is DOCK_HEADER_PX (36): the
+   transport's 28 px Play button with 4 px above and below. It lives in
+   workspaces.ts, which builds the arrangements. */
+export { DOCK_HEADER_PX }
 /** Open, the dock takes a third of the shell, and never less than this. */
 const DOCK_OPEN_MIN_PX = 220
 const isDockGroup = (g: DockviewGroupPanel | undefined) => !!g && g.panels.some((p) => (DOCK_PANELS as readonly string[]).includes(p.id))
@@ -178,7 +220,18 @@ function ExportDockPanel(_: IDockviewPanelProps) {
   )
 }
 
-const COMPONENTS = { drawing: DrawingPanel, view3d: ViewPanel, timeline: TimelinePanel, drawin: DrawInPanel, export: ExportDockPanel }
+/* THE STYLE PANEL (L4): the eight families and the open one, the drawer that
+   sat under the style bar, as a column the height of its panel. */
+function StylePanel(_: IDockviewPanelProps) {
+  const { style } = useContext(SlotContext)
+  return (
+    <div data-dock-panel="style" className="h-full w-full border-l border-border">
+      {style}
+    </div>
+  )
+}
+
+const COMPONENTS = { drawing: DrawingPanel, view3d: ViewPanel, style: StylePanel, timeline: TimelinePanel, drawin: DrawInPanel, export: ExportDockPanel }
 
 /* What the dock's header needs from the shell: whether it is folded, and the
    two moves it makes. Provided by `DockShell`, read by the tabs and the
@@ -363,22 +416,51 @@ export type DockHarness = {
     open: (id?: DockPanelId) => void
     fold: () => void
     expand: () => void
-    /** The whole dock group hidden (true) or shown. Hidden, the Drawing and the
-     *  3D view share the shell as they did before L3; L4's rail does this. */
+    /** The whole dock group hidden (true) or shown, as the rail's Timeline does. */
     setHidden: (hidden: boolean) => void
     hidden: () => boolean
   }
+  /** The workspaces (L4). */
+  workspace: {
+    current: () => WorkspaceId
+    switch: (ws: WorkspaceId) => void
+    reset: () => void
+    /** `JSON.stringify(api.toJSON())`, what the save writes. */
+    json: () => string
+    /** Show or hide one rail panel, as its rail button does. */
+    toggle: (id: RailPanel) => void
+    shown: () => Record<RailPanel, boolean>
+    /** The two canvases alone, at today's split (the pre-L4 page, dock and
+     *  Style hidden). For assert-dock-shell's BUFFERS and FRAMES only. */
+    today: () => void
+  }
 }
 
-export function DockShell({ drawing, view }: Slots) {
+export function DockShell(slots: Slots) {
   return (
     <DockHostProvider>
-      <DockShellInner drawing={drawing} view={view} />
+      <DockShellInner {...slots} />
     </DockHostProvider>
   )
 }
 
-function DockShellInner({ drawing, view }: Slots) {
+/* Said once per page load, never silently: storage that throws on a read or
+   a write, and a saved layout that could not be loaded. */
+let storageToasted = false
+const sayStorageBlocked = (why: string) => {
+  if (storageToasted) return
+  storageToasted = true
+  // The first load runs in the shell's mount, before the page's Toaster has
+  // subscribed (it mounts after the shell); a toast raised then is dropped.
+  window.setTimeout(() =>
+    toast.warning("Layouts cannot be saved in this browser", {
+      description: `Storage is blocked (${why}), so every workspace opens on its default arrangement.`,
+    }), 0)
+}
+
+const RAIL_NONE: Record<RailPanel, boolean> = { drawing: false, view3d: false, style: false, timeline: false, export: false }
+
+function DockShellInner({ drawing, view, style }: Slots) {
   const mutantRef = useRef<Mutant>(null)
   const apiRef = useRef<DockviewApi | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
@@ -395,6 +477,20 @@ function DockShellInner({ drawing, view }: Slots) {
     setCollapsedState(v)
   }, [])
 
+  /* THE WORKSPACE, and what the rail shows as on. */
+  const [workspace, setWorkspaceState] = useState<WorkspaceId>("draw")
+  const wsRef = useRef<WorkspaceId>("draw")
+  const [shown, setShown] = useState<Record<RailPanel, boolean>>(RAIL_NONE)
+  /** True while a layout is being loaded, so the load itself is not saved. */
+  const loadingRef = useRef(false)
+  /** Today's split held (assert-dock-shell only, see `today`). */
+  const todayRef = useRef(false)
+  const saveTimer = useRef<number | null>(null)
+  /** The layout as it stood once the last load settled. A save that would
+   *  write exactly this is skipped: only a change is saved, so a Reset leaves
+   *  no save behind until the next real change. */
+  const loadedJson = useRef<string | null>(null)
+
   /* The toast sits above the dock and the drawing's own action bar above it.
      88 px over the dock's top edge is the clearance `app/page.tsx` measured for
      the drawing bar; the page's Toaster reads it through `--fs-toast-offset`. */
@@ -407,15 +503,50 @@ function DockShellInner({ drawing, view }: Slots) {
     document.documentElement.style.setProperty("--fs-toast-offset", `${px}px`)
   }, [])
 
+  const readShown = useCallback(() => {
+    const api = apiRef.current
+    if (!api) return
+    const vis = (id: string) => {
+      const p = api.getPanel(id)
+      return !!p && p.group.api.isVisible
+    }
+    const g = dockGroup()
+    const dockOpen = !!g && g.api.isVisible && !collapsedRef.current
+    setShown({
+      drawing: vis("drawing"),
+      view3d: vis("view3d"),
+      style: vis("style"),
+      timeline: !!g && g.api.isVisible,
+      export: dockOpen && g!.activePanel?.id === "export",
+    })
+  }, [])
+
   const hold = useCallback(() => requestAnimationFrame(() => {
     const api = apiRef.current
     if (!api || !boxRef.current) return
     const g = api.groups.find(isDockGroup)
-    if (g && collapsedRef.current && !api.hasMaximizedGroup() && Math.abs(g.element.getBoundingClientRect().height - DOCK_HEADER_PX) > 0.5)
+    if (g && collapsedRef.current && g.api.isVisible && !api.hasMaximizedGroup() && Math.abs(g.element.getBoundingClientRect().height - DOCK_HEADER_PX) > 0.5)
       g.api.setSize({ height: DOCK_HEADER_PX })
-    holdTodaysSplit(api, boxRef.current)
+    if (todayRef.current) holdTodaysSplit(api, boxRef.current)
     publishEdge()
-  }), [publishEdge])
+    readShown()
+  }), [publishEdge, readShown])
+
+  const save = useCallback(() => {
+    const api = apiRef.current
+    if (!api || loadingRef.current || !window.matchMedia(LG).matches || api.hasMaximizedGroup() || todayRef.current || mutantRef.current === "nosave") return
+    const now = api.toJSON()
+    if (loadedJson.current === null || JSON.stringify(now) === loadedJson.current) return
+    const r = writeSaved(wsRef.current, now)
+    if (!r.ok) sayStorageBlocked(r.why)
+  }, [])
+  const saveSoon = useCallback(() => {
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = null
+      save()
+    }, 300)
+  }, [save])
 
   const openPx = () => {
     const h = boxRef.current?.getBoundingClientRect().height ?? 900
@@ -424,6 +555,7 @@ function DockShellInner({ drawing, view }: Slots) {
   const expand = useCallback(() => {
     const g = dockGroup()
     if (!g) return
+    if (!g.api.isVisible) g.api.setVisible(true)
     setCollapsed(false)
     g.api.setSize({ height: openPx() })
     hold()
@@ -438,11 +570,17 @@ function DockShellInner({ drawing, view }: Slots) {
     hold()
   }, [hold, setCollapsed])
   const show = useCallback((id: DockPanelId) => {
+    const g = dockGroup()
+    if (g && !g.api.isVisible) {
+      g.api.setVisible(true)
+      saveSoon()
+    }
     apiRef.current?.getPanel(id)?.api.setActive()
     if (collapsedRef.current) expand()
     syncDrawIn()
+    hold()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expand])
+  }, [expand, hold, saveSoon])
   const toggleCollapsed = useCallback(() => (collapsedRef.current ? expand() : fold()), [expand, fold])
 
   /* DRAW-IN OPEN IS THE DRAW-IN TAB SHOWING. The store's `drawInOpen` is what
@@ -453,8 +591,8 @@ function DockShellInner({ drawing, view }: Slots) {
   const syncDrawIn = () => {
     const g = dockGroup()
     if (!store || !g) return
-    const shown = g.activePanel?.id === "drawin" && !collapsedRef.current
-    if (store.get("drawInOpen") !== shown) store.set("drawInOpen", shown)
+    const shownNow = g.activePanel?.id === "drawin" && !collapsedRef.current && g.api.isVisible
+    if (store.get("drawInOpen") !== shownNow) store.set("drawInOpen", shownNow)
   }
   const subDrawIn = useCallback((fn: () => void) => (store ? store.subscribe("drawInOpen", fn) : () => {}), [store])
   const readDrawIn = useCallback(() => store?.get("drawInOpen") ?? false, [store])
@@ -462,15 +600,15 @@ function DockShellInner({ drawing, view }: Slots) {
   useEffect(() => {
     const g = dockGroup()
     if (!g || mutantRef.current === "nosync") return
-    const shown = g.activePanel?.id === "drawin" && !collapsedRef.current
-    if (drawInOpen && !shown) show("drawin")
-    else if (!drawInOpen && shown) apiRef.current?.getPanel("timeline")?.api.setActive()
+    const shownNow = g.activePanel?.id === "drawin" && !collapsedRef.current && g.api.isVisible
+    if (drawInOpen && !shownNow) show("drawin")
+    else if (!drawInOpen && shownNow) apiRef.current?.getPanel("timeline")?.api.setActive()
   }, [drawInOpen, show])
   useEffect(() => syncDrawIn(), [collapsed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const frozen = useRef<Slots | null>(null)
-  if (frozen.current === null) frozen.current = { drawing, view }
-  const slots = mutantRef.current === "stale" ? frozen.current : { drawing, view }
+  if (frozen.current === null) frozen.current = { drawing, view, style }
+  const slots = mutantRef.current === "stale" ? frozen.current : { drawing, view, style }
 
   /* Every group but the dock keeps its header hidden (L1). The dock's header
      is the transport row and the tabs, and it is marked for `dock.css`. */
@@ -487,68 +625,159 @@ function DockShellInner({ drawing, view }: Slots) {
     for (const g of api.groups) dressGroup(g)
   }, [dressGroup])
 
+  /* ---- WORKSPACES (L4) -------------------------------------------------- */
+
+  const shellSize = () => {
+    const r = boxRef.current?.getBoundingClientRect()
+    return { w: r?.width ?? 1464, h: r?.height ?? 942, wide: window.matchMedia(LG).matches }
+  }
+  const afterLoad = useCallback(() => {
+    const api = apiRef.current
+    if (!api) return
+    hideHeaders(api)
+    const g = api.groups.find(isDockGroup)
+    const h = g && g.api.isVisible ? g.element.getBoundingClientRect().height : DOCK_HEADER_PX
+    setCollapsed(h <= DOCK_HEADER_PX + 1)
+    if (mutantRef.current === "nodock") for (const id of DOCK_PANELS) api.getPanel(id)?.api.close()
+    // The folded dock pinned to its header now, not a frame later, so the
+    // layout read next is the loaded one and a change a moment after the load
+    // (a rail click) is a change, not part of the load.
+    if (g && g.api.isVisible && h <= DOCK_HEADER_PX + 1 && Math.abs(h - DOCK_HEADER_PX) > 0.5) g.api.setSize({ height: DOCK_HEADER_PX })
+    loadedJson.current = JSON.stringify(api.toJSON())
+    hold()
+  }, [hideHeaders, hold, setCollapsed])
+
+  /** Load `layout` over the panels already open. Never removes a panel. */
+  const loadLayout = useCallback((layout: SerializedDockview) => {
+    const api = apiRef.current
+    if (!api) return
+    loadingRef.current = true
+    try {
+      api.fromJSON(layout, { reuseExistingPanels: mutantRef.current !== "noReuse" })
+    } finally {
+      loadingRef.current = false
+    }
+    afterLoad()
+  }, [afterLoad])
+
+  /** What `ws` opens on: its saved arrangement when there is a sound one, its
+   *  default otherwise, and the default is said out loud when a save existed. */
+  const layoutFor = useCallback((ws: WorkspaceId): SerializedDockview => {
+    const { w, h, wide } = shellSize()
+    const def = defaultLayout(ws, w, h, wide)
+    if (!wide) return def
+    const label = WORKSPACES.find((x) => x.id === ws)!.label
+    const saved = mutantRef.current === "unguarded" ? { ok: true as const, layout: JSON.parse(window.localStorage.getItem(storageKey(ws)) ?? "null") } : readSaved(ws)
+    if (!saved.ok) {
+      sayStorageBlocked(saved.why)
+      return def
+    }
+    if (saved.layout === null) return def
+    const problem = mutantRef.current === "silent" ? null : layoutProblem(saved.layout)
+    if (problem) {
+      if (mutantRef.current !== "silent")
+        toast.warning(`The saved ${label} layout was not loaded`, { description: `${problem[0].toUpperCase()}${problem.slice(1)}. ${label} opens on its default arrangement.` })
+      return def
+    }
+    return saved.layout as SerializedDockview
+  }, [])
+
+  const switchTo = useCallback((ws: WorkspaceId) => {
+    if (saveTimer.current !== null) {
+      window.clearTimeout(saveTimer.current)
+      saveTimer.current = null
+    }
+    save()
+    todayRef.current = false
+    wsRef.current = ws
+    setWorkspaceState(ws)
+    writeCurrent(ws)
+    loadLayout(layoutFor(ws))
+  }, [save, loadLayout, layoutFor])
+
+  const reset = useCallback(() => {
+    const ws = wsRef.current
+    const r = deleteSaved(ws)
+    if (!r.ok) sayStorageBlocked(r.why)
+    const { w, h, wide } = shellSize()
+    loadLayout(defaultLayout(ws, w, h, wide))
+  }, [loadLayout])
+
+  const toggle = useCallback((id: RailPanel) => {
+    const api = apiRef.current
+    if (!api) return
+    if (id === "export") {
+      const g = dockGroup()
+      const on = !!g && g.api.isVisible && !collapsedRef.current && g.activePanel?.id === "export"
+      if (on) show("timeline")
+      else show("export")
+      return
+    }
+    const g = id === "timeline" ? dockGroup() : api.getPanel(id)?.group
+    if (!g) return
+    g.api.setVisible(!g.api.isVisible)
+    hold()
+    syncDrawIn()
+    // Showing or hiding a group fires no layout change, so it saves here.
+    saveSoon()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [show, hold, saveSoon])
+
+  const today = useCallback(() => {
+    const api = apiRef.current
+    if (!api) return
+    todayRef.current = true
+    for (const id of ["drawing", "view3d"] as const) {
+      const g = api.getPanel(id)?.group
+      if (g && !g.api.isVisible) g.api.setVisible(true)
+    }
+    for (const g of [api.getPanel("style")?.group, dockGroup()]) if (g && g.api.isVisible) g.api.setVisible(false)
+    hold()
+  }, [hold])
+
   const onReady = useCallback((e: DockviewReadyEvent) => {
     const api = e.api
     const mutant = readMutant()
     mutantRef.current = mutant
-    const wide = window.matchMedia(LG).matches
-    const d = api.addPanel({ id: "drawing", component: "drawing", title: "Drawing" })
-    api.addPanel({
-      id: "view3d",
-      component: "view3d",
-      title: "3D view",
-      position: { referencePanel: d, direction: wide ? "right" : "below" },
-    })
-    // THE DOCK, under both, folded to its header (see the note at the top).
-    if (mutant !== "nodock") {
-      const t = api.addPanel({
-        id: "timeline",
-        component: "timeline",
-        tabComponent: "dock",
-        title: DOCK_TITLES.timeline,
-        position: { direction: "below" },
-        minimumHeight: DOCK_HEADER_PX,
-        initialHeight: DOCK_HEADER_PX,
-      })
-      for (const id of ["drawin", "export"] as const)
-        api.addPanel({
-          id,
-          component: id,
-          tabComponent: "dock",
-          title: DOCK_TITLES[id],
-          position: { referencePanel: t, direction: "within" },
-          inactive: true,
-          minimumHeight: DOCK_HEADER_PX,
-        })
-      t.api.setActive()
-    }
-    hideHeaders(api)
-    // Groups come and go on a move, a maximize and a layout load; each new
-    // one arrives with its header showing unless it is hidden here.
+    apiRef.current = api
+    // Groups come and go on a load; each new one arrives with its header
+    // showing unless it is hidden here.
     api.onDidAddGroup((g) => dressGroup(g))
     api.onDidLayoutFromJSON(() => hideHeaders(api))
-    apiRef.current = api
     api.onDidMovePanel(hold)
     api.onDidMaximizedGroupChange(hold)
     api.onDidLayoutFromJSON(hold)
-    api.onDidActivePanelChange(() => syncDrawIn())
+    api.onDidActivePanelChange(() => {
+      syncDrawIn()
+      readShown()
+    })
     /* A drag on the edge above the dock folds or opens it as far as it goes:
-       at its header it is folded, anything taller is open. */
+       at its header it is folded, anything taller is open. Every change is
+       saved to the current workspace, 300 ms after the last one. */
     api.onDidLayoutChange(() => {
       const g = api.groups.find(isDockGroup)
-      if (!g) return
-      const h = g.element.getBoundingClientRect().height
-      const folded = h <= DOCK_HEADER_PX + 1
-      if (folded !== collapsedRef.current) setCollapsed(folded)
+      if (g && g.api.isVisible) {
+        const folded = g.element.getBoundingClientRect().height <= DOCK_HEADER_PX + 1
+        if (folded !== collapsedRef.current) setCollapsed(folded)
+      }
       publishEdge()
+      readShown()
+      if (!loadingRef.current) saveSoon()
     })
-    hold()
+
+    // THE FIRST ARRANGEMENT: the workspace last used, as it was left.
+    // The "unguarded" arm reads storage bare, as the must-fail for blocked storage.
+    const first: WorkspaceId =
+      mutant === "unguarded" ? ((window.localStorage.getItem(CURRENT_KEY) as WorkspaceId | null) ?? "draw") : (readCurrent() ?? "draw")
+    wsRef.current = first
+    setWorkspaceState(first)
+    loadLayout(layoutFor(first))
 
     if (process.env.NODE_ENV !== "production") {
       const harness: DockHarness = {
         api,
         mutant,
-        load: (layout) => api.fromJSON(layout, { reuseExistingPanels: mutant !== "noReuse" }),
+        load: (layout) => loadLayout(layout),
         dock: {
           collapsed: () => collapsedRef.current,
           open: (id = "timeline") => show(id),
@@ -560,46 +789,83 @@ function DockShellInner({ drawing, view }: Slots) {
           },
           hidden: () => !(api.groups.find(isDockGroup)?.api.isVisible ?? false),
         },
+        workspace: {
+          current: () => wsRef.current,
+          switch: switchTo,
+          reset,
+          json: () => JSON.stringify(api.toJSON()),
+          toggle,
+          shown: () => {
+            const vis = (id: string) => !!api.getPanel(id)?.group.api.isVisible
+            const g = api.groups.find(isDockGroup)
+            return {
+              drawing: vis("drawing"),
+              view3d: vis("view3d"),
+              style: vis("style"),
+              timeline: !!g?.api.isVisible,
+              export: !!g?.api.isVisible && !collapsedRef.current && g.activePanel?.id === "export",
+            }
+          },
+          today,
+        },
       }
       ;(window as unknown as { __dockHarness?: DockHarness }).__dockHarness = harness
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hideHeaders, dressGroup, hold, publishEdge, setCollapsed])
+  }, [hideHeaders, dressGroup, hold, publishEdge, setCollapsed, loadLayout, layoutFor, saveSoon, switchTo, reset, toggle, today, readShown])
 
-  // Below `lg` the two stack, as the flex column did: the 3D view moves under
-  // the drawing. It is a panel move, the same one the gate proves.
+  /* Crossing `lg` reloads the workspace: below it every workspace is the
+     stacked arrangement (never saved); above it, the saved one. */
   useEffect(() => {
     const mq = window.matchMedia(LG)
     const onChange = () => {
-      const api = apiRef.current
-      const d = api?.getPanel("drawing"), v = api?.getPanel("view3d")
-      if (!d || !v) return
-      v.api.moveTo({ group: d.group, position: mq.matches ? "right" : "bottom" })
+      if (!apiRef.current) return
+      loadLayout(layoutFor(wsRef.current))
     }
     mq.addEventListener("change", onChange)
     const ro = new ResizeObserver(hold)
     if (boxRef.current) ro.observe(boxRef.current)
     return () => { mq.removeEventListener("change", onChange); ro.disconnect() }
-  }, [hold])
+  }, [hold, loadLayout, layoutFor])
+
+  /* 1, 2 and 3 switch the workspace, as the rail's tooltips say. Not while
+     typing, and not with a modifier (⌘1 and the rest stay the browser's).
+     Grepped first: no keydown handler in app/ or components/ binds a digit. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.repeat) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
+      const ws = WORKSPACES.find((w) => w.key === e.key)
+      if (!ws) return
+      e.preventDefault()
+      switchTo(ws.id)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [switchTo])
 
   return (
     <SlotContext.Provider value={slots}>
       <DockControlContext.Provider value={{ collapsed, show, toggleCollapsed }}>
-        <div ref={boxRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden" style={QUIET}>
-          <DockviewReact
-            className="absolute inset-0"
-            components={COMPONENTS}
-            tabComponents={TAB_COMPONENTS}
-            prefixHeaderActionsComponent={DockHeaderPrefix}
-            rightHeaderActionsComponent={DockHeaderActions}
-            onReady={onReady}
-            theme={THEME}
-            defaultRenderer={readMutant() === "onlyWhenVisible" ? "onlyWhenVisible" : "always"}
-            hideBorders
-            disableDnd
-            disableFloatingGroups
-            locked
-          />
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <Rail workspace={workspace} onWorkspace={switchTo} shown={shown} onToggle={toggle} onReset={reset} />
+          <div ref={boxRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden" style={QUIET}>
+            <DockviewReact
+              className="absolute inset-0"
+              components={COMPONENTS}
+              tabComponents={TAB_COMPONENTS}
+              prefixHeaderActionsComponent={DockHeaderPrefix}
+              rightHeaderActionsComponent={DockHeaderActions}
+              onReady={onReady}
+              theme={THEME}
+              defaultRenderer={readMutant() === "onlyWhenVisible" ? "onlyWhenVisible" : "always"}
+              hideBorders
+              disableDnd
+              disableFloatingGroups
+              locked
+            />
+          </div>
         </div>
       </DockControlContext.Provider>
     </SlotContext.Provider>

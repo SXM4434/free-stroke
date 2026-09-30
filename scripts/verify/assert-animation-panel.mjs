@@ -17,6 +17,7 @@ import { createHash } from "node:crypto"
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 const { chromium } = await import("./lib/browser.mjs")
 const { LAB_URL } = await import("./lib/dev-server.mjs")
+const { openStyle } = await import("./lib/dock.mjs")
 const OUT = new URL("../../docs/verification/animation-panel/", import.meta.url).pathname
 mkdirSync(OUT, { recursive: true })
 const BASE = `${OUT}main-popover-baseline.json`
@@ -212,10 +213,8 @@ async function row4(mutate = false) {
   // The drawer opens from the style strip's chip ("Animation Static"); inside it,
   // the nav button for the tab carries aria-current.
   const tab = page.locator("nav button", { has: page.locator("span", { hasText: /^Animation$/ }) }).first()
-  if (!((await tab.count()) > 0 && (await tab.isVisible()))) {
-    const chip = page.locator("button", { hasText: /^Animation\s*\S*$/ }).first()
-    if ((await chip.count()) > 0) { await chip.click(); await settle(page, 600) }
-  }
+  // L4: the style strip's chip is gone; the Style panel is shown from the rail.
+  if (!((await tab.count()) > 0 && (await tab.isVisible()))) { await openStyle(page); await settle(page, 600) }
   const tabOk = (await tab.count()) > 0 && (await tab.isVisible())
   if (tabOk && (await tab.getAttribute("aria-current")) !== "true") { await tab.click(); await settle(page, 400) }
   const show = page.getByRole("button", { name: "Show animation panel" })

@@ -40,6 +40,7 @@
 // Usage:
 //   node scripts/verify/_run-clean.mjs scripts/verify/assert-fusion-newborn.mjs
 import { chromium } from "./lib/browser.mjs"
+import { openStyle } from "./lib/dock.mjs"
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
@@ -451,10 +452,9 @@ async function main() {
   }
   const readState = () => page.evaluate(() => window.__styleHarness.get().styleState)
 
-  const showPanel = page.getByRole("button", { name: /Show panel|Hide panel/ })
-  if ((await showPanel.textContent())?.trim() === "Show panel") await showPanel.click()
+  // L4: the Style panel shown from the rail on its Fusion family (the style bar's Show panel and the drawer's Fusion tab until L4).
+  await openStyle(page, "fusion")
   await page.waitForTimeout(250)
-  await page.getByRole("button", { name: "Fusion", exact: true }).first().click()
   await page.waitForTimeout(400)
   const body = page.locator("div.fs-panel-enter")
   say((await body.count()) === 1, "the fusion panel is reachable by clicking")

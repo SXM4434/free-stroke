@@ -47,6 +47,7 @@
 //   node scripts/verify/assert-fusion-authoring.mjs --mutate=unlinked   # must FAIL
 //   node scripts/verify/assert-fusion-authoring.mjs --mutate=deadalive  # must FAIL
 import { chromium } from "./lib/browser.mjs"
+import { openStyle } from "./lib/dock.mjs"
 import { writeFileSync, mkdirSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
@@ -331,10 +332,9 @@ async function main() {
 
   /* ================= PART A — THE SURFACE, BY CLICK ====================== */
 
-  const showPanel = page.getByRole("button", { name: /Show panel|Hide panel/ })
-  if ((await showPanel.textContent())?.trim() === "Show panel") await showPanel.click()
+  // L4: the Style panel shown from the rail on its Fusion family (the style bar's Show panel and the drawer's Fusion tab until L4).
+  await openStyle(page, "fusion")
   await page.waitForTimeout(250)
-  await page.getByRole("button", { name: "Fusion", exact: true }).first().click()
   await page.waitForTimeout(350)
   const body = page.locator("div.fs-panel-enter")
   say((await body.count()) === 1, "fusion panel body is rendered")

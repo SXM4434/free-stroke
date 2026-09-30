@@ -19,6 +19,7 @@
 
 import { chromium } from "./lib/browser.mjs"
 import { LAB_URL } from "./lib/dev-server.mjs"
+import { openStyle } from "./lib/dock.mjs"
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { execSync } from "node:child_process"
 import { join, dirname } from "node:path"
@@ -124,7 +125,8 @@ const open = async (fresh) => {
     await page.evaluate(() => { window.__revealHarness.setEase("linear"); window.__revealHarness.setPlaying(false) })
   }
   await page.waitForTimeout(600)
-  await page.getByRole("button", { name: /^Animation/ }).first().click()
+  // L4: the Animation family of the Style panel, shown from the rail (the style bar's pill until L4).
+  await openStyle(page, "animation")
   await page.waitForTimeout(800)
 }
 
@@ -298,7 +300,7 @@ try {
   }
 
   // ── 7 · Cmd-Z undoes a drag ──
-  await page.getByRole("button", { name: /^Animation/ }).first().click().catch(() => {})
+  await openStyle(page, "animation").catch(() => {})
   await page.waitForTimeout(600)
   const c7a = await live()
   await drag("envelope", "in", 0.7, 0.3)

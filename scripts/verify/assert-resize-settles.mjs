@@ -58,6 +58,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 const { chromium } = await import("./lib/browser.mjs")
 const { LAB_URL } = await import("./lib/dev-server.mjs")
+const { openStyle } = await import("./lib/dock.mjs")
 
 const OUT = new URL("../../docs/verification/resize/", import.meta.url).pathname
 const HASHES = `${OUT}main-hashes.json`
@@ -296,7 +297,8 @@ try {
         await s.page.evaluate(() => { const gl = window.__rsStore.getState().gl, pr = gl.getPixelRatio(); gl.setViewport(0, 0, gl.domElement.width / pr, gl.domElement.height / pr) })
         await s.raf2()
       }
-      const r1 = await resizeRow(s, 1, arm, () => s.page.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click(), "Preset panel open")
+      // L4: the Presets family in the Style panel, shown from the rail: the resize that opening it causes.
+      const r1 = await resizeRow(s, 1, arm, () => openStyle(s.page, "presets"), "Preset panel open")
       if (arm === "fix") for (const [n, u] of [["panel-a1", r1.a1], ["panel-b", r1.b]]) writeFileSync(`${OUT}settles-${n}.png`, Buffer.from(u.split(",")[1], "base64"))
       await exportRow(s, arm)
       await s.ctx.close()

@@ -182,8 +182,11 @@ async function main() {
   /* ================================================================== */
   console.log("\n=== A · the rail, through the real UI ===")
 
-  // Open the Presets panel from the summary strip — the only way in.
-  await page.getByRole("button", { name: /^Preset/ }).click()
+  // Open the Presets family of the Style panel: since L4 the rail shows the
+  // panel and its family list picks Presets (the summary strip's chip until L4).
+  await page.locator('[data-rail] button[data-rail-panel="style"]').click()
+  await wait(200)
+  await page.locator('[data-dock-panel="style"] nav button', { has: page.locator('[data-style-family="presets"]') }).click()
   await wait(300)
 
   const familyOptions = await page.evaluate(() => {
@@ -243,8 +246,9 @@ async function main() {
     "clicking the 'Solid Cutout' PILL switches the app into Solid",
     `${modeBefore} → ${modeAfter}`,
   )
+  // L4: the Presets entry of the Style panel's family list (the style bar's Preset chip until L4).
   const chipAfterClick = await page.evaluate(
-    () => [...document.querySelectorAll("button")].find((b) => b.textContent.startsWith("Preset"))?.textContent,
+    () => document.querySelector('[data-dock-panel="style"] nav [data-style-family="presets"]')?.textContent,
   )
   say(
     /Solid Cutout/.test(chipAfterClick ?? ""),
@@ -300,11 +304,12 @@ async function main() {
   /* ================================================================== */
   /*  G · THE SUMMARY STRIP — is every panel reachable from it?          */
   /* ================================================================== */
-  console.log("\n=== G · the summary strip ===")
+  console.log("\n=== G · the summary strip (since L4 the Style panel's family list) ===")
+  /* L4 took the style bar away; its reading went into the Style panel's family
+   * list, one button per family, the family's name over what it is set to.
+   * These rows now read that list: the same text, "Layers" then its value. */
   const chips = await page.evaluate(() =>
-    [...document.querySelectorAll("button")]
-      .filter((b) => b.className.includes("rounded-full") && b.className.includes("gap-1.5"))
-      .map((b) => b.textContent.trim()),
+    [...document.querySelectorAll('[data-dock-panel="style"] nav button')].map((b) => b.textContent.trim()),
   )
   const chipLabels = chips.map((c) => c.replace(/([a-z])([A-Z0-9])/g, "$1|$2").split("|")[0])
   say(
@@ -327,7 +332,7 @@ async function main() {
 
   const layersChip = async () =>
     page.evaluate(
-      () => [...document.querySelectorAll("button")].find((b) => b.textContent.startsWith("Layers"))?.textContent,
+      () => document.querySelector('[data-dock-panel="style"] nav [data-style-family="layers"]')?.textContent,
     )
   await page.evaluate(() =>
     window.__styleHarness.setStyle({ layerStackEnabled: false, stackAnimationEnabled: false }),

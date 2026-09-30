@@ -53,12 +53,11 @@ await page.waitForTimeout(1200)
 
 /* ---- §1 · OPEN THE PANEL, BY CLICKING THE CHIP THE USER CLICKS ------------ */
 {
-  // The summary strip is the drawer's header; its Fusion chip opens the panel.
-  const chip = page.locator("text=Fusion").first()
-  await chip.click({ timeout: 10000 }).catch(() => {})
+  // Since L4: the rail's Style button shows the Style panel, and its family
+  // list's Fusion entry opens the panel (the summary strip's chip until L4).
+  await page.locator('[data-rail] button[data-rail-panel="style"]').click({ timeout: 10000 }).catch(() => {})
   await page.waitForTimeout(400)
-  // If that did not land on the Fusion tab, press the tab in the panel's nav.
-  const tab = page.locator('nav[aria-label="Style panel sections"] button', { hasText: "Fusion" })
+  const tab = page.locator('nav[aria-label="Style panel sections"] button', { has: page.locator('[data-style-family="fusion"]') })
   if (await tab.count()) await tab.first().click().catch(() => {})
   await page.waitForTimeout(400)
   const present = await page.locator("[data-fusion-combos]").count()

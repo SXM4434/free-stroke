@@ -3757,6 +3757,8 @@ export function StylePanelScaffold({
   onSpin,
   onSelectCombo,
   drawInTiming,
+  docked = false,
+  summary,
 }: {
   open: boolean
   activeId: StylePanelId
@@ -3773,6 +3775,14 @@ export function StylePanelScaffold({
   /** The draw-in controls for the Animation tab. Absent, the tab shows only
    *  the style-animation settings, as before. */
   drawInTiming?: DrawInTimingProps
+  /** L4: the Style panel is a dockview panel (components/dock-shell.tsx), a
+   *  column the height of its panel: the families on top, the open one below,
+   *  scrolling inside the panel instead of under a height cap. `open` is then
+   *  ignored; the rail shows and hides the panel. */
+  docked?: boolean
+  /** Docked only: what each family is set to, shown under its name (the
+   *  style bar's status line until L4). */
+  summary?: Partial<Record<StylePanelId, string>>
 }) {
   const active = PANELS.find((p) => p.id === activeId) ?? PANELS[0]
   // Every panel now has a live control (Fusion landed in phases 20/21).
@@ -3811,13 +3821,14 @@ export function StylePanelScaffold({
   // The summary strip in app/page.tsx is the drawer's header, so the drawer itself
   // renders nothing when closed — no second header competing with the strip.
   void onOpenChange
-  if (!open) return null
+  if (!open && !docked) return null
 
   return (
-    <div className="shrink-0 border-b border-border bg-background">
-      <div className="flex gap-4 px-4 py-3">
-        {/* Tabs */}
-        <nav aria-label="Style panel sections" className="flex w-40 shrink-0 flex-col gap-0.5">
+    <div data-style-panel className={docked ? "flex h-full min-h-0 flex-col bg-background" : "shrink-0 border-b border-border bg-background"}>
+      <div className={docked ? "flex min-h-0 flex-1 flex-col gap-3 p-3" : "flex gap-4 px-4 py-3"}>
+        {/* Tabs. Docked, the eight families sit in two columns over the open
+            one, so the panel's 360 px width holds them in four rows. */}
+        <nav aria-label="Style panel sections" className={docked ? "grid shrink-0 grid-cols-2 gap-0.5" : "flex w-40 shrink-0 flex-col gap-0.5"}>
           {PANELS.map((p) => (
             <button
               key={p.id}
@@ -3842,7 +3853,14 @@ export function StylePanelScaffold({
                   : "text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
             >
-              <span>{p.label}</span>
+              {docked && summary ? (
+                <span data-style-family={p.id} className="flex min-w-0 flex-col">
+                  <span>{p.label}</span>
+                  <span className={`truncate text-[10px] font-normal ${p.id === activeId ? "text-background/70" : "text-muted-foreground"}`}>{summary[p.id] ?? ""}</span>
+                </span>
+              ) : (
+                <span>{p.label}</span>
+              )}
               {p.status === "active" && (
                 <span
                   className={`h-1.5 w-1.5 rounded-full ${
@@ -3880,7 +3898,7 @@ export function StylePanelScaffold({
         <div
           key={active.id}
           ref={bodyRef}
-          className={`fs-panel-enter max-h-[min(26rem,calc(100vh-28rem))] min-h-[14rem] flex-1 overflow-y-auto rounded-xl border border-border bg-muted/10 p-5 ${
+          className={`fs-panel-enter ${docked ? "min-h-0 p-4" : "max-h-[min(26rem,calc(100vh-28rem))] min-h-[14rem] p-5"} flex-1 overflow-y-auto rounded-xl border border-border bg-muted/10 ${
             moreBelow
               ? "[mask-image:linear-gradient(to_bottom,black_calc(100%-2.5rem),transparent)]"
               : ""

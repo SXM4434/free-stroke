@@ -55,13 +55,26 @@ const harness = async (page, timeout) => {
 
 export const hideDock = async (page, { timeout = 240000 } = {}) => {
   await harness(page, timeout)
-  if (MUTATE !== "nohide") await page.evaluate(() => window.__dockHarness.dock.setHidden(true))
+  // L4 and later: the two canvases alone at today's split, the closest to a
+  // dockless main the rail allows. It cannot reach main's 755x890 (the rail
+  // takes 48 px, and the style bar's 44 px went back to the canvases), so on
+  // a page with the rail the check is that the canvas fills its panel, and
+  // its size is printed: a frame base recorded on a pre-L4 tree is at another
+  // size, so the row that compares with it fails on its own and has to be
+  // recorded again on this layout. Pages without the rail keep main's check.
+  const railed = await page.evaluate(() => !!window.__dockHarness.workspace?.today)
+  if (MUTATE !== "nohide")
+    await page.evaluate(() => {
+      const w = window.__dockHarness.workspace
+      if (w?.today) w.today()
+      else window.__dockHarness.dock.setHidden(true)
+    })
   const t0 = Date.now()
   let m
   const miss = (m) => {
     if (!m.canvas) return "no canvas in the 3D view panel"
     if (off(m.canvas[0], m.panel[0]) || off(m.canvas[1], m.panel[1])) return `canvas ${px(m.canvas)} does not fill its panel ${px(m.panel)} within 1 px`
-    if (m.win[0] === MAIN.win[0] && m.win[1] === MAIN.win[1] && (off(m.canvas[0], MAIN.canvas[0]) || off(m.canvas[1], MAIN.canvas[1])))
+    if (!railed && m.win[0] === MAIN.win[0] && m.win[1] === MAIN.win[1] && (off(m.canvas[0], MAIN.canvas[0]) || off(m.canvas[1], MAIN.canvas[1])))
       return `canvas ${px(m.canvas)} is not main's ${px(MAIN.canvas)} within 1 px at ${MAIN.win.join("x")}`
     return null
   }
@@ -74,8 +87,8 @@ export const hideDock = async (page, { timeout = 240000 } = {}) => {
   const why = miss(m)
   if (why) throw new Error(`hideDock: ${why}, still after ${Date.now() - t0} ms. The page would compare at the docked size.`)
   const hidden = await page.evaluate(() => window.__dockHarness.dock.hidden())
-  if (!hidden) throw new Error("hideDock: the canvas has main's size but the dock group still reports visible.")
-  console.log(`[dock] hidden: canvas ${px(m.canvas)} fills the 3D view at ${m.win.join("x")}`)
+  if (!hidden) throw new Error("hideDock: the canvas fills its panel but the dock group still reports visible.")
+  console.log(`[dock] hidden: canvas ${px(m.canvas)} fills the 3D view at ${m.win.join("x")}${railed ? " (the rail's layout: not main's 755x890, a pre-L4 frame base will not match)" : ""}`)
   return m
 }
 
@@ -107,13 +120,67 @@ export const openDock = async (page, { tab = "timeline", timeout = 240000 } = {}
   return m
 }
 
+/* THE STYLE PANEL, AS A GATE MEETS IT (L4). The style bar's pills and its
+   Show panel are gone; the Style panel is one of the shell's panels, shown and
+   hidden from the rail. `openStyle(page, family)` shows it the way the rail's
+   Style button does (a no-op when it already shows) and, given a family,
+   clicks that family in the panel's own list, then checks the panel says it
+   is the open one (`aria-current`). `family` is the panel id or its label:
+   material, animation, texture, dither, ascii, presets, layers, fusion.
+   `closeStyle(page)` hides it again. Both throw with the reason on a miss. */
+const FAMILY = { material: "Material", animation: "Animation", texture: "Texture", dither: "Dither", ascii: "ASCII", presets: "Presets", preset: "Presets", layers: "Layers", fusion: "Fusion" }
+
+export const openStyle = async (page, family = null, { timeout = 60000 } = {}) => {
+  await page.waitForFunction(() => window.__dockHarness?.workspace, null, { timeout })
+  await page.evaluate(() => { const w = window.__dockHarness.workspace; if (!w.shown().style) w.toggle("style") })
+  await frame(page)
+  if (!family) return
+  const label = FAMILY[String(family).toLowerCase()] ?? family
+  const id = Object.keys(FAMILY).find((k) => FAMILY[k] === label && k !== "preset") ?? String(family).toLowerCase()
+  // Each family button carries `data-style-family` (its name over its value, L4).
+  const find = ([id, label]) =>
+    document.querySelector(`[data-dock-panel="style"] nav [data-style-family="${id}"]`)?.closest("button") ??
+    [...document.querySelectorAll('[data-dock-panel="style"] nav button')].find((x) => x.textContent.trim() === label)
+  const ok = await page.evaluate(([id, label, src]) => {
+    const nav = document.querySelector('[data-dock-panel="style"] nav[aria-label="Style panel sections"]')
+    if (!nav) return "no Style panel family list on the page"
+    const b = new Function(`return (${src})`)()([id, label])
+    if (!b) return `no family named ${label} in the Style panel`
+    if (b.getAttribute("aria-current") !== "true") b.click()
+    return true
+  }, [id, label, find.toString()])
+  if (ok !== true) throw new Error(`openStyle: ${ok}`)
+  await frame(page)
+  const current = await page.evaluate(([id, label, src]) => {
+    const b = new Function(`return (${src})`)()([id, label])
+    return b?.getAttribute("aria-current") === "true" && b.checkVisibility({ visibilityProperty: true })
+  }, [id, label, find.toString()])
+  if (!current) throw new Error(`openStyle: ${label} is not the open family, or the Style panel is not showing`)
+}
+
+export const closeStyle = async (page) => {
+  await page.evaluate(() => { const w = window.__dockHarness.workspace; if (w.shown().style) w.toggle("style") })
+  await frame(page)
+}
+
 /* Self test: one page through each helper, so each arm can be shown firing. */
 if (process.argv[1]?.endsWith("dock.mjs") && process.argv.includes("--self")) {
   const { chromium } = await import("./browser.mjs")
   const { LAB_URL } = await import("./dev-server.mjs")
   const b = await chromium.launch()
   let code = 0
-  for (const [name, fn] of [["openDock", openDock], ["hideDock", hideDock]]) {
+  const styleCheck = async (page) => {
+    await openStyle(page, "presets")
+    await closeStyle(page)
+    // must-fail, always run: a family the panel does not have has to throw.
+    let threw = false
+    try { await openStyle(page, "nosuchfamily") } catch { threw = true }
+    if (!threw) throw new Error("openStyle did not throw on a family the panel does not have")
+    console.log("[dock] openStyle: presets opened and closed; FIRED on a missing family")
+  }
+  const steps = [["openDock", openDock], ["hideDock", hideDock]]
+  steps.push(["openStyle", styleCheck])
+  for (const [name, fn] of steps) {
     const ctx = await b.newContext({ viewport: { width: 1512, height: 982 } })
     const page = await ctx.newPage()
     await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 240000 })

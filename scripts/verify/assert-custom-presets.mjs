@@ -155,7 +155,7 @@ if (!process.argv.includes("--model-only")) {
     try { isSelf[label] = b.sha === srv.head || !codeDiffers(srv, b.sha) } catch (e) { refuse(e.message) }
   }
   const graded = (label, name, ok, detail) => (isSelf[label] ? selfRow(name, `${detail}; base ${label} has the served code (${srv.head.slice(0, 9)}), so this compares the tree to itself`) : row(name, ok, detail))
-  const { hideDock } = await import("./lib/dock.mjs")
+  const { hideDock, openStyle, closeStyle } = await import("./lib/dock.mjs")
   mkdirSync(OUT, { recursive: true })
   const sha = (x) => createHash("sha256").update(x).digest("hex").slice(0, 16)
   const polys = JSON.parse(readFileSync(new URL("../capture/logo-strokes.json", import.meta.url), "utf8")).polylines
@@ -239,7 +239,8 @@ if (!process.argv.includes("--model-only")) {
       const dither = S.PRESET_REGISTRY.dither.filter((p) => p.applies && "ditherScale" in p.applies && p.enabled)
       const [p0, p1] = dither
       await H("selectPreset", "dither", p0.id)
-      await page.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click()
+      // L4: the Style panel on its Presets family (the style bar's Preset pill until L4).
+      await openStyle(page, "presets")
       await page.waitForSelector("[data-preset-customize]", { timeout: 20000 })
       // The first frame after the panel opened, before any re-render, for the
       // record: it is the stale frame named above, not a style result.
@@ -328,12 +329,13 @@ if (!process.argv.includes("--model-only")) {
       // STILL setStyle, 600 ms). With the Presets panel shut the canvas is
       // 755x890 on both sides, so the row compares one size, and the STILL
       // write still forces the settle after each resize.
-      const presetsChip = page.locator("button[aria-expanded]", { hasText: /^Preset/ }).first()
-      const panelShut = async () => { if ((await presetsChip.getAttribute("aria-expanded")) === "true") await presetsChip.click(); await page.waitForSelector("[data-preset-customize]", { state: "detached", timeout: 10000 }) }
+      // L4: shut is the Style panel hidden from the rail. The panel stays mounted
+      // (a hidden panel is never removed, BUILD-PLAN.md §3), so shut is "hidden".
+      const panelShut = async () => { await closeStyle(page); await page.waitForSelector("[data-preset-customize]", { state: "hidden", timeout: 10000 }) }
       await panelShut()
       const beforeDelete = await grab() // the size is read after the grab, once it holds
       const sizeBefore = await canvasSize()
-      await presetsChip.click()
+      await openStyle(page, "presets")
       await page.waitForSelector("[data-delete]", { timeout: 10000 })
       await page.click("[data-delete]")
       const deletedGone = (await count("[data-mine-group]")) === 0
@@ -342,7 +344,7 @@ if (!process.argv.includes("--model-only")) {
       const sizeAfter = await canvasSize()
       row("delete works on the page and keeps the picture (both grabs with the panel shut, one canvas size)", deletedGone && sizeBefore === sizeAfter && afterDelete === beforeDelete, `${sizeBefore} ${beforeDelete} vs ${sizeAfter} ${afterDelete}`)
       row("  must-fail: at that canvas size a different style gives different pixels (Mine vs the untouched page)", sizeBefore === untouchedSize && beforeDelete !== untouched, `${untouchedSize} ${untouched}`)
-      await presetsChip.click()
+      await openStyle(page, "presets")
       await H("undo")
       row("delete is one undo step", (await count(`[data-preset-id="${mineId}"]`)) === 1)
 
@@ -358,7 +360,7 @@ if (!process.argv.includes("--model-only")) {
       // section of p0's Customize; one slider field per column is edited, more if
       // a column has none after the resize. Every other family is outside it.
       await H("selectPreset", "dither", p0.id)
-      if ((await presetsChip.getAttribute("aria-expanded")) !== "true") await presetsChip.click()
+      await openStyle(page, "presets")
       await page.waitForSelector("[data-preset-customize]", { timeout: 10000 })
       const SECTION = '[data-preset-customize] [data-customize-system="Dither"]'
       const colOf = () => page.$$eval(`${SECTION} [data-field-keys]`, (fs) => {

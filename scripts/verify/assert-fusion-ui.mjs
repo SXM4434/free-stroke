@@ -48,6 +48,7 @@
 //
 // Usage: node scripts/verify/assert-fusion-ui.mjs [--label=after]
 import { chromium } from "./lib/browser.mjs"
+import { openStyle } from "./lib/dock.mjs"
 import { writeFileSync, mkdirSync, renameSync, readdirSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
@@ -156,11 +157,9 @@ async function main() {
   }
 
   /* ---- 1. reach the panel by clicking, and find its controls ------------- */
-  const showPanel = page.getByRole("button", { name: /Show panel|Hide panel/ })
-  const showText = (await showPanel.textContent())?.trim()
-  if (showText === "Show panel") await showPanel.click()
+  // L4: the Style panel shown from the rail on its Fusion family (the style bar's Show panel and the drawer's Fusion tab until L4).
+  await openStyle(page, "fusion")
   await page.waitForTimeout(300)
-  await page.getByRole("button", { name: "Fusion", exact: true }).first().click()
   await page.waitForTimeout(400)
 
   // The panel BODY, so nothing outside it is counted. Located from its heading

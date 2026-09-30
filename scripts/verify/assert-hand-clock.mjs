@@ -29,6 +29,7 @@ const S = await jiti.import("../../lib/style-system.ts")
 const GE = await jiti.import("../../lib/geometry-engines.ts")
 const { chromium } = await import("./lib/browser.mjs")
 const { LAB_URL } = await import("./lib/dev-server.mjs")
+const { openStyle } = await import("./lib/dock.mjs")
 const OUT = new URL("../../docs/verification/hand-clock/", import.meta.url).pathname
 mkdirSync(OUT, { recursive: true })
 const J = JSON.stringify
@@ -159,7 +160,8 @@ async function run(mutate) {
     row("authentic", sha(t0) === MAIN_TAKE, `Authentic take ${sha(t0)} vs main ${MAIN_TAKE}`)
 
     // R5
-    await page.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click().catch(() => {}); await settle(600)
+    // L4: the Style panel on Presets, from the rail (the style bar's Preset pill until L4).
+    await openStyle(page, "presets").catch(() => {}); await settle(600)
     await page.locator("select").filter({ has: page.locator('option[value="geometryAnimation"]') }).first().selectOption("geometryAnimation").catch(() => {}); await settle(400)
     await page.locator('button[data-preset-id="handDraw"]').first().click().catch(() => {}); await settle(600)
     const cz = "[data-preset-customize]"

@@ -1136,20 +1136,10 @@ export default function Home() {
     return () => window.removeEventListener("keydown", onKey)
   }, [doUndo, doRedo])
 
-  // Style panels drawer: closed by default so the app opens canvas-first —
-  // the gesture is the product; the control surface is one click away. The
-  // summary strip is the drawer's header: a chip opens its panel, clicking the
-  // active chip again closes the drawer.
-  const [panelsOpen, setPanelsOpen] = useState(false)
+  // The Style panel's open family. Since L4 the panel is one of the dock
+  // shell's six; whether it shows is the workspace's call and the rail's, so
+  // the drawer's open flag and the summary strip's pill toggle went with them.
   const [activePanelId, setActivePanelId] = useState<StylePanelId>("material")
-  const openPanel = (id: StylePanelId) => {
-    if (panelsOpen && activePanelId === id) {
-      setPanelsOpen(false)
-      return
-    }
-    setActivePanelId(id)
-    setPanelsOpen(true)
-  }
 
   /**
    * THE STYLE PANEL'S ONE WRITE PATH, RECORDED.
@@ -1887,6 +1877,138 @@ export default function Home() {
     }
   }, [setKeys])
 
+  /* THE STATUS LINE, KEPT (L4). The style bar's pills said what each family
+   * is set to ("Material Ink", "Layers 3 layers"); the bar went, the reading
+   * did not: the Style panel's family list shows the same value under each
+   * name. Built exactly as the pills were. */
+  const styleSummary: Partial<Record<StylePanelId, string>> = (() => {
+      const activePreset = findPresetIn(styleState, styleState.activePresetId)
+      const presetEdited = presetEditedFields(styleState, activePreset).length > 0
+      const summary: { id: StylePanelId; label: string; value: string; live: boolean }[] = [
+        {
+          id: "material",
+          label: "Material",
+          value: MATERIAL_PRESETS.find((p) => p.id === styleState.materialPreset)?.label ?? "Unknown",
+          live: true,
+        },
+        {
+          id: "texture",
+          label: "Texture",
+          value:
+            styleState.textureEnabled && styleState.textureMode !== "none"
+              ? `${TEXTURE_MODES.find((t) => t.id === styleState.textureMode)?.label ?? "On"}${
+                  styleState.textureAnimated ? " · animated" : ""
+                }`
+              : "None",
+          live: true,
+        },
+        {
+          id: "dither",
+          label: "Dither",
+          value: styleState.ditherEnabled
+            ? `${DITHER_PRESETS.find((d) => d.id === styleState.ditherType)?.label ?? "On"}${
+                styleState.ditherAnimated ? " · animated" : ""
+              }`
+            : "Off",
+          live: true,
+        },
+        {
+          id: "ascii",
+          label: "ASCII",
+          value: styleState.asciiEnabled
+            ? `${ASCII_PRESETS.find((a) => a.id === styleState.asciiCharset)?.label ?? "On"}${
+                styleState.asciiAnimated ? " · animated" : ""
+              }`
+            : "Off",
+          live: true,
+        },
+        {
+          id: "animation",
+          label: "Animation",
+          value:
+            styleState.materialAnimationEnabled && styleState.materialAnimationType !== "none"
+              ? MATERIAL_ANIMATION_TYPES.find((a) => a.id === styleState.materialAnimationType)
+                  ?.label ?? "Material"
+              : styleState.motionMode === "off"
+                ? "Static"
+                : styleState.motionMode === "independent"
+                  ? "Independent"
+                  : "Sync to Draw",
+          live: true,
+        },
+        // LAYERS BELONGS IN THE STRIP TOO, and it was the last one missing.
+        //
+        // The strip is the app's status line and its ONLY navigation into the
+        // panels: a chip opens its panel, and there is no other way in. The
+        // Layers panel was live, wired and reachable ONLY by opening some
+        // OTHER panel first and then finding it in the panel's own tab row.
+        // So the layer stack (group opacity, per-layer opacity, blend mode,
+        // order) and the WHOLE of stack animation, eight behaviours plus
+        // speed, direction and phase, sat behind a door with no handle on the
+        // one screen that lists what is on. The PRD gives layering and stack
+        // animation two families of their own (§6 Families 10 and 11); a
+        // headline system with no entry in the status line reads as a system
+        // that is not there.
+        //
+        // It says what is ON, in the strip's own grammar. Which layers are
+        // participating is the composition question ("3 layers"), and the
+        // group behaviour is the second half ("· Drift"), because a stack
+        // that is animating and a stack that is sitting still are two
+        // different states and the strip is where you learn which you are in.
+        {
+          id: "layers",
+          label: "Layers",
+          value: (() => {
+            if (!styleState.layerStackEnabled) return "Off"
+            const live = [
+              styleState.textureEnabled && styleState.textureMode !== "none",
+              styleState.ditherEnabled,
+              styleState.asciiEnabled,
+            ].filter(Boolean).length
+            const stacked = live === 0 ? "Empty" : `${live} layer${live === 1 ? "" : "s"}`
+            const anim =
+              styleState.stackAnimationEnabled && styleState.stackAnimationType !== "none"
+                ? ` · ${STACK_ANIMATION_LABELS[styleState.stackAnimationType] ?? "animated"}`
+                : ""
+            return stacked + anim
+          })(),
+          live: true,
+        },
+        // FUSION BELONGS IN THE STRIP, and it did not have a chip.
+        //
+        // The strip is the app's status line, the one place that says what
+        // is currently on. Fusion is the loudest system in the product and
+        // the only one a user can now AUTHOR, and it was the only live system
+        // with no chip: you could make a fusion, name it, and then have no
+        // way to see from the main screen that it was running or what it was
+        // called. A named thing the user made has to be visible by name.
+        {
+          id: "fusion",
+          label: "Fusion",
+          value:
+            styleState.fusionPreset === "none"
+              ? "None"
+              : (styleState.customFusions.find(
+                  (f) => customFusionKey(f.id) === styleState.fusionPreset,
+                )?.name ||
+                FUSION_PRESETS.find((p) => p.id === styleState.fusionPreset)?.label ||
+                /* A COMBINATION CELL IS A NAMED THING TOO. Without this the
+                   status line read "On" for 120 of its options, the same
+                   silence the chip was added to end for user fusions. */
+                FUSION_COMBOS_BY_KEY[styleState.fusionPreset.replace(/^combo:/, "")]?.name ||
+                "On"),
+          live: true,
+        },
+        {
+          id: "presets",
+          label: "Preset",
+          value: activePreset ? `${activePreset.label}${presetEdited ? ", edited" : ""}` : "None",
+          live: true,
+        },
+      ]
+    return Object.fromEntries(summary.map((i) => [i.id, i.value]))
+  })()
+
   return (
     <StrokeTakeProvider take={take} commit={commitTake} keys={keys} setKeys={setKeys} mode={geometryMode} penMs={takePenMs} strokeCount={viewportStrokes.length}>
     {/* L2: play, the clock, the pace and the dock's flags, one store for the
@@ -2280,208 +2402,11 @@ export default function Home() {
         </div>
       )}
 
-      {/* Style summary strip (read-only). Shows the current selection for each
-          system as a chip; clicking a chip opens that system's panel where the
-          live control lives. This is status/navigation only — no controls here,
-          so each system has exactly ONE control surface (its panel). */}
-      {(() => {
-        const activePreset = findPresetIn(styleState, styleState.activePresetId)
-        const presetEdited = presetEditedFields(styleState, activePreset).length > 0
-        const summary: { id: StylePanelId; label: string; value: string; live: boolean }[] = [
-          {
-            id: "material",
-            label: "Material",
-            value: MATERIAL_PRESETS.find((p) => p.id === styleState.materialPreset)?.label ?? "—",
-            live: true,
-          },
-          {
-            id: "texture",
-            label: "Texture",
-            value:
-              styleState.textureEnabled && styleState.textureMode !== "none"
-                ? `${TEXTURE_MODES.find((t) => t.id === styleState.textureMode)?.label ?? "On"}${
-                    styleState.textureAnimated ? " · animated" : ""
-                  }`
-                : "None",
-            live: true,
-          },
-          {
-            id: "dither",
-            label: "Dither",
-            value: styleState.ditherEnabled
-              ? `${DITHER_PRESETS.find((d) => d.id === styleState.ditherType)?.label ?? "On"}${
-                  styleState.ditherAnimated ? " · animated" : ""
-                }`
-              : "Off",
-            live: true,
-          },
-          {
-            id: "ascii",
-            label: "ASCII",
-            value: styleState.asciiEnabled
-              ? `${ASCII_PRESETS.find((a) => a.id === styleState.asciiCharset)?.label ?? "On"}${
-                  styleState.asciiAnimated ? " · animated" : ""
-                }`
-              : "Off",
-            live: true,
-          },
-          {
-            id: "animation",
-            label: "Animation",
-            value:
-              styleState.materialAnimationEnabled && styleState.materialAnimationType !== "none"
-                ? MATERIAL_ANIMATION_TYPES.find((a) => a.id === styleState.materialAnimationType)
-                    ?.label ?? "Material"
-                : styleState.motionMode === "off"
-                  ? "Static"
-                  : styleState.motionMode === "independent"
-                    ? "Independent"
-                    : "Sync to Draw",
-            live: true,
-          },
-          // LAYERS BELONGS IN THE STRIP TOO, and it was the last one missing.
-          //
-          // The strip is the app's status line and its ONLY navigation into the
-          // panels — a chip opens its panel, and there is no other way in. The
-          // Layers panel was live, wired and reachable ONLY by opening some
-          // OTHER panel first and then finding it in the panel's own tab row.
-          // So the layer stack — group opacity, per-layer opacity, blend mode,
-          // order — and the WHOLE of stack animation, eight behaviours plus
-          // speed, direction and phase, sat behind a door with no handle on the
-          // one screen that lists what is on. The PRD gives layering and stack
-          // animation two families of their own (§6 Families 10 and 11); a
-          // headline system with no entry in the status line reads as a system
-          // that is not there.
-          //
-          // It says what is ON, in the strip's own grammar. Which layers are
-          // participating is the composition question ("3 layers"), and the
-          // group behaviour is the second half ("· Drift"), because a stack
-          // that is animating and a stack that is sitting still are two
-          // different states and the strip is where you learn which you are in.
-          {
-            id: "layers",
-            label: "Layers",
-            value: (() => {
-              if (!styleState.layerStackEnabled) return "Off"
-              const live = [
-                styleState.textureEnabled && styleState.textureMode !== "none",
-                styleState.ditherEnabled,
-                styleState.asciiEnabled,
-              ].filter(Boolean).length
-              const stacked = live === 0 ? "Empty" : `${live} layer${live === 1 ? "" : "s"}`
-              const anim =
-                styleState.stackAnimationEnabled && styleState.stackAnimationType !== "none"
-                  ? ` · ${STACK_ANIMATION_LABELS[styleState.stackAnimationType] ?? "animated"}`
-                  : ""
-              return stacked + anim
-            })(),
-            live: true,
-          },
-          // FUSION BELONGS IN THE STRIP, and it did not have a chip.
-          //
-          // The strip is the app's status line — the one place that says what
-          // is currently on. Fusion is the loudest system in the product and
-          // the only one a user can now AUTHOR, and it was the only live system
-          // with no chip: you could make a fusion, name it, and then have no
-          // way to see from the main screen that it was running or what it was
-          // called. A named thing the user made has to be visible by name.
-          {
-            id: "fusion",
-            label: "Fusion",
-            value:
-              styleState.fusionPreset === "none"
-                ? "None"
-                : (styleState.customFusions.find(
-                    (f) => customFusionKey(f.id) === styleState.fusionPreset,
-                  )?.name ||
-                  FUSION_PRESETS.find((p) => p.id === styleState.fusionPreset)?.label ||
-                  /* A COMBINATION CELL IS A NAMED THING TOO. Without this the
-                     status line read "On" for 120 of its options — the same
-                     silence the chip was added to end for user fusions. */
-                  FUSION_COMBOS_BY_KEY[styleState.fusionPreset.replace(/^combo:/, "")]?.name ||
-                  "On"),
-            live: true,
-          },
-          {
-            id: "presets",
-            label: "Preset",
-            value: activePreset ? `${activePreset.label}${presetEdited ? ", edited" : ""}` : "None",
-            live: true,
-          },
-        ]
-        return (
-          <div className="flex h-11 shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-muted/20 px-4">
-            <span className="shrink-0 select-none text-[11px] font-semibold tracking-tight text-foreground">
-              Style
-            </span>
-            {summary.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => openPanel(item.id)}
-                aria-expanded={activePanelId === item.id && panelsOpen}
-                title={
-                  activePanelId === item.id && panelsOpen
-                    ? `Close ${item.label}`
-                    : `Edit ${item.label}`
-                }
-                className={`fs-press flex shrink-0 select-none items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
-                  activePanelId === item.id && panelsOpen
-                    ? "border-foreground/30 bg-foreground/10"
-                    : "border-border bg-background hover:bg-muted"
-                }`}
-              >
-                <span className="font-medium text-muted-foreground">{item.label}</span>
-                <span className="font-semibold text-foreground">{item.value}</span>
-                {!item.live && (
-                  <span className="rounded bg-muted px-1 py-0.5 text-[9px] font-medium text-muted-foreground">
-                    preview
-                  </span>
-                )}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setPanelsOpen((v) => !v)}
-              aria-expanded={panelsOpen}
-              className="fs-press ml-auto shrink-0 select-none rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              {panelsOpen ? "Hide panel" : "Show panel"}
-            </button>
-          </div>
-        )
-      })()}
-
-      {/* Dedicated per-system control panels. Each system's live control lives
-          in its own panel; the summary strip above opens the matching panel. */}
-      <StylePanelScaffold
-        open={panelsOpen}
-        activeId={activePanelId}
-        styleState={styleState}
-        setStyleState={setStyleStateRecorded}
-        onSelectPreset={handleSelectPreset}
-        onOpenChange={setPanelsOpen}
-        onActiveIdChange={setActivePanelId}
-        cameraSpin={cameraSpin}
-        onSpin={applySpin}
-        onSelectCombo={handleSelectCombo}
-        drawInTiming={{
-          drawIn,
-          patchDrawIn: handleDrawInChange,
-          drawInUnitCount: countDrawInUnits(
-            viewportStrokes,
-            drawIn.unit,
-            geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined,
-          ),
-          strokeCount: viewportStrokes.length,
-          revealWindow,
-          patchWindow: handleRevealWindowChange,
-          envelope: revealEnvelope,
-          patchEnvelope: handleRevealEnvelopeChange,
-          flatten,
-          patchFlatten: handleFlattenChange,
-        }}
-      />
+      {/* THE STYLE BAR AND "SHOW PANEL" WENT IN L4 (BUILD-PLAN.md §2, §5 row L4).
+          The eight summary pills opened the drawer below them; the drawer is
+          the Style panel in the dock shell now, its family list does the
+          pills' job, and the rail shows and hides it (components/dock-shell.tsx,
+          components/workspace/rail.tsx). */}
 
       {/* ==================================================================
           THE TWO COLUMNS, AND THE ONE THING ABOUT THEM THAT WAS A DEFECT.
@@ -2589,6 +2514,38 @@ export default function Home() {
         }
         view={
           <Viewport3DWrapper processedStrokes={viewportStrokes} rawStrokes={clocked.raw} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} inflateParams={geometryMode === "inflate" ? inflateParams : undefined} styleState={styleState} engineFamily={engineFamily} drawIn={drawIn} onDrawInChange={handleDrawInChange} revealWindow={revealWindow} onRevealWindowChange={handleRevealWindowChange} revealEnvelope={revealEnvelope} onRevealEnvelopeChange={handleRevealEnvelopeChange} take={take} onTakeChange={handleTakeChange} flatten={flatten} onFlattenChange={handleFlattenChange} settingsRef={settingsRef} apiRef={viewportApiRef} />
+        }
+        style={
+          <StylePanelScaffold
+            docked
+            summary={styleSummary}
+            open
+            activeId={activePanelId}
+            styleState={styleState}
+            setStyleState={setStyleStateRecorded}
+            onSelectPreset={handleSelectPreset}
+            onOpenChange={() => {}}
+            onActiveIdChange={setActivePanelId}
+            cameraSpin={cameraSpin}
+            onSpin={applySpin}
+            onSelectCombo={handleSelectCombo}
+            drawInTiming={{
+              drawIn,
+              patchDrawIn: handleDrawInChange,
+              drawInUnitCount: countDrawInUnits(
+                viewportStrokes,
+                drawIn.unit,
+                geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined,
+              ),
+              strokeCount: viewportStrokes.length,
+              revealWindow,
+              patchWindow: handleRevealWindowChange,
+              envelope: revealEnvelope,
+              patchEnvelope: handleRevealEnvelopeChange,
+              flatten,
+              patchFlatten: handleFlattenChange,
+            }}
+          />
         }
       />
 

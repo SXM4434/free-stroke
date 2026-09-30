@@ -58,6 +58,12 @@
 // main's size before the take dock existed. A reference page with neither (main before ANIM-3C) is taken as
 // it is. The SURVIVES and DRAW rows run on the same pages.
 //
+// L4 (2026-09-30) put the 48 px rail left of the panels and took the 44 px style bar away, so no L4 page can
+// draw either canvas at a pre-L4 reference's size, whatever is hidden. The lane is set to the closest thing
+// (`workspace.today()`: the Drawing and the 3D view alone, at today's split of what the rail leaves), and
+// BUFFERS and FRAMES stay as they are: against a pre-L4 reference they go red, by the plan's design, until a
+// reference with the same chrome is chosen (a question in LOG.md). SURVIVES and DRAW are unaffected.
+//
 // MUST-FAIL ARMS, set before navigation through `window.__fsDockMutant`, read once by the shell:
 //   header           BUFFERS must go red: group headers stay visible, a 28 px strip over the 3D view
 //   noReuse          SURVIVES must go red: the harness's loads pass `reuseExistingPanels: false`
@@ -154,6 +160,9 @@ const REF_FLOAT =
   "[data-take-dock]>:is([data-animation-panel],:has([data-take-timeline])){position:absolute!important;left:12px;right:12px;bottom:64px;margin:0!important}"
 async function noDock(page) {
   const how = await page.evaluate(() => {
+    // L4 and later: the two canvases alone at today's split (dock and Style hidden).
+    const w = window.__dockHarness?.workspace
+    if (w?.today) { w.today(); return "today" }
     const d = window.__dockHarness?.dock
     if (d) { d.setHidden(true); return "hidden" }
     return document.querySelector("[data-take-dock]") ? "float" : "none"
