@@ -23,7 +23,8 @@
 //   1. the control is LIVE — the two divisors render measurably different
 //      frames at grazing incidence. A dial that does not visibly do what its
 //      name says is a defect this repo has shipped three times.
-//   2. the shipped divisor (`fwidth(sd)`) is NEVER the worse of the two on the
+//   2. the shipped divisor (`length(vec2(dFdx(sd), dFdy(sd)))`, which was
+//      `fwidth(sd)` until CARVE-AA, 2026-09-30) is NEVER the worse of the two on the
 //      white-speckle statistic, at every frame the MODEL predicts is inside the
 //      carve fade's `smoothstep(0.28, 0.42, |cos yaw|)` band.
 //
@@ -121,7 +122,17 @@ const say = (ok, label, detail) => {
  *
  * `--model-rev=<rev>` derives from that commit's model, for a run against a
  * server on another checkout. `--times-only` prints the derivation and exits
- * without a browser. */
+ * without a browser.
+ *
+ * ── WHAT f222 TO f224 ACTUALLY GRADE (CARVE-AA, 2026-09-30) ──
+ * The `s` goes SOLID at the apex: the model has letter 2 at flat 0 from f222
+ * on, and the carve amount is multiplied by flat, so neither divisor touches
+ * the `s` on the last three samples. Those rows grade the head-on flat letters
+ * (3 to 10), whose carve is at full amount. The f224 red of 2026-09-26 (784
+ * -> 801 on the Mac) was the head-on `k`'s carved edge beside the solid `s`,
+ * where `fwidth(sd)`'s L1 over-width left paper pixels in the gap. The shipped
+ * arm is now the gradient's length; the JSON keeps the key `fwidth` for it so
+ * older evidence stays comparable. The samples are unchanged. */
 const FPS = 30
 const SUBJECT = 2
 const WINDOW = [-3, -2, -1, 0, 1, 2]
@@ -222,7 +233,7 @@ async function main() {
   /* THE ARMS ACTUALLY TOOK. A sweep that measures the same arm twice under two
    * labels is the four-identical-frames defect, and it is cheap to refuse. */
   say(await setAA(false), "the arm aa=0 (the parked prior) actually TOOK", "carveAA() === false")
-  say(await setAA(true), "the arm aa=1 (fwidth, shipped) actually TOOK", "carveAA() === true")
+  say(await setAA(true), "the arm aa=1 (|grad sd|, shipped) actually TOOK", "carveAA() === true")
 
   /* ---- capture both arms at every predicted frame, ONE page session ---- */
   const frames = []
@@ -316,7 +327,7 @@ async function main() {
   const bandFrac = sumPrior > 0 ? (sumFwidth - sumPrior) / sumPrior : 0
   say(
     bandFrac <= 0,
-    "OVER THE BAND the shipped divisor fwidth(sd) is not the worse of the two on white speckle",
+    "OVER THE BAND the shipped divisor |grad sd| is not the worse of the two on white speckle",
     `prior ${sumPrior} vs fwidth ${sumFwidth} over ${frames.length} predicted frames ` +
       `(${(100 * bandFrac).toFixed(2)} %; needs <= 0). The defect this control exists for is a ` +
       `stipple ACROSS the carve fade, so the band is what a viewer integrates.`,

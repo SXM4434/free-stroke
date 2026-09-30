@@ -12,7 +12,9 @@
 //
 // ── OFAT, ONE PAGE SESSION ────────────────────────────────────────────────
 // Two arms differing in ONE thing: the coverage ramp's divisor.
-//   aa=1  `fwidth(sd)`                     — shipped (PEN_CARVE_AA_FWIDTH)
+//   aa=1  `length(vec2(dFdx(sd), dFdy(sd)))`, shipped (PEN_CARVE_AA_FWIDTH);
+//         `fwidth(sd)` until CARVE-AA, 2026-09-30. The `fwidth` names below
+//         are the arm's old label, kept so older evidence reads the same.
 //   aa=0  the screen size of one LOCAL UNIT — the parked prior, the defect
 // Captured from the same page, the same seek and the same field, because an
 // arm captured in a second session is not comparable to one captured in the
@@ -158,7 +160,7 @@ async function main() {
     aa: window.__captureHarness?.carveAA?.() ?? null,
     tip: window.__captureHarness?.penTip?.() ?? null,
   }))
-  say(live.aa === true, "the shipped divisor is fwidth(sd)", String(live.aa))
+  say(live.aa === true, "the shipped divisor is the aa=1 arm, |grad sd|", String(live.aa))
 
   const seek = async (t) => {
     await page.evaluate((tt) => {
@@ -299,7 +301,7 @@ async function main() {
   g.fillStyle = "#e8e8f0"
   g.font = "600 22px sans-serif"
   g.fillText(`${FILM} · t ${worst.t.toFixed(3)} s · dsf ${DSF} · ${Z}x — the carve's coverage divisor`, PAD, 30)
-  ;[[pr, `prior — one LOCAL UNIT (${worst.holes} white px inside the mark)`], [fw, `fwidth(sd) — shipped (${out.find((r) => r.arm === "fwidth" && r.t === worst.t).holes} white px)`]].forEach(([r, lab], i) => {
+  ;[[pr, `prior, one LOCAL UNIT (${worst.holes} white px inside the mark)`], [fw, `|grad sd|, shipped (${out.find((r) => r.arm === "fwidth" && r.t === worst.t).holes} white px)`]].forEach(([r, lab], i) => {
     const x = PAD + i * (CW * Z + PAD)
     g.fillStyle = "#9aa0b4"
     g.font = "500 16px sans-serif"
