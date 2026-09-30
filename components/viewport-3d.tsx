@@ -175,6 +175,7 @@ import {
 import { assignLetters } from "@/lib/hero-letters"
 import TakeTimeline from "@/components/take-timeline"
 import { DrawInTimingControls, REVEAL_EASES, OPEN_ANIMATION_PANEL_EVENT } from "@/components/draw-in-timing-controls"
+import { useTakeTransport, useTransportSlot, createTakeTransport, useProgressValue, type ProgressStore, type TakeTransport } from "@/lib/take-transport"
 /* K7's PAPER BREAK. The junction SET is measured by the page and published on
  * `window.__heroJunctions`; this turns it into the samples the shader needs and
  * measures which junctions have an over/under to show at all. It lives in
@@ -8065,38 +8066,14 @@ export function unEaseReveal(p: number, ease: RevealEase): number {
  * Measured 2026-09-25, night R (`docs/verification/night-r/`): while a take
  * played, `progress` lived in `Viewport3D`'s `useState`, so each 66 ms readout
  * tick re-rendered the whole host and, through `<Canvas>`, about 50 components
- * of the R3F tree: 12.4 commits a second on each renderer, 660 R3F component
- * renders a second in dev, 612 in production. Nothing in the scene reads that
- * value; the scene reads `playheadRef` inside `useFrame`. Only three readouts
- * read it: the take bar, the time label and the range input.
+ * of the R3F tree. Nothing in the scene reads that value; the scene reads
+ * `playheadRef` inside `useFrame`. Only three readouts read it: the take bar,
+ * the time label and the range input.
  *
- * So the value lives in this store and only those three subscribe. The host
+ * So the value lives in a store and only those three subscribe. The host
  * subscribes to one boolean, "at the end", for the compare cycle, which flips
- * once a pass instead of fifteen times a second. */
-type ProgressStore = {
-  get: () => number
-  set: (v: number) => void
-  subscribe: (fn: () => void) => () => void
-}
-function createProgressStore(initial: number): ProgressStore {
-  let value = initial
-  const subs = new Set<() => void>()
-  return {
-    get: () => value,
-    set: (v: number) => {
-      if (Object.is(v, value)) return
-      value = v
-      subs.forEach((fn) => fn())
-    },
-    subscribe: (fn) => {
-      subs.add(fn)
-      return () => subs.delete(fn)
-    },
-  }
-}
-function useProgressValue(store: ProgressStore): number {
-  return useSyncExternalStore(store.subscribe, store.get, store.get)
-}
+ * once a pass instead of fifteen times a second. Since L2 the store is the
+ * page's transport's (`lib/take-transport.ts`, `createProgressStore`). */
 function LiveTakeTimeline({
   progressStore,
   ...rest
@@ -10882,6 +10859,21 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     return viewportProps.flatten ? "affine" : "perspective"
   })
   const affine = projection === "affine"
+  /* ---- L2 · THE TRANSPORT IS THE PAGE'S --------------------------------
+   *
+   * Play, the clock, the pace, the speed and the dock's flags live in the
+   * page's `TakeTransport` store (`lib/take-transport.ts`), so the dock can
+   * leave this component in L3 and read the numbers the frame loop runs on.
+   * Taken once, at mount. The page's store goes back to its defaults here,
+   * silently, so a viewport the error boundary remounts starts paused at 0
+   * with speed 1, as it did when these were `useState`. A host with no
+   * provider gets a store of its own, which is that `useState`. */
+  const pageTransport = useTakeTransport()
+  const [transport] = useState<TakeTransport>(() => {
+    if (!pageTransport) return createTakeTransport()
+    pageTransport.resetSilently()
+    return pageTransport
+  })
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   /* ---- 🔴 THE CANVAS THIS COMPONENT MEANS, BY IDENTITY --------------------
@@ -10979,15 +10971,15 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   /* The timing note under the transport, folded to its verdict line by default.
    * Docked under the canvas, every line the panel spends is a line the canvas
    * loses, and the full paragraph is one click away. */
-  const [timingNoteOpen, setTimingNoteOpen] = useState(false)
+  const [timingNoteOpen, setTimingNoteOpen] = useTransportSlot(transport, "timingNoteOpen")
   const captureWidth = 1920
   const captureHeight = 1080
 
   /* ---- Animation state ---- */
-  const playheadRef = useRef(0) // 0..1
-  const [playing, setPlaying] = useState(false)
+  const playheadRef = transport.playheadRef // 0..1
+  const [playing, setPlaying] = useTransportSlot(transport, "playing")
   /* The readout value. A store, not state: see `createProgressStore`. */
-  const progressStore = useMemo(() => createProgressStore(0), [])
+  const progressStore = transport.progress
   const setProgress = progressStore.set
   const progressAtEnd = useSyncExternalStore(
     progressStore.subscribe,
@@ -11016,7 +11008,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     }, 2000)
     return () => window.clearInterval(id)
   }, [])
-  const [speed, setSpeed] = useState(1)
+  const [speed, setSpeed] = useTransportSlot(transport, "speed")
   /* THE PACE IS THE DOCUMENT'S; THE OVERRIDE IS THE DIAGNOSTIC'S.
    *
    * `revealMode` used to be plain local state, which meant the compare harness
@@ -11026,20 +11018,20 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    * pills write the document through `patchEnvelope`, and compare and the
    * debug `smooth` pill write `modeOverride`, which persists nowhere and is
    * dropped when compare exits. */
-  const [modeOverride, setModeOverride] = useState<RevealMode | null>(null)
-  const [hybridBlend, setHybridBlend] = useState(0.4)
+  const [modeOverride, setModeOverride] = useTransportSlot(transport, "modeOverride")
+  const [hybridBlend, setHybridBlend] = useTransportSlot(transport, "hybridBlend")
   /* ---- HOW THE DRAW-IN PLAYS (PRD Phase 22) ----
    * `clockRef` is wall-clock 0..1; `playheadRef` is `easeReveal(clock)`. Every
    * reveal consumer reads the playhead, so nothing downstream has to know an
    * envelope exists. Defaults are the behaviour that shipped before these
    * controls did — linear, no delay, no loop, forwards — so an existing capture
    * script or a fresh session renders byte-identically to before. */
-  const clockRef = useRef(0)
+  const clockRef = transport.clockRef
   /* F118 TRAVEL-5, THE OPENING PASS, owned here so the harness, the export and
    * every clock write below set and read the same ref as the frame loop in
    * `Scene`. True until a looping pass wraps; `openAt` puts it back whenever a
    * clock write lands on the forward start. See `openingRef` in Scene. */
-  const openingRef = useRef(true)
+  const openingRef = transport.openingRef
   /* Host-controlled on exactly the terms `drawIn` and `revealWindow` are, and
    * for the reason those two already prove out: the local state below runs ONLY
    * when the host passed neither the value nor the handler. Everything
@@ -11143,7 +11135,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    * the canvas keeps its size until he opens it; the drawer's "Show animation
    * panel" opens it through OPEN_ANIMATION_PANEL_EVENT, since the drawer sits
    * outside this component. */
-  const [drawInOpen, setDrawInOpen] = useState(false)
+  const [drawInOpen, setDrawInOpen] = useTransportSlot(transport, "drawInOpen")
   /* ═══ `DRAW IN` — the first modifier ═══════════════════════════════════════
    *
    * `docs/animation-toolset-map.md` §8, the smallest slice that makes the
@@ -11269,7 +11261,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    * and `assert-harness-surface.mjs` grades what it publishes.
    */
   const debugSurfaceAllowed = process.env.NODE_ENV !== "production"
-  const [debugRequested, setShowDebug] = useState(false)
+  const [debugRequested, setShowDebug] = useTransportSlot(transport, "debugRequested")
   const showDebug = debugSurfaceAllowed && debugRequested
   const meshStatusRef = useRef<StrokeBuildStatus[]>([])
   const solidStatusRef = useRef<SolidBuildStatus | null>(null)
