@@ -115,6 +115,7 @@ import {
 } from "@/lib/stroke-schedule"
 import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, clockUnderTake, clockKeyOf, carryTimeByArc, rateScaled } from "@/lib/stroke-timing"
 import { StrokeTakeProvider } from "@/components/stroke-strip"
+import { TakeTransportProvider } from "@/lib/take-transport"
 import { compactKeys, validateKeys, type TakeKeys } from "@/lib/keyframes"
 
 /**
@@ -1888,6 +1889,9 @@ export default function Home() {
 
   return (
     <StrokeTakeProvider take={take} commit={commitTake} keys={keys} setKeys={setKeys} mode={geometryMode} penMs={takePenMs} strokeCount={viewportStrokes.length}>
+    {/* L2: play, the clock, the pace and the dock's flags, one store for the
+        page. The viewport reads it today; L3's dock panels read the same one. */}
+    <TakeTransportProvider>
     <div className="flex h-screen flex-col">
       {/* Top bar */}
       {/* THE HEADER WAS THE ONE THING STILL FORCING THE PAGE SIDEWAYS.
@@ -2650,6 +2654,7 @@ export default function Home() {
           gate instead of quietly covering a control again. */}
       <Toaster position="bottom-center" offset={182} richColors closeButton />
     </div>
+    </TakeTransportProvider>
     </StrokeTakeProvider>
   )
 }
