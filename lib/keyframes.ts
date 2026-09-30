@@ -204,6 +204,40 @@ export function isKeyPath(name: string): name is KeyPath {
 /** The speeds that drive a looping motion: every keyable style path named `...Speed`. */
 export const LOOP_SPEED_PATHS: readonly StyleKeyPath[] = KEYABLE_PATHS.filter((p) => /Speed$/.test(p.path)).map((p) => p.path)
 
+/**
+ * THE KEYABLE PATHS A KEY DOES NOT DRIVE, EACH WITH ITS REASON (K2,
+ * BUILD-PLAN.md §4 "How sampling feeds the style" and "Procedural loops").
+ *
+ * Each is a number with a range, so its keys pass `validateKeys` (K1's
+ * contract). But the frame loop (components/viewport-3d.tsx) leaves them out
+ * of `styleAt`, and the key button (K3) shows disabled with the reason as its
+ * label. His ruling of 2026-09-26: keys drive a loop's speed, amount, contrast
+ * and colour, never its phase; a key button that does nothing is a dead dial.
+ *
+ * Every other keyable path is read inside the frame, on the frame's sample
+ * (checked when K2 was built: each path's reads in the viewport, the material
+ * written from the frame's base every frame, `resolveStack` and
+ * `evaluateFusion` called from the frame with the frame's style).
+ */
+export const KEY_DISABLED: Readonly<Record<string, string>> = {
+  texturePhase: "a loop's phase is never keyed, only its speed, amount, contrast and colour",
+  stackAnimationPhase: "a loop's phase is never keyed, only its speed, amount, contrast and colour",
+  textureDelay: "a delay moves where the loop starts, so a keyed delay would jump it; key the amount instead",
+  ditherDelay: "a delay moves where the loop starts, so a keyed delay would jump it; key the amount instead",
+  asciiDelay: "a delay moves where the loop starts, so a keyed delay would jump it; key the amount instead",
+  styleLoopSeconds: "the loop's length: a keyed length moves every looping layer to another point in its cycle, a jump",
+  stackAnimationSpeed: "the stack's loop still runs as speed times time (lib/style-stack.ts), so a keyed speed would jump it",
+  fusionAnimationSpeed: "fusion's drives still run as speed times time (lib/style-fusion.ts), so a keyed speed would jump them",
+}
+
+/** `keys` without the paths the frame does not drive (`KEY_DISABLED`); the same object when it has none. */
+export function framedKeys(keys: TakeKeys | undefined): TakeKeys | undefined {
+  if (!keys || !Object.keys(keys).some((p) => p in KEY_DISABLED)) return keys
+  const out: Record<string, unknown> = {}
+  for (const [p, t] of Object.entries(keys)) if (!(p in KEY_DISABLED)) out[p] = t
+  return out as TakeKeys
+}
+
 /* ---- validation ---------------------------------------------------------- */
 
 /**

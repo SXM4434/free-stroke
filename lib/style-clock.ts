@@ -429,6 +429,75 @@ export function evaluateLayerTime(clock: StyleClock, cfg: LayerTiming): LayerTim
 }
 
 /**
+ * A KEYED SPEED, AS A RUNNING SUM (K2, his ruling of 2026-09-26: "keys drive a
+ * loop's speed, never its phase").
+ *
+ * `evaluateLayerTime` computes a layer's phase as speed times the layer's own
+ * time: `t * speed` running free, `pingPong(t) * speed` looping, `reveal *
+ * scale * speed` reveal-synced. With a constant speed that is the same as
+ * summing speed over time. With a KEYED speed it is not: a step from 1 to 3 at
+ * 2 s would move the phase from 2 to 6 in one frame, a jump of 4 units, where
+ * the loop should simply start going faster.
+ *
+ * So a keyed layer keeps a running sum instead. Each frame the layer's time is
+ * evaluated at speed 1 and phase 0, which is the mode's own base (t, the ping-
+ * pong position, the scaled reveal), and the phase advances by this frame's
+ * speed times the base's change. A speed change bends the motion and never
+ * jumps it. The sum restarts when the layer re-arms (its armed time goes back)
+ * or the clock is re-based (an export zeroing it).
+ *
+ * Only layers whose speed is keyed use this; an unkeyed layer keeps
+ * `evaluateLayerTime` itself, so nothing that is not keyed moves by a bit.
+ */
+export interface RunningPhase {
+  /** The mode's base (time at speed 1) on the last frame. */
+  base: number
+  /** The layer's armed time on the last frame; a drop means it re-armed. */
+  armed: number
+  /** The running sum of speed over the base. */
+  travel: number
+}
+
+export function createRunningPhase(): RunningPhase {
+  return { base: Number.NaN, armed: Number.NaN, travel: 0 }
+}
+
+export function runningLayerTime(clock: StyleClock, cfg: LayerTiming, acc: RunningPhase): LayerTime {
+  if (!cfg.animated) {
+    // A still layer rests at its phase; the next time it moves, the sum starts over.
+    acc.base = Number.NaN
+    return evaluateLayerTime(clock, cfg)
+  }
+  const unit = evaluateLayerTime(clock, { ...cfg, speed: 1, phase: 0 })
+  const phase = cfg.phase ?? 0
+  const armed = cfg.sinceArmed ?? clock.elapsed
+  const base = unit.time
+  if (!Number.isFinite(acc.base) || armed < acc.armed) {
+    // First frame, or the layer re-armed: start the sum where a constant speed would be.
+    acc.travel = cfg.speed * base
+  } else {
+    acc.travel += cfg.speed * (base - acc.base)
+  }
+  acc.base = base
+  acc.armed = armed
+  return { ...unit, time: acc.travel + phase }
+}
+
+/**
+ * The same running sum for a loop that is not one of the three shader layers
+ * (the material's): `base` is its time at speed 1, which only goes forward
+ * while it runs. A base that goes back (an export re-basing the clock, a
+ * scrub back under "sync to draw") starts the sum again where a constant speed
+ * would be, as a re-arm does above.
+ */
+export function runningSum(acc: RunningPhase, base: number, speed: number): number {
+  if (!Number.isFinite(acc.base) || base < acc.base) acc.travel = speed * base
+  else acc.travel += speed * (base - acc.base)
+  acc.base = base
+  return acc.travel
+}
+
+/**
  * Arming bookkeeping, shared by every caller so the rule lives in one place.
  *
  * `key` is the behaviour's IDENTITY — enough to notice "the user chose a

@@ -5664,6 +5664,10 @@ export interface MaterialAnimationInput {
   /** Seconds (already scaled by the caller's clock; speed applied here). */
   time: number
   speed: number
+  /** K2: the loop's phase as the running sum of a KEYED speed (`runningSum`,
+   *  lib/style-clock.ts). Given, it replaces `time * speed`; absent, nothing
+   *  changes. */
+  travel?: number
   /** 0..1 intensity from the panel. */
   intensity: number
   /** Stroke draw-in progress 0..1 (for completionFlash). */
@@ -5700,7 +5704,7 @@ function scaleHex(hex: string, k: number): string {
  * (the Signal preset is screen-lit) or as an explicit accent (completionFlash). */
 export function evaluateMaterialAnimation(input: MaterialAnimationInput): MaterialParams {
   const { base, type, intensity, completion } = input
-  const t = input.time * input.speed
+  const t = input.travel ?? input.time * input.speed
   const k = clamp01(intensity)
   const p: MaterialParams = { ...base }
 
