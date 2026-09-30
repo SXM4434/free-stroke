@@ -821,6 +821,13 @@ export default function Home() {
     clockMsRef.current = performance.now() - t0
     return { raw, processed, hand: wantHand, stamped, drift, rate: played }
   }, [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, revealEnvelope.pressureReveal, revealEnvelope.durationSeconds, clockNib])
+  /* DRAWIN-EXTRAS · Authored or Recorded. Recorded hands the viewport (the
+   * render, the clock, export) an empty take, so it plays the recording; the
+   * strip and Perform keep the real take through the provider, so his rows
+   * stay where he can see and edit them, and nothing is written. Authored
+   * hands over `take` itself, the same object, which is main. */
+  const timingMutate = typeof window !== "undefined" ? (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE : undefined
+  const playedTake = revealEnvelope.timing === "recorded" && timingMutate !== "timing-ignored" ? STROKE_TIMING_TAKE_DEFAULTS : take
   const takePenMs = useMemo(() => {
     const knock = typeof window !== "undefined" && (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "clock-strip-recorded"
     return penMsOf(knock ? rawStrokes : clocked.raw)
@@ -1837,6 +1844,7 @@ export default function Home() {
        * call, so a gate's write takes the same holds and undo step. */
       setEnvelope: (patch: Partial<RevealEnvelopeParams>) => handleRevealEnvelopeChange(patch),
       envelope: () => docRef.current.revealEnvelope,
+      take: () => docRef.current.take,
       // DEV capture: drive the Inflate fusion dials (same state the config
       // strip sets) so the verification scripts exercise the real control
       // path instead of a parallel one.
@@ -2618,7 +2626,7 @@ export default function Home() {
 
         {/* Right column: 3D viewport. `min-w-0` for the ratchet above. */}
         <div className="min-w-0 flex-1">
-          <Viewport3DWrapper processedStrokes={viewportStrokes} rawStrokes={clocked.raw} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} inflateParams={geometryMode === "inflate" ? inflateParams : undefined} styleState={styleState} engineFamily={engineFamily} drawIn={drawIn} onDrawInChange={handleDrawInChange} revealWindow={revealWindow} onRevealWindowChange={handleRevealWindowChange} revealEnvelope={revealEnvelope} onRevealEnvelopeChange={handleRevealEnvelopeChange} take={take} onTakeChange={handleTakeChange} flatten={flatten} onFlattenChange={handleFlattenChange} settingsRef={settingsRef} apiRef={viewportApiRef} />
+          <Viewport3DWrapper processedStrokes={viewportStrokes} rawStrokes={clocked.raw} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} inflateParams={geometryMode === "inflate" ? inflateParams : undefined} styleState={styleState} engineFamily={engineFamily} drawIn={drawIn} onDrawInChange={handleDrawInChange} revealWindow={revealWindow} onRevealWindowChange={handleRevealWindowChange} revealEnvelope={revealEnvelope} onRevealEnvelopeChange={handleRevealEnvelopeChange} take={playedTake} onTakeChange={handleTakeChange} flatten={flatten} onFlattenChange={handleFlattenChange} settingsRef={settingsRef} apiRef={viewportApiRef} />
         </div>
       </div>
 
