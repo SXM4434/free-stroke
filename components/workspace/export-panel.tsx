@@ -69,6 +69,9 @@ export type ExportPanelProps = {
   // GLB
   onExportGLB: () => void
   exporting: boolean
+  /** The geometry with the draw-in as a glTF animation (coverage row 92). */
+  onExportAnimatedGLB: () => void
+  exportingAnimGlb: boolean
 }
 
 const seg = (on: boolean) =>
@@ -226,6 +229,18 @@ export function ExportPanel(p: ExportPanelProps) {
         className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
       >
         {p.exporting ? "Saving…" : "GLB"}
+      </button>
+      {/* THE DRAW-IN AS A GLB ANIMATION, beside the still one: same geometry,
+          plus morph targets and a "draw-in" clip keyed on the Video settings'
+          frame plan (lib/export/drawin-glb.ts). */}
+      <button
+        type="button"
+        onClick={p.onExportAnimatedGLB}
+        disabled={p.strokeCount === 0 || p.exportingAnimGlb}
+        title={`Save the geometry with the draw-in as a glTF animation, keyed on the Video settings. ${p.videoPlanNote}`}
+        className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {p.exportingAnimGlb ? "Saving…" : "Anim GLB"}
       </button>
       </div>
 

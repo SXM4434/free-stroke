@@ -265,6 +265,7 @@ import { FREE_STROKE, type RegisterLighting } from "@/lib/registers"
  * so the dependency runs one way: the component drives the exporter, never the
  * other way round. */
 import { exportAnimation, planFrames, describePlan, revealEndsFor, EXPORT_PAPER, type ExportTimebase } from "@/lib/export"
+import { buildAnimatedGlb } from "@/lib/export/drawin-glb-three"
 import { useStrokeTake, type KeyLiveValues } from "@/components/stroke-strip"
 import { KEY_PROPERTIES, sampleKeys, revealClockMs, keysEndMs, validateKeys, type TakeKeys, type KeySample } from "@/lib/keyframes"
 import { flipPoseAt, type FlipDirection, type FlipOpts } from "@/lib/flip-pose"
@@ -428,6 +429,22 @@ export interface StillCanvas {
  *     screen frequency are scaled with the buffer for exactly the length of the
  *     grab, so the output matches the viewport at every scale.
  */
+/**
+ * THE DRAW-IN, AS SPANS, FOR THE ANIMATED GLB. Published by the Scene that owns
+ * the still export (never a 3-Up slave), read by `buildAnimatedGLBBuffer`.
+ *
+ * `spansAt(playhead, opening)` answers "which part of each stroke is drawn at
+ * this playhead" with the SAME calls the live rebuild path cuts Solid and
+ * Extrude at: the reveal distance under the pen's timing, the window, then
+ * `strokeSpansIn` per window part, or `takeSpansIn` under a timed take. The GLB
+ * therefore reveals by the app's own law and re-derives nothing.
+ * `strokes` is the array those spans index.
+ */
+export const DRAWIN_EXPORT: {
+  spansAt: null | ((playhead: number, opening: boolean) => Float64Array[])
+  strokes: ProcessedStroke[] | null
+} = { spansAt: null, strokes: null }
+
 export const STILL_EXPORT: {
   grab: null | ((opts: StillOptions) => Promise<StillResult | null>)
   /** The un-encoded frame, for the animated export. See `StillCanvas`. */
@@ -9660,6 +9677,29 @@ function Scene({
    * `solid-bench/gaps.mjs` holds the must-fail for it. */
   const timedClip =
     timed && !timed.identity && (geometryMode === "extrude" || geometryMode === "solid") ? timed : null
+
+  /* THE ANIMATED GLB'S VIEW OF THE REVEAL, published for the export bar. A
+   * timed take cuts every mode by its own slots here (the GLB has no drawRange
+   * or shader to fall back on), exactly as `takeSpansIn` cuts Extrude and
+   * Solid live. */
+  useEffect(() => {
+    if (!stillExport) return
+    const timedAll = timed && !timed.identity ? timed : null
+    const lifts = liftsLandBetweenStrokes(schedule, revealWindow.mode)
+    const spansAt = (playhead: number, opening: boolean): Float64Array[] => {
+      if (timedAll) return takeSpansIn(timedAll, windowAt(revealWindow, playhead, opening))
+      const frac = revealDistanceFraction(strokes, playhead, revealMode, hybridBlend, lifts)
+      return windowParts(windowAt(revealWindow, frac, opening)).map(([a, b]) => strokeSpansIn(schedule, a, b))
+    }
+    DRAWIN_EXPORT.spansAt = spansAt
+    DRAWIN_EXPORT.strokes = strokes
+    return () => {
+      if (DRAWIN_EXPORT.spansAt === spansAt) {
+        DRAWIN_EXPORT.spansAt = null
+        DRAWIN_EXPORT.strokes = null
+      }
+    }
+  }, [stillExport, timed, schedule, revealWindow, strokes, revealMode, hybridBlend])
   const solidRevealFracRef = useRef<((timeFrac: number) => number) | null>(null)
   /* Under `timedClip` the tick's skip is OFF (null): the partial is no longer a
    * function of the beat, and a held-back or delayed stroke moves while the
@@ -12602,7 +12642,11 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    * would prove nothing about the real export.
    * Returns null when there is nothing exportable.
    */
-  const buildGLBBuffer = useCallback(async (): Promise<ArrayBuffer | null> => {
+  /* ONE ENGINE EXPORT FOR BOTH GLBs. The static GLB and the animated one
+   * build their geometry through this single call, so the animated file's
+   * last frame is the static file's mark by construction, not by a second
+   * copy of the parameters. */
+  const buildExportResult = useCallback(() => {
     if (processedStrokes.length === 0) return null
     const engine = getEngineFor(geometryMode, engineFamily)
     const settings = settingsRef?.current
@@ -12630,7 +12674,27 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         cornersEnabled: settings?.preserveCorners ?? null,
       },
     })
-    if (exportResult.objectCount === 0) return null
+    return exportResult
+  }, [
+    processedStrokes,
+    geometryMode,
+    engineFamily,
+    extrudeParams,
+    solidParams,
+    inflateParams,
+    exportName,
+    settingsRef,
+    strokeCount,
+    totalPoints,
+    canvasWidth,
+    canvasHeight,
+    styleState?.materialPreset,
+    styleState?.customMaterial,
+  ])
+
+  const buildGLBBuffer = useCallback(async (): Promise<ArrayBuffer | null> => {
+    const exportResult = buildExportResult()
+    if (!exportResult || exportResult.objectCount === 0) return null
 
     const exportScene = new THREE.Scene()
     exportScene.add(exportResult.group)
@@ -12665,22 +12729,80 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
       }
     })
     return buffer
-  }, [
-    processedStrokes,
-    geometryMode,
-    engineFamily,
-    extrudeParams,
-    solidParams,
-    inflateParams,
-    exportName,
-    settingsRef,
-    strokeCount,
-    totalPoints,
-    canvasWidth,
-    canvasHeight,
-    styleState?.materialPreset,
-    styleState?.customMaterial,
-  ])
+  }, [buildExportResult])
+
+  /* THE FILM'S PLAN INPUT, ONCE. The Video panel's sentence and the animated
+   * GLB's keyframes are both cut from it, so the GLB plays on the film's clock.
+   * The comment that belongs to the ends line, moved here with it: */
+  const filmPlanInput = useMemo(
+    () => ({
+      penDurationMs: exportMs,
+      fps: videoFps,
+      timebase: videoTimebase,
+      fixedDurationMs: videoFixedSeconds * 1000,
+      speed,
+      reverse: revealReverse,
+      leadInMs: revealDelaySeconds * 1000,
+      holdMs: 600,
+      /* THE SAME FACT THE EXPORT GETS, so the sentence in the panel and the file
+       * on disk cannot disagree: this note exists to say what the film WILL be,
+       * and a note computed from a different plan than the one that runs is a
+       * confident lie. It is what makes `describeRevealEnds` reach a user:
+       * "...128 frames · ends on empty paper, so there is no hold". The parked
+       * `unwired` law is read here too, or the known-bad arm would ship a panel
+       * that contradicts its own export. */
+      ...(readDevLaw("__fsExportRevealEnds", ["unwired"], "wired") === "wired"
+        ? { revealEnds: revealEndsFor(seamWindow.mode, { seamless: seamWindow.seamless === true, opening: !revealReverse }) }
+        : {}),
+    }),
+    [exportMs, videoFps, videoTimebase, videoFixedSeconds, speed, revealReverse, revealDelaySeconds, seamWindow],
+  )
+
+  /**
+   * THE ANIMATED GLB (coverage row 92): the static export's geometry plus the
+   * draw-in as morph targets, one keyframe per frame of `plan`. The plan is
+   * the Video panel's, so the GLB and the film share a clock; each frame's
+   * playhead goes through the app's own reveal ease, and its spans come from
+   * `DRAWIN_EXPORT` (the live reveal's own cut). See `lib/export/drawin-glb.ts`.
+   */
+  const buildAnimatedGLBBuffer = useCallback(
+    async (plan: ReturnType<typeof planFrames>) => {
+      const spansAt = DRAWIN_EXPORT.spansAt
+      if (!spansAt || DRAWIN_EXPORT.strokes?.length !== processedStrokes.length) {
+        throw new Error("the 3D scene has not published its reveal yet. Try again in a moment")
+      }
+      const exportResult = buildExportResult()
+      if (!exportResult || exportResult.objectCount === 0) return null
+      const opening = !revealReverse
+      /* THE PARKED KNOWN-BAD: `off` hands the builder the whole mark on every
+       * frame, a GLB that ignores the live reveal. assert-export-glb-anim-app
+       * requires its first keyframe to fail the "matches live" row. */
+      const revealLaw = readDevLaw("__fsAnimGlbReveal", ["off"], "live")
+      const whole = () => [Float64Array.from({ length: processedStrokes.length * 2 }, (_, i) => (i % 2 ? 1 : 0))]
+      const frames = plan.frames.map((f) => ({
+        timeMs: f.timeMs,
+        spans: revealLaw === "off" ? whole() : spansAt(easeReveal(f.clock, revealEaseRef.current), opening),
+      }))
+      try {
+        return await buildAnimatedGlb({
+          group: exportResult.group,
+          strokes: processedStrokes.map((st) => st.points),
+          canvasWidth,
+          canvasHeight,
+          frames,
+        })
+      } finally {
+        for (const g of exportResult.disposables) g.dispose()
+        exportResult.group.traverse((node) => {
+          if (node instanceof THREE.Mesh) {
+            node.geometry?.dispose()
+            if (node.material instanceof THREE.Material) node.material.dispose()
+          }
+        })
+      }
+    },
+    [buildExportResult, processedStrokes, revealReverse, canvasWidth, canvasHeight],
+  )
 
   // DEV-ONLY verification hook: lets scripts/verify/verify-gates.mjs assert the
   // geometry-rebuild gate and export health without clicking the UI.
@@ -13319,6 +13441,47 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     }
   }, [processedStrokes, buildGLBBuffer, exportFilename, download, geometryMode])
 
+  /* THE ANIMATED GLB, the same thin wrapper shape as the static one: the build
+   * is `buildAnimatedGLBBuffer`, this is naming, download and the receipt. The
+   * receipt names the keyframes, the morph targets and the clip, because "it
+   * downloaded" says nothing about whether it plays. */
+  const [exportingAnimGlb, setExportingAnimGlb] = useState(false)
+  const handleExportAnimatedGLB = useCallback(async () => {
+    if (processedStrokes.length === 0) {
+      toast.error("Nothing to export", { description: "Draw a stroke on the canvas first." })
+      return
+    }
+    setExportingAnimGlb(true)
+    try {
+      const plan = planFrames(filmPlanInput)
+      const out = await buildAnimatedGLBBuffer(plan)
+      if (!out) {
+        toast.error("The exporter found no geometry", {
+          description: `${geometryMode} built no mesh from this drawing. Try another mode, or add a longer stroke.`,
+        })
+        return
+      }
+      const filename = exportFilename("glb", "anim")
+      const blob = new Blob([out.buffer], { type: "model/gltf-binary" })
+      download(blob, filename)
+      const targets = out.animation.meshes.reduce((a, m) => a + m.targets.length, 0)
+      toast.success("Saved " + filename, {
+        description:
+          `${geometryMode} geometry with the draw-in as a glTF animation ("draw-in"): ` +
+          `${plan.frames.length} keyframes, the Video panel's clock (${describePlan(plan)}), ` +
+          `${targets} morph targets on ${out.animatedMeshes} of ${out.animation.meshes.length} meshes · ${formatBytes(blob.size)}. ` +
+          "A viewer that plays glTF animation plays it; one that does not shows the finished mark.",
+      })
+    } catch (err) {
+      console.error("[FreeStroke Export] animated GLB export failed:", err)
+      toast.error("Animated GLB export failed", {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setExportingAnimGlb(false)
+    }
+  }, [processedStrokes, filmPlanInput, buildAnimatedGLBBuffer, exportFilename, download, geometryMode])
+
   /**
    * EXPORT THE PICTURE — the product's actual output.
    *
@@ -13920,28 +14083,8 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    * deciding whether to press the button. */
   const videoPlanNote = useMemo(() => {
     if (totalDuration <= 0) return "Draw a stroke to see how long the film will be."
-    const plan = planFrames({
-      penDurationMs: exportMs,
-      fps: videoFps,
-      timebase: videoTimebase,
-      fixedDurationMs: videoFixedSeconds * 1000,
-      speed,
-      reverse: revealReverse,
-      leadInMs: revealDelaySeconds * 1000,
-      holdMs: 600,
-      /* THE SAME FACT THE EXPORT GETS, so the sentence in the panel and the file
-       * on disk cannot disagree — this note exists to say what the film WILL be,
-       * and a note computed from a different plan than the one that runs is a
-       * confident lie. It is what makes `describeRevealEnds` reach a user:
-       * "…128 frames · ends on empty paper, so there is no hold". The parked
-       * `unwired` law is read here too, or the known-bad arm would ship a panel
-       * that contradicts its own export. */
-      ...(readDevLaw("__fsExportRevealEnds", ["unwired"], "wired") === "wired"
-        ? { revealEnds: revealEndsFor(seamWindow.mode, { seamless: seamWindow.seamless === true, opening: !revealReverse }) }
-        : {}),
-    })
-    return describePlan(plan)
-  }, [exportMs, videoFps, videoTimebase, videoFixedSeconds, speed, revealReverse, revealDelaySeconds, revealWindow, seamWindow])
+    return describePlan(planFrames(filmPlanInput))
+  }, [totalDuration, filmPlanInput])
 
   /* THE DRAWER'S DOOR INTO THE DOCK. Until 2026-09-26 the draw-in controls
    * also lived in a Timing popover over the canvas, and its title once landed
@@ -14165,6 +14308,8 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     hasAnimatedStyleLayer,
     onExportGLB: handleExportGLB,
     exporting,
+    onExportAnimatedGLB: handleExportAnimatedGLB,
+    exportingAnimGlb,
   }
 
   return (
