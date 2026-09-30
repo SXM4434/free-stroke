@@ -1,0 +1,10 @@
+[youtube] Extracting URL: https://www.youtube.com/watch?v=3E8vDN2-0jE
+[youtube] 3E8vDN2-0jE: Downloading webpage
+[youtube] 3E8vDN2-0jE: Downloading android vr player API JSON
+[youtube] Downloading comment section API JSON
+[youtube] Downloading ~9 comments
+[youtube] Sorting comments by top
+[youtube] Downloading comment API JSON page 1 (0/~9)
+[youtube] Extracted 9 comments
+[info] 3E8vDN2-0jE: Downloading 1 format(s): 136+251
+[info] Writing video metadata as JSON to: popup-book.info.json

@@ -1,0 +1,59 @@
+SOURCE_URL: https://pmc.ncbi.nlm.nih.gov/articles/PMC5018499/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Measured handwriting timing across ages (preschool, second grade, adults) with in-air time, pause duration, and velocity inversions in milliseconds.
+NUMBERS: Preschool in-air time: 394.29 ms; Second grade: 127.50 ms; Adults: 0 ms (continuous); Second graders pause time: 2664.79 ms total; Adults pause time: 1550.43 ms; Velocity inversions (NIV): Preschool 76.94, Adults 34.88
+
+# Handwriting Timing: Paper vs. Tablet Across Ages
+
+Research comparing handwriting fluency and timing metrics across preschoolers, second graders, and adults.
+
+## Writing Duration (Complete Task)
+
+**Loop Task (loops without dots, on paper):**
+- Preschoolers: 11,918.97 ms (≈12 seconds)
+- Second graders: 9,548.36 ms (≈9.5 seconds)
+- Adults: 4,760.90 ms (≈4.8 seconds)
+
+**"Sun and Waves" Task (on paper):**
+- Second graders: 14,753.40 ms writing duration
+- Adults: 5,039.54 ms writing duration
+
+## In-Air Time (Pauses Between Strokes)
+
+**Loop Task (paper surface):**
+- Preschoolers: 394.29 ms per task (≈0.4 seconds)
+- Second graders: 127.50 ms per task
+- Adults: 0 ms (continuous writing, no lift pauses)
+
+**Interpretation**: Adults write continuously without pen lifts on simple tasks; younger children show substantial pauses.
+
+## Total Pause Time (Complex Task)
+
+**"Sun and Waves" Task (paper):**
+- Second graders: 2,664.79 ms total pause time (≈2.7 seconds in 14.8 second task)
+- Adults: 1,550.43 ms total pause time (≈1.6 seconds in 5 second task)
+
+## Movement Fluency: Velocity Inversions (NIV)
+
+Number of Inversions in Velocity reflects automaticity—fewer inversions indicate more fluent movement.
+
+**Loop Task (paper):**
+- Preschoolers: 76.94 velocity inversions
+- Adults: 34.88 velocity inversions
+
+**Interpretation**: Adults produce half the velocity reversals, indicating smoother, more automatic motor control.
+
+## Tablet vs. Paper Comparison
+
+**Key Finding**: Tablet writing produced:
+- Shorter in-air times across all age groups
+- Faster velocities across all age groups
+- Different surface feedback changes temporal patterns
+
+## Clinical Relevance
+
+This study demonstrates that handwriting fluency dramatically improves from preschool through adulthood:
+- Writing speed accelerates (3x faster in adults)
+- Pause times decrease dramatically
+- Movement becomes more continuous and automatic

@@ -1,0 +1,43 @@
+SOURCE_URL: https://maxwellito.github.io/vivus/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Vivus.js documentation describing animation types for SVG line drawing
+
+# Vivus.js Animation Documentation
+
+## Overview
+
+Vivus is a lightweight, dependency-free JavaScript library that animates SVGs to appear as though they're being drawn in real-time.
+
+## How It Works
+
+The script uses the CSS property strokeDashoffset, which manages the stroke offset on every line of the SVG. The duration for each line depends on their length to make a constant drawing speed.
+
+## Animation Types
+
+**Delayed**
+"Every path element is drawn at the same time with a small delay at the start." This serves as the default animation approach.
+
+**Sync**
+"Each line is drawn synchronously. They all start and finish at the same time." This technique creates uniform timing across all path elements.
+
+**OneByOne**
+"Each path element is drawn one after the other." According to the documentation, this method "gives the best impression of live drawing."
+
+## Key Requirements
+
+The strokeDashoffset property is only available on the path elements, which is an issue because in an SVG there are a lot of elements such as circle, rect, line and polyline which will break the animation. To address this, there is another class available called pathformer, which is made for transforming all objects of your SVG into path elements to be able to use strokeDashoffset and animate your SVGs.
+
+All elements must have a stroke property and cannot be filled, because the animation only looks to progressively draw strokes and will not check for filled colours.
+
+## Timing Functions
+
+The library allows customization through timing functions that work similarly to CSS animations. These functions accept a number between 0-1 as input and return a corresponding output value (0-1). Available timing options include linear, ease, ease-in, ease-out, and bounce effects.
+
+These functions can be applied at two levels: individual paths and the entire SVG animation.
+
+---
+
+## Analysis
+
+Vivus.js represents a complete implementation of the stroke-dasharray animation technique, with careful attention to timing and sequencing. However, it does not address—and cannot address—the fundamental limitation: all visible output is uniform SVG strokes, which lack the material properties of authentic handwriting.
