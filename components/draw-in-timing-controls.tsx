@@ -742,6 +742,31 @@ export function DrawInTimingControls({
       </span>
     </div>
     </>)}
+    {/* TIP HIGHLIGHT (DRAWIN-EXTRAS). A light on the pen's moving end while it
+        draws. 0 is off, and off mounts nothing, so the take is main's. */}
+    {W(["envelope.tipHighlight"], <>
+    <label className="mb-2 flex flex-col gap-1" data-tip-row>
+      <span className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span>Tip highlight</span>
+        <span className="tabular-nums text-foreground">
+          {envelope.tipHighlight === 0 ? "off" : `${Math.round(envelope.tipHighlight * 100)}%`}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        aria-label="Tip highlight"
+        value={envelope.tipHighlight}
+        onChange={(e) => patchEnvelope({ tipHighlight: Number(e.target.value) })}
+        className="h-1 w-full cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+      />
+      <span className="text-[10px] leading-snug text-muted-foreground">
+        A glow where the pen is still writing, one on each stroke that is part drawn. It goes out when the stroke lands.
+      </span>
+    </label>
+    </>)}
     {/* REVERSE + LOOP */}
     {W(["envelope.reverse", "envelope.loop"], <div className="flex flex-col gap-1">
       <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">

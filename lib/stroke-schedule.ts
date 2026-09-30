@@ -423,6 +423,9 @@ export interface RevealEnvelopeParams {
   loop: boolean
   /** Play the draw backwards, so the mark un-draws. */
   reverse: boolean
+  /** DRAWIN-EXTRAS · a glow on the pen's moving end, 0..1. 0 is off and mounts
+   *  nothing, so it is main. `lib/tip-highlight.ts`. */
+  tipHighlight: number
 }
 
 export const REVEAL_ENVELOPE_DEFAULTS: RevealEnvelopeParams = {
@@ -434,6 +437,7 @@ export const REVEAL_ENVELOPE_DEFAULTS: RevealEnvelopeParams = {
   delaySeconds: 0,
   loop: false,
   reverse: false,
+  tipHighlight: 0,
 }
 
 export interface RevealWindow {

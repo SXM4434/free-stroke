@@ -3180,6 +3180,7 @@ const MOTION_FIELD_KEYS: PresetFieldKey[] = [
   "drawIn.order", "drawIn.overlap", "drawIn.align", "drawIn.unit", "drawIn.reverse",
   "revealWindow.mode", "revealWindow.length",
   "envelope.mode", "envelope.ease", "envelope.delaySeconds", "envelope.cadence", "envelope.loop", "envelope.reverse",
+  "envelope.tipHighlight",
 ]
 /** DrawInTimingControls lives in its own file, so it takes <Field> as a prop. */
 const fieldWrap = (keys: string[], node: React.ReactNode) => <Field k={keys as PresetFieldKey[]}>{node}</Field>

@@ -937,6 +937,14 @@ export function validateSession(input: unknown): { session: SessionDoc; repairs:
     repairs.push(`revealEnvelope.rate ${JSON.stringify(revealEnvelope.rate)} is outside ${REVEAL_RATE_MIN} to ${REVEAL_RATE_MAX}, read as 1`)
     revealEnvelope.rate = REVEAL_ENVELOPE_DEFAULTS.rate
   }
+  /* DRAWIN-EXTRAS · the tip highlight's slider runs 0..1. A document from
+   * before it has none and reads 0, off, which is main. Out of range is
+   * clamped and said. */
+  if (!(revealEnvelope.tipHighlight >= 0 && revealEnvelope.tipHighlight <= 1)) {
+    const v = revealEnvelope.tipHighlight
+    revealEnvelope.tipHighlight = v > 1 ? 1 : 0
+    repairs.push(`revealEnvelope.tipHighlight ${JSON.stringify(v)} is outside 0 to 1, read as ${revealEnvelope.tipHighlight}`)
+  }
   /* GATE ONLY. assert-hand-clock.mjs sets this in a must-fail pass to drop the
    * clock on read, so its save-and-reload row can be seen to fail. */
   if (typeof window !== "undefined" && (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "clock-not-persisted") {
