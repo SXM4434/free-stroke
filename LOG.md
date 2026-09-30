@@ -66,7 +66,7 @@ A subagent read the whole `lib/export` and viewport diff for correctness. It fou
 - `index.ts`: the lossy-alpha warning no longer blames VP8 alone (a VP9 encoder without quantizer mode takes the same path).
 - `viewport-3d.tsx`: the GIF button stays a GIF under the dev law `__fsExportGround = "none"` (it wrote a WebM).
 - `webm.ts`: DocTypeVersion 4 when the file carries BlockAdditions and AlphaMode, as libwebm writes it; 2 otherwise (the no-alpha output is unchanged byte for byte, `assert-export-encoders` 8/0).
-Node gates after the fixes: `assert-export-webm-alpha` 4/0, `assert-export-encoders` 8/0, `assert-export-glb-anim` 11/0, `assert-export-gif` 8/0, `assert-export-plan` 12/0; tsc 6. Browser reruns and `assert-export-window`: below when they finish.
+Node gates after the fixes: `assert-export-webm-alpha` 4/0, `assert-export-encoders` 8/0, `assert-export-glb-anim` 11/0, `assert-export-gif` 8/0, `assert-export-plan` 12/0; tsc 6. Browser gates rerun on the fixed tree: `assert-export-webm-alpha-app` 10/0 (Chrome still plays the DocTypeVersion 4 file see-through), `assert-export-glb-anim-app` 11/0, `assert-export-gif-app` 9/0. `assert-export-window`: at the end of this log when it finishes.
 
 ## What I could not run, and why
 - Real Google Chrome: the proxy refuses its download (403). Every browser number here is Playwright's Chromium 141 on SwiftShader, through a container-only symlink at `/opt/google/chrome/chrome`, compared with the same gate's run on the unchanged base in the same container. None of it is a Mac number.
