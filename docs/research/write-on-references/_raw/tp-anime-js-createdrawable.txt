@@ -1,0 +1,58 @@
+SOURCE_URL: https://animejs.com/documentation/svg/createdrawable/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: anime.js createDrawable documentation for SVG line drawing animations
+
+# Anime.js createDrawable Function Documentation
+
+The createDrawable function creates a proxy of an SVG element that exposes a draw property, enabling animation of line visibility along SVG paths.
+
+## Syntax
+
+```javascript
+const [ drawable ] = svg.createDrawable(target);
+```
+
+## Parameters
+
+- target: Accepts CSS selectors or SVG element types including SVGLineElement, SVGPathElement, SVGPolylineElement, and SVGRectElement
+
+## Returns
+
+An array containing proxy SVG elements with an additional draw property.
+
+## Draw Property
+
+The draw property accepts a string with two space-separated values (0-1 range) representing start and end points:
+
+- '0 1' - displays the entire line
+- '0 .5' - shows first half
+- '.25 .75' - renders middle section
+- '.5 1' - displays second half
+- '1 1' - shows endpoint only
+
+## Example Implementation
+
+```javascript
+import { animate, svg, stagger } from 'animejs';
+
+animate(svg.createDrawable('.line'), {
+  draw: ['0 0', '0 1', '1 1'],
+  ease: 'inOutQuad',
+  duration: 2000,
+  delay: stagger(100),
+  loop: true
+});
+```
+
+## Performance Note
+
+Animating elements with vector-effect: non-scaling-stroke may experience performance issues due to scale factor recalculation during each animation frame.
+
+Available Since: Version 4.0.0
+
+---
+
+## Analysis for Write-On Research
+
+Like GSAP, anime.js's createDrawable abstracts the stroke-dasharray mechanism but does not address the fundamental limitation: uniform strokes cannot express the varying pressure, ink saturation, and material properties of real handwritten lines.

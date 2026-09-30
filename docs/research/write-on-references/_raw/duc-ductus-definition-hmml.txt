@@ -1,0 +1,27 @@
+SOURCE_URL: https://hmmlschool.org/lexicon/14517/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: The number and direction of strokes used to form letters in a given script or hand, and their order of execution.
+
+# Ductus Definition
+
+From HMML School Lexicon:
+
+**Core Definition:**
+"The number and direction of strokes used to form letters in a given script or hand, and their order of execution."
+
+**Expanded Explanation:**
+Ductus encompasses what scribes actually did while writing—the physical actions that produced the letters visible on the page. This includes three key components:
+
+1. **Number of strokes** — how many individual marks comprise each letter
+2. **Direction of strokes** — the path and orientation of each mark
+3. **Order of execution** — the sequence in which strokes were applied
+
+**Fundamental to Paleography:**
+Understanding ductus allows scholars to analyze writing techniques and identify characteristics of different scripts and hands across various time periods and languages.
+
+**Etymology:**
+The term 'duct' or ductus comes from Latin meaning 'leading' or 'conduct'.
+
+**Practical Relevance:**
+A single letter may have distinctly different ductus across different scripts. For example, the letter 'o' in one script may be made in a single, circular stroke, while in another it may be made of six individual angular strokes. This illustrates how different scripts and hands can have distinctly different ductus for the same letter.

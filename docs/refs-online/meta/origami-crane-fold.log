@@ -1,0 +1,13 @@
+[youtube] Extracting URL: https://www.youtube.com/watch?v=djeRnWMDjyc
+[youtube] djeRnWMDjyc: Downloading webpage
+[youtube] djeRnWMDjyc: Downloading android vr player API JSON
+[youtube] Downloading comment section API JSON
+[youtube] Downloading ~7 comments
+[youtube] Sorting comments by top
+[youtube] Downloading comment API JSON page 1 (0/~7)
+[youtube]     Downloading comment API JSON reply thread 1 (2/~7)
+[youtube]     Downloading comment API JSON reply thread 2 (4/~7)
+[youtube]     Downloading comment API JSON reply thread 3 (6/~7)
+[youtube] Extracted 7 comments
+[info] djeRnWMDjyc: Downloading 1 format(s): 137+251
+[info] Writing video metadata as JSON to: origami-crane-fold.info.json

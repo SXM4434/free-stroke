@@ -1,0 +1,21 @@
+import { chromium } from "./lib/browser.mjs"
+import { PORT } from "./lib/dev-server.mjs"
+const b = await chromium.launch()
+const p = await (await b.newContext({ viewport: { width: 1440, height: 1440 } })).newPage()
+const errs = []
+p.on("console", (m) => { if (m.type() === "error") errs.push(m.text().slice(0, 400)) })
+p.on("pageerror", (e) => errs.push("PAGEERROR " + String(e).slice(0, 600)))
+await p.goto(`http://localhost:${PORT}/desk-doodles`, { waitUntil: "networkidle" })
+await p.waitForTimeout(6000)
+console.log("errors:", errs.length)
+errs.slice(0, 6).forEach((e) => console.log("  " + e))
+console.log("film pill count:", await p.locator('[data-read-film="letterByLetter"]').count())
+console.log("hero-film readout:", await p.locator("[data-hero-film]").count(), await p.locator("[data-hero-film]").getAttribute("data-hero-film").catch(() => "n/a"))
+await p.locator('[data-read-film="letterByLetter"]').click().catch((e) => console.log("click err", String(e).slice(0, 200)))
+await p.waitForTimeout(1500)
+console.log("after click:", await p.locator("[data-hero-film]").getAttribute("data-hero-film").catch(() => "n/a"))
+console.log("letter-from pills:", await p.locator("[data-letter-from]").count())
+const txt = await p.locator('[data-pill-group="Letters read from"]').count()
+console.log("pill group:", txt)
+console.log("errors now:", errs.length); errs.slice(0, 8).forEach((e) => console.log("  " + e))
+await b.close()

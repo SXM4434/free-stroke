@@ -1,0 +1,47 @@
+SOURCE_URL: https://developers.google.com/ml-kit/vision/digital-ink-recognition
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Google ML Kit Digital Ink Recognition API - records Ink.Stroke objects with x, y, t (timestamp) arrays per touch point, recognizes text and gestures from stroke sequences
+
+## Digital Ink Recognition Overview
+
+ML Kit's Digital Ink Recognition API converts handwritten input into digital text and classifies gestures. The system processes stroke data—sequences of touch points captured when users write or draw on screen.
+
+## Ink Structure
+
+The API uses an `Ink` object representing user input as "a vector representation of what the user has written on the screen: a sequence of strokes, each being a list of coordinates with time information called touch points."
+
+### Stroke Point Structure
+
+Each stroke contains three coordinate arrays:
+- **x**: Horizontal position values
+- **y**: Vertical position values  
+- **t**: Timestamp values (in milliseconds)
+
+A stroke begins when the user places stylus/finger down and ends upon lifting.
+
+### Ink.Stroke.Builder API
+
+Strokes are constructed using `Ink.Stroke.Builder`:
+```
+var strokeBuilder = Ink.Stroke.Builder()
+strokeBuilder.addPoint(x, y, timeOffset)
+var stroke = strokeBuilder.build()
+```
+
+## Key Capabilities
+
+- Supports 300+ languages and 25+ writing systems
+- Recognizes nine gesture classes (arch, caret, circle, corner, scribble, strike, verticalbar, writing)
+- Identifies hand-drawn emojis and shapes
+- Operates fully offline on Android and iOS
+- Returns multiple recognition candidates ranked by confidence
+
+## Processing Flow
+
+The recognizer accepts an `Ink` object and returns one or more possible transcriptions as `RecognitionResult` objects, each containing candidate text with associated confidence scores.
+
+## Reference
+
+Android Implementation: https://developers.google.com/ml-kit/vision/digital-ink-recognition/android
+API Reference: https://developers.google.com/android/reference/com/google/mlkit/vision/digitalink/Ink.Stroke
