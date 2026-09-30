@@ -11091,6 +11091,10 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   const [videoTimebase, setVideoTimebase] = useState<ExportTimebase>("pen")
   const [videoFixedSeconds, setVideoFixedSeconds] = useState(3)
   const [videoPanelOpen, setVideoPanelOpen] = useState(false)
+  /* WHICH BUTTON STARTED THE RUNNING EXPORT. Video and GIF share one render
+   * path, one guard and the settings in the Video panel; this only decides
+   * which of the two buttons counts frames and becomes the cancel. */
+  const [animKind, setAnimKind] = useState<"video" | "gif">("video")
   /* CANCELLABLE, because a 3600-frame ceiling is two minutes of file and a user
    * who started the wrong one should not have to reload the page. The recorder
    * checks the signal every frame.
@@ -13248,7 +13252,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
      * indistinguishable from the still. `_anim` in the stem says which it is.
      * `lib/export` has a filename law of its own (`exportFilename` there) and
      * it is deliberately NOT used — one naming law per app, and this is it. */
-    (ext: "glb" | "png" | "webm", kind?: "anim") => {
+    (ext: "glb" | "png" | "webm" | "gif", kind?: "anim") => {
       const now = new Date()
       const pad = (n: number) => String(n).padStart(2, "0")
       const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
@@ -13417,7 +13421,13 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    * 3 · `setSceneTimeMs` — the style clock, driven instead of wall-advanced.
    *     See `STYLE_CLOCK_DRIVE`. Reset in the `finally` on every path.
    */
-  const handleExportVideo = useCallback(async () => {
+  /* VIDEO AND GIF ARE ONE EXPORT WITH TWO CONTAINERS. Everything below (the
+   * guard, the plan, the host, the clock law, the toast, the restore) is the
+   * same film; `kind` only picks the container, and a GIF is always on paper
+   * because its one-bit transparency would fringe every soft ink edge
+   * (`lib/export/gif.ts`). */
+  const runAnimatedExport = useCallback(async (kind: "video" | "gif") => {
+    const noun = kind === "gif" ? "GIF" : "film"
     /* ── ONE AT A TIME, AND THE GUARD LIVES HERE ─────────────────────────────
      *
      * The toolbar button could not re-enter — while `exportingVideo` is true its
@@ -13545,7 +13555,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
      * same object. The button label is untouched and stays the cancel
      * affordance. */
     const toastId = `fs-video-export-${run}`
-    toast.loading("Rendering the film…", {
+    toast.loading(`Rendering the ${noun}…`, {
       id: toastId,
       description:
         "Every frame is rendered and encoded one at a time, so this takes a few seconds. " +
@@ -13553,6 +13563,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     })
     let lastPct = -1
     let framesGrabbed = 0
+    setAnimKind(kind)
     setExportingVideo(true)
     setVideoDone(0)
     setVideoTotal(0)
@@ -13573,7 +13584,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
          * not — and APNG unconditionally when the user asks for transparency,
          * because a video cannot carry alpha and the module refuses to write an
          * opaque file with a transparent label. */
-        format: priorGround ? "webm" : "auto",
+        format: priorGround ? "webm" : kind === "gif" ? "gif" : "auto",
         /* THE TRANSPORT IS PART OF THE PICTURE. Speed, Reverse and Delay are
          * what the user judged the animation with, so the film is exported with
          * them rather than with a second set of defaults nobody chose. Loop is
@@ -13690,7 +13701,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
           const pct = total > 0 ? Math.round((done / total) * 100) : -1
           if (pct !== lastPct) {
             lastPct = pct
-            toast.loading(`Rendering the film, ${pct}%`, {
+            toast.loading(`Rendering the ${noun}, ${pct}%`, {
               id: toastId,
               description: `Frame ${done} of ${total}. The file downloads on its own when it is done.`,
             })
@@ -13698,7 +13709,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         },
       })
 
-      const filename = exportFilename(res.encoderId === "webm" ? "webm" : "png", "anim")
+      const filename = exportFilename(res.encoderId === "apng" ? "png" : res.encoderId, "anim")
       download(res.blob, filename)
       /* SAME ID — this REPLACES the progress toast rather than stacking under
        * it, so the thing that said "rendering" is the thing that says where the
@@ -13736,7 +13747,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         /* THE FAILURE PATH LANDS ON THE SAME TOAST, and it names the reason. A
          * progress toast left hanging at 62 % with a separate error beside it is
          * the "appeared to hang" defect wearing a receipt. */
-        toast.error("Video export failed", {
+        toast.error(kind === "gif" ? "GIF export failed" : "Video export failed", {
           id: toastId,
           description: err instanceof Error ? err.message : String(err),
         })
@@ -13779,6 +13790,8 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     playheadRef,
     clockRef,
   ])
+  const handleExportVideo = useCallback(() => runAnimatedExport("video"), [runAnimatedExport])
+  const handleExportGif = useCallback(() => runAnimatedExport("gif"), [runAnimatedExport])
 
   /* PUBLISH THE API — after the export handlers, because it carries them.
    *
@@ -15043,7 +15056,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
           <div className="flex items-center">
           <button
             type="button"
-            onClick={exportingVideo ? () => videoAbortRef.current?.abort() : handleExportVideo}
+            onClick={exportingVideo && animKind === "video" ? () => videoAbortRef.current?.abort() : handleExportVideo}
             /* THE PROGRESS IS THE LABEL, AND THE LABEL IS THE CANCEL. A
                hundred-and-forty-frame render is the one export long enough to
                look hung, so the button counts frames while it works — and the
@@ -15051,7 +15064,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
                defect a spinner hides rather than solves. */
             disabled={strokeCount === 0 || (compare3Up && !exportingVideo)}
             title={
-              exportingVideo
+              exportingVideo && animKind === "video"
                 ? "Stop the export"
                 : compare3Up
                   ? "Leave 3-Up compare to save a film. An export is one view, not three"
@@ -15059,7 +15072,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
             }
             className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium tabular-nums text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {exportingVideo
+            {exportingVideo && animKind === "video"
               ? videoTotal > 0
                 ? `${Math.round((videoDone / videoTotal) * 100)}%`
                 : "…"
@@ -15080,6 +15093,29 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
             </svg>
           </button>
           </div>
+          {/* GIF: THE SAME FILM IN THE CONTAINER THAT PLAYS INLINE EVERYWHERE.
+              It reads the Video panel's clock, frame rate and resolution (one
+              set of film settings, not two), is always on paper, and counts
+              and cancels exactly as Video does. */}
+          <button
+            type="button"
+            onClick={exportingVideo && animKind === "gif" ? () => videoAbortRef.current?.abort() : handleExportGif}
+            disabled={strokeCount === 0 || (compare3Up && !exportingVideo)}
+            title={
+              exportingVideo && animKind === "gif"
+                ? "Stop the export"
+                : compare3Up
+                  ? "Leave 3-Up compare to save a GIF. An export is one view, not three"
+                  : `Save a GIF of the animation, on paper, 256 colours, with the Video settings. ${videoPlanNote}`
+            }
+            className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium tabular-nums text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {exportingVideo && animKind === "gif"
+              ? videoTotal > 0
+                ? `${Math.round((videoDone / videoTotal) * 100)}%`
+                : "…"
+              : "GIF"}
+          </button>
           <div className="mx-0.5 h-5 w-px bg-border" />
           <button
             type="button"
@@ -15216,6 +15252,10 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
                 {videoTransparent
                   ? "Animated PNG (.png), lossless, keeps alpha, no contact shadow. Larger than a video, and the only format that can carry a see-through ground."
                   : "WebM video (.webm) on the studio ground, exactly as you see it."}
+              </div>
+              <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">
+                GIF uses these settings too: always on paper, 256 colours picked
+                from the film itself, at most 50 fps.
               </div>
               {hasAnimatedStyleLayer && (
                 <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">

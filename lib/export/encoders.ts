@@ -4,7 +4,10 @@
  *   WebCodecsWebmEncoder   VP9/VP8 in WebM. The thing you post.
  *   ApngEncoder            Lossless RGBA with alpha. The thing you composite.
  *
- * Both take frames as "whatever the viewport handed us" — a canvas, an
+ *   GifEncoder             256 colours on paper. The thing that plays inline
+ *                          everywhere else. See `./gif` for the palette.
+ *
+ * All take frames as "whatever the viewport handed us": a canvas, an
  * ImageBitmap, or a PNG blob — because the app's existing grab
  * (`STILL_EXPORT.grab`, `components/viewport-3d.tsx`) returns a Blob today and
  * a canvas would be one small change away. Accepting both is what lets this
@@ -24,6 +27,7 @@
  */
 import { WebmMuxer, type WebmCodec } from "./webm"
 import { ApngWriter } from "./apng"
+import { GifWriter, PaletteMapper, buildInkPalette, gifDelaysCs, type InkPalette } from "./gif"
 
 /* ------------------------------------------------------------------ */
 /*  Frames, in whatever shape the host can cheaply produce            */
@@ -44,9 +48,18 @@ export interface EncoderFrame {
 }
 
 export interface AnimationEncoder {
-  readonly id: "webm" | "apng"
+  readonly id: "webm" | "apng" | "gif"
   readonly mimeType: string
   readonly extension: string
+  /**
+   * How many frames this encoder wants to SEE before the first `addFrame`, or
+   * absent for none. GIF needs one palette for the whole film, and the only
+   * honest source for it is the film itself, so the recorder renders this many
+   * planned instants (always the first and the last among them) and hands each
+   * to `sample` first. Nothing is encoded from them.
+   */
+  readonly samplesWanted?: number
+  sample?(source: FrameSource): Promise<void>
   addFrame(frame: EncoderFrame): Promise<void>
   finish(): Promise<Blob>
   /** Release anything the encoder is holding, on cancel or on error. */
@@ -66,6 +79,44 @@ function releasePaintable(p: Paintable, src: FrameSource) {
   // Only close bitmaps WE created, or the caller's own bitmap becomes unusable
   // for the next encoder in a two-format export.
   if (src.kind === "blob" && "close" in p && typeof p.close === "function") p.close()
+}
+
+/* ------------------------------------------------------------------ */
+/*  Reading pixels back, shared by the two CPU encoders               */
+/* ------------------------------------------------------------------ */
+
+class PixelReader {
+  private ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null
+  constructor(private readonly width: number, private readonly height: number) {}
+
+  private ensure() {
+    if (this.ctx) return this.ctx
+    if (typeof OffscreenCanvas !== "undefined") {
+      this.ctx = new OffscreenCanvas(this.width, this.height).getContext("2d", { willReadFrequently: true })
+    } else {
+      const c = document.createElement("canvas")
+      c.width = this.width
+      c.height = this.height
+      this.ctx = c.getContext("2d", { willReadFrequently: true })
+    }
+    if (!this.ctx) throw new Error("export: no 2d context to read pixels")
+    return this.ctx
+  }
+
+  /** Straight RGBA of one frame, cleared first so nothing accumulates. */
+  async read(src: FrameSource): Promise<Uint8Array> {
+    const ctx = this.ensure()
+    const paintable = await toPaintable(src)
+    ctx.clearRect(0, 0, this.width, this.height)
+    ctx.drawImage(paintable as CanvasImageSource, 0, 0, this.width, this.height)
+    releasePaintable(paintable, src)
+    const img = ctx.getImageData(0, 0, this.width, this.height)
+    return new Uint8Array(img.data.buffer, img.data.byteOffset, img.data.byteLength)
+  }
+
+  dispose() {
+    this.ctx = null
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -284,5 +335,90 @@ export class ApngEncoder implements AnimationEncoder {
   dispose() {
     this.scratch = null
     this.ctx = null
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  GIF                                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The browser half of `./gif`. Frames must already be OPAQUE on `ground`: the
+ * recorder composites the paper in before anything reaches an encoder, and the
+ * palette reserves that exact paper.
+ *
+ * ONE FRAME BEHIND ON PURPOSE. A GIF frame's delay is the gap to the NEXT
+ * frame, and `gifDelaysCs` cuts it from the next frame's own timestamp so the
+ * rounding never accumulates. So each frame is written when its successor
+ * arrives, and the last one in `finish` from its own duration.
+ */
+export class GifEncoder implements AnimationEncoder {
+  readonly id = "gif" as const
+  readonly mimeType = "image/gif"
+  readonly extension = "gif"
+  readonly samplesWanted: number
+
+  private reader: PixelReader
+  private samples: Uint8Array[] = []
+  private palette: InkPalette | null = null
+  private mapper: PaletteMapper | null = null
+  private writer: GifWriter | null = null
+  private held: { indices: Uint8Array; timestampUs: number; durationUs: number } | null = null
+
+  constructor(
+    private readonly width: number,
+    private readonly height: number,
+    private readonly ground: readonly [number, number, number] | null,
+    samplesWanted = 12,
+    private readonly loops = 0,
+  ) {
+    this.reader = new PixelReader(width, height)
+    this.samplesWanted = Math.max(1, samplesWanted)
+  }
+
+  async sample(source: FrameSource): Promise<void> {
+    this.samples.push(await this.reader.read(source))
+  }
+
+  /** The palette the file was written with; null before the first frame. */
+  get inkPalette(): InkPalette | null {
+    return this.palette
+  }
+
+  private ensureWriter() {
+    if (this.writer) return this.writer
+    this.palette = buildInkPalette(this.samples, { ground: this.ground })
+    this.samples = []
+    this.mapper = new PaletteMapper(this.palette)
+    this.writer = new GifWriter({ width: this.width, height: this.height, palette: this.palette, loops: this.loops })
+    return this.writer
+  }
+
+  async addFrame(frame: EncoderFrame): Promise<void> {
+    const writer = this.ensureWriter()
+    const rgba = await this.reader.read(frame.source)
+    const indices = this.mapper!.mapFrame(rgba)
+    if (this.held) {
+      const [delay] = gifDelaysCs([this.held.timestampUs], frame.timestampUs)
+      writer.addFrame({ indices: this.held.indices, delayCs: delay })
+    }
+    this.held = { indices, timestampUs: frame.timestampUs, durationUs: frame.durationUs }
+  }
+
+  async finish(): Promise<Blob> {
+    const writer = this.ensureWriter()
+    if (this.held) {
+      const [delay] = gifDelaysCs([this.held.timestampUs], this.held.timestampUs + this.held.durationUs)
+      writer.addFrame({ indices: this.held.indices, delayCs: delay })
+      this.held = null
+    }
+    const bytes = writer.finish()
+    return new Blob([bytes as unknown as BlobPart], { type: this.mimeType })
+  }
+
+  dispose() {
+    this.reader.dispose()
+    this.samples = []
+    this.held = null
   }
 }
