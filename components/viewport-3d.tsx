@@ -10907,14 +10907,16 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   const glCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const boundsRef = useRef<StrokeBounds | null>(null)
   const exportGroupRef = useRef<THREE.Group | null>(null)
-  const [exporting, setExporting] = useState(false)
-  const [exportName, setExportName] = useState("")
+  /* L2: the export name and the in-flight flags are the page transport's, so
+   * L3's Export panel reads the same ones. The handlers stay here. */
+  const [exporting, setExporting] = useTransportSlot(transport, "exporting")
+  const [exportName, setExportName] = useTransportSlot(transport, "exportName")
   /* ---- Still export ----
    * Defaults chosen rather than inherited: 2x because 1x hands back a ~900px
    * picture of a 3-D object and nobody wants that twice, and PAPER because the
    * studio ground is part of the look the user has been judging. Both are one
    * click away in the panel. */
-  const [exportingPng, setExportingPng] = useState(false)
+  const [exportingPng, setExportingPng] = useTransportSlot(transport, "exportingPng")
   const [pngScale, setPngScale] = useState(2)
   const [pngTransparent, setPngTransparent] = useState(false)
   const [pngPanelOpen, setPngPanelOpen] = useState(false)
@@ -10935,7 +10937,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    *                 the canned alternative and stays one click away; the pick
    *                 between them is Sebs's and is flagged, not defaulted away.
    */
-  const [exportingVideo, setExportingVideo] = useState(false)
+  const [exportingVideo, setExportingVideo] = useTransportSlot(transport, "exportingVideo")
   const [videoDone, setVideoDone] = useState(0)
   const [videoTotal, setVideoTotal] = useState(0)
   const [videoFps, setVideoFps] = useState(30)
