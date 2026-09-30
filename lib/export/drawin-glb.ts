@@ -212,7 +212,9 @@ class SegmentGrid {
       segs += Math.max(1, c.xs.length - 1)
     }
     const span = Math.max(x1 - x0, y1 - y0, 1e-6)
-    this.size = span / Math.max(8, Math.min(256, Math.round(Math.sqrt(segs) * 2)))
+    /* A floor on the cell, or a one-tap drawing (every point in one place)
+     * makes cells 1e-7 wide and `nearest` walks thousands of empty rings. */
+    this.size = Math.max(1e-3, span / Math.max(8, Math.min(256, Math.round(Math.sqrt(segs) * 2))))
     this.minX = x0
     this.minY = y0
     lines.forEach((c, s) => {

@@ -13754,10 +13754,10 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
          * not — and APNG unconditionally when the user asks for transparency,
          * because a video cannot carry alpha and the module refuses to write an
          * opaque file with a transparent label. */
-        format: priorGround
-          ? "webm"
-          : kind === "gif"
-            ? "gif"
+        format: kind === "gif"
+          ? "gif"
+          : priorGround
+            ? "webm"
             : videoTransparent && videoAlphaFormat === "webm"
               ? "webm-alpha"
               : "auto",

@@ -156,8 +156,9 @@ export function sparsifyMorphTargets(glb: ArrayBuffer): { glb: ArrayBuffer; repo
       }
     }
     /* Sparse costs 16 bytes a non-zero vertex against 12 a vertex dense, so
-     * it only pays below three quarters full. */
-    if (idx.length * 16 >= a.count * 12) {
+     * it only pays below three quarters full. An all-zero target stays dense:
+     * the spec requires `sparse.count` of at least 1. */
+    if (idx.length === 0 || idx.length * 16 >= a.count * 12) {
       targetsKeptDense++
       return
     }

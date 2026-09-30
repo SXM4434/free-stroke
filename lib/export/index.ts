@@ -248,7 +248,7 @@ export async function exportAnimation(opts: ExportAnimationOptions): Promise<Exp
   }
   if (alphaLossy && opts.alphaCoding !== "bitrate") {
     res.warnings.unshift(
-      "This browser writes the transparent WebM as VP8, whose alpha is compressed like the picture, so the see-through ground may carry a faint grain. Pick APNG for exact alpha.",
+      "This browser's video encoder has no lossless mode for the alpha stream, so the see-through ground of this WebM may carry a faint grain. Pick APNG for exact alpha.",
     )
   }
   if (wanted === "gif" && opts.transparent) {
