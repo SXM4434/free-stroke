@@ -55,6 +55,12 @@ export interface WebmFrame {
   /** Frame duration in microseconds. May be 0 for the last frame. */
   durationUs: number
   keyFrame: boolean
+  /**
+   * The ALPHA stream's bytes for this frame: a second VP8/VP9 frame whose luma
+   * is the alpha (see `./webm-alpha`). Written as the Block's
+   * `BlockAdditional` with BlockAddID 1 when the muxer was made with `alpha`.
+   */
+  additional?: Uint8Array
 }
 
 export interface WebmMuxerOptions {
@@ -66,6 +72,12 @@ export interface WebmMuxerOptions {
   /** Codec private data (AV1 needs it; VP8/VP9 do not). */
   codecPrivate?: Uint8Array
   writingApp?: string
+  /**
+   * A WebM with alpha: `AlphaMode = 1` on the track and every frame written as
+   * a BlockGroup whose BlockAdditions carry the frame's `additional` bytes.
+   * Off, the file is byte for byte what this muxer always wrote.
+   */
+  alpha?: boolean
 }
 
 /* ---- EBML primitives ------------------------------------------------- */
@@ -97,6 +109,20 @@ function uint(value: number): Uint8Array {
   while (len < 8 && v >= 2 ** (8 * len)) len++
   const out = new Uint8Array(len)
   let x = v
+  for (let i = len - 1; i >= 0; i--) {
+    out[i] = x & 0xff
+    x = Math.floor(x / 256)
+  }
+  return out
+}
+
+/** Signed integer, minimum bytes, two's complement. */
+function sint(value: number): Uint8Array {
+  const v = Math.round(value)
+  let len = 1
+  while (len < 8 && (v < -(2 ** (8 * len - 1)) || v >= 2 ** (8 * len - 1))) len++
+  const out = new Uint8Array(len)
+  let x = v < 0 ? 2 ** (8 * len) + v : v
   for (let i = len - 1; i >= 0; i--) {
     out[i] = x & 0xff
     x = Math.floor(x / 256)
@@ -162,9 +188,17 @@ const ID = {
   Video: [0xe0],
   PixelWidth: [0xb0],
   PixelHeight: [0xba],
+  AlphaMode: [0x53, 0xc0],
   Cluster: [0x1f, 0x43, 0xb6, 0x75],
   Timecode: [0xe7],
   SimpleBlock: [0xa3],
+  BlockGroup: [0xa0],
+  Block: [0xa1],
+  ReferenceBlock: [0xfb],
+  BlockAdditions: [0x75, 0xa1],
+  BlockMore: [0xa6],
+  BlockAddID: [0xee],
+  BlockAdditional: [0xa5],
   Cues: [0x1c, 0x53, 0xbb, 0x6b],
   CuePoint: [0xbb],
   CueTime: [0xb3],
@@ -199,7 +233,7 @@ export class WebmMuxer {
   }
 
   finish(): Uint8Array {
-    const { width, height, codec, fps, codecPrivate, writingApp } = this.opts
+    const { width, height, codec, fps, codecPrivate, writingApp, alpha } = this.opts
     if (this.frames.length === 0) throw new Error("webm: no frames")
 
     const header = el(ID.EBML, concat([
@@ -226,6 +260,7 @@ export class WebmMuxer {
     ]))
 
     const videoParts = [el(ID.PixelWidth, uint(width)), el(ID.PixelHeight, uint(height))]
+    if (alpha) videoParts.push(el(ID.AlphaMode, uint(1)))
     const trackParts = [
       el(ID.TrackNumber, uint(TRACK_NUMBER)),
       el(ID.TrackUID, uint(TRACK_NUMBER)),
@@ -248,6 +283,7 @@ export class WebmMuxer {
     let blocks: Uint8Array[] = []
     let clusterTimeMs = 0
     let clusterHasCue = false
+    let prevTimeMs = 0
 
     const flush = () => {
       if (blocks.length === 0) return
@@ -273,8 +309,26 @@ export class WebmMuxer {
       const head = new Uint8Array(4)
       head[0] = 0x80 | TRACK_NUMBER // vint of the track number, 1 byte
       new DataView(head.buffer).setInt16(1, rel, false)
-      head[3] = f.keyFrame ? 0x80 : 0x00
-      blocks.push(el(ID.SimpleBlock, concat([head, f.data])))
+      if (alpha) {
+        /* A BLOCKGROUP, BECAUSE A SIMPLEBLOCK HAS NOWHERE TO PUT THE ALPHA.
+         * A Block has no keyframe flag; a frame that depends on another says
+         * so with a ReferenceBlock (the signed offset to the frame before),
+         * and a keyframe carries none. That is how ffmpeg writes it and how
+         * Chrome's demuxer reads it. */
+        head[3] = 0x00
+        const parts = [el(ID.Block, concat([head, f.data]))]
+        if (!f.keyFrame) parts.push(el(ID.ReferenceBlock, sint(prevTimeMs - tMs)))
+        if (f.additional && f.additional.length) {
+          parts.push(
+            el(ID.BlockAdditions, el(ID.BlockMore, concat([el(ID.BlockAddID, uint(1)), el(ID.BlockAdditional, f.additional)]))),
+          )
+        }
+        blocks.push(el(ID.BlockGroup, concat(parts)))
+      } else {
+        head[3] = f.keyFrame ? 0x80 : 0x00
+        blocks.push(el(ID.SimpleBlock, concat([head, f.data])))
+      }
+      prevTimeMs = tMs
       if (f.keyFrame && !clusterHasCue) {
         // `offset` is the position this cluster WILL occupy: everything before
         // it has already been added.

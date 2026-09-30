@@ -11074,9 +11074,10 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    *   scale 1     — a film is a hundred and forty renders, not one. 2x doubles
    *                 the pixels the encoder chews per frame and the wait with it;
    *                 the still is where resolution matters.
-   *   PAPER       — because transparent is APNG (video has no alpha), and an
-   *                 APNG of a long draw is enormous. The choice is offered, and
-   *                 the panel says what it costs instead of hiding it.
+   *   PAPER       because the studio ground is part of the look the user has
+   *                 been judging. Transparent is one click away (a WebM with a
+   *                 VP9 alpha stream, or a lossless APNG), and the panel says
+   *                 what each costs instead of hiding it.
    *   PEN timebase — the product's whole argument, and the one setting no
    *                 competitor can copy without recording the hand. `fixed` is
    *                 the canned alternative and stays one click away; the pick
@@ -11088,6 +11089,12 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   const [videoFps, setVideoFps] = useState(30)
   const [videoScale, setVideoScale] = useState(1)
   const [videoTransparent, setVideoTransparent] = useState(false)
+  /* WHAT "TRANSPARENT" IS WRITTEN AS. WebM carries alpha now (a second VP9
+   * stream in the same track, `lib/export/webm-alpha.ts`) and is the default:
+   * it is a video file an editor lays over footage, a fraction of an APNG's
+   * size. APNG stays one click away because it is lossless. Where the browser
+   * cannot encode WebM, the export falls back to APNG and says so. */
+  const [videoAlphaFormat, setVideoAlphaFormat] = useState<"webm" | "apng">("webm")
   const [videoTimebase, setVideoTimebase] = useState<ExportTimebase>("pen")
   const [videoFixedSeconds, setVideoFixedSeconds] = useState(3)
   const [videoPanelOpen, setVideoPanelOpen] = useState(false)
@@ -13515,6 +13522,12 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
      * a fix whose absence cannot be re-rendered is a fix nobody can fail.
      * Same shape as `__fsExportClock` / `__fsExportGround` above. */
     const revealEndsLaw = readDevLaw("__fsExportRevealEnds", ["unwired"], "wired")
+    /* THE PARKED PRIOR FOR A TRANSPARENT WEBM'S ALPHA. `bitrate` codes the
+     * alpha stream at the colour stream's bitrate, as the first build did; it
+     * left a veil of alpha 1 to 3 across an empty keyframe. The shipped arm is
+     * lossless (VP9 quantizer 0), and assert-export-webm-alpha-app.mjs films
+     * both. */
+    const alphaCodingLaw = readDevLaw("__fsExportAlphaCoding", ["bitrate"], "lossless")
 
     /* WHERE THE SCRUBBER WAS. An export walks the playhead from 0 to 1 and
      * would otherwise leave it at the end — the user pressed a button called
@@ -13584,7 +13597,13 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
          * not — and APNG unconditionally when the user asks for transparency,
          * because a video cannot carry alpha and the module refuses to write an
          * opaque file with a transparent label. */
-        format: priorGround ? "webm" : kind === "gif" ? "gif" : "auto",
+        format: priorGround
+          ? "webm"
+          : kind === "gif"
+            ? "gif"
+            : videoTransparent && videoAlphaFormat === "webm"
+              ? "webm-alpha"
+              : "auto",
         /* THE TRANSPORT IS PART OF THE PICTURE. Speed, Reverse and Delay are
          * what the user judged the animation with, so the film is exported with
          * them rather than with a second set of defaults nobody chose. Loop is
@@ -13622,6 +13641,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
           : {}),
         markName: exportName,
         hasAnimatedStyleLayer,
+        alphaCoding: alphaCodingLaw,
         signal: controller.signal,
         /* `undefined` means "the module's own default", which for an opaque
          * container is `EXPORT_PAPER`. Only the parked control passes `null`. */
@@ -13773,6 +13793,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     videoFps,
     videoScale,
     videoTransparent,
+    videoAlphaFormat,
     speed,
     revealReverse,
     revealDelaySeconds,
@@ -15068,7 +15089,13 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
                 ? "Stop the export"
                 : compare3Up
                   ? "Leave 3-Up compare to save a film. An export is one view, not three"
-                  : `Save the animation as ${videoTransparent ? "an animated PNG" : "a video"}. ${videoPlanNote}`
+                  : `Save the animation as ${
+                      videoTransparent
+                        ? videoAlphaFormat === "webm"
+                          ? "a transparent WebM video"
+                          : "an animated PNG"
+                        : "a video"
+                    }. ${videoPlanNote}`
             }
             className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium tabular-nums text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -15243,14 +15270,34 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
                 </button>
               </div>
               {/* NAMES MUST MATCH BEHAVIOUR, so the format is stated rather
-                  than implied. Video has no alpha channel — VP9's rides a
-                  Matroska side channel this muxer does not write — so
-                  "transparent" is an animated PNG, which is lossless and
-                  larger. Saying so is the difference between a setting and a
+                  than implied. "Transparent" is a WebM with a VP9 alpha stream
+                  (lib/export/webm-alpha.ts) or, one click away, a lossless
+                  animated PNG; each sentence says where it plays and what it
+                  costs. Saying so is the difference between a setting and a
                   surprise. */}
+              {videoTransparent && (
+                <div className="mt-1.5 flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
+                  {(["webm", "apng"] as const).map((f) => (
+                    <button
+                      key={f}
+                      type="button"
+                      onClick={() => setVideoAlphaFormat(f)}
+                      className={`fs-press flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                        videoAlphaFormat === f
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {f === "webm" ? "WebM" : "APNG"}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">
                 {videoTransparent
-                  ? "Animated PNG (.png), lossless, keeps alpha, no contact shadow. Larger than a video, and the only format that can carry a see-through ground."
+                  ? videoAlphaFormat === "webm"
+                    ? "WebM video (.webm) with alpha, no contact shadow. Plays see-through in Chrome and Edge and in editors that read VP9 alpha; other players may show it without its alpha. A browser that cannot encode WebM gets an animated PNG instead, and is told."
+                    : "Animated PNG (.png), lossless, keeps alpha, no contact shadow. Larger than a video, and it plays see-through everywhere, Safari included."
                   : "WebM video (.webm) on the studio ground, exactly as you see it."}
               </div>
               <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">

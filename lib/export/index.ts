@@ -41,7 +41,15 @@
  * (`EXPORT_PAPER`, `REVEAL_WINDOW_ENDS`), never as imports.
  */
 import { planFrames, describePlan, type ExportTimebase, type FramePlan, type RevealEnds } from "./frame-plan"
-import { ApngEncoder, GifEncoder, WebCodecsWebmEncoder, pickWebmCodec, type AnimationEncoder } from "./encoders"
+import {
+  ApngEncoder,
+  GifEncoder,
+  WebCodecsWebmAlphaEncoder,
+  WebCodecsWebmEncoder,
+  pickWebmAlphaCodec,
+  pickWebmCodec,
+  type AnimationEncoder,
+} from "./encoders"
 import { GIF_MAX_FPS, parseHexColor } from "./gif"
 import { recordAnimation, exportFilename, type ExportHost, type RecordResult } from "./recorder"
 
@@ -51,8 +59,14 @@ export * from "./apng"
 export * from "./encoders"
 export * from "./recorder"
 export * from "./gif"
+export * from "./webm-alpha"
 
-export type ExportFormat = "webm" | "apng" | "gif" | "auto"
+/**
+ * `webm-alpha` is a transparent WebM (VP9 or VP8 with an alpha stream) where
+ * the browser can encode one, and an animated PNG with a warning saying so
+ * where it cannot. It always implies `transparent`.
+ */
+export type ExportFormat = "webm" | "webm-alpha" | "apng" | "gif" | "auto"
 
 /**
  * The studio ground an opaque export is composited onto.
@@ -87,6 +101,13 @@ export interface ExportAnimationOptions {
    * what shipped, so an unwired caller gets exactly the previous behaviour.
    */
   revealEnds?: RevealEnds
+  /**
+   * How a `webm-alpha` film codes its alpha stream. `lossless` (the default) is
+   * VP9 quantizer 0 where the browser offers it; `bitrate` is the parked prior,
+   * the alpha coded at the colour stream's bitrate, kept so a gate can show the
+   * veil it leaves (`assert-export-webm-alpha-app.mjs`).
+   */
+  alphaCoding?: "lossless" | "bitrate"
   /** Keep a hold that would be blank paper. See `FramePlanInput.holdOnEmpty`. */
   holdOnEmpty?: boolean
   reverse?: boolean
@@ -111,15 +132,19 @@ export interface ExportAnimationResult extends RecordResult {
 }
 
 /**
- * TRANSPARENT MEANS APNG. Not a preference — VP9's alpha rides a Matroska
- * `BlockAdditions` side channel this muxer does not write, so a "transparent
- * WebM" from here would be an opaque file with a promise on the label. The
- * one thing an export may never be is a lie about what it contains.
+ * TRANSPARENT MEANS APNG, UNLESS `webm-alpha` IS ASKED FOR BY NAME. VP9's
+ * alpha rides a Matroska `BlockAdditions` side channel, which the muxer now
+ * writes (`./webm`, `./webm-alpha`) when, and only when, the alpha encoder
+ * feeds it; a plain `webm` request with `transparent` still gets APNG, because
+ * a WebM whose alpha was never encoded would be an opaque file with a promise
+ * on the label. The one thing an export may never be is a lie about what it
+ * contains.
  */
 function resolveFormat(requested: ExportFormat, transparent: boolean): ExportFormat {
   /* A GIF stays a GIF when alpha is asked for, on paper, and says so below:
    * its one-bit transparency would cut a fringe round every soft ink edge. */
   if (requested === "gif") return "gif"
+  if (requested === "webm-alpha") return "webm-alpha"
   if (transparent) return "apng"
   return requested
 }
@@ -130,7 +155,7 @@ export async function exportAnimation(opts: ExportAnimationOptions): Promise<Exp
   const wanted = resolveFormat(opts.format ?? "auto", !!opts.transparent)
   /* A GIF is always opaque; see `resolveFormat`. The renderer is asked for the
    * paper frame, exactly the frame a WebM gets. */
-  const transparent = wanted === "gif" ? false : !!opts.transparent
+  const transparent = wanted === "gif" ? false : wanted === "webm-alpha" ? true : !!opts.transparent
   /* GIF delays are centiseconds and browsers play anything under 2 cs as 10 cs,
    * so a 60 fps GIF would play at a sixth of its speed. The plan is made at the
    * ceiling instead, and the file's frame count is that plan's. */
@@ -161,9 +186,21 @@ export async function exportAnimation(opts: ExportAnimationOptions): Promise<Exp
 
   let encoder: AnimationEncoder
   let fellBack = false
+  let alphaFellBack = false
+  let alphaLossy = false
   const gifGround = opts.background ?? EXPORT_PAPER
   if (wanted === "gif") {
     encoder = new GifEncoder(width, height, parseHexColor(gifGround))
+  } else if (wanted === "webm-alpha") {
+    const picked = await pickWebmAlphaCodec(width, height, fps)
+    const choice = picked && opts.alphaCoding === "bitrate" ? { ...picked, alphaLossless: false } : picked
+    if (choice) {
+      encoder = new WebCodecsWebmAlphaEncoder(width, height, fps, choice)
+      alphaLossy = !choice.alphaLossless
+    } else {
+      encoder = new ApngEncoder(width, height, 1000 / fps)
+      alphaFellBack = true
+    }
   } else if (wanted === "apng") {
     encoder = new ApngEncoder(width, height, 1000 / fps)
   } else {
@@ -185,7 +222,9 @@ export async function exportAnimation(opts: ExportAnimationOptions): Promise<Exp
   const background =
     encoder.id === "gif"
       ? gifGround
-      : opts.background !== undefined
+      : wanted === "webm-alpha"
+        ? null
+        : opts.background !== undefined
         ? opts.background
         : encoder.id === "apng" && transparent
           ? null
@@ -202,6 +241,16 @@ export async function exportAnimation(opts: ExportAnimationOptions): Promise<Exp
     hasAnimatedStyleLayer: opts.hasAnimatedStyleLayer,
   })
 
+  if (alphaFellBack) {
+    res.warnings.unshift(
+      "This browser cannot encode WebM video, so the transparent export is an animated PNG instead. It keeps the same see-through ground.",
+    )
+  }
+  if (alphaLossy && opts.alphaCoding !== "bitrate") {
+    res.warnings.unshift(
+      "This browser writes the transparent WebM as VP8, whose alpha is compressed like the picture, so the see-through ground may carry a faint grain. Pick APNG for exact alpha.",
+    )
+  }
   if (wanted === "gif" && opts.transparent) {
     res.warnings.unshift("A GIF has no soft transparency, so this one is on the paper ground. Pick Animated PNG to keep alpha.")
   }

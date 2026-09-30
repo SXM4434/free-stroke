@@ -4,7 +4,8 @@
 //
 // Kept to what the three gates share. Every gate still owns its rows, its
 // counters and its known-bad arms; this file only knows how to reach the app.
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { join } from "node:path"
 import { createRequire } from "node:module"
 import { chromium } from "./browser.mjs"
@@ -98,6 +99,39 @@ export function frameAt(file, n, { pixFmt = "rgba", extra = [] } = {}) {
   )
   if (r.status !== 0) throw new Error(`ffmpeg could not read frame ${n} of ${file}: ${String(r.stderr).split("\n")[0]}`)
   return r.stdout
+}
+
+/**
+ * One sha1 per decoded frame, streamed: ffmpeg decodes the file ONCE and each
+ * frame is hashed as its bytes arrive, so memory stays one frame whatever the
+ * film's length (a per-frame `frameAt` loop decodes the file N times).
+ */
+export function frameHashes(file, width, height, { pixFmt = "rgba", extra = [] } = {}) {
+  const frameBytes = width * height * (pixFmt === "rgba" ? 4 : 3)
+  return new Promise((resolve, reject) => {
+    const proc = spawn(FFMPEG, ["-v", "error", ...extra, "-i", file, "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", pixFmt, "-"])
+    const hashes = []
+    let h = createHash("sha1")
+    let filled = 0
+    let err = ""
+    proc.stdout.on("data", (chunk) => {
+      let o = 0
+      while (o < chunk.length) {
+        const take = Math.min(frameBytes - filled, chunk.length - o)
+        h.update(chunk.subarray(o, o + take))
+        filled += take
+        o += take
+        if (filled === frameBytes) {
+          hashes.push(h.digest("hex"))
+          h = createHash("sha1")
+          filled = 0
+        }
+      }
+    })
+    proc.stderr.on("data", (c) => (err += String(c)))
+    proc.on("error", reject)
+    proc.on("close", (code) => (code === 0 ? resolve(hashes) : reject(new Error(`ffmpeg exited ${code}: ${err.slice(0, 200)}`))))
+  })
 }
 
 /** A still image (PNG) as raw RGBA plus its size. */
