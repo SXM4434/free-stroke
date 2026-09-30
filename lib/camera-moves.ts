@@ -63,6 +63,10 @@ export interface CameraTake {
   takeMs: number
   /** The take's keys. Only `drawProgress` is read: its pauses, and its remap of the clock. */
   keys?: TakeKeys
+  /** `[a, b]` pairs, ms, take time: where no stroke lays ink (`takeLiftsMs`).
+   *  A slot runs to the next stroke's landing, so a lift sits inside it and the
+   *  gaps between slots miss it; given, "Turn in the lifts" reads these instead. */
+  lifts?: ArrayLike<number>
 }
 
 export interface CameraMoveOpts {
@@ -112,6 +116,8 @@ interface OnClock {
   windows: [number, number][]
   /** When the last stroke lands on the clock. */
   landingMs: number
+  /** The take's lifts on the clock, when it names them; else null. */
+  lifts: [number, number][] | null
 }
 
 /**
@@ -172,7 +178,21 @@ function onClock(label: string, take: CameraTake | null | undefined): OnClock {
     windows.push([c0, c1])
     landingMs = Math.max(landingMs, c1)
   }
-  return { windows, landingMs }
+  let lifts: [number, number][] | null = null
+  const L = take.lifts
+  if (L) {
+    if (L.length % 2 !== 0) refuse(label, `the take names ${L.length} lift ends, not pairs`)
+    lifts = []
+    for (let k = 0; k < L.length; k += 2) {
+      const a = L[k]
+      const b = L[k + 1]
+      if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) refuse(label, `lift ${k / 2} is [${a}, ${b}], not a span`)
+      const c0 = clockOf(a)
+      const c1 = clockOf(b)
+      if (c0 !== null && c1 !== null && c1 > c0) lifts.push([c0, c1])
+    }
+  }
+  return { windows, landingMs, lifts }
 }
 
 /** Gaps between the draw windows, merged over every stroke, so an overlapping stroke is never inside a lift. */
@@ -207,9 +227,9 @@ const ORBIT_LIFTS: CameraMove = {
   tracks: ["azimuth"],
   keys(take, opts) {
     const L = ORBIT_LIFTS.label
-    const { windows } = onClock(L, take)
+    const on = onClock(L, take)
     const minLift = opts?.minLiftMs ?? 120
-    const lifts = liftsOf(windows).filter(([a, b]) => b - a >= minLift)
+    const lifts = (on.lifts ?? liftsOf(on.windows)).filter(([a, b]) => b - a >= minLift)
     if (lifts.length === 0) {
       refuse(L, `the pen never lifts for ${minLift} ms or more in this take. Each stroke starts as the one before it ends, so there is no still moment to turn in. Open a gap on the strip first`)
     }

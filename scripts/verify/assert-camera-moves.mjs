@@ -313,6 +313,58 @@ async function runRows() {
     return { tr, err }
   }
 
+  /* HAND-DRAW-P3 · LIFTS INSIDE THE SLOTS. Under the hand clock a slot runs to
+   * the next stroke's landing, so the slots touch end to end and every lift sits
+   * in a slot's tail. The pace holds a beat through each lift; `takeLiftsMs`
+   * reads those holds, carried through the rows, and the move turns there. The
+   * pace below draws at clock [0, 0.2], [0.3, 0.5], [0.55, 0.75], [0.9, 1] of a
+   * 2000 ms take, so its lifts are 200, 100 and 300 ms, worked out by hand. */
+  check("IN-LIFTS", "the rows ran", () => {
+    const bad = []
+    const ink = [[0, 0.2], [0.3, 0.5], [0.55, 0.75], [0.9, 1]]
+    // Each lift holds 1e-9 under the stroke boundary, as the hand's lifts sit a
+    // few float steps under theirs, so a slot's end reads the next landing.
+    const curve = (c) => {
+      for (let k = 0; k < ink.length; k++) {
+        const [a, b] = ink[k]
+        if (c < a) return k / ink.length - 1e-9
+        if (c <= b) return (k + ((c - a) / (b - a)) * (k + 1 < ink.length ? 1 - 4e-9 : 1)) / ink.length
+      }
+      return 1
+    }
+    const pace = T.paceFromCurve(curve)
+    const MS = 2000
+    const sch = schedOf(4)
+    const base = new Float64Array(8)
+    sch.tracks.forEach((t, i) => {
+      base[2 * i] = pace.beatToLanding(t.start) * MS
+      base[2 * i + 1] = pace.beatToClock(t.end) * MS
+    })
+    for (let i = 1; i < 4; i++) if (Math.abs(base[2 * i] - base[2 * i - 1]) > 1e-3) bad.push(`base slots ${i - 1} and ${i} do not touch: ${base[2 * i - 1]} to ${base[2 * i]}`)
+    const near = (got, want, what) => {
+      if (got.length !== want.length * 2) return bad.push(`${what}: ${got.length / 2} lifts, want ${want.length}`)
+      want.forEach(([a, b], k) => { if (!(Math.abs(got[2 * k] - a) <= 1e-3 && Math.abs(got[2 * k + 1] - b) <= 1e-3)) bad.push(`${what}: lift ${k} [${got[2 * k].toFixed(3)}, ${got[2 * k + 1].toFixed(3)}], want [${a}, ${b}]`) })
+    }
+    const L0 = T.takeLiftsMs(null, pace, base, MS)
+    near(L0, [[400, 600], [1000, 1100], [1500, 1800]], "no rows")
+    const take0 = { slots: base, takeMs: MS }
+    if (!thrown(() => byId["orbit-lifts"].keys(take0))) bad.push("touching slots with no lifts named did not refuse (the old reading)")
+    const az = byId["orbit-lifts"].keys({ ...take0, lifts: L0 }).azimuth
+    const turns = []
+    for (let i = 0; i + 1 < az.length; i++) if (az[i + 1].value !== az[i].value) turns.push([az[i].tMs, az[i + 1].tMs])
+    if (JSON.stringify(turns.map((t) => t.map((v) => Math.round(v)))) !== JSON.stringify([[400, 600], [1500, 1800]])) bad.push(`turns ${JSON.stringify(turns)}, want the 200 and 300 ms lifts`)
+    for (const [a, b] of [[0, 400], [600, 1000], [1100, 1500], [1800, 2000]]) {
+      const v0 = at(K, az, a)
+      let worst = 0
+      for (let c = a; c <= b; c += 0.5) worst = Math.max(worst, Math.abs(at(K, az, c) - v0))
+      if (!(worst <= 1e-9)) bad.push(`ink [${a}, ${b}] turns ${worst.toFixed(4)} deg`)
+    }
+    // A row carries its stroke's lift: stroke 2 250 ms late, ripple off.
+    const ts = T.buildTimedSchedule(sch, { strokes: { 2: { ...N, delayMs: 250 } }, ripple: false }, { baseMs: MS, pace })
+    near(T.takeLiftsMs(ts, pace, base, MS), [[400, 600], [1000, 1350], [1750, 1800]], "stroke 2 at +250 ms")
+    row("IN-LIFTS", bad.length === 0, "with the slots touching, Turn in the lifts turns in the pace's own holds, carried through the rows", bad.slice(0, 3).join(" | ") || `lifts [400, 600] [1000, 1100] [1500, 1800] ms, turns in the two of 120 ms or more, still over 4 ink stretches; +250 ms on stroke 2 moves its lift to [1000, 1350] and its hold to [1750, 1800]`)
+  })
+
   check("THIN-FIT", "the rows ran", () => {
     const { tr, err } = fit(0.5)
     const v = K.validateTrack(tr)
@@ -356,6 +408,9 @@ const MUTANTS = [
   { name: "empty take not refused", find: "if (!s || n === 0 || s.length % 2 !== 0) refuse(", text: "if (false) refuse(", red: ["REFUSE"] },
   { name: "a stroke that never lands not refused", find: "if (c0 === null || c1 === null) {", text: "if (false) {", red: ["REFUSE"] },
   { name: "orbit with no lifts not refused", find: "if (lifts.length === 0) {", text: "if (false) {", red: ["REFUSE"] },
+  { name: "the lifts the take names are ignored, back to the slot gaps", find: "(on.lifts ?? liftsOf(on.windows))", text: "liftsOf(on.windows)", red: ["IN-LIFTS"] },
+  { file: "lib/stroke-timing.ts", name: "the pace reports no holds", find: "holds: Float64Array.from(holds) }", text: "holds: new Float64Array(0) }", red: ["IN-LIFTS"] },
+  { file: "lib/stroke-timing.ts", name: "a row's lifts stay at their base time", find: "      if (!ts) return h\n", text: "      return h\n", red: ["IN-LIFTS"] },
   { name: "lean in with no pause not refused", find: "if (pauses.length === 0) {", text: "if (false) {", red: ["REFUSE"] },
   { name: "thinning stops at the turning points", find: "if (worst >= 0) {", text: "if (false) {", red: ["THIN-FIT"] },
   { name: "thinning keeps every sample", find: "const keep = new Set<number>([0, n - 1])", text: "const keep = new Set<number>(t.map((_, i) => i))", red: ["THIN-FIT", "THIN-LOOSER"] },

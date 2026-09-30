@@ -18,10 +18,19 @@
 // Doodles' own call, the word space as the longest lift, the default logo take
 // measured off the playing page, and Authentic's take against main's hash.
 //
+// HAND-DRAW-P3: R11 drives the real Camera picker and reads the keys it writes
+// (must-fails `lifts-slot-gaps`, the picker back on the slot gaps, and
+// `clock-uniform`; a row naming two knockouts fires only when both turn it
+// red). R12 is the export row: the film under Hand equals live at 8 clocks.
+// R13 is Inflate's tip in the lifts under a timed take (plan section 4,
+// "Inflate's shader holds"): it measured a creep, now held.
+//
 // Exit 0 all green and every must-fail fired, 1 otherwise, 2 nothing to check.
 import { createJiti } from "jiti"
 import { createHash } from "node:crypto"
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs"
+import ts from "typescript"
+import sharp from "sharp"
 const jiti = createJiti(import.meta.url, { alias: { "@": new URL("../..", import.meta.url).pathname } })
 const PR = await jiti.import("../../lib/pen-reveal.ts")
 const ST = await jiti.import("../../lib/stroke-timing.ts")
@@ -42,10 +51,18 @@ const DD_NIB = GE.computeSolidEffectiveThicknessPx(GE.DEFAULT_SOLID_PARAMS.thick
 const MAIN_TAKE = "47596359db80"
 const TARGET_MS = (140 / 30) * 1000, FRAME_MS = 1000 / 60
 
+// R12 films through the export module itself, served to the page the way
+// assert-stroke-timing-browser does (lib/export transpiled, one route each).
+const EXPORT_MODULES = ["frame-plan", "webm", "apng", "encoders", "recorder", "index"]
+const ROOT = new URL("../..", import.meta.url).pathname
+const transpiled = (name) =>
+  ts.transpileModule(readFileSync(`${ROOT}lib/export/${name}.ts`, "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 }, fileName: `${name}.ts` })
+    .outputText.replace(/from\s+["']\.\/([a-z-]+)["']/g, 'from "./$1.js"')
+const EXPORT_CLOCKS = 8
+
 const hand = S.PRESET_REGISTRY.geometryAnimation.find((p) => p.id === "handDraw")
 if (!hand) { console.log("NOTHING TO CHECK: no handDraw preset in Geometry Animation"); process.exit(2) }
 const polys = JSON.parse(readFileSync(new URL("../capture/logo-strokes.json", import.meta.url), "utf8")).polylines
-console.log(`DENOMINATOR: logo fixture ${polys.length} strokes, ${polys.reduce((a, p) => a + p.length, 0)} input points; ${N_SAMPLES} reveal samples per stroke set; 11 rows, each with its own must-fail pass`)
 
 const ROWS = {
   off: "R1 off is main: clock recorded hands the viewport the SAME arrays, and the take, slots and frames are unchanged by a hand round trip",
@@ -58,9 +75,12 @@ const ROWS = {
   lift: "R8 the longest lift is the word space (the lift with the widest x gap), on / and on Desk Doodles, and every lift matches",
   take: "R9 Hand Draw's default logo take is 140/30 s within one frame, measured off the playing page and read off the take",
   authentic: "R10 Authentic's logo take is byte-identical to main (sha 47596359db80)",
-  lifts: "R11 Turn in the lifts reads the Hand lifts: the slot gaps the picker reads equal stampPenClock's lifts / rate within one frame, and the move turns in exactly the gaps of 120 ms or more",
+  lifts: "R11 Turn in the lifts reads the Hand lifts: under Hand the picker offers the move and its keys turn in exactly stampPenClock's lifts / rate of 120 ms or more, each end within one frame",
+  export: `R12 export under Hand equals live at ${EXPORT_CLOCKS} clocks, with no rows and with a timed take: the film's length is the take the page plays, and each frame is the live frame at its clock`,
+  tip: "R13 Inflate under Hand with a timed take stands still in every pen lift of 50 ms or more (0 px change across the lift), while the same span inside the stroke before it moves",
 }
-const MUST_FAIL = { off: "clock-always-hand", pen: "clock-uniform", strip: "clock-strip-recorded", save: "clock-not-persisted", custom: "presetFields-applies-only", perform: "clock-no-rebase", lifts: "clock-uniform", parity: "clock-stamp-resampled", lift: "clock-stamp-resampled", take: "clock-rate-off", authentic: "clock-rate-leak" }
+const MUST_FAIL = { off: "clock-always-hand", pen: "clock-uniform", strip: "clock-strip-recorded", save: "clock-not-persisted", custom: "presetFields-applies-only", perform: "clock-no-rebase", lifts: ["lifts-slot-gaps", "clock-uniform"], export: "exportpen", tip: "tip-no-liftholds", parity: "clock-stamp-resampled", lift: "clock-stamp-resampled", take: "clock-rate-off", authentic: "clock-rate-leak" }
+console.log(`DENOMINATOR: logo fixture ${polys.length} strokes, ${polys.reduce((a, p) => a + p.length, 0)} input points; ${N_SAMPLES} reveal samples per stroke set; ${Object.keys(ROWS).length} rows, each with its own must-fail pass`)
 
 const browser = await chromium.launch()
 const asProcessed = (pts) => pts.map((points) => ({ points, cornerCount: 0 }))
@@ -123,6 +143,7 @@ async function run(mutate) {
   const ctx = await browser.newContext({ viewport: { width: 1512, height: 982 }, deviceScaleFactor: 1 })
   if (mutate) await ctx.addInitScript((m) => { window.__FS_GATE_MUTATE = m }, mutate)
   const page = await ctx.newPage()
+  for (const m of EXPORT_MODULES) await page.route(`${LAB_URL}/__fsexport/${m}.js`, (r) => r.fulfill({ status: 200, contentType: "text/javascript", body: transpiled(m) }))
   const errors = []
   page.on("pageerror", (e) => errors.push(String(e)))
   const settle = async (ms = 400) => { await page.waitForTimeout(ms); await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))) }
@@ -283,29 +304,120 @@ async function run(mutate) {
     row("perform", setOk && pc0 === "hand" && pc1 === "recorded" && pc2 === "hand" && d(s0, s1) <= 1 && d(s0, s2) <= 1 && pfSame && followed > 0,
       `set ${setOk}, clock ${pc0} -> ${pc1} -> ${pc2}, stroke 2 slot [${s0?.map((v) => v.toFixed(1))}] -> [${s1?.map((v) => v.toFixed(1))}] -> [${s2?.map((v) => v.toFixed(1))}] ms, worst ${Math.max(d(s0, s1), d(s0, s2)).toFixed(4)} ms, performed ${pfSame ? "identical" : `differs (${pfA.pf ? "" : "unread: " + pfA.keys})`}, ${followed} other strokes moved with the clock`)
 
-    // R11: a fresh logo under Hand, no rows. The picker reads the strip's slots (key-lanes moveOptions).
+    // R11: a fresh logo under Hand, no rows, through the real picker. Under Hand
+    // a slot runs to the next stroke's landing, so the lifts sit inside the slots
+    // and the move has to read the pace's holds (HAND-DRAW-P3). The bar: the
+    // move is offered, and its azimuth keys turn in exactly the stamped lifts of
+    // 120 ms or more (stampPenClock's lifts / rate), each end within one frame.
     {
     await page.evaluate((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys); await settle(1200)
     await pickPreset("handDraw"); await settle(600)
-    const cl = await clock(), tk = await take()
+    await page.evaluate(() => window.__fsTake.clear()); await settle(400)
+    const cl = await clock()
     const rate = cl.rate
-    const rec = (cl.recorded ?? []).map((q) => q.points ?? q)
-    const st = PR.stampPenClock(rec, "lognormal", { nibDiameter: DD_NIB })
+    const st = PR.stampPenClock(cl.rawRecorded ?? [], "lognormal", { nibDiameter: DD_NIB })
     const gapsOf = (w) => { w = w.slice().sort((a, b) => a[0] - b[0]); const g = []; let e = w[0][1]; for (let i = 1; i < w.length; i++) { if (w[i][0] > e) g.push([e, w[i][0]]); e = Math.max(e, w[i][1]) } return g }
-    const want = gapsOf(st.map((q) => { const pts = q.points ?? q; return [pts[0].t / rate, pts[pts.length - 1].t / rate] })).map(([a, b]) => b - a)
-    const win = []; for (let i = 0; tk.slots && i < tk.slots.length / 2; i++) win.push([tk.slots[i * 2], tk.slots[i * 2 + 1]])
-    const got = win.length ? gapsOf(win) : []
-    let worst = got.length === want.length ? 0 : Infinity
-    for (let i = 0; i < got.length && i < want.length; i++) worst = Math.max(worst, Math.abs(got[i][1] - got[i][0] - want[i]))
-    const mv = CM.CAMERA_MOVES.find((m) => m.id === "orbit-lifts")
-    const tr = CM.tryCameraMove(mv, { slots: tk.slots ?? [], takeMs: tk.takeMs })
-    const az = tr.keys?.azimuth ?? []
+    const want = st.length ? gapsOf(st.map((q) => { const pts = q.points ?? q; return [pts[0].t / rate, pts[pts.length - 1].t / rate] })) : []
+    const clear = want.filter(([a, b]) => b - a >= 120)
+    if ((await page.evaluate(() => document.querySelector("[data-key-lanes]")?.getAttribute("data-open"))) !== "1") { await page.locator("[data-key-lanes]").first().click().catch(() => {}); await settle(400) }
+    const k0 = await page.evaluate(() => JSON.parse(JSON.stringify(window.__fsKeys?.() ?? {})))
+    await page.locator("[data-camera-picker]").first().click().catch(() => {}); await settle(400)
+    const opt = await page.evaluate(() => { const b = document.querySelector("[data-camera-move='orbit-lifts']"); return b ? { refused: b.getAttribute("data-refused") === "1", reason: b.querySelector("[data-camera-reason]")?.textContent ?? "" } : null })
+    if (opt && !opt.refused) { await page.locator("[data-camera-move='orbit-lifts']").first().click().catch(() => {}); await settle(400) }
+    const k1 = await page.evaluate(() => JSON.parse(JSON.stringify(window.__fsKeys?.() ?? {})))
+    const az = k1.azimuth ?? []
     const turns = []; for (let i = 0; i + 1 < az.length; i++) if (az[i + 1].value !== az[i].value) turns.push([az[i].tMs, az[i + 1].tMs])
-    const clear = got.filter(([a, b]) => b - a >= 120)
-    const turnsOk = turns.length === clear.length && turns.every((t, i) => Math.abs(t[0] - clear[i][0]) < 1e-6 && Math.abs(t[1] - clear[i][1]) < 1e-6)
-    writeFileSync(`${OUT}lifts-under-hand.json`, J({ rate, liftsMs: got.map(([a, b]) => +(b - a).toFixed(2)), stampedLiftsMs: want.map((v) => +v.toFixed(2)), turns, refused: tr.refused ?? null }, null, 2))
-    row("lifts", cl.clock === "hand" && worst <= FRAME_MS && (clear.length ? turnsOk : !!tr.refused),
-      `rate ${rate}, ${got.length} lifts vs ${want.length} stamped, worst ${worst.toFixed(2)} ms; lifts ms [${got.map(([a, b]) => (b - a).toFixed(0)).join(" ")}]; ${clear.length} clear 120 ms, ${turns.length} turns${tr.refused ? `, refused: ${String(tr.refused).slice(0, 80)}` : ""}`)
+    let worst = turns.length === clear.length && clear.length > 0 ? 0 : Infinity
+    for (let i = 0; i < turns.length && i < clear.length; i++) worst = Math.max(worst, Math.abs(turns[i][0] - clear[i][0]), Math.abs(turns[i][1] - clear[i][1]))
+    writeFileSync(`${OUT}lifts-under-hand${mutate ? "-" + mutate : ""}.json`, J({ rate, stampedLiftsMs: want.map(([a, b]) => [+a.toFixed(2), +b.toFixed(2)]), clear, turns, offered: opt, azimuthBefore: k0.azimuth ?? null }, null, 2))
+    row("lifts", cl.clock === "hand" && !!opt && !opt.refused && worst <= FRAME_MS,
+      `rate ${rate}, ${want.length} stamped lifts [${want.map(([a, b]) => (b - a).toFixed(0)).join(" ")}] ms, ${clear.length} of 120 ms or more; move ${opt ? (opt.refused ? `refused: ${opt.reason.slice(0, 90)}` : "offered") : "not found"}; ${turns.length} turns [${turns.map(([a, b]) => `${a.toFixed(1)}-${b.toFixed(1)}`).join(" ")}], worst end ${Number.isFinite(worst) ? worst.toFixed(3) : "n/a"} ms`)
+    // The move's keys turn the camera in the lifts; R12 and R13 read frames there.
+    await page.evaluate(() => window.__fsSetKeys?.(undefined)); await settle(300)
+    }
+    // R12: export under Hand against live, no rows and then a timed take
+    // (the last stroke at half speed, so the take outruns the pen). The export plans
+    // its film over `getTotalDuration()`, the length the page's own export
+    // passes (`exportMs`), and grabs each frame from the live scene; the live
+    // arm seeks each of EXPORT_CLOCKS plan frames at its time over the take the
+    // page plays. Must-fail `exportpen`: the export is handed pen time.
+    {
+    await page.evaluate((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys); await settle(1200)
+    await pickPreset("handDraw"); await settle(600)
+    const arm = async (rowsK) => {
+      await page.evaluate((r) => { window.__fsTake.clear(); if (r) window.__fsTake.set(r) }, rowsK); await settle(800)
+      if (mutate === "exportpen") { await page.evaluate(() => window.__fsTake.knockout("exportpen")); await settle(400) }
+      const live = await page.evaluate(() => { const t = window.__fsTake.get(); return { takeMs: t.totalDuration, penMs: t.penMs, timed: !!t.timed } })
+      const r = await page.evaluate(async ([takeMs, nClocks]) => {
+        const mod = await import("/__fsexport/index.js")
+        const rh = window.__revealHarness, ch = window.__captureHarness
+        const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+        const h = async (s) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)))).slice(0, 8).join(".")
+        const D = rh.getTotalDuration()
+        const film = []
+        const host = {
+          seek: async (p) => rh.setProgress(p),
+          easePlayhead: (c) => rh.ease(c, "linear"),
+          settle,
+          async grabFrame() { const url = ch.grab(); film.push(await h(url)); const gi = ch.grabInfo(); return { kind: "blob", blob: await (await fetch(url)).blob(), width: gi.width, height: gi.height } },
+        }
+        const res = await mod.exportAnimation({ host, penDurationMs: D, timebase: "pen", fps: 8, scale: 1, transparent: false, format: "apng", holdMs: 250, markName: "hand" })
+        const clocks = res.plan.frames.map((f) => f.clock)
+        const f = film.slice(film.length - clocks.length)
+        const pick = Array.from({ length: nClocks }, (_, k) => Math.round((k * (clocks.length - 1)) / (nClocks - 1)))
+        const out = []
+        for (const i of pick) {
+          const ms = clocks[i] * D
+          rh.setProgress(Math.min(1, Math.max(0, ms / takeMs)))
+          await new Promise((r) => setTimeout(r, 120)); await settle()
+          out.push({ i, ms: Math.round(ms), same: (await h(ch.grab())) === f[i] })
+        }
+        return { D, n: clocks.length, out }
+      }, [live.takeMs, EXPORT_CLOCKS])
+      if (mutate === "exportpen") { await page.evaluate(() => window.__fsTake.knockout(null)); await settle(200) }
+      return { ...r, ...live, same: r.out.filter((o) => o.same).length }
+    }
+    const A = await arm(null)
+    const B = await arm({ [polys.length - 1]: { delayMs: 0, speed: 0.5, ease: { kind: "preset", id: "linear" }, holdBack: false } })
+    await page.evaluate(() => window.__fsTake.clear()); await settle(400)
+    const ok = (x) => x.out.length === EXPORT_CLOCKS && x.same === EXPORT_CLOCKS && Math.abs(x.D - x.takeMs) < 1e-6
+    const txt = (x, tag) => `${tag}: ${x.same}/${x.out.length} clocks equal live (of ${x.n} frames), film ${x.D.toFixed(1)} ms vs take ${x.takeMs.toFixed(1)} ms, pen ${x.penMs.toFixed(1)}, timed ${x.timed}${x.same < x.out.length ? `, differ at ${x.out.filter((o) => !o.same).map((o) => o.ms).join(" ")} ms` : ""}`
+    row("export", ok(A) && ok(B) && !A.timed && B.timed && B.takeMs > B.penMs + 1 && Math.abs(A.D - TARGET_MS) <= FRAME_MS, `${txt(A, "no rows")}; ${txt(B, "last stroke at 0.5x")}`)
+    }
+    // R13: Inflate's tip in the lifts under a timed take (+1 ms on the last
+    // stroke, which moves nothing else). With no rows the tip reads the beat,
+    // which the pace holds flat in a lift; under a take it reads the take's
+    // clock, which runs on, and the tip crept 5 to 61 px per lift until the
+    // frame loop held it at each lift's start (HAND-DRAW-P3). Five frames from
+    // 2 ms after the lift to 2 ms before the landing; the control is the same
+    // span inside the stroke before it. Must-fail `tip-no-liftholds`.
+    {
+    await page.evaluate((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys); await settle(1200)
+    await pickPreset("handDraw"); await settle(600)
+    await page.evaluate(() => { window.__styleHarness.setMode("inflate"); window.__styleHarness.setInflate({ fusion: "auto" }) }); await settle(2500)
+    const cl = await clock()
+    await page.evaluate((i) => window.__fsTake.set({ [i]: { delayMs: 1, speed: 1, ease: { kind: "preset", id: "linear" }, holdBack: false } }), cl.clocked.length - 1); await settle(1500)
+    const rect = await glRect()
+    const grabPx = async (ms) => {
+      const total = await page.evaluate(() => window.__revealHarness.getTotalDuration())
+      await page.evaluate((p) => window.__revealHarness.setProgress(p), ms / total); await settle(200)
+      return sharp(await page.screenshot({ clip: rect })).raw().toBuffer()
+    }
+    const diffPx = (A, B) => { let n = 0; for (let k = 0; k < A.length; k += 3) if (A[k] !== B[k] || A[k + 1] !== B[k + 1] || A[k + 2] !== B[k + 2]) n++; return n }
+    const out = []
+    for (let i = 0; i + 1 < cl.clocked.length; i++) {
+      const a0 = cl.clocked[i], b0 = cl.clocked[i + 1], t0 = a0[a0.length - 1].t, t1 = b0[0].t
+      if (t1 - t0 < 50) continue
+      const a = t0 + 2, b = t1 - 2, ref = await grabPx(a)
+      let creep = 0
+      for (let k = 1; k <= 4; k++) creep = Math.max(creep, diffPx(ref, await grabPx(a + ((b - a) * k) / 4)))
+      const c0 = Math.max(a0[0].t, t0 - (b - a) - 2)
+      out.push({ after: i, ms: t1 - t0, creep, control: diffPx(await grabPx(c0), await grabPx(c0 + (b - a))) })
+    }
+    const timed = await page.evaluate(() => !!window.__fsTake.get().timed)
+    await page.evaluate(() => { window.__fsTake.clear(); window.__styleHarness.setMode("rod") }); await settle(800)
+    row("tip", timed && out.length > 0 && out.every((r) => r.creep === 0 && r.control > 0),
+      `timed ${timed}, ${out.length} lifts of 50 ms or more; px changed across each lift [${out.map((r) => r.creep).join(" ")}], worst ${Math.max(0, ...out.map((r) => r.creep))}; controls [${out.map((r) => r.control).join(" ")}]`)
     }
     rows.errors = errors.slice(0, 3)
   } catch (e) {
@@ -316,7 +428,12 @@ async function run(mutate) {
 
 const real = await run(null)
 const mf = {}
-if (!FILM) for (const [k, m] of Object.entries(MUST_FAIL)) { const r = await run(m); mf[k] = { mutate: m, fired: r[k] ? !r[k].ok : false, detail: r[k]?.detail ?? r.crash ?? "row not reached" } }
+// A row may name more than one knockout; it counts as fired only when every one turns it red.
+if (!FILM) for (const [k, ms] of Object.entries(MUST_FAIL)) {
+  const each = []
+  for (const m of [ms].flat()) { const r = await run(m); each.push({ mutate: m, fired: r[k] ? !r[k].ok : false, detail: r[k]?.detail ?? r.crash ?? "row not reached" }) }
+  mf[k] = { mutate: each.map((e) => e.mutate).join(" + "), fired: each.every((e) => e.fired), detail: each.map((e) => `${e.mutate}: ${e.fired ? "red" : "GREEN"}, ${e.detail}`).join(" | ") }
+}
 await browser.close()
 
 const keys = Object.keys(ROWS)

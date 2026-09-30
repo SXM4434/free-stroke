@@ -118,6 +118,7 @@ import {
   type TimedSchedule,
   performedPenMs,
   performedHolds,
+  takeLiftsMs,
 } from "@/lib/stroke-timing"
 import {
   scheduleFromStrokes,
@@ -2588,6 +2589,10 @@ function readTipTrailsWindow(): boolean {
  *  exactly. The shader loops over this many at a constant bound; the bake keeps
  *  the longest and publishes the rest on `__heroPenTip.holdsDropped`. */
 const TIP_HOLD_MAX = 8
+/** The must-fail of `assert-hand-clock` R13: the tip's clock runs on through the lifts. */
+const liftHoldsKnocked = () =>
+  process.env.NODE_ENV !== "production" && typeof window !== "undefined" &&
+  (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "tip-no-liftholds"
 
 /**
  * THE REVEAL'S MOVING END, AS A FRAGMENT TEST.
@@ -4173,6 +4178,9 @@ function AnimatedStrokesInner({
      *  pace, which leaves the shader's test the shipped one. */
     holds: THREE.Vector4[]
     holdN: number
+    /** HAND-DRAW-P3 · the take's pen lifts, `[a, b]` pairs as take fractions,
+     *  under a timed take; null otherwise. The tip's clock holds at `a` in each. */
+    lifts: Float64Array | null
     /** The lengths the hold radius is built from, in local units: one nib
      *  half-width, the word's longest segment, one field texel. */
     radiusLocal: number
@@ -5288,6 +5296,7 @@ function AnimatedStrokesInner({
         slopeMax: 1,
         holds: Array.from({ length: TIP_HOLD_MAX }, () => new THREE.Vector4()),
         holdN: 0,
+        lifts: null as Float64Array | null,
         radiusLocal: 0,
         segMaxLocal: 0,
         texelLocal: 0,
@@ -5433,6 +5442,17 @@ function AnimatedStrokesInner({
       else entry.holds[k].set(0, 0, 2, 2)
     }
     entry.holdN = holdKept.length
+    /* HAND-DRAW-P3 · THE PEN LIFTS, AS TAKE FRACTIONS. With no rows the tip
+     * reads the beat, which the pace holds flat through a lift, so the mark
+     * stands still there. Under a timed take it reads the take's clock, which
+     * runs on, and the nose and the LINEAR filter carried ink across every lift:
+     * on the logo under Hand with one row, 5 to 61 px changed inside each of the
+     * 10 lifts of 50 ms or more, against 0 with no rows. Holds at the pen points
+     * (F121's answer) took that to 13 px and left single pixels where strokes
+     * cross, because a lift is not local: no stroke lays ink anywhere in it
+     * (`takeLiftsMs`). So the frame loop holds the whole tip at the lift's
+     * start until the landing, the same stillness the beat gives. */
+    entry.lifts = timedBake ? takeLiftsMs(timedBake, timedBake.pace, timedBake.baseSlots, timedBake.baseMs).map((v) => v / takeMs) : null
     entry.radiusLocal = field.radius * scale
     entry.segMaxLocal = segMax * scale
     entry.texelLocal = field.unitsPerTexel * scale
@@ -5472,6 +5492,8 @@ function AnimatedStrokesInner({
           arc: h.arc,
           local: h.at ? [toX(h.at.x), toY(h.at.y)] : null,
         })),
+        /* HAND-DRAW-P3. The lifts the tip holds through, ms on the take's clock. */
+        lifts: entry.lifts ? Array.from(entry.lifts, (v) => Number((v * takeMs).toFixed(1))) : null,
         holdsDropped: holdDropped.map((h) => ({
           stroke: h.stroke,
           t0Ms: Number(h.t0.toFixed(1)),
@@ -7081,6 +7103,17 @@ function AnimatedStrokesInner({
           /* ANIM-1A3 · under a timed take the per-texel slope replaces the one
            * word-wide scale, so the scale is 1 and the shader reads the slope. */
           const timedTip = timedRef.current !== null
+          /* HAND-DRAW-P3 · a pen lift holds the whole tip at the lift's start,
+           * the stillness the beat gives with no rows (the bake's `lifts`). */
+          if (timedTip && tf.lifts && !liftHoldsKnocked()) {
+            const d = tu.d.value
+            for (let k = 0; k + 1 < tf.lifts.length; k += 2) {
+              if (d >= tf.lifts[k] && d < tf.lifts[k + 1]) {
+                tu.d.value = tf.lifts[k]
+                break
+              }
+            }
+          }
           const tScale = timedTip ? 1 : ts && !ts.identity ? ts.scale : 1
           const slopeOn = timedTip && !!tf.slopeTex && takeKnockoutRef.current !== "slope"
           tu.slope.value = slopeOn ? tf.slopeTex : tf.texture

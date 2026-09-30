@@ -64,6 +64,7 @@ import {
   isTimedTake,
   paceFromCurve,
   rowOf,
+  takeLiftsMs,
   withRow,
   type StrokeTiming,
   type StrokeTimingTake,
@@ -92,6 +93,9 @@ export interface StrokeTakeContextValue {
   /** The strip's slots in ms, written on every render of the strip, so the
    *  stroke block can clamp a typed delay at t0 = 0 exactly. */
   slotsRef: { current: Float64Array | null }
+  /** HAND-DRAW-P3 · the take's pen lifts in ms, `takeLiftsMs` over the same
+   *  pace and slots, written with `slotsRef`. "Turn in the lifts" reads them. */
+  liftsRef: { current: Float64Array | null }
   /** ANIM-3B · what the view shows this frame, written by the viewport's
    *  `KeyLive` every frame and read by the key lanes when "+" adds a key. Null
    *  until the view has drawn once. */
@@ -123,14 +127,15 @@ const StrokeTakeContext = createContext<StrokeTakeContextValue | null>(null)
 export function StrokeTakeProvider({
   children,
   ...value
-}: Omit<StrokeTakeContextValue, "selected" | "select" | "slotsRef" | "liveRef"> & { children: ReactNode }) {
+}: Omit<StrokeTakeContextValue, "selected" | "select" | "slotsRef" | "liftsRef" | "liveRef"> & { children: ReactNode }) {
   const [picked, setPicked] = useState<number | null>(null)
   const slotsRef = useRef<Float64Array | null>(null)
+  const liftsRef = useRef<Float64Array | null>(null)
   const liveRef = useRef<KeyLiveValues | null>(null)
   // A selection past the last stroke (an undo removed it) reads as none.
   const selected = picked !== null && picked < value.strokeCount ? picked : null
   const ctx = useMemo<StrokeTakeContextValue>(
-    () => ({ ...value, selected, select: setPicked, slotsRef, liveRef }),
+    () => ({ ...value, selected, select: setPicked, slotsRef, liftsRef, liveRef }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [value.take, value.commit, value.keys, value.setKeys, value.mode, value.penMs, value.strokeCount, selected],
   )
@@ -290,6 +295,8 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
     })
     return s
   }, [schedule, pace, penMs, n])
+  const penLifts = useMemo(() => takeLiftsMs(timed, pace, baseSlots, penMs), [timed, pace, baseSlots, penMs])
+  ctx.liftsRef.current = penLifts
   const canPerform = n === strokes.length
 
   const xOf = (ms: number) => unEase(clamp01(ms / axisMs), ease) * k

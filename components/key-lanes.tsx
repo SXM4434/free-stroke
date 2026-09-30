@@ -407,7 +407,11 @@ function moveOptions(ctx: StrokeTakeContextValue): MoveOption[] {
   let takeMs = 0
   for (let i = 1; i < slots.length; i += 2) if (slots[i] > takeMs) takeMs = slots[i]
   if (!(takeMs > 0)) takeMs = ctx.penMs
-  return CAMERA_MOVES.map((move) => ({ move, ...tryCameraMove(move, { slots, takeMs, keys: ctx.keys }) }))
+  /* The pen lifts sit inside the slots (a slot runs to the next landing), so the
+   * move reads them from the strip's pace, not from the slot gaps (HAND-DRAW-P3). */
+  const knock = typeof window !== "undefined" && (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "lifts-slot-gaps"
+  const lifts = knock ? undefined : (ctx.liftsRef.current ?? undefined)
+  return CAMERA_MOVES.map((move) => ({ move, ...tryCameraMove(move, { slots, takeMs, keys: ctx.keys, lifts }) }))
 }
 
 function CameraPicker({

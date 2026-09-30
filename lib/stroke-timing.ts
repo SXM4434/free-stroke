@@ -116,6 +116,11 @@ export interface TimingPace {
    * slot starts here (F120). Where the curve rises it equals `beatToClock`. */
   beatToLanding: (beat: number) => number
   clockToBeat: (clock: number) => number
+  /** HAND-DRAW-P3 · the pen lifts: `[c0, c1]` pairs, clock 0..1, where the curve
+   *  holds one beat strictly inside 0..1, from the lift's start to its landing.
+   *  Absent means none. A slot runs to the next stroke's landing (F120), so a
+   *  lift sits inside a slot, and only the pace can say where it is. */
+  holds?: Float64Array
 }
 
 const LINEAR_PACE: TimingPace = { beatToClock: (b) => b, beatToLanding: (b) => b, clockToBeat: (c) => c }
@@ -234,7 +239,15 @@ export function paceFromCurve(clockToBeat: (clock: number) => number, n = 1024):
     const b0 = bs[lo - 1]
     return cs[lo - 1] + (cs[lo] - cs[lo - 1]) * ((b - b0) / (bs[lo] - b0))
   }
-  return { beatToClock: b2c, beatToLanding: b2land, clockToBeat: c2b }
+  /* The flats, off the same table: runs of entries on one beat, merged. */
+  const holds: number[] = []
+  for (let k = 0; k < last; k++) {
+    if (bs[k + 1] !== bs[k] || !(cs[k + 1] > cs[k]) || !(bs[k] > 0 && bs[k] < 1)) continue
+    const h = holds.length
+    if (h && holds[h - 1] === cs[k]) holds[h - 1] = cs[k + 1]
+    else holds.push(cs[k], cs[k + 1])
+  }
+  return { beatToClock: b2c, beatToLanding: b2land, clockToBeat: c2b, holds: Float64Array.from(holds) }
 }
 
 /* ==========================================================================
@@ -607,6 +620,104 @@ export function timedRevealKeys(
  */
 export function timedTipMap(ts: TimedSchedule): { arcAt: (stroke: number, a: number) => number } {
   return { arcAt: (i, a) => timedArcMsIn(ts, i, a) / ts.takeMs }
+}
+
+/**
+ * HAND-DRAW-P3 · THE PEN LIFTS ON THE TAKE'S CLOCK, `[a, b]` pairs in ms: the
+ * stretches where no stroke lays ink. "Turn in the lifts" reads these, never
+ * the gaps between slots, because a slot runs to the next stroke's landing
+ * (F120) and a lift sits inside it: under the hand clock the logo's slots
+ * touch end to end while its word space holds 174 ms.
+ *
+ * Each stroke inks over its slot less the pace's holds inside its base slot,
+ * each carried onto the slot through the row (delay, speed, and the inverse of
+ * its ease, the map `timedArcMsIn` uses). A performed stroke inks over its
+ * whole slot: its own pace replaces the clock's there, and a stop in it is the
+ * pen standing on the page, not a lift. With no rows (`ts` null) the lifts are
+ * the pace's holds times `baseMs` wherever they fall between the first ink
+ * and the last. `baseSlots` is read only then; under rows the schedule's own
+ * `baseSlots` are, the ones its slots were placed from. Only lifts between two inks count, so the lead-in and the
+ * tail are never lifts.
+ */
+/** A piece of ink shorter than this, one microsecond, is residue, not a stroke:
+ *  a hold's end carried through a neutral row, or a slot end the table reads a
+ *  few ULPs of beat past the landing. Kept, it would split one lift in two. */
+const LIFT_EPS_MS = 1e-3
+
+export function takeLiftsMs(
+  ts: TimedSchedule | null,
+  pace: TimingPace,
+  baseSlots: ArrayLike<number>,
+  baseMs: number,
+): Float64Array {
+  const out: number[] = []
+  for (const g of liftGaps(inkPieces(ts, pace, baseSlots, baseMs))) out.push(g.a, g.b)
+  return Float64Array.from(out)
+}
+
+/** One stretch of ink: stroke `i` lays ink over `[s, e]`, ms on the take's clock. */
+interface InkPiece {
+  s: number
+  e: number
+  i: number
+}
+
+/** Every stroke's ink on the take's clock, sorted by start: `takeLiftsMs`' walk. */
+function inkPieces(ts: TimedSchedule | null, pace: TimingPace, baseSlots: ArrayLike<number>, baseMs: number): InkPiece[] {
+  // Under rows the schedule's own base slots, so the carry reads what placed the slots.
+  const base = ts ? ts.baseSlots : baseSlots
+  const n = Math.floor(base.length / 2)
+  const H = pace.holds ?? new Float64Array(0)
+  const slots = ts ? ts.slots : base
+  const ink: InkPiece[] = []
+  for (let i = 0; i < n; i++) {
+    const t0 = slots[i * 2]
+    const t1 = slots[i * 2 + 1]
+    if (!(t1 > t0)) continue
+    if (ts?.performed[i]) {
+      ink.push({ s: t0, e: t1, i })
+      continue
+    }
+    const B0 = base[i * 2]
+    const B1 = base[i * 2 + 1]
+    const span = B1 - B0
+    const e = ts ? ts.eases[i] : null
+    const at = (h: number) => {
+      if (!ts) return h
+      let w = span > 0 ? (h - B0) / span : 1
+      w = w < 0 ? 0 : w > 1 ? 1 : w
+      return t0 + (t1 - t0) * (e ? easeInverse(e, w) : w)
+    }
+    let from = t0
+    for (let k = 0; k + 1 < H.length; k += 2) {
+      const h0 = Math.max(H[k] * baseMs, B0)
+      const h1 = Math.min(H[k + 1] * baseMs, B1)
+      if (!(h1 > h0)) continue
+      const a = at(h0)
+      const b = at(h1)
+      if (a - from > LIFT_EPS_MS) ink.push({ s: from, e: a, i })
+      if (b > from) from = b
+    }
+    if (t1 - from > LIFT_EPS_MS) ink.push({ s: from, e: t1, i })
+  }
+  return ink.sort((x, y) => x.s - y.s)
+}
+
+/** The gaps between the ink, each with the stroke whose ink ends at its start
+ *  (`up`, the pen leaving) and the one whose ink starts at its end (`down`). */
+function liftGaps(ink: InkPiece[]): { a: number; b: number; up: number; down: number }[] {
+  const out: { a: number; b: number; up: number; down: number }[] = []
+  if (!ink.length) return out
+  let end = ink[0].e
+  let up = ink[0].i
+  for (let k = 1; k < ink.length; k++) {
+    if (ink[k].s > end) out.push({ a: end, b: ink[k].s, up, down: ink[k].i })
+    if (ink[k].e > end) {
+      end = ink[k].e
+      up = ink[k].i
+    }
+  }
+  return out
 }
 
 /* ==========================================================================
