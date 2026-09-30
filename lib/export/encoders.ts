@@ -398,17 +398,18 @@ export class WebCodecsWebmAlphaEncoder implements AnimationEncoder {
       timestamp: frame.timestampUs,
       duration: frame.durationUs,
     }
-    const cf = new VideoFrame(pair.color, { ...init, colorSpace: WEBM_ALPHA_COLOR_SPACE })
-    const af = new VideoFrame(pair.alpha, { ...init, colorSpace: { ...WEBM_ALPHA_COLOR_SPACE, fullRange: true } })
     const keyFrame = frame.index % this.keyFrameInterval === 0
+    const cf = new VideoFrame(pair.color, { ...init, colorSpace: WEBM_ALPHA_COLOR_SPACE })
+    let af: VideoFrame | null = null
     try {
+      af = new VideoFrame(pair.alpha, { ...init, colorSpace: { ...WEBM_ALPHA_COLOR_SPACE, fullRange: true } })
       this.colorEnc.encode(cf, { keyFrame })
       /* `vp9.quantizer` is in the WebCodecs VP9 registration and in Chrome, not
        * yet in TypeScript's DOM typings. */
       this.alphaEnc.encode(af, (this.choice.alphaLossless ? { keyFrame, vp9: { quantizer: 0 } } : { keyFrame }) as VideoEncoderEncodeOptions)
     } finally {
       cf.close()
-      af.close()
+      af?.close()
     }
     for (const enc of [this.colorEnc, this.alphaEnc]) {
       if (enc.encodeQueueSize > 8) {

@@ -58,12 +58,22 @@ Checks at the step 3 commit (browser gates on the final tree, :3138):
 - Regression, each equal to its own run on the unchanged base: `assert-export-webm-alpha` 4/0, `assert-export-webm-alpha-app` 10/0, `assert-export-gif` 8/0, `assert-export-gif-app` 9/0, `assert-export-encoders` 8/0, `assert-export-plan` 12/0, `assert-export-live` 9/0, `assert-still-export` 10 PASS · 1 FAIL (row 8, the proxy's ERR_TUNNEL, as on base), `assert-export-app` (with the fix commit `b038238`) 21 PASS · 2 FAIL, the same two rows as base (stall row: fast 55.8 s vs slow 61.6 s here; console: ERR_TUNNEL). A first run of `assert-export-app` beside two `assert-export-window` runs timed out waiting for its second download after 300 s; run alone it completed as above.
 - `assert-export-window.mjs`: pending, see the end of this log.
 
+## Review fixes (after an independent read of the diff)
+A subagent read the whole `lib/export` and viewport diff for correctness. It found no broken file on the normal paths; six points were fixed in one commit:
+- `drawin-glb.ts`: the centreline grid's cell now has a floor (1e-3 units). A one-tap drawing (every point in one place) made cells 1e-7 wide, and `nearest` could walk thousands of empty rings, a hang.
+- `glb-sparse.ts`: an all-zero morph target stays dense (the spec requires `sparse.count` of at least 1).
+- `encoders.ts`: the alpha `VideoFrame` is built inside the `try`, so the colour frame is closed if it throws.
+- `index.ts`: the lossy-alpha warning no longer blames VP8 alone (a VP9 encoder without quantizer mode takes the same path).
+- `viewport-3d.tsx`: the GIF button stays a GIF under the dev law `__fsExportGround = "none"` (it wrote a WebM).
+- `webm.ts`: DocTypeVersion 4 when the file carries BlockAdditions and AlphaMode, as libwebm writes it; 2 otherwise (the no-alpha output is unchanged byte for byte, `assert-export-encoders` 8/0).
+Node gates after the fixes: `assert-export-webm-alpha` 4/0, `assert-export-encoders` 8/0, `assert-export-glb-anim` 11/0, `assert-export-gif` 8/0, `assert-export-plan` 12/0; tsc 6. Browser reruns and `assert-export-window`: below when they finish.
+
 ## What I could not run, and why
 - Real Google Chrome: the proxy refuses its download (403). Every browser number here is Playwright's Chromium 141 on SwiftShader, through a container-only symlink at `/opt/google/chrome/chrome`, compared with the same gate's run on the unchanged base in the same container. None of it is a Mac number.
 - `assert-export-window.mjs` per step: one run takes well over 50 minutes here (the base run timed out at 50 minutes on 19 PASS and 0 FAIL), so it was run on the base and on the final tree only, each alone with a long timeout. Its result is at the end of this log.
 - Playback outside Chrome: Safari and Firefox are not in this container, so where the transparent WebM plays see-through outside Chrome and Edge is unverified; the panel says "other players may show it without its alpha". GLB viewers other than three (Blender, Babylon, model-viewer) were not run; the animated GLB is held to an independent reader and to three's GLTFLoader + AnimationMixer.
 - The VP8-only branch of the transparent WebM (lossy alpha, with its warning) was not exercised: this Chromium has VP9. The no-WebCodecs fallback WAS exercised, by deleting `VideoEncoder` and `VideoFrame` from the page.
-- `pnpm install --frozen-lockfile` (see Setup).
+- `pnpm install --frozen-lockfile` (see Setup). `pnpm lint`: the snapshot has no ESLint config (flat or legacy), so eslint exits at startup, on base too.
 
 ## A mistake of mine, fixed
 Step 2's commit (`998f74f`) shipped `assert-export-app.mjs` with the `const buf = execFileSync(...)` line of `decodeRgba` deleted by my own edit, so that gate did not parse at that commit. The step 2 checks above ran the pre-amend tree plus a buffer-raised copy, not the committed file, which is why it was missed. Fixed in its own commit after step 2; its run on the final tree is below.

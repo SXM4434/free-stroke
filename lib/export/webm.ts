@@ -236,13 +236,16 @@ export class WebmMuxer {
     const { width, height, codec, fps, codecPrivate, writingApp, alpha } = this.opts
     if (this.frames.length === 0) throw new Error("webm: no frames")
 
+    /* DocTypeVersion 4 when the file uses BlockAdditions and AlphaMode (as
+     * libwebm writes it); 2, as always, otherwise. */
+    const docVersion = alpha ? 4 : 2
     const header = el(ID.EBML, concat([
       el(ID.EBMLVersion, uint(1)),
       el(ID.EBMLReadVersion, uint(1)),
       el(ID.EBMLMaxIDLength, uint(4)),
       el(ID.EBMLMaxSizeLength, uint(8)),
       el(ID.DocType, ascii("webm")),
-      el(ID.DocTypeVersion, uint(2)),
+      el(ID.DocTypeVersion, uint(docVersion)),
       el(ID.DocTypeReadVersion, uint(2)),
     ]))
 
