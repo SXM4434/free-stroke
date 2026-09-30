@@ -2651,8 +2651,19 @@ export default function Home() {
           file — which is why it is not left to trust: `assert-shell-states.mjs`
           §3 drives every toast path and asks the document what is actually at
           the centre of every interactive element, so a bar that moves fails a
-          gate instead of quietly covering a control again. */}
-      <Toaster position="bottom-center" offset={182} richColors closeButton />
+          gate instead of quietly covering a control again.
+
+          🔴 L3 MOVED THE TRANSPORT AGAIN, AND THE CONSTANT WENT WITH IT. The
+          transport left the 3D view for the dock's header, under both panels,
+          and the dock folds and opens, so no fixed number clears it: 182
+          over a dock opened to a third of the shell lands the toast on the
+          strip. The dock publishes its own top edge as `--fs-toast-offset`
+          (`components/dock-shell.tsx`, publishEdge): the edge plus the 88 px
+          the drawing's action bar needs, since that bar now sits right on
+          top of the dock. 182 is only the fallback for the frames before
+          the dock has laid out. `assert-dock-panels.mjs` row T is the must-fail:
+          the fixed 182 against the moved transport. */}
+      <Toaster position="bottom-center" offset={{ bottom: "var(--fs-toast-offset, 182px)" }} richColors closeButton />
     </div>
     </TakeTransportProvider>
     </StrokeTakeProvider>

@@ -1,0 +1,37 @@
+/* THE DOCK'S HEADER (L3, components/dock-shell.tsx). Only the group marked
+   `data-fs-dock` shows a header; the Drawing and 3D view groups keep theirs
+   hidden. The header is one 36 px row: the transport first, taking what the
+   tabs leave, then the tabs, then the fold chevron. The 1 px rule on top is the
+   same `border-border` edge the panels use. */
+.fs-dock-theme .dv-groupview[data-fs-dock] > .dv-tabs-and-actions-container {
+  height: 36px;
+  border-top: 1px solid var(--border);
+  box-sizing: border-box;
+  background: var(--background);
+}
+.fs-dock-theme .dv-groupview[data-fs-dock] > .dv-tabs-and-actions-container > .dv-pre-actions-container {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+.fs-dock-theme .dv-groupview[data-fs-dock] > .dv-tabs-and-actions-container .dv-tabs-container {
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-left: 1px solid var(--border);
+  overflow: visible;
+}
+.fs-dock-theme .dv-groupview[data-fs-dock] > .dv-tabs-and-actions-container .dv-void-container {
+  flex: 0 0 0;
+}
+.fs-dock-theme .dv-groupview[data-fs-dock] .dv-tab {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  background: transparent;
+}
+.fs-dock-theme .dv-groupview[data-fs-dock] > .dv-content-container {
+  background: var(--background);
+}

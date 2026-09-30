@@ -300,6 +300,11 @@ row(
 )
 
 /* ---- THE PANEL IS A CONTROL, SO DRIVE IT ---------------------------- */
+// Since L3 the export bar is the dock's Export panel, and the dock loads
+// folded, so it is opened on Export the way its tab opens it.
+await page.waitForFunction(() => !!window.__dockHarness?.dock, null, { timeout: 60000 })
+await page.evaluate(() => window.__dockHarness.dock.open("export"))
+await page.waitForTimeout(400)
 const videoBtn = page.locator('button[title*="Save the animation"]')
 row((await videoBtn.count()) === 1, "the export bar carries a Video button", `found ${await videoBtn.count()}`)
 await page.locator('button[aria-label="Video export settings"]').click()

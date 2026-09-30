@@ -154,6 +154,13 @@ try {
   await page.goto(LAB_URL, { waitUntil: "domcontentloaded" })
   await page.waitForTimeout(9000)
   await page.waitForFunction(() => !!window.__revealHarness, null, { timeout: 60000 })
+  /* Since L3 the strip lives in the dock's Timeline panel under both canvases,
+   * and the dock loads folded to its header, where the strip is hidden. Every
+   * §F row grabs a bar with the real mouse, so the dock is opened first, the
+   * way a click on its Timeline tab opens it (components/dock-shell.tsx). */
+  await page.waitForFunction(() => !!window.__dockHarness?.dock, null, { timeout: 60000 })
+  await page.evaluate(() => window.__dockHarness.dock.open("timeline"))
+  await page.waitForTimeout(400)
 
   const shot = async (name) => {
     try {

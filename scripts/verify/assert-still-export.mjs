@@ -301,6 +301,12 @@ async function main() {
     })
   })
   await settle(page, 1200)
+  /* Since L3 the export controls are the dock's Export panel, under both
+   * canvases, and the dock loads folded. It is opened on Export here, before
+   * the canvas is measured, so every size below is the one the export sees
+   * with the panel a person would have open. */
+  await page.evaluate(() => window.__dockHarness.dock.open("export"))
+  await settle(page, 600)
 
   const openPanel = async () => {
     const expanded = await page

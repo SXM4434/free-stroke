@@ -25,7 +25,7 @@
 // other widths, dark theme, and the group-mode strip (assert-take-timeline covers that view).
 import { chromium } from "./lib/browser.mjs"
 import { LAB_URL } from "./lib/dev-server.mjs"
-import { undock } from "./lib/undock.mjs"
+import { hideDock, openDock } from "./lib/dock.mjs"
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
 import { join, dirname } from "node:path"
@@ -130,15 +130,16 @@ const drag = async (i, where, dx, steps = 12) => {
 const t0Of = (g, i) => g.slots[i * 2]
 const t1Of = (g, i) => g.slots[i * 2 + 1]
 
-/* A fresh context per page, so nothing the last page stored comes back. `undocked` floats the dock
-   (`lib/undock.mjs`) before the strokes land, so the canvas is main's size from mount. */
+/* A fresh context per page, so nothing the last page stored comes back. `undocked` hides the dock
+   (`lib/dock.mjs`, L3) before the strokes land, so the canvas is main's size from mount. Docked, the
+   dock is opened on its Timeline tab once the strokes land, since every later row drives the strip. */
 const openPage = async ({ undocked }) => {
   if (context) await context.close()
   context = await browser.newContext({ viewport: { width: 1512, height: 982 }, deviceScaleFactor: 1 })
   page = await context.newPage()
   page.on("pageerror", (e) => pageErrors.push(String(e)))
   await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 180000 })
-  if (undocked) await undock(page)
+  if (undocked) await hideDock(page)
   await page.waitForFunction(() => window.__styleHarness && window.__revealHarness && window.__captureHarness, null, {
     timeout: 240000,
   })
@@ -150,6 +151,7 @@ const openPage = async ({ undocked }) => {
   })
   await page.waitForTimeout(600)
   await page.waitForFunction(() => !!window.__fsTake, null, { timeout: 60000 })
+  if (!undocked && PHASE !== "base") await openDock(page)
 }
 
 try {

@@ -35,7 +35,7 @@
 // several strokes, the group-mode strip, dark theme, other widths.
 import { chromium } from "./lib/browser.mjs"
 import { LAB_URL } from "./lib/dev-server.mjs"
-import { undock } from "./lib/undock.mjs"
+import { hideDock, openDock } from "./lib/dock.mjs"
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
 import { join, dirname } from "node:path"
@@ -264,8 +264,9 @@ const picture = async () => {
   return out
 }
 
-/* A fresh context per page, so nothing the last page stored comes back. `undocked` floats the dock
-   (`lib/undock.mjs`) before the strokes land, so the canvas is main's size from mount. */
+/* A fresh context per page, so nothing the last page stored comes back. `undocked` hides the dock
+   (`lib/dock.mjs`, L3) before the strokes land, so the canvas is main's size from mount. Docked, the
+   dock is opened on its Timeline tab after the strokes land, since Perform lives on the strip. */
 const openPage = async ({ undocked }) => {
   if (context) await context.close()
   context = await browser.newContext({ viewport: { width: 1512, height: 982 }, deviceScaleFactor: 1 })
@@ -273,7 +274,7 @@ const openPage = async ({ undocked }) => {
   page = await context.newPage()
   page.on("pageerror", (e) => pageErrors.push(String(e)))
   await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 180000 })
-  if (undocked) await undock(page)
+  if (undocked) await hideDock(page)
   await page.waitForFunction(() => window.__styleHarness && window.__revealHarness && window.__captureHarness, null, { timeout: 240000 })
   await page.evaluate((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys)
   await page.waitForTimeout(1500)
@@ -283,6 +284,7 @@ const openPage = async ({ undocked }) => {
   })
   await page.waitForTimeout(600)
   await page.waitForFunction(() => !!window.__fsTake, null, { timeout: 60000 })
+  if (!undocked) await openDock(page)
 }
 
 try {
@@ -293,7 +295,7 @@ try {
   if (PHASE === "base") {
     /* HARDEN-B4: row 8 grabs on a fresh page with the dock floated, canvas 755x890 from mount, so the
      * base is grabbed the same way. Main has carried the take dock since ANIM-3C; on 0fcee4b7e the
-     * docked grab moved every rod frame. `undock` throws on a page with no dock, so a dockless main
+     * docked grab moved every rod frame. `hideDock` throws on a page with no dock, so a dockless main
      * refuses here instead of recording at another canvas size. */
     await openPage({ undocked: true })
     /* Before HARDEN-B4 the base had to lack the Perform button, the only sign it was not the lane itself.

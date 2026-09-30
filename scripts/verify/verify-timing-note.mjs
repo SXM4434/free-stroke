@@ -110,13 +110,24 @@ async function main() {
   // window and silently truncates the note out of the right-hand side of the
   // shot. The clip is also clamped to the window, because Playwright drops a
   // clip that runs past the viewport rather than shrinking it.
+  //
+  // Since L3 the note sits at the foot of the dock's Timeline panel, which
+  // spans the window under both panels and loads folded, so the dock is
+  // opened on its Timeline tab first (a folded dock hides the note). The
+  // panel is as wide as the window by design now, so the crop test is on the
+  // NOTE, the evidence itself: it must sit wholly inside the window.
+  // MUST-FAIL ARM: TIMING_NOTE_MUTATE=noopen skips the open; the visibility
+  // check has to throw.
   const shotPanel = async (name) => {
     await page.evaluate(() => window.__captureHarness.disable())
+    if (process.env.TIMING_NOTE_MUTATE !== "noopen") await page.evaluate(() => window.__dockHarness?.dock.open("timeline"))
     await page.waitForTimeout(600)
     const note = await page.$('[data-testid="timing-note"]')
     if (!note) throw new Error("timing note is not in the DOM")
+    if (!(await note.isVisible())) throw new Error("timing note is in the DOM but not visible: the dock did not open")
     const panel = await note.evaluateHandle((n) => n.parentElement)
     const box = await panel.asElement().boundingBox()
+    const noteBox = await note.boundingBox()
     const view = page.viewportSize()
     const x = Math.max(0, box.x - 4)
     const y = Math.max(0, box.y - 4)
@@ -129,9 +140,9 @@ async function main() {
         height: Math.min(box.height + 8, view.height - y),
       },
     })
-    if (box.width + 8 > view.width - x) {
+    if (noteBox.x < 0 || noteBox.x + noteBox.width > view.width || noteBox.y < 0 || noteBox.y + noteBox.height > view.height) {
       throw new Error(
-        `panel is wider than the window (${Math.round(box.width)}px at x=${Math.round(box.x)}, window ${view.width}px) — the note would be cropped out of the evidence`,
+        `the note runs outside the window (${Math.round(noteBox.width)}x${Math.round(noteBox.height)} at ${Math.round(noteBox.x)},${Math.round(noteBox.y)}, window ${view.width}x${view.height}): it would be cropped out of the evidence`,
       )
     }
   }

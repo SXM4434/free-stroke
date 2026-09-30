@@ -48,7 +48,7 @@ const jiti = createJiti(import.meta.url, { alias: { "@": new URL("../..", import
 const S = await jiti.import("../../lib/style-system.ts")
 const { chromium } = await import("./lib/browser.mjs")
 const { LAB_URL } = await import("./lib/dev-server.mjs")
-const { undock } = await import("./lib/undock.mjs")
+const { hideDock } = await import("./lib/dock.mjs")
 
 const STILL = { motionMode: "off", materialAnimationEnabled: false, textureAnimated: false, ditherAnimated: false, asciiAnimated: false, stackAnimationEnabled: false, fusionAnimationEnabled: false }
 const sha = (x) => createHash("sha256").update(x).digest("hex").slice(0, 16)
@@ -81,7 +81,7 @@ const look = (tag, pg = page) => pg.evaluate((tag) => {
 }, tag)
 const boot = async (pg) => {
   await pg.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 180000 })
-  await undock(pg)
+  await hideDock(pg)
   await pg.waitForFunction(() => window.__styleHarness && window.__revealHarness && window.__captureHarness, null, { timeout: 240000 })
   await pg.evaluate((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys)
   await pg.waitForTimeout(1500)

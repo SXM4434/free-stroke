@@ -22,7 +22,7 @@
 // Video button, so a host that stopped passing exportMs to the button would not be seen here.
 import { chromium } from "./lib/browser.mjs"
 import { LAB_URL } from "./lib/dev-server.mjs"
-import { undock } from "./lib/undock.mjs"
+import { hideDock } from "./lib/dock.mjs"
 import ts from "typescript"
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
@@ -108,9 +108,9 @@ const setEngine = async (mode) => {
 
 try {
   await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 180000 })
-  // Every row here reads frames or masks, none the strip, so the one page floats the dock and the
-  // canvas is main's size from mount (`lib/undock.mjs`). The base head has no dock and is not undocked.
-  if (PHASE === "lane") await undock(page)
+  // Every row here reads frames or masks, none the strip, so the one page hides the dock and the
+  // canvas is main's size from mount (`lib/dock.mjs`, L3). The base head has no dock and is not hidden.
+  if (PHASE === "lane") await hideDock(page)
   await page.waitForFunction(() => window.__styleHarness && window.__revealHarness && window.__captureHarness, null, {
     timeout: 240000,
   })

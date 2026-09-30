@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useCallback, useMemo, useEffect, useLayoutEffect, useReducer, useState, useSyncExternalStore, memo, type CSSProperties } from "react"
+import { useRef, useCallback, useMemo, useEffect, useLayoutEffect, useReducer, useState, useSyncExternalStore, memo } from "react"
 import { Canvas, useThree, useFrame, useStore } from "@react-three/fiber"
 // Environment/Lightformer now live inside the ported rigs (components/studio-rig.tsx).
 import { OrbitControls } from "@react-three/drei"
@@ -173,7 +173,10 @@ import {
  * other's ink"), already built, already calibrated against the font's authored
  * map, and deliberately not a lookup table. */
 import { assignLetters } from "@/lib/hero-letters"
-import TakeTimeline from "@/components/take-timeline"
+import { createPortal } from "react-dom"
+import { LiveTakeTimeline, TransportRow, TimingNote, DrawInBody, type TransportRowProps } from "@/components/workspace/timeline-panel"
+import { ExportPanel, type ExportPanelProps } from "@/components/workspace/export-panel"
+import { useDockHost, useHasDock } from "@/components/workspace/dock-hosts"
 import { DrawInTimingControls, REVEAL_EASES, OPEN_ANIMATION_PANEL_EVENT } from "@/components/draw-in-timing-controls"
 import { useTakeTransport, useTransportSlot, createTakeTransport, useProgressValue, unEaseReveal, revealModeOf, transportLengths, seamWindowOf, type ProgressStore, type TakeTransport } from "@/lib/take-transport"
 /* K7's PAPER BREAK. The junction SET is measured by the page and published on
@@ -261,7 +264,7 @@ import { FREE_STROKE, type RegisterLighting } from "@/lib/registers"
  * so the dependency runs one way: the component drives the exporter, never the
  * other way round. */
 import { exportAnimation, planFrames, describePlan, revealEndsFor, EXPORT_PAPER, type ExportTimebase } from "@/lib/export"
-import { useStrokeTake, stripBandPx, type KeyLiveValues } from "@/components/stroke-strip"
+import { useStrokeTake, type KeyLiveValues } from "@/components/stroke-strip"
 import { KEY_PROPERTIES, sampleKeys, revealClockMs, keysEndMs, validateKeys, type TakeKeys, type KeySample } from "@/lib/keyframes"
 import { previewParamsAtWidth, rodNormalOffset, widenAlongNormals, widthAt, widthForFrame } from "@/lib/width-keys"
 
@@ -8030,46 +8033,9 @@ export { easeReveal }
  * Re-exported so anything that imported it from here still does. */
 export { unEaseReveal }
 
-/* ---- The transport's readout value, kept OUT of the host's React state ----
- *
- * Measured 2026-09-25, night R (`docs/verification/night-r/`): while a take
- * played, `progress` lived in `Viewport3D`'s `useState`, so each 66 ms readout
- * tick re-rendered the whole host and, through `<Canvas>`, about 50 components
- * of the R3F tree. Nothing in the scene reads that value; the scene reads
- * `playheadRef` inside `useFrame`. Only three readouts read it: the take bar,
- * the time label and the range input.
- *
- * So the value lives in a store and only those three subscribe. The host
- * subscribes to one boolean, "at the end", for the compare cycle, which flips
- * once a pass instead of fifteen times a second. Since L2 the store is the
- * page's transport's (`lib/take-transport.ts`, `createProgressStore`). */
-function LiveTakeTimeline({
-  progressStore,
-  ...rest
-}: Omit<React.ComponentProps<typeof TakeTimeline>, "playhead"> & { progressStore: ProgressStore }) {
-  return <TakeTimeline {...rest} playhead={useProgressValue(progressStore)} />
-}
-function ProgressTimeLabel({ progressStore, totalDuration }: { progressStore: ProgressStore; totalDuration: number }) {
-  const p = useProgressValue(progressStore)
-  return (
-    <span className="w-10 shrink-0 text-center font-mono text-[10px] text-muted-foreground">
-      {((totalDuration * p) / 1000).toFixed(1) + "s"}
-    </span>
-  )
-}
-function ProgressScrubber({ progressStore, onScrub }: { progressStore: ProgressStore; onScrub: (v: number) => void }) {
-  return (
-    <input
-      type="range"
-      min={0}
-      max={1}
-      step={0.001}
-      value={useProgressValue(progressStore)}
-      onChange={(e) => onScrub(Number(e.target.value))}
-      className="h-1 min-w-16 flex-1 cursor-pointer appearance-none rounded-full bg-border accent-foreground"
-    />
-  )
-}
+/* The transport's readouts (`LiveTakeTimeline`, the time label and the
+ * scrubber) live in `components/workspace/timeline-panel.tsx` since L3, with
+ * the rest of the dock's controls. */
 
 /* ---- PlaybackController: advances playheadRef when playing ---- */
 function PlaybackController({
@@ -13835,24 +13801,131 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   const slaveExportRef1 = useRef<THREE.Group | null>(null)
   const slaveExportRef2 = useRef<THREE.Group | null>(null)
 
-  /* THE TAKE PANEL DOCKS BELOW THE CANVAS IN THE SINGLE LIVE VIEW (ANIM-3C,
-   * ruled 2026-09-25). Over the canvas it covered the mark in every state at
-   * 1512x982 and 1280x800: the camera centres the mark in the whole view, so
-   * the room under it was 262 and 193 px against a closed panel of 322 and 336.
-   * Docked, the canvas is the flex-1 pane and shrinks; the camera is
-   * perspective, so the mark scales about its own centre and stays whole. The
-   * root's bottom 64 px hold the camera and export row, as before.
+  /* THE DOCK LEFT THE VIEWPORT (L3, BUILD-PLAN.md §5). Until L3 the take
+   * panel docked in flow under this canvas (ANIM-3C) and the export bar sat at
+   * its bottom right, in a 64 px band the canvas gave up for them. They render
+   * in the page's dock panels now, under both the Drawing and the 3D view, and
+   * the canvas takes the panel's whole box; Top and Reset camera float on it.
+   * The state and the handlers stay here, next to the renderer they drive:
+   * each control is portalled into the host its panel registers
+   * (`components/workspace/dock-hosts.tsx`).
    *
-   * `captureMode` (a fixed 1920x1080 target) and 3-Up (three canvases in a
-   * grid) keep the panel floating over the canvas. A host that owns its own
-   * chrome shows no panel, so it keeps the full canvas. */
-  const docked = !compare3Up && !captureMode && !chromeless
+   * A host with no dock on the page keeps the floating card over the canvas
+   * and the export bar beside the camera buttons. `chromeless` shows neither. */
+  const hasDock = useHasDock()
+  const docked = hasDock && !chromeless
+  const transportHost = useDockHost("transport")
+  const timelineHost = useDockHost("timeline")
+  const drawInHost = useDockHost("drawin")
+  const drawInSummaryHost = useDockHost("drawin-summary")
+  const exportHost = useDockHost("export")
+
+  const transportProps: TransportRowProps = {
+    progressStore,
+    totalDuration,
+    playing,
+    onPlayPause: handlePlayPause,
+    onScrub: handleScrub,
+    revealMode,
+    setRevealMode,
+    comparing,
+    timingCharacter,
+    speed,
+    setSpeed,
+    debugSurfaceAllowed,
+    showDebug,
+    onToggleDebug: () => setShowDebug((v) => !v),
+    hybridBlend,
+    setHybridBlend,
+    onSmooth: () => setModeOverride("smooth"),
+    compare3Up,
+    onCompareToggle: handleCompareToggle,
+    onToggle3Up: () => {
+      setCompare3Up((v) => !v)
+      if (!compare3Up && comparing) {
+        setComparing(false)
+        setPlaying(false)
+        setCompareLabel("")
+      }
+    },
+  }
+  const drawInControls = {
+    drawIn,
+    patchDrawIn,
+    drawInUnitCount,
+    strokeCount: processedStrokes.length,
+    revealWindow,
+    patchWindow,
+    envelope: revealEnvelope,
+    patchEnvelope,
+    onEase: handleEaseChange,
+    flatten,
+    patchFlatten: onFlattenChange ? patchFlatten : undefined,
+  }
+  /* THE TAKE, AS A PICTURE. Map §3 item 11, "see the timing". A VIEW of what
+     `DRAW IN` and `WINDOW` produce (§9 pick 3), never an authoring surface. */
+  const takeTimeline = (
+    <LiveTakeTimeline
+      progressStore={progressStore}
+      strokes={processedStrokes}
+      drawIn={drawIn}
+      revealWindow={seamWindow}
+      openingRef={openingRef}
+      inkThickness={(solidParams ?? DEFAULT_SOLID_PARAMS).thickness}
+      mode={revealMode}
+      hybridBlend={hybridBlend}
+      ease={revealEase}
+      unEase={unEaseReveal}
+      totalDurationMs={totalDuration}
+    />
+  )
+  const timingNote = (
+    <TimingNote open={timingNoteOpen} setOpen={setTimingNoteOpen} timingCharacter={timingCharacter} hybridBlend={hybridBlend} />
+  )
+  const exportProps: ExportPanelProps = {
+    containerRef: pngPanelRef,
+    docked,
+    exportName,
+    setExportName,
+    strokeCount,
+    compare3Up,
+    onExportPNG: handleExportPNG,
+    exportingPng,
+    pngScale,
+    setPngScale,
+    pngScales: PNG_SCALES,
+    stillPixelNote,
+    pngTransparent,
+    setPngTransparent,
+    pngPanelOpen,
+    setPngPanelOpen,
+    onExportVideo: handleExportVideo,
+    onAbortVideo: () => videoAbortRef.current?.abort(),
+    exportingVideo,
+    videoDone,
+    videoTotal,
+    videoPlanNote,
+    videoTimebase,
+    setVideoTimebase,
+    videoFixedSeconds,
+    setVideoFixedSeconds,
+    videoFps,
+    setVideoFps,
+    videoScale,
+    setVideoScale,
+    videoTransparent,
+    setVideoTransparent,
+    videoPanelOpen,
+    setVideoPanelOpen,
+    hasAnimatedStyleLayer,
+    onExportGLB: handleExportGLB,
+    exporting,
+  }
 
   return (
     <div
       ref={containerRef}
-      data-take-dock={docked || undefined}
-      className={docked ? "relative flex h-full w-full flex-col pb-16" : "relative h-full w-full"}
+      className="relative h-full w-full"
       style={
         captureMode
           ? {
@@ -13953,9 +14026,9 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         </div>
       ) : (
         /* ---- Single viewport ----
-           Docked, this pane is what shrinks: `min-h-0 flex-1` takes whatever
-           the panel leaves, and R3F's own wrapper fills it at 100%. */
-        <div className={docked ? "relative min-h-0 flex-1" : "relative h-full w-full"}>
+           The pane is the whole panel since L3: the dock is not in here any
+           more, so R3F's own wrapper fills it at 100%. */
+        <div className="relative h-full w-full">
           <ViewportErrorBoundary>
             <Canvas
               /* A NEW KEY IS A NEW GL CONTEXT — the recovery path for a lost
@@ -14359,424 +14432,57 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         </div>
       )}
 
-      {/* Animation controls. Suppressed under `chromeless`: a host that drives
-          the reveal itself owns the clock, and a second transport reading a
-          second timeline in the same frame is the defect, not a convenience. */}
-      {/* Docked, the panel shows before the first stroke (plan 2026-09-26 §1):
-          it is where the animation tools live, and a door that appears only
-          after drawing is how he looked for them and found nothing. Floating
-          (compare-3-up, capture) it still waits for a stroke. */}
-      {(docked || strokeCount > 0) && !chromeless && (
-        /* `bottom-12` (48px) put this card's bottom edge INSIDE the export
-           row. Measured 1512 × 982 with a stroke down: card bottom 934, export
-           row top 930 — a 4px overlap, and 3px of daylight between the card's
-           border and the "Reset camera" button. Two bordered surfaces 3px
-           apart read as one broken surface, and every other gap in this chrome
-           is 12px (`bottom-3`, `right-3`, `gap-3`).
+      {/* THE DOCK'S CONTROLS, in the dock's panels (L3). Suppressed under
+          `chromeless`: a host that drives the reveal itself owns the clock, and
+          a second transport reading a second timeline in the same frame is the
+          defect, not a convenience. Docked, they show before the first stroke
+          (plan 2026-09-26 §1): the dock is where the animation tools live, and
+          a door that appears only after drawing is how he looked for them and
+          found nothing. */}
+      {docked && transportHost && createPortal(<TransportRow {...transportProps} docked />, transportHost)}
+      {docked && timelineHost && createPortal(
+        <div data-take-panel className="flex h-full min-h-0 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col">{takeTimeline}</div>
+          {timingNote}
+        </div>,
+        timelineHost,
+      )}
+      {docked && drawInHost && drawInOpen && createPortal(<DrawInBody controls={drawInControls} docked />, drawInHost)}
+      {docked && drawInSummaryHost && timingSummary && createPortal(
+        <span data-animation-drawin-summary className="max-w-[12rem] truncate text-[10px] font-normal text-muted-foreground">
+          {timingSummary}
+        </span>,
+        drawInSummaryHost,
+      )}
+      {docked && exportHost && createPortal(<ExportPanel {...exportProps} />, exportHost)}
 
-           The export row is 40px tall at `bottom-3`, so its top sits 52px off
-           the bottom. `bottom-16` (64px) puts the card's edge 12px above it,
-           which is the gap the rest of the chrome uses. */
-        /* DOCKED (see `docked`): in flow under the canvas, 12 px in from each
-           side and 12 px above the camera row, as the floating card was.
-           `max-h-[55%]` of the root's content box keeps the canvas at no less
-           than 45% of it; past that the strip and lanes' shared scroll region
-           gives, and nothing else in the panel shrinks. Measured in
-           `docs/verification/keyframes/dock-after.json`. */
+      {/* NO DOCK ON THE PAGE: the floating card over the canvas, as before L3.
+          `bottom-16` puts the card's edge 12px above the export row, the gap
+          the rest of this chrome uses. */}
+      {!docked && !chromeless && strokeCount > 0 && (
         <div
           ref={animationPanelRef}
           data-animation-panel
-          /* Draw-in open, the strip keeps every row the closed strip shows
-             (`stripBandPx`: up to twelve at its 12 px pitch, plus 4rem for its
-             header, the Keyframes row and padding), and the dock takes 66% of
-             the column instead of up to 55%, so the section's room comes out of
-             the 3D view and never out of the strip. Open, the dock is exactly
-             66%, whatever the section shows, and the section scrolls inside it.
-             PANEL-4 measured the content-sized dock it replaces: Window from
-             Grow to Vanish shows more controls and moved the canvas from
-             798 x 544 to 798 x 558. Opening and closing the section is the one
-             change that resizes the 3D view. PANEL's first cut floored the
-             band at six rows: at 1280 x 800 the logo showed 6 of its 12 bars,
-             the sixth half under the fade, and the strip is where an Order or
-             Overlap change shows. */
-          style={docked ? ({ "--strip-band": `${stripBandPx(processedStrokes.length)}px` } as CSSProperties) : undefined}
-          className={
-            docked
-              ? `relative mx-3 mt-3 flex min-h-0 flex-col rounded-lg border border-border bg-background ${drawInOpen ? "h-[66%] [&>:first-child]:min-h-[calc(var(--strip-band)+4rem)] [&_[data-take-scroll]]:min-h-[var(--strip-band)]" : "max-h-[55%]"}`
-              : "absolute bottom-16 left-3 right-3 rounded-lg border border-border bg-background/80 backdrop-blur-sm"
-          }
+          className="absolute bottom-16 left-3 right-3 rounded-lg border border-border bg-background/80 backdrop-blur-sm"
         >
-        {/* THE TAKE, AS A PICTURE. Map §3 item 11, "see the timing". A VIEW of
-            what `DRAW IN` and `WINDOW` produce (§9 pick 3), never an authoring
-            surface. It is the dock's first row for the same reason the timing
-            note is its last: this bar is already three rows, and the transport
-            growing into a dock is exactly what §5A said would happen. */}
-        <LiveTakeTimeline
-          progressStore={progressStore}
-          strokes={processedStrokes}
-          drawIn={drawIn}
-          revealWindow={seamWindow}
-          openingRef={openingRef}
-          inkThickness={(solidParams ?? DEFAULT_SOLID_PARAMS).thickness}
-          mode={revealMode}
-          hybridBlend={hybridBlend}
-          ease={revealEase}
-          unEase={unEaseReveal}
-          totalDurationMs={totalDuration}
-        />
-        {/* THE TRANSPORT ROW. Every control is shrink-0, so the scrubber is the
-            one that gives: `min-w-16` lets it drop below the range input's
-            129 px default, and the row wraps before any control can leave the
-            dock. At 1280 x 800 PANEL's row ran 4 px past the dock's right edge
-            and cut Debug in half. */}
-        <div data-animation-transport className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2">
-          {/* Play/Pause */}
-          <button
-            onClick={handlePlayPause}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-foreground transition-colors hover:bg-accent"
-            aria-label={playing ? "Pause" : "Play"}
-          >
-            {playing ? (
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                <rect x="2" y="1" width="3" height="10" rx="0.5" />
-                <rect x="7" y="1" width="3" height="10" rx="0.5" />
-              </svg>
-            ) : (
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                <path d="M3 1.5v9l7.5-4.5L3 1.5z" />
-              </svg>
-            )}
-          </button>
-
-          {/* Time display */}
-          <ProgressTimeLabel progressStore={progressStore} totalDuration={totalDuration} />
-
-          {/* Scrubber */}
-          <ProgressScrubber progressStore={progressStore} onScrub={handleScrub} />
-
-          {/* Main timing toggle: Natural (hybrid) / Authentic (raw) */}
-          <div className={`flex shrink-0 items-center gap-0.5 ${comparing ? "pointer-events-none opacity-40" : ""}`}>
-            <button
-              type="button"
-              onClick={() => setRevealMode("hybrid")}
-              aria-pressed={revealMode === "hybrid"}
-              className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                revealMode === "hybrid"
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Natural
-            </button>
-            <button
-              type="button"
-              onClick={() => setRevealMode("raw")}
-              aria-pressed={revealMode === "raw"}
-              className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                revealMode === "raw"
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Authentic
-            </button>
-            {/* Live state chip: how much speed variation the CURRENT strokes
-                carry. This is the quantity the two buttons act on, so showing
-                it turns "the toggle does nothing" into "there is nothing here
-                for the toggle to do". */}
-            <span
-              title={
-                timingCharacter.usable
-                  ? `Pen speed departs from constant by up to ${(timingCharacter.maxDeviation * 100).toFixed(1)}% of the stroke length`
-                  : "These strokes carry no usable timestamps"
-              }
-              className={`ml-1 shrink-0 rounded px-1 py-0.5 font-mono text-[9px] leading-none ${
-                timingCharacter.present
-                  ? "bg-foreground/10 text-foreground"
-                  : "bg-muted text-muted-foreground"
-              }`}
-            >
-              {timingCharacter.usable
-                ? `±${(timingCharacter.maxDeviation * 100).toFixed(1)}%`
-                : "no timing"}
-            </span>
-          </div>
-
-          <div className="h-4 w-px bg-border" />
-
-          {/* Speed.
-              `tabular-nums` because these three are NUMERALS in a segmented
-              group and the selected one is a filled lozenge. Measured without
-              it, same 6px padding on all three: 0.5x 33.36px, 1x 22.14px, 2x
-              24.39px. Switching 1x to 2x grew the black pill by 2.25px and
-              nudged its neighbour, for no reason but the width of a glyph.
-              This file's own readouts already use `tabular-nums`.
-
-              `type="button"` and `aria-pressed` bring these five transport
-              buttons up to what the top strip already does: `app/page.tsx:1740`
-              carries `role="radiogroup"` + `aria-checked` on the mode and
-              engine switchers, and its comment says the top-level selectors
-              "had simply been missed". So had these. */}
-          <div className="flex shrink-0 items-center gap-0.5">
-            {[0.5, 1, 2].map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setSpeed(s)}
-                aria-pressed={speed === s}
-                className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors ${speed === s
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:text-foreground"
-                  }`}
-              >
-                {s}x
-              </button>
-            ))}
-          </div>
-
-          <div className="h-4 w-px bg-border" />
-
-          {/* ---- DRAW-IN: the dock's own section, not a popover ------------
-              Order, overlap, the window, delay, ease, reverse and loop. Until
-              2026-09-26 a Timing button here opened them in a popover over the
-              canvas; they open as a section of this panel now, under this row.
-              The header copies Keyframes' (key-lanes.tsx): an 8 px chevron that
-              turns 90 degrees, the name in 10 px medium, and what is set in 10 px
-              muted beside it, so a delay is never a mystery pause. It sits in
-              the transport row, where Timing was, so a closed section costs the
-              canvas no height. It opens without motion, as Keyframes does: a
-              control touched this often reads as slow if it animates. */}
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              data-animation-drawin
-              data-open={drawInOpen ? "1" : "0"}
-              aria-expanded={drawInOpen}
-              aria-controls="animation-drawin-body"
-              onClick={() => setDrawInOpen((v) => !v)}
-              title={drawInOpen ? "Hide the draw-in controls" : "Show the draw-in controls: order, overlap, delay, easing, reverse and loop"}
-              className="fs-press flex shrink-0 items-center gap-1 text-[10px] font-medium text-foreground"
-            >
-              <svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8" className={`shrink-0 ${drawInOpen ? "rotate-90" : ""}`}>
-                <path d="M2.5 1.5 5.5 4 2.5 6.5" fill="none" stroke="currentColor" strokeWidth="1" />
-              </svg>
-              Draw-in
-            </button>
-            {timingSummary && (
-              <span data-animation-drawin-summary className="max-w-[12rem] truncate text-[10px] text-muted-foreground">
-                {timingSummary}
-              </span>
-            )}
-          </div>
-
-          <div className="h-4 w-px bg-border" />
-
-          {/* Debug toggle — DEV ONLY. The door is guarded with the room it
-              opens; see `debugSurfaceAllowed` where `showDebug` is derived. */}
-          {debugSurfaceAllowed && (
-          <button
-            onClick={() => setShowDebug((v) => !v)}
-            className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
-              showDebug
-                ? "border-foreground/20 bg-foreground text-background"
-                : "border-border text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Debug
-          </button>
-          )}
-
-          {/* Debug-only tools */}
-          {showDebug && (
-            <>
-              <div className="h-4 w-px bg-border" />
-
-              {/* Smooth option (debug only) */}
-              <button
-                onClick={() => setModeOverride("smooth")}
-                className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                  revealMode === "smooth"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Smooth
-              </button>
-
-              {/* Blend slider (debug only) */}
-              {revealMode === "hybrid" && (
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={hybridBlend}
-                  onChange={(e) => setHybridBlend(Number(e.target.value))}
-                  title={`Blend: ${hybridBlend.toFixed(2)}`}
-                  disabled={comparing}
-                  className={`h-1 w-14 shrink-0 cursor-pointer appearance-none rounded-full bg-border accent-foreground ${comparing ? "opacity-40" : ""}`}
-                />
-              )}
-
-              <div className="h-4 w-px bg-border" />
-
-              {/* Compare toggle (debug only) */}
-              <button
-                onClick={handleCompareToggle}
-                disabled={compare3Up}
-                className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                  comparing
-                    ? "border-foreground/20 bg-foreground text-background"
-                    : "border-border text-muted-foreground hover:text-foreground"
-                } ${compare3Up ? "pointer-events-none opacity-40" : ""}`}
-              >
-                {comparing ? "Stop" : "Compare"}
-              </button>
-
-              {/* 3-Up toggle (debug only) */}
-              <button
-                onClick={() => {
-                  setCompare3Up((v) => !v)
-                  if (!compare3Up && comparing) {
-                    setComparing(false)
-                    setPlaying(false)
-                    setCompareLabel("")
-                  }
-                }}
-                className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                  compare3Up
-                    ? "border-foreground/20 bg-foreground text-background"
-                    : "border-border text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {compare3Up ? "Single" : "3-Up"}
-              </button>
-            </>
-          )}
-        </div>
-
-        {/* THE DRAW-IN SECTION, OPEN. The same component and the same props the
-            popover passed, so every control writes the same host state. The
-            scroll box and the column box are two elements on purpose: a height
-            cap on a multi-column box adds columns to the right instead of
-            scrolling. `columns-2xs` is the drawer's box (style-panel-scaffold),
-            so the dock's width decides the column count. `px-3` and the
-            `border-border/60` hairline are the strip's own. */}
-        {drawInOpen && (
-          <div
-            id="animation-drawin-body"
-            data-animation-drawin-body
-            role="region"
-            aria-label="Draw-in timing"
-            className="min-h-0 shrink grow overflow-y-auto overscroll-contain border-t border-border/60 px-3 pb-2 pt-2"
-          >
-            <div className="columns-2xs gap-3 [&>*]:break-inside-avoid">
-              <DrawInTimingControls
-                drawIn={drawIn}
-                patchDrawIn={patchDrawIn}
-                drawInUnitCount={drawInUnitCount}
-                strokeCount={processedStrokes.length}
-                revealWindow={revealWindow}
-                patchWindow={patchWindow}
-                envelope={revealEnvelope}
-                patchEnvelope={patchEnvelope}
-                onEase={handleEaseChange}
-                flatten={flatten}
-                patchFlatten={onFlattenChange ? patchFlatten : undefined}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* ---- Honest note about what the timing toggle depends on ----
-            Natural and Authentic are the same reveal with one number changed,
-            and the number is how far the recorded pen speed departs from
-            constant. When it departs by nothing — a stroke laid out from the
-            letter font stamps every point the same interval apart — the two
-            settings produce identical frames, and without this line the only
-            available conclusion is that the control is broken. The percentage
-            is measured live off the strokes in the viewport with the SAME
-            function the reveal uses, so it cannot describe something the
-            renderer isn't doing. */}
-        {/* FOLDED TO ONE LINE (ANIM-3C). Folded, the line is the verdict, the
-            one sentence that changes with the drawing and the reason the note
-            exists: whether Natural and Authentic can differ here. Open, it is
-            the whole paragraph, unchanged. The chevron is the Keyframes one. */}
-        <div
-          data-testid="timing-note"
-          data-open={timingNoteOpen ? "1" : "0"}
-          className="flex shrink-0 items-start gap-1.5 border-t border-border/60 px-3 py-1.5 text-[10px] leading-snug text-muted-foreground"
-        >
-          <button
-            type="button"
-            aria-expanded={timingNoteOpen}
-            aria-controls="timing-note-body"
-            onClick={() => setTimingNoteOpen((v) => !v)}
-            title={timingNoteOpen ? "Fold the timing note" : "Read the whole timing note"}
-            className={`fs-press flex items-start gap-1.5 text-left transition-colors hover:text-foreground ${timingNoteOpen ? "shrink-0" : "min-w-0"}`}
-          >
-            <svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8" className={`mt-[3px] shrink-0 ${timingNoteOpen ? "rotate-90" : ""}`}>
-              <path d="M2.5 1.5 5.5 4 2.5 6.5" fill="none" stroke="currentColor" strokeWidth="1" />
-            </svg>
-            {timingNoteOpen ? (
-              <span className="sr-only">Fold the timing note</span>
-            ) : (
-              <span id="timing-note-body" className="min-w-0 truncate">
-                {!timingCharacter.usable
-                  ? "These strokes carry no usable timestamps, so both settings render the same reveal."
-                  : timingCharacter.present
-                    ? `This drawing\u2019s pen speed departs from constant by up to ${(timingCharacter.maxDeviation * 100).toFixed(1)}% of its length, so the two settings differ.`
-                    : `This drawing was made at a near-constant speed, max departure ${(timingCharacter.maxDeviation * 100).toFixed(1)}%, so both settings render the same reveal.`}
-              </span>
-            )}
-          </button>
-          {timingNoteOpen && (
-            <div id="timing-note-body" className="min-w-0">
-              <span className="text-foreground">Authentic</span> replays the speed the
-              stroke was drawn at; <span className="text-foreground">Natural</span> blends
-              that {Math.round(hybridBlend * 100)}% back toward constant speed.{" "}
-              {!timingCharacter.usable ? (
-                <>
-                  These strokes carry no usable timestamps, so both settings render the
-                  same reveal.
-                </>
-              ) : timingCharacter.present ? (
-                <>
-                  This drawing&rsquo;s pen speed departs from constant by up to{" "}
-                  {(timingCharacter.maxDeviation * 100).toFixed(1)}% of its length, so
-                  the two settings differ.
-                </>
-              ) : (
-                <>
-                  This drawing was made at a near-constant speed, max departure{" "}
-                  {(timingCharacter.maxDeviation * 100).toFixed(1)}%, so both settings
-                  render the same reveal. Strokes imported from the letter font are
-                  stamped at a fixed interval per point and have nothing to replay.
-                  Draw by hand, with pauses and flicks, to see the difference.
-                </>
-              )}{" "}
-              {/* WAS FALSE ON SCREEN UNTIL 2026-08-28. It read "Speed only: pen
-                  pressure is recorded but no engine reads it yet." Inflate has read
-                  pressure since `INFLATE_PRESSURE_INFLUENCE` landed
-                  (`lib/geometry-engines.ts`, `inflateInkWidthProfile`): a constant
-                  0.5 against a 0.15 to 0.95 ramp moves 14,167 px and 4.7% of the
-                  ink. What is true is the SPLIT, so the caption says the split. */}
-              Pressure shapes the mark&rsquo;s width, never its timing. A mouse or
-              trackpad reports a flat 0.5, so pressure only shows up under a stylus.
-            </div>
-          )}
-        </div>
+          {takeTimeline}
+          <TransportRow
+            {...transportProps}
+            drawIn={{ open: drawInOpen, toggle: () => setDrawInOpen((v) => !v), summary: timingSummary }}
+          />
+          {drawInOpen && <DrawInBody controls={drawInControls} />}
+          {timingNote}
         </div>
       )}
 
-      {/* ---- Camera + Export controls ----------------------------------
-          TWO GROUPED CARDS, not one undifferentiated row of buttons —
-          `drawing-canvas.tsx:439` already sets that pattern for the canvas
-          half, and camera framing and file output are two different jobs. The
-          old row put "Export GLB" between the filename field and "Top", so the
-          only two controls that belong together were separated by the only
-          control that does not. */}
+      {/* ---- Camera controls, floating on the 3D view ----------------------
+          Top and Reset camera stay on the view they move (Unity's pattern,
+          BUILD-PLAN.md §2). Export moved to its own dock panel in L3; with no
+          dock on the page it stays here, its own card beside the camera's, as
+          `drawing-canvas.tsx` groups the canvas half: camera framing and file
+          output are two different jobs. */}
       <div
+        data-camera-bar
         className="absolute bottom-3 right-3 flex items-end gap-2"
         style={chromeless ? { display: "none" } : undefined}
       >
@@ -14799,317 +14505,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
           </button>
         </div>
 
-        <div
-          ref={pngPanelRef}
-          className="relative flex items-center gap-1 rounded-xl border border-border bg-background/85 p-1 shadow-sm backdrop-blur-sm"
-        >
-          <input
-            type="text"
-            value={exportName}
-            onChange={(e) => setExportName(e.target.value)}
-            placeholder="name"
-            maxLength={32}
-            aria-label="Filename prefix for exports"
-            className="h-[30px] w-24 rounded-lg bg-transparent px-2 text-xs text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-foreground/20"
-          />
-          {/* PNG and its settings chevron are ONE control and are spaced as
-              one — at the shared gap the chevron read as belonging to GLB,
-              which is the button it does not configure. */}
-          <div className="flex items-center">
-          <button
-            type="button"
-            onClick={handleExportPNG}
-            /* DISABLED IN 3-UP, WITH A REASON. The grab is registered by the
-               single viewport's scene only (three racing scenes would fight
-               over one hook), so in compare mode the button would raise "the
-               viewport is not ready" — a true sentence that explains nothing.
-               A disabled control with a title that names the condition is the
-               honest version. */
-            disabled={strokeCount === 0 || exportingPng || compare3Up}
-            title={
-              compare3Up
-                ? "Leave 3-Up compare to save a still. An export is one view, not three"
-                : `Save the viewport as a PNG at ${pngScale}×. The only export that carries texture, dither and ASCII.`
-            }
-            className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {exportingPng ? "Saving…" : "PNG"}
-          </button>
-          {/* The PNG settings live behind their own affordance instead of
-              spending four permanent controls on a choice most users make
-              once. Its state is visible on the button's own title and inside
-              the panel, so nothing is hidden — only folded. */}
-          <button
-            type="button"
-            onClick={() => setPngPanelOpen((v) => !v)}
-            aria-expanded={pngPanelOpen}
-            aria-label="PNG export settings"
-            title="PNG export settings"
-            className={`fs-press flex h-[30px] w-7 items-center justify-center rounded-lg transition-colors hover:bg-accent ${
-              pngPanelOpen ? "bg-accent text-foreground" : "text-muted-foreground"
-            }`}
-          >
-            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d={pngPanelOpen ? "M1.5 6.5L5 3l3.5 3.5" : "M1.5 3.5L5 7l3.5-3.5"} />
-            </svg>
-          </button>
-          </div>
-          <div className="mx-0.5 h-5 w-px bg-border" />
-          {/* ---- THE ANIMATED EXPORT ----------------------------------
-              Same two-part shape as PNG — the action and its chevron are ONE
-              control — because a third pattern in a bar of three would read as
-              three unrelated buttons. It sits BETWEEN the still and the GLB on
-              purpose: PNG → Video → GLB is picture, moving picture, geometry,
-              which is the order of how much of the app each one carries. */}
-          <div className="flex items-center">
-          <button
-            type="button"
-            onClick={exportingVideo ? () => videoAbortRef.current?.abort() : handleExportVideo}
-            /* THE PROGRESS IS THE LABEL, AND THE LABEL IS THE CANCEL. A
-               hundred-and-forty-frame render is the one export long enough to
-               look hung, so the button counts frames while it works — and the
-               same press stops it, because a long job with no way out is the
-               defect a spinner hides rather than solves. */
-            disabled={strokeCount === 0 || (compare3Up && !exportingVideo)}
-            title={
-              exportingVideo
-                ? "Stop the export"
-                : compare3Up
-                  ? "Leave 3-Up compare to save a film. An export is one view, not three"
-                  : `Save the animation as ${videoTransparent ? "an animated PNG" : "a video"}. ${videoPlanNote}`
-            }
-            className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium tabular-nums text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {exportingVideo
-              ? videoTotal > 0
-                ? `${Math.round((videoDone / videoTotal) * 100)}%`
-                : "…"
-              : "Video"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setVideoPanelOpen((v) => !v)}
-            aria-expanded={videoPanelOpen}
-            aria-label="Video export settings"
-            title="Video export settings"
-            className={`fs-press flex h-[30px] w-7 items-center justify-center rounded-lg transition-colors hover:bg-accent ${
-              videoPanelOpen ? "bg-accent text-foreground" : "text-muted-foreground"
-            }`}
-          >
-            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d={videoPanelOpen ? "M1.5 6.5L5 3l3.5 3.5" : "M1.5 3.5L5 7l3.5-3.5"} />
-            </svg>
-          </button>
-          </div>
-          <div className="mx-0.5 h-5 w-px bg-border" />
-          <button
-            type="button"
-            onClick={handleExportGLB}
-            disabled={strokeCount === 0 || exporting}
-            title="Save the geometry as a glTF binary. No style layers yet, see the roadmap."
-            className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {exporting ? "Saving…" : "GLB"}
-          </button>
-
-          {videoPanelOpen && (
-            <div className="absolute bottom-[calc(100%+6px)] right-0 w-72 rounded-xl border border-border bg-background p-2.5 shadow-lg">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Clock
-              </div>
-              {/* THE ONE SETTING NO COMPETITOR CAN COPY. `pen` makes the film
-                  exactly as long as the gesture was, because the strokes carry
-                  real timestamps; `fixed` is what every other tool offers. The
-                  note below prints the sentence out loud rather than leaving a
-                  duration to be inferred from a number. */}
-              <div className="flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
-                {(["pen", "fixed"] as ExportTimebase[]).map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setVideoTimebase(t)}
-                    className={`fs-press flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                      videoTimebase === t
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {t === "pen" ? "Your pace" : "Fixed"}
-                  </button>
-                ))}
-              </div>
-              {videoTimebase === "fixed" && (
-                <div className="mt-1.5 flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
-                  {[2, 3, 5].map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setVideoFixedSeconds(s)}
-                      className={`fs-press flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                        videoFixedSeconds === s
-                          ? "bg-background text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {s}s
-                    </button>
-                  ))}
-                </div>
-              )}
-              <div className="mb-2 mt-1.5 text-[10px] leading-snug text-muted-foreground/80">
-                {videoPlanNote}
-              </div>
-
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Frame rate
-              </div>
-              <div className="mb-1.5 flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
-                {[24, 30, 60].map((f) => (
-                  <button
-                    key={f}
-                    type="button"
-                    onClick={() => setVideoFps(f)}
-                    className={`fs-press flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                      videoFps === f
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {f}
-                  </button>
-                ))}
-              </div>
-
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Resolution
-              </div>
-              <div className="mb-1.5 flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
-                {[1, 2].map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setVideoScale(s)}
-                    className={`fs-press flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                      videoScale === s
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {s}×
-                  </button>
-                ))}
-              </div>
-
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Background
-              </div>
-              <div className="flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setVideoTransparent(false)}
-                  className={`fs-press flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                    !videoTransparent
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Paper
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setVideoTransparent(true)}
-                  className={`fs-press flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                    videoTransparent
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Transparent
-                </button>
-              </div>
-              {/* NAMES MUST MATCH BEHAVIOUR, so the format is stated rather
-                  than implied. Video has no alpha channel — VP9's rides a
-                  Matroska side channel this muxer does not write — so
-                  "transparent" is an animated PNG, which is lossless and
-                  larger. Saying so is the difference between a setting and a
-                  surprise. */}
-              <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">
-                {videoTransparent
-                  ? "Animated PNG (.png), lossless, keeps alpha, no contact shadow. Larger than a video, and the only format that can carry a see-through ground."
-                  : "WebM video (.webm) on the studio ground, exactly as you see it."}
-              </div>
-              {hasAnimatedStyleLayer && (
-                <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">
-                  Animated style layers are stepped on the export clock, not on
-                  wall time. The file plays at the speed you set it, however
-                  long each frame takes to render.
-                </div>
-              )}
-            </div>
-          )}
-
-          {pngPanelOpen && (
-            /* OPAQUE, not translucent. At 95 % the page's own timing note read
-               through the panel's body text — two sentences occupying the same
-               pixels. A settings surface has no reason to be see-through. */
-            <div className="absolute bottom-[calc(100%+6px)] right-0 w-60 rounded-xl border border-border bg-background p-2.5 shadow-lg">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                PNG
-              </div>
-              <div className="mb-1.5 flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
-                {PNG_SCALES.map((s) => (
-                  <button
-                    key={s.value}
-                    type="button"
-                    onClick={() => setPngScale(s.value)}
-                    className={`fs-press flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                      pngScale === s.value
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-              <div className="mb-2 text-[10px] leading-snug text-muted-foreground/80">
-                {stillPixelNote}
-              </div>
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Background
-              </div>
-              <div className="flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setPngTransparent(false)}
-                  className={`fs-press flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                    !pngTransparent
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Paper
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPngTransparent(true)}
-                  className={`fs-press flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                    pngTransparent
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Transparent
-                </button>
-              </div>
-              <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">
-                {pngTransparent
-                  ? "No ground and no contact shadow. A shadow patch on a see-through background reads as dirt."
-                  : "The studio ground, exactly as you see it, with the contact shadow."}
-              </div>
-            </div>
-          )}
-        </div>
+        {!docked && <ExportPanel {...exportProps} />}
       </div>
 
       {/* SOLID DEBUG OVERLAY - on-screen debug for Solid mode */}

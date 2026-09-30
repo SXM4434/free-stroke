@@ -1602,6 +1602,11 @@ const titleOf = () => page.getByRole("button", { name: "Video", exact: true }).g
  * a user gets. Nothing in this function knows anything about `lib/export`.
  */
 async function pressVideo(tag) {
+  /* Since L3 Video is in the dock's Export tab, a sibling of the Draw-in tab,
+   * so the Export tab is shown first. Switching tabs does not resize the 3D
+   * view (the dock keeps its height), so the film's size is not touched. */
+  await page.evaluate(() => window.__dockHarness?.dock.open("export"))
+  await page.waitForTimeout(300)
   const btn = page.getByRole("button", { name: "Video", exact: true })
   const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 600000 }), btn.click()])
   const name = dl.suggestedFilename()

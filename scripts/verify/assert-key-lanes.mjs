@@ -27,9 +27,9 @@
 // itself a 1339 px window against a 982 px one, with the canvas held at 755x890
 // in both, is 0 of 5 frames equal. A taller window is therefore no way to match
 // the canvas. The docked canvas is smaller by ruling (ANIM-3C), so the no-keys
-// frames are grabbed in their own page at the base's window, with a test-only
-// stylesheet (`lib/undock.mjs`) that floats the dock over the canvas as main does. The canvas is
-// then 755x890 from mount, and the product code is untouched. The base file
+// frames are grabbed in their own page at the base's window with the dock
+// hidden (`lib/dock.mjs`; until L3 a test-only stylesheet, `lib/undock.mjs`,
+// floated it over the canvas instead). The canvas is then 755x890 from mount. The base file
 // records its window; a branch run at another window FAILS row 11 by name.
 //
 // READS. `__fsKeys` (the doc), `__fsSetKeys` (returns refusals), `__fsKeySample`
@@ -60,7 +60,7 @@
 
 import { chromium } from "./lib/browser.mjs"
 import { LAB_URL } from "./lib/dev-server.mjs"
-import { undock } from "./lib/undock.mjs"
+import { hideDock, openDock } from "./lib/dock.mjs"
 import { serverCommit, codeDiffers } from "./lib/server-commit.mjs"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs"
 import { execFileSync } from "node:child_process"
@@ -221,7 +221,9 @@ const openLab = async ({ undocked }) => {
   page = await context.newPage()
   await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 180000 })
   // Before the strokes land, so the canvas never takes the docked size first.
-  if (undocked) await undock(page)
+  // Since L3 the dock is a group under both panels; hidden, the canvas is
+  // dockless main's 755x890 (lib/dock.mjs).
+  if (undocked) await hideDock(page)
   await page.waitForFunction(() => window.__styleHarness && window.__revealHarness && window.__captureHarness, null, { timeout: 240000 })
   await ev((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys)
   await page.waitForTimeout(1500)
@@ -231,6 +233,9 @@ const openLab = async ({ undocked }) => {
   })
   // The base commit predates the key hooks, so the no-keys pass waits for the page only.
   if (!NOKEYS_ONLY) await page.waitForFunction(() => !!window.__fsTake && !!window.__fsSetKeys, null, { timeout: 60000 })
+  // The docked page drives the lanes, which live in the dock's Timeline tab
+  // since L3; the dock loads folded, so it is opened here.
+  if (!undocked && !NOKEYS_ONLY) await openDock(page)
   await settle(800)
   // Warm: one full sweep so the first measured frame is not a compile frame.
   for (const p of [0, 0.5, 1, 0]) await setP(p)

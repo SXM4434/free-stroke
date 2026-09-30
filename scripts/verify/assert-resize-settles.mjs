@@ -218,6 +218,10 @@ async function exportRow(s, arm) {
     window.__rsLog = null
     gl.render = (scene, cam) => { orig(scene, cam); if (window.__rsLog && gl.getRenderTarget() === null) { const c = gl.getContext(), v = c.getParameter(c.VIEWPORT); window.__rsLog.push([v[2], v[3], gl.domElement.width, gl.domElement.height]) } }
   })
+  // Since L3 the export controls are the dock's Export panel, which loads
+  // folded; it is opened once, before the rows below measure anything.
+  await s.page.evaluate(() => window.__dockHarness?.dock.open("export"))
+  await s.page.waitForTimeout(400)
   const openPanel = async () => {
     const btn = s.page.getByRole("button", { name: "PNG export settings" })
     if ((await btn.getAttribute("aria-expanded")) !== "true") { await btn.click(); await s.page.waitForTimeout(200) }

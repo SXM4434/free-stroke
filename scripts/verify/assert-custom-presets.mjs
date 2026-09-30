@@ -155,7 +155,7 @@ if (!process.argv.includes("--model-only")) {
     try { isSelf[label] = b.sha === srv.head || !codeDiffers(srv, b.sha) } catch (e) { refuse(e.message) }
   }
   const graded = (label, name, ok, detail) => (isSelf[label] ? selfRow(name, `${detail}; base ${label} has the served code (${srv.head.slice(0, 9)}), so this compares the tree to itself`) : row(name, ok, detail))
-  const { undock } = await import("./lib/undock.mjs")
+  const { hideDock } = await import("./lib/dock.mjs")
   mkdirSync(OUT, { recursive: true })
   const sha = (x) => createHash("sha256").update(x).digest("hex").slice(0, 16)
   const polys = JSON.parse(readFileSync(new URL("../capture/logo-strokes.json", import.meta.url), "utf8")).polylines
@@ -202,12 +202,14 @@ if (!process.argv.includes("--model-only")) {
   const count = (sel) => page.locator(sel).count()
   try {
     await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 180000 })
-    // This tree docks the take panel under the canvas (755x533 at 1512x982);
-    // ea31c5b38 floats it over a 755x890 canvas. Float it here the way the
-    // other gates do, before any stroke lands, so the untouched rows compare
-    // one canvas size. The base run is on main, which has no dock and must not
-    // call it (undock throws there).
-    if (!phaseBase || BASES[baseArg].undock) await undock(page)
+    // ea31c5b38 draws a 755x890 canvas with no dock; 5519dba0f was recorded
+    // with its dock floated to the same size. Since L3 the dock is a group
+    // under both panels, and hidden (lib/dock.mjs) the canvas is that size
+    // again, before any stroke lands, so the untouched rows compare one
+    // canvas size. A base run on a dockless main must not call it (hideDock
+    // throws there). Re-recording 5519dba0f needs that commit's own
+    // lib/undock.mjs, which L3 retired.
+    if (!phaseBase || BASES[baseArg].undock) await hideDock(page)
     await page.waitForFunction(() => window.__styleHarness && window.__revealHarness && window.__captureHarness, null, { timeout: 240000 })
     await page.evaluate((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys)
     await page.waitForTimeout(1500)

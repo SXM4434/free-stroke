@@ -47,6 +47,17 @@
 // (assert-resize-settles, run beside this one, not inside it). IDENTICAL is REPLACED, not loosened: the page
 // diff still runs and still names its regions as PAGE, it just no longer decides anything.
 //
+// WHY THE PAGES ARE SET UP, L3 (2026-09-30). L3 moved the take dock out of the 3D column into a dockview
+// group under both panels (BUILD-PLAN.md §5 row L3), so no lane page has main's two canvas sizes any more:
+// main's 3D canvas gave its column's bottom to the in-column dock (755x533 at 1512x982) and L3's gives the
+// dock's 36 px header under both. BUFFERS and FRAMES keep their bar, byte-equal at equal buffers, by
+// comparing the one arrangement both trees can show: the two canvases with no dock beside them. The lane
+// hides its dock group (`__dockHarness.dock.setHidden`, the rail's show/hide from L4); a reference that
+// still docks under the canvas (`[data-take-dock]`) gets the stylesheet `lib/undock.mjs` used to float that
+// dock off the canvas, kept here for reference trees only. Both then draw 755x890 at 1512x982, which is
+// main's size before the take dock existed. A reference page with neither (main before ANIM-3C) is taken as
+// it is. The SURVIVES and DRAW rows run on the same pages.
+//
 // MUST-FAIL ARMS, set before navigation through `window.__fsDockMutant`, read once by the shell:
 //   header           BUFFERS must go red: group headers stay visible, a 28 px strip over the 3D view
 //   noReuse          SURVIVES must go red: the harness's loads pass `reuseExistingPanels: false`
@@ -128,12 +139,28 @@ async function open(url, [w, h], arm) {
   page.on("pageerror", (e) => console.log(`  pageerror ${arm}: ${e.message.slice(0, 160)}`))
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 180000 })
   await page.waitForFunction(() => window.__styleHarness && window.__revealHarness && window.__captureHarness, null, { timeout: 240000 })
+  await noDock(page)
   const blank = await drawHash(page)
   await page.evaluate((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys)
   await page.waitForTimeout(1500)
   await page.evaluate((st) => { window.__styleHarness.setStyle(st); window.__revealHarness.setPlaying(false); window.__revealHarness.setProgress(1) }, STILL)
   await settle(page, 1500)
   return { ctx, page, blank }
+}
+/* NO DOCK BESIDE THE CANVASES (see "WHY THE PAGES ARE SET UP, L3"). Before any stroke lands, so neither
+   canvas takes another size first. The reference stylesheet is `lib/undock.mjs`'s, as it was at L2. */
+const REF_FLOAT =
+  "[data-take-dock]{padding-bottom:0!important}" +
+  "[data-take-dock]>:is([data-animation-panel],:has([data-take-timeline])){position:absolute!important;left:12px;right:12px;bottom:64px;margin:0!important}"
+async function noDock(page) {
+  const how = await page.evaluate(() => {
+    const d = window.__dockHarness?.dock
+    if (d) { d.setHidden(true); return "hidden" }
+    return document.querySelector("[data-take-dock]") ? "float" : "none"
+  })
+  if (how === "float") await page.addStyleTag({ content: REF_FLOAT })
+  await page.waitForTimeout(300)
+  return how
 }
 const settle = async (page, ms) => { await page.waitForTimeout(ms); await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))) }
 const drawHash = (page) => page.evaluate(() => [...document.querySelectorAll('[data-dock-panel="drawing"] canvas')].map((c) => `${c.width}x${c.height}:${c.toDataURL()}`).join("|")).then(sha)
