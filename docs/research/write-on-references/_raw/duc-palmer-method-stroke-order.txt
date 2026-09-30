@@ -1,0 +1,46 @@
+SOURCE_URL: https://www.gutenberg.org/files/66476/66476-h/66476-h.htm
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Palmer Method muscular movement writing with explicit stroke sequences for capital and lowercase letters and speed requirements.
+
+# Palmer Method: Stroke Order and Letter Formation
+
+The Palmer Method emphasizes muscular movement writing rather than finger manipulation, developed by Austin Palmer.
+
+## Core Principles
+
+**Muscular Movement**: "the arm is never raised above, but lies on the desk all the time in a perfectly natural, comfortable position."
+
+**Speed Control**: Formation speed directly affects line quality. "Correct speed forces a light, firm line; too little speed results in shaky tremulous lines."
+
+## Capital Letter Stroke Sequences
+
+**A**: Begins with downward stroke, requires "a positive stop at the point of connection" at the top to prevent loops
+
+**O**: Made with oval motion; "the final stroke should be pushed upward" to avoid resembling A
+
+**C**: Pen "must move downward in the direction of a left curve" at the beginning stroke
+
+**M & N**: Use the inverted figure six form for starting; finishing strokes drop below the baseline
+
+## Lowercase Letter Stroke Sequences
+
+**m & n**: Formed with "over-motion" at the tops; connective lines use "under-motion"
+
+**o**: One-sixteenth inch height; requires angular stop at top closure
+
+**l, b, h, k, f**: Loop letters extending equally above the baseline (four spaces high)
+
+**d, g, q**: Share first parts with small 'a'
+
+## Speed Requirements (Strokes per Minute)
+
+- Compact ovals: 200 downward strokes per minute
+- Capital A: 65-75 per minute
+- Small o: 90+ per minute
+
+Emphasizes that movement drills occur at specific rhythmic counts, establishing temporal consistency in formation.
+
+## Historical Reference
+
+Source: "The Palmer Method of Business Writing" by A. N. Palmer (Project Gutenberg, original publication early 20th century)

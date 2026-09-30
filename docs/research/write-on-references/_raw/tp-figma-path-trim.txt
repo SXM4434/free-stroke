@@ -1,0 +1,36 @@
+SOURCE_URL: https://help.figma.com/hc/en-us/articles/42200302811927-Animate-strokes-with-path-trim
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Figma path trim animation documentation for handwriting and draw-on effects
+
+# Figma Path Trim Animation Guide
+
+## Overview
+
+Path trim is a Figma Motion feature that animates strokes by controlling vector path visibility. As stated in the documentation, it helps creators "create draw-on or erase effects, handwriting animations, and looping spinners."
+
+## Two Implementation Methods
+
+1. Path Animation Style:
+This preset approach works exclusively with open vector paths featuring center-positioned strokes. Users select their path, navigate to the Animations panel, and choose the Path preset to quickly apply the effect.
+
+2. Path Trim Keyframes:
+This method offers granular control by animating start and end points independently. The documentation notes this technique "can be applied to both open and closed vector paths," making it more versatile than the preset option.
+
+## Key Requirements
+
+- Center-positioned strokes only
+- Available to anyone with edit access (all plan types)
+- Currently in open beta
+
+## Usage Example
+
+The feature supports loading spinners with "staggered start and end points for more fluid, organic movement," as demonstrated in Figma's hands-on project materials.
+
+For learners, Figma recommends exploring their "Motion design fundamentals collection" to understand underlying animation principles.
+
+---
+
+## Analysis
+
+Figma's path trim feature is directly designed for handwriting animations. The documentation acknowledges this as a primary use case. However, like all stroke-dasharray implementations, it operates within the same visual limitations: uniform strokes without pressure-sensitive variation or ink qualities that make handwriting read as authentic.

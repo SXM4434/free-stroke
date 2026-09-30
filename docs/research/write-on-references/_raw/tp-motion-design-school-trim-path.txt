@@ -1,0 +1,35 @@
+SOURCE_URL: https://motiondesign.school/blog/fake-3d-rotation-with-trim-path/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Motion Design School guide on using trim path animators in After Effects for 3D rotation effects
+
+# Fake 3D Rotation with Trim Path in After Effects
+
+## Overview
+
+Motion Design School published a guide by Maksim Marakhovskyi explaining how to use Trim Path animators in Adobe After Effects to create the illusion of 3D rotation. According to the article, "Shape Modifiers in After Effects is a potent tool" that can simulate depth without requiring actual 3D layers or cameras.
+
+## Key Steps
+
+The tutorial outlines a six-step process:
+
+1. Create a composition in After Effects
+2. Import your object or shape into the timeline
+3. Add the Trim Paths animator to your layer
+4. Adjust properties including Start, End, and Offset values
+5. Set keyframes to define animation points over time
+6. Preview and refine the rotation effect
+
+## Essential Properties
+
+The guide explains three critical controls: the Start point determines where rotation begins, the End point marks the conclusion, and "Adjust the offset value to control the rotation speed and direction. Positive values rotate the object clockwise, while negative values rotate it counterclockwise."
+
+## Creative Applications
+
+The article recommends combining this technique with other effects, varying rotation speeds across multiple objects, using pre-composition for organization, and experimenting with different shapes to achieve unique visual results.
+
+---
+
+## Context for Handwriting Research
+
+This Motion Design School article uses trim path for 3D illusion effects rather than handwriting animation. It demonstrates the versatility of the tool but does not address handwriting-specific use cases or the visual limitations of trim path for imitating authentic penmanship.
