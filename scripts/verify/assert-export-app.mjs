@@ -107,6 +107,7 @@ function decodeRgba(file, w, h) {
    * frames and the APNG arm died with ENOBUFS at 84 (73 on the unchanged base
    * in the cloud session), before any of its paired rows ran. Same cliff as
    * `pixelHash`'s note below; this reader still has to hold the film. */
+  const buf = execFileSync(FFMPEG, ["-v", "error", "-i", file, "-f", "rawvideo", "-pix_fmt", "rgba", "-"], {
     maxBuffer: 2 ** 31,
   })
   const size = w * h * 4
