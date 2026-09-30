@@ -1,3 +1,83 @@
+# DRAWIN-EXTRAS lane log, 2026-09-30 (cloud)
+
+Branch `claude/drawin-extras-animation-asks-yj9zyt`, cut from `cloud/drawin-extras` at `52982e8` (the snapshot of main). Nothing merges; this is for review.
+
+Coverage items 10 and 11 of `docs/research-2026-09-26/animation-asks-coverage.md` (rows 15, 19, 41, 42, 47). The rows' "his words" column reads "plan" or "doc", so the words are the PRD's: Layer 3 "Future: ... pressure-aware reveal, tip highlight", and Phase 22 "speed, duration, delay, loop, reverse, easing, reveal styles: authentic/smooth/presentation/snappy/slow gel". Row 47 cites REPO-2 N1, "timeline · authored vs recorded timing", and its grade says "No single switch for the whole take was found", so it asks for the switch and step 5 builds it.
+
+Each extra is a new field on the playback envelope (`RevealEnvelopeParams`, `lib/stroke-schedule.ts`), off by default. Each has a real control in the Whole draw box of `components/draw-in-timing-controls.tsx`, wrapped for Customize. `DRAW_IN_EXTRAS_OFF` in `lib/style-system.ts` sets each one at off in every draw-in preset, so Customize lists them under every draw-in preset. They persist through `lib/doc-store.ts`: read against the defaults, range-clamped, and repaired out loud. No new panel; the only placement is rows inside the existing Whole draw box.
+
+## Steps
+
+| step | commit | what |
+|---|---|---|
+| 1 tip highlight | `1b69711` | `tipHighlight` 0..1. An amber glow on the moving end of every stroke that is part drawn; it goes out when the stroke lands. `lib/tip-highlight.ts` finds the heads from the numbers the reveal already uses (the take's spans, the schedule's tracks, or the plain arc spans). One `Points` draw outside the flatten and export groups, so GLB export and bounds never see it. At 0 nothing mounts. |
+| 2 pressure-aware reveal | `e2087c4` | `pressureReveal` 0..1. Inside each stroke that carries varying pressure, a harder press means a slower pen and a lighter one a quicker pen, and the stroke is scaled back to its recorded start and end. `lib/pressure-reveal.ts`, applied in the clock memo in `app/page.tsx` after the hand clock and before the rate. A stroke with no pressure, or constant pressure (a mouse), comes back as the same object, so at any value a mouse drawing gets main's arrays. |
+| 3 duration | `5037ce8` | `durationSeconds`, 0 (off) or 0.5 to 30. Above 0 the rate becomes the one that lands the pen's first ink to its last in exactly that long, on either clock and after pressure. The Speed pills hold while it is on. |
+| 4 Presentation | `354bc0c` | The fifth reveal style, a new shipped preset between Smooth Reveal and Snappy Draw: 4 s however long he drew, ease in-out, overlap 0.2, 0.4 s delay, tip at 0.6. |
+| 5 authored vs recorded | `c728b87` | `timing`, `authored` (main) or `recorded`. Recorded gives the viewport (render, clock, export) an empty take, so it plays the recording. The strip and Perform keep the real take, so his rows stay visible and editable and nothing is written. |
+
+Pressure, duration and Presentation's duration are held with Clock and Speed under a performed take (`clockKeyOf` carries each only when it is above 0, so its string is unchanged at 0), because each re-times the clock a performed row is stored against.
+
+## Checks, every step
+
+- **tsc**: 6 errors after every step (5 `lib/geometry-engines.ts`, 1 `lib/dd-engine/handFeel.ts`), the baseline.
+- **The new gate**, `scripts/verify/assert-drawin-extras.mjs`. `--phase=base` ran against the unchanged base on :3140 and wrote main's frames and clocks. It was recorded twice and the two files are byte-identical. Every OFF row compares against that file. Rod and Inflate, the hero word, 4 playheads, and the six shipped presets at 0.45.
+
+| section | rows | must-fails fired | what the must-fail is |
+|---|---|---|---|
+| tip | 8 of 8 | 3 of 3 | the OFF compare run with the glow on; knockout `tip-at-start` (the glow lands 21.9 px from the new ink against a 14.4 px bar, the glow's own radius); knockout `tip-dark` (0 px change) |
+| pressure | 6 of 6 | 2 of 2 | knockout `pressure-no-fallback`; knockout `pressure-inverted` (0 of 12 strokes quicker, mean share 0.781 against 0.497) |
+| duration | 7 of 7 | 2 of 2 | the OFF compare run at 5 s; knockout `duration-ignored` (13116 ms against 2000) |
+| presentation | 5 of 5 | 2 of 2 | Presentation held to Authentic Draw's main record; the Presentation claim held to Smooth Reveal |
+| timing | 6 of 6 | 2 of 2 | the OFF compare with two authored rows playing; knockout `timing-ignored` |
+
+Full gate at each step: step 1 9 of 9, step 2 15 of 15, step 3 22 of 22, step 4 27 of 27, step 5 33 of 33, 11 of 11 must-fails (counts include the "no page errors" row).
+
+What the ON rows measure:
+- **Tip**: at 0.45 and 0.7, the pixels the glow changes are centred on the ink the pen drew in the last 0.02 of the take. That ink is found from two glow-off frames, independently of the glow code. Gaps were 9.0 and 8.4 px against the glow's radius, 14.5 and 14.2 px. At the end of the take, the finished frame is byte-identical with the glow on (that row has no must-fail arm).
+- **Pressure**: over the hero word with pressure 0.25 on each stroke's first half of points and 0.95 on the rest, all 12 strokes reach half their arc sooner (mean share of time 0.497 off, 0.212 on), every stroke keeps its start and end to 1e-6 ms, frames at 0.45 and 0.7 move, and the finished frame does not.
+- **Fallback**: at pressureReveal 1, the plain word (constant 0.6, which is what a mouse gives) renders all 8 frames and both clocks as main, with the same arrays (`__fsClock` sameRef true).
+- **Duration**: 2 s and 7 s on the recorded clock and 2 s on the hand clock. The take is exactly the duration (2000.0, 7000.0 ms), and a real playback's clock, fitted from 10% to 90%, is 2000, 7000 and 2000 ms against a 2% bar.
+- **Presentation**: the take is 4000.0 ms, a real playback's clock fits 4001 ms, the ease is inOut, and the tip shows 2 heads at 0.45. Each of the six shipped presets still plays as main (frame at 0.45 and clock).
+- **Timing**: with two rows set (stroke 1 at 2x, stroke 5 held back), Recorded renders all 8 frames and both clocks as main while both rows stay in the document; back on Authored the take is 14880 ms again.
+- **Controls**: for each extra, the Customize row is found under a draw-in preset, and one key step or click writes the field.
+
+**Regressions**, each compared with its own run on the unchanged base in this container:
+
+| gate | base | step 1 | step 2 | step 3 | step 4 | step 5 |
+|---|---|---|---|---|---|---|
+| assert-motion-customize | 49/49, 48/48 red | 49/49, 48/48 | 49/49, 48/48 | 49/49, 48/48 | 57/57, 56/56 (7 presets now) | 57/57, 56/56 |
+| assert-hand-clock | 10/10, 10/10 fired | 10/10, 10/10 | 10/10, 10/10 | 10/10, 10/10 | 10/10, 10/10 | 10/10, 10/10 |
+| assert-take-timeline | 20/21 (E2 41.4/s, later 35.7/s) | 20/21 (E2 40.8) | 20/21 (E2 38.6) | 20/21 (E2 37.7) | 20/21 (E2 36.3) | 20/21 (E2 36.3) |
+| assert-stroke-strip | 17/18 (row 0) | 17/18 (row 0) | 17/18 | 17/18 | 17/18 | 17/18 (row 0) |
+| assert-drawin-curve | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+
+- **take-timeline E2** (frame rate with the strip live, bar 50/s) is red on base too. Headless Chromium here renders WebGL on SwiftShader (CPU), and it drifts down over a long session on base as much as on the lane: base read 41.4/s at the start and 35.7/s after step 4. For step 5 both servers were restarted and base was re-run first: base 31.5/s, lane 36.3/s, both red, and the lane is not the slower one. No bar was touched.
+- **stroke-strip row 0** is red on base against its own base file, written minutes earlier from the same code: 18 of 18 frames differ. Its frames are not stable from one page load to the next in this container. I found the same thing in my own gate: the camera framing after strokes are injected differs per load (33,987 px apart on one paused frame). Pinning the camera with `__captureHarness.orbitView(45, 35.264, 1.7)` made loads byte-identical. I did not change that gate.
+- **assert-drawin-curve cannot run here**: it builds its reference from `git show 45ed049fc:lib/stroke-timing.ts`, and this snapshot has no history. It throws before its first row, on base and lane alike.
+- Must-fail arms of the regression gates fired at every step as they did on base (motion-customize 48 of 48 then 56 of 56 rows red, hand-clock 10 of 10).
+
+## Setup, and what could not run
+
+- `pnpm install --frozen-lockfile` FAILS on this snapshot: package.json has `dialkit@^1.4.3` and `motion@^12.43.0`, and pnpm-lock.yaml does not. package-lock.json has both. I ran `pnpm install --no-frozen-lockfile` and restored pnpm-lock.yaml, so no lockfile change is committed.
+- `npx playwright install --with-deps chromium` worked (system deps installed, Chromium 1194 already present). But `scripts/verify/lib/browser.mjs` pins `channel: "chrome"` (Google Chrome), and `npx playwright install chrome` failed: dl.google.com is refused by the egress proxy (403). So in this container `/opt/google/chrome/chrome` is a symlink to Playwright's Chromium, and browser.mjs is unchanged. Its `--use-angle=metal` is a Mac flag; here WebGL runs on SwiftShader, so rAF-rate numbers are this container's, not a Mac's.
+- `jiti` is only a transitive dependency, and pnpm does not hoist it, so motion-customize and hand-clock could not import it. I symlinked `node_modules/jiti` to the pnpm store copy in both trees (node_modules only, not committed).
+- Base ran from a git worktree of `cloud/drawin-extras` in the scratchpad on :3140; the lane ran on :3139. Both servers were stopped and started by their recorded pids.
+- Not run: Extrude and Solid, the 3-Up compare panels and export frames under any extra (the glow is drawn into the canvas export grabs, so it should be in a video export, but I did not film one); a real stylus. The pressure rows use injected pressure, not a pen.
+- Gate artefacts: none written under docs/verification by the new gate (its base file lives in the scratchpad, passed by `--base-file`). The regression gates write their own evidence under docs/verification; none of it is committed.
+
+## Questions for the owner
+
+1. **Presentation's values are mine.** The plan has one word. I read it as the take made to be watched: 4 s whatever the drawing's length, eased both ends, tip lit at 0.6, a 0.4 s beat before. Right idea, or should Presentation mean something else (camera, flat ink, a fixed order)?
+2. **Duration against per-stroke rows.** Duration sets the pen's length. A held-back stroke or a delay still adds to the take, by construction of `buildTimedSchedule` (not measured with a duration on). Should Duration fit the whole take, rows included, instead?
+3. **Pressure's direction.** Harder press means a slower pen. The other reading is harder means faster. It is one sign in `lib/pressure-reveal.ts`; the gate's must-fail already runs the other way.
+4. **The tip's look.** An amber dot about 4 nib widths wide at full. The first try, a warm-white additive glow, disappeared on the near-white page. Colour, size and whether it should follow the ink colour are yours to call.
+5. **"Recorded" appears twice.** The Clock row's Recorded is "his timestamps, not the modelled hand"; the Timing row's Recorded is "the recording without his per-stroke rows". The names are from the rows (N1's words). Rename one?
+6. **Recorded and the strip.** Under Recorded the strip still shows his rows where Authored would play them, so the bars do not match what plays. The note under the switch says so. Grey the bars out, or leave as is?
+7. **Saved presets** check only each field's type, as they do for clock and rate. A saved preset carrying tipHighlight 5 plays clamped to 1 in the viewport, but its stored value is not repaired. Worth a range check there too?
+
+---
+
 # ANIM-1A3 lane log, 2026-09-25
 
 Stopped at the 150k lane context gate (hook) after the code steps. Nothing browser-verified yet: no dev server was started, no browser was opened, no gate was run.
