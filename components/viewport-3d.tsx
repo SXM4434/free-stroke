@@ -2005,7 +2005,9 @@ interface PenCarveUniforms {
    */
   hard: { value: number }
   /**
-   * WHICH DIVISOR SIZES THE COVERAGE RAMP. 1 = `fwidth(sd)`, the shipped value;
+   * WHICH DIVISOR SIZES THE COVERAGE RAMP. 1 = the length of `sd`'s screen
+   * gradient, `length(vec2(dFdx(sd), dFdy(sd)))`, the shipped value (it was
+   * `fwidth(sd)` until CARVE-AA, 2026-09-30);
    * 0 = the parked prior, the screen size of one LOCAL UNIT. See
    * `PEN_CARVE_AA_FWIDTH` for the measurement and for the frame it closes.
    */
@@ -2063,6 +2065,26 @@ interface PenCarveUniforms {
  *
  * The prior stays reachable — `__captureHarness.setCarveAA(false)` — because a
  * fix whose defect cannot be re-rendered is a claim, not a result.
+ *
+ * ── CARVE-AA, 2026-09-30: THE GRADIENT'S LENGTH, NOT `fwidth` ────────────────────
+ * `fwidth(sd)` is `|dFdx sd| + |dFdy sd|`, the L1 size of the gradient. On an
+ * edge that runs diagonally on screen that is up to 1.41 times the true one
+ * pixel, so the ramp was up to 1.41 times too wide there, and a wider ramp is
+ * more fractional alpha for `alphaToCoverage` to turn into a sample mask. The
+ * divisor is now `length(vec2(dFdx(sd), dFdy(sd)))`, the exact width:
+ * `sd` over it is the signed distance to the edge in pixels. It is never wider
+ * than `fwidth`, so nothing `fwidth` closed at grazing reopens. Head-on, where
+ * the prior's one local unit IS the gradient of a distance field, it lands
+ * much nearer the prior than `fwidth` did (1843 px from the prior at f222 to
+ * f224 under `fwidth`, 372 px under the length, SwiftShader, dsf 2).
+ *
+ * Found by `assert-carve-graze`'s f224 row, and not where the row said. At
+ * f224 the `s` is SOLID (flat 0 from the flip apex, f222), so its carve is
+ * off and neither divisor touches it. The row was reading the head-on `k`'s
+ * carved edge beside it, where `fwidth`'s diagonal over-width left paper
+ * pixels in the gap between the two letters. The constant keeps its name: 1
+ * still means "the derivative of `sd` itself", and the dial's gates read it
+ * by that name.
  * ══════════════════════════════════════════════════════════════════════════ */
 export const PEN_CARVE_AA_FWIDTH = true
 let liveCarveAA = PEN_CARVE_AA_FWIDTH
@@ -2263,7 +2285,8 @@ function applyPenCarve(
           "  float fsSd = fsSdU * uFsPenUnits;",
           // One local unit in pixels, so the boundary is antialiased at the
           // same rate the mark's own silhouette is.
-          /* ---- THE RAMP'S WIDTH, AND IT IS `fwidth(sd)` — see
+          /* ---- THE RAMP'S WIDTH, AND IT IS THE LENGTH OF `sd`'S SCREEN
+           * GRADIENT, NOT `fwidth(sd)` (CARVE-AA, 2026-09-30); see
            * `PEN_CARVE_AA_FWIDTH` for the frame this closes and for why the
            * fade above could not have closed it.
            *
@@ -2275,7 +2298,7 @@ function applyPenCarve(
            * straddling two letters has undefined derivatives under either
            * divisor, and letters are hundreds of pixels apart. */
           "  fsPpx = max(length(dFdx(fsPq)), length(dFdy(fsPq)));",
-          "  float fsPenW = uFsPenAA > 0.5 ? fwidth(fsSd) : fsPpx;",
+          "  float fsPenW = uFsPenAA > 0.5 ? length(vec2(dFdx(fsSd), dFdy(fsSd))) : fsPpx;",
           "  fsPenCov = clamp(0.5 - fsSd / max(fsPenW, 1e-9), 0.0, 1.0);",
           /* THE CPU PROBE'S LAW, AS AN ARM. `_probe-carve-render.mjs` tests
            * `sd <= 0` with no derivative and no coverage; this makes that exact
