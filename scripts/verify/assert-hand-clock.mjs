@@ -27,6 +27,7 @@ const PR = await jiti.import("../../lib/pen-reveal.ts")
 const ST = await jiti.import("../../lib/stroke-timing.ts")
 const S = await jiti.import("../../lib/style-system.ts")
 const GE = await jiti.import("../../lib/geometry-engines.ts")
+const CM = await jiti.import("../../lib/camera-moves.ts")
 const { chromium } = await import("./lib/browser.mjs")
 const { LAB_URL } = await import("./lib/dev-server.mjs")
 const OUT = new URL("../../docs/verification/hand-clock/", import.meta.url).pathname
@@ -44,7 +45,7 @@ const TARGET_MS = (140 / 30) * 1000, FRAME_MS = 1000 / 60
 const hand = S.PRESET_REGISTRY.geometryAnimation.find((p) => p.id === "handDraw")
 if (!hand) { console.log("NOTHING TO CHECK: no handDraw preset in Geometry Animation"); process.exit(2) }
 const polys = JSON.parse(readFileSync(new URL("../capture/logo-strokes.json", import.meta.url), "utf8")).polylines
-console.log(`DENOMINATOR: logo fixture ${polys.length} strokes, ${polys.reduce((a, p) => a + p.length, 0)} input points; ${N_SAMPLES} reveal samples per stroke set; 10 rows, each with its own must-fail pass`)
+console.log(`DENOMINATOR: logo fixture ${polys.length} strokes, ${polys.reduce((a, p) => a + p.length, 0)} input points; ${N_SAMPLES} reveal samples per stroke set; 11 rows, each with its own must-fail pass`)
 
 const ROWS = {
   off: "R1 off is main: clock recorded hands the viewport the SAME arrays, and the take, slots and frames are unchanged by a hand round trip",
@@ -52,13 +53,14 @@ const ROWS = {
   strip: "R3 strip and stage agree under hand: the provider's penMs (the strip's seconds axis) equals the viewport's",
   save: "R4 save and reload keeps hand",
   custom: "R5 Customize under Hand Draw lists envelope.clock and envelope.rate, an edit marks each, Reset puts hand and Hand Draw's rate back",
-  perform: "R6 a performed take holds the clock: asking for another clock leaves the performed slot where it was",
+  perform: "R6 PEN-7 perform wins: a performed stroke keeps its on-screen [t0, t1] within 1 ms and its performed pace across Hand -> Authentic -> Hand, while the other strokes follow the clock",
   parity: "R7 /'s stamp equals Desk Doodles' stampPenClock(logo, lognormal, nib, dropSubNibStubs) at every point and at 64 clock fractions, 1e-9",
   lift: "R8 the longest lift is the word space (the lift with the widest x gap), on / and on Desk Doodles, and every lift matches",
   take: "R9 Hand Draw's default logo take is 140/30 s within one frame, measured off the playing page and read off the take",
   authentic: "R10 Authentic's logo take is byte-identical to main (sha 47596359db80)",
+  lifts: "R11 Turn in the lifts reads the Hand lifts: the slot gaps the picker reads equal stampPenClock's lifts / rate within one frame, and the move turns in exactly the gaps of 120 ms or more",
 }
-const MUST_FAIL = { off: "clock-always-hand", pen: "clock-uniform", strip: "clock-strip-recorded", save: "clock-not-persisted", custom: "presetFields-applies-only", perform: "clock-no-yield", parity: "clock-stamp-resampled", lift: "clock-stamp-resampled", take: "clock-rate-off", authentic: "clock-rate-leak" }
+const MUST_FAIL = { off: "clock-always-hand", pen: "clock-uniform", strip: "clock-strip-recorded", save: "clock-not-persisted", custom: "presetFields-applies-only", perform: "clock-no-rebase", lifts: "clock-uniform", parity: "clock-stamp-resampled", lift: "clock-stamp-resampled", take: "clock-rate-off", authentic: "clock-rate-leak" }
 
 const browser = await chromium.launch()
 const asProcessed = (pts) => pts.map((points) => ({ points, cornerCount: 0 }))
@@ -266,12 +268,45 @@ async function run(mutate) {
     await pickPreset("handDraw")
     const setOk = await page.evaluate(() => window.__fsTake.set({ 2: { delayMs: 0, speed: 1, ease: { kind: "preset", id: "linear" }, holdBack: false, performed: [0, 0.1, 0.3, 0.6, 0.85, 1] } }))
     await settle(600)
-    const p0 = await take(), pc0 = (await clock()).clock
-    await pickPreset("authenticDraw")
-    const p1 = await take(), pc1 = (await clock()).clock
-    const s0 = p0.slots ? [p0.slots[4], p0.slots[5]] : null, s1 = p1.slots ? [p1.slots[4], p1.slots[5]] : null
-    row("perform", setOk && s0 && s1 && pc0 === "hand" && pc1 === "hand" && Math.abs(s0[0] - s1[0]) <= 1 && Math.abs(s0[1] - s1[1]) <= 1,
-      `set ${setOk}, clock ${pc0} -> ${pc1}, stroke 2 slot [${s0?.map(Math.round)}] -> [${s1?.map(Math.round)}] ms`)
+    const perf = () => page.evaluate(() => { const t = window.__fsTake.get(); const pf = t.take?.strokes?.[2]?.performed ?? t.performed?.[2] ?? null; return { pf: pf ? Array.from(pf) : null, keys: Object.keys(t).join(",") } })
+    const p0 = await take(), pc0 = (await clock()).clock, pfA = await perf()
+    await pickPreset("authenticDraw"); await settle(600)
+    const p1 = await take(), pc1 = (await clock()).clock, pfB = await perf()
+    await pickPreset("handDraw"); await settle(600)
+    const p2 = await take(), pc2 = (await clock()).clock, pfC = await perf()
+    const sl = (p) => (p.slots ? [p.slots[4], p.slots[5]] : null)
+    const s0 = sl(p0), s1 = sl(p1), s2 = sl(p2)
+    const d = (a, b) => (a && b ? Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])) : Infinity)
+    let followed = 0
+    for (let i = 0; p0.slots && p1.slots && i < p0.slots.length / 2; i++) if (i !== 2 && Math.abs(p0.slots[i * 2 + 1] - p1.slots[i * 2 + 1]) > FRAME_MS) followed++
+    const pfSame = !!pfA.pf && J(pfA.pf) === J(pfB.pf) && J(pfA.pf) === J(pfC.pf)
+    row("perform", setOk && pc0 === "hand" && pc1 === "recorded" && pc2 === "hand" && d(s0, s1) <= 1 && d(s0, s2) <= 1 && pfSame && followed > 0,
+      `set ${setOk}, clock ${pc0} -> ${pc1} -> ${pc2}, stroke 2 slot [${s0?.map((v) => v.toFixed(1))}] -> [${s1?.map((v) => v.toFixed(1))}] -> [${s2?.map((v) => v.toFixed(1))}] ms, worst ${Math.max(d(s0, s1), d(s0, s2)).toFixed(4)} ms, performed ${pfSame ? "identical" : `differs (${pfA.pf ? "" : "unread: " + pfA.keys})`}, ${followed} other strokes moved with the clock`)
+
+    // R11: a fresh logo under Hand, no rows. The picker reads the strip's slots (key-lanes moveOptions).
+    {
+    await page.evaluate((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys); await settle(1200)
+    await pickPreset("handDraw"); await settle(600)
+    const cl = await clock(), tk = await take()
+    const rate = cl.rate
+    const rec = (cl.recorded ?? []).map((q) => q.points ?? q)
+    const st = PR.stampPenClock(rec, "lognormal", { nibDiameter: DD_NIB })
+    const gapsOf = (w) => { w = w.slice().sort((a, b) => a[0] - b[0]); const g = []; let e = w[0][1]; for (let i = 1; i < w.length; i++) { if (w[i][0] > e) g.push([e, w[i][0]]); e = Math.max(e, w[i][1]) } return g }
+    const want = gapsOf(st.map((q) => { const pts = q.points ?? q; return [pts[0].t / rate, pts[pts.length - 1].t / rate] })).map(([a, b]) => b - a)
+    const win = []; for (let i = 0; tk.slots && i < tk.slots.length / 2; i++) win.push([tk.slots[i * 2], tk.slots[i * 2 + 1]])
+    const got = win.length ? gapsOf(win) : []
+    let worst = got.length === want.length ? 0 : Infinity
+    for (let i = 0; i < got.length && i < want.length; i++) worst = Math.max(worst, Math.abs(got[i][1] - got[i][0] - want[i]))
+    const mv = CM.CAMERA_MOVES.find((m) => m.id === "orbit-lifts")
+    const tr = CM.tryCameraMove(mv, { slots: tk.slots ?? [], takeMs: tk.takeMs })
+    const az = tr.keys?.azimuth ?? []
+    const turns = []; for (let i = 0; i + 1 < az.length; i++) if (az[i + 1].value !== az[i].value) turns.push([az[i].tMs, az[i + 1].tMs])
+    const clear = got.filter(([a, b]) => b - a >= 120)
+    const turnsOk = turns.length === clear.length && turns.every((t, i) => Math.abs(t[0] - clear[i][0]) < 1e-6 && Math.abs(t[1] - clear[i][1]) < 1e-6)
+    writeFileSync(`${OUT}lifts-under-hand.json`, J({ rate, liftsMs: got.map(([a, b]) => +(b - a).toFixed(2)), stampedLiftsMs: want.map((v) => +v.toFixed(2)), turns, refused: tr.refused ?? null }, null, 2))
+    row("lifts", cl.clock === "hand" && worst <= FRAME_MS && (clear.length ? turnsOk : !!tr.refused),
+      `rate ${rate}, ${got.length} lifts vs ${want.length} stamped, worst ${worst.toFixed(2)} ms; lifts ms [${got.map(([a, b]) => (b - a).toFixed(0)).join(" ")}]; ${clear.length} clear 120 ms, ${turns.length} turns${tr.refused ? `, refused: ${String(tr.refused).slice(0, 80)}` : ""}`)
+    }
     rows.errors = errors.slice(0, 3)
   } catch (e) {
     rows.crash = String(e).slice(0, 300); console.log(`CRASH ${mutate ?? "real"}: ${rows.crash}`)

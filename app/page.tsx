@@ -84,7 +84,9 @@ import {
 } from "@/lib/style-fusion"
 import type { ViewportApi } from "@/components/viewport-3d"
 import { toast } from "sonner"
-import { setPenTipMode, readPenTipMode, stampPenClock, type PenTipMode } from "@/lib/pen-reveal"
+import { setPenTipMode, readPenTipMode, stampPenClock, liftsLandBetweenStrokes, revealDistanceFraction, type PenTipMode } from "@/lib/pen-reveal"
+import { scheduleFromStrokes } from "@/lib/stroke-schedule"
+import { assignLetters } from "@/lib/hero-letters"
 /* THE CHANNEL THAT TURNS A DRAWING INTO AN OBJECT. `flatten` is what the hero
  * beat animates, and until now `app/page.tsx` did not mention it once: the
  * viewport defaulted the prop to SOLID_STATE on every render, so the product
@@ -112,7 +114,7 @@ import {
   REVEAL_WINDOW_DEFAULTS,
   REVEAL_ENVELOPE_DEFAULTS,
 } from "@/lib/stroke-schedule"
-import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, clockUnderTake, clockKeyOf, carryTimeByArc, rateScaled } from "@/lib/stroke-timing"
+import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, takeHasPerformed, rebasePerformed, paceFromCurve, carryTimeByArc, rateScaled } from "@/lib/stroke-timing"
 import { StrokeTakeProvider } from "@/components/stroke-strip"
 import { compactKeys, validateKeys, type TakeKeys } from "@/lib/keyframes"
 
@@ -692,20 +694,40 @@ export default function Home() {
     [edit],
   )
 
+  /* HAND-DRAW-P2 (PEN-7). A new clock, rate, pace or draw-in under a take with
+   * performed strokes re-stores those rows (`rebasePerformed`), so each keeps the
+   * start and length he performed while the other strokes follow the new clock.
+   * It rides in the same edit as the change, one undo step. Null when nothing
+   * performed would move. */
+  const rebaseForClock = (
+    cur: RevealEnvelopeParams,
+    next: RevealEnvelopeParams,
+    nextDrawIn = docRef.current.drawIn,
+    nextWindow = docRef.current.revealWindow,
+  ): StrokeTimingTake | null => {
+    const d = docRef.current
+    if (!d.take || !takeHasPerformed(d.take)) return null
+    if (typeof window !== "undefined" && (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "clock-no-rebase") return null
+    const { raw, processed, nib } = clockInRef.current
+    const base = (env: RevealEnvelopeParams, drawIn: typeof nextDrawIn, win: typeof nextWindow) => {
+      const c = clockStrokesFor(raw, processed, env, nib, settingsRef.current)
+      return baseSlotsFor(c.processed, penMsOf(c.raw), drawIn, win.mode, env.mode, nib)
+    }
+    const a = base(cur, d.drawIn, d.revealWindow)
+    const b = base(next, nextDrawIn, nextWindow)
+    if (a.length === b.length && a.every((v, i) => v === b[i])) return null
+    return rebasePerformed(d.take, a, b)
+  }
+
   const handleRevealEnvelopeChange = useCallback(
     (patch: Partial<RevealEnvelopeParams>, gesture?: string | null) => {
       const key = Object.keys(patch)[0] ?? "revealEnvelope"
       const cur = docRef.current.revealEnvelope
       const next = { ...cur, ...patch }
-      const { held } = clockUnderTake(clockKeyOf(cur), clockKeyOf(next), docRef.current.take)
-      if (held) {
-        toast("This take has performed strokes. A new clock or speed would move them, so both stay put.")
-        if (Object.keys(patch).length === 1) return
-        next.clock = cur.clock
-        next.rate = cur.rate
-      }
-      edit(`Playback ${humanise(key).toLowerCase()}`, gesture ?? null, { revealEnvelope: next })
+      const rebased = rebaseForClock(cur, next)
+      edit(`Playback ${humanise(key).toLowerCase()}`, gesture ?? null, rebased ? { revealEnvelope: next, take: rebased } : { revealEnvelope: next })
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [edit],
   )
 
@@ -761,43 +783,15 @@ export default function Home() {
    * the recorded arrays: the input canvas is the recording. */
   const clockNib = computeSolidEffectiveThicknessPx(solidParams.thickness)
   const clockMsRef = useRef(0)
-  const clocked = useMemo(() => {
-    const mutate = typeof window !== "undefined" ? (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE : undefined
-    const wantHand = revealEnvelope.clock === "hand" || mutate === "clock-always-hand"
-    const rate = mutate === "clock-rate-off" ? 1 : mutate === "clock-rate-leak" ? HAND_DRAW_RATE : revealEnvelope.rate
-    if ((!wantHand && rate === 1) || processedStrokes.length === 0)
-      return { raw: rawStrokes, processed: processedStrokes, hand: false, stamped: null as Stroke[] | null, drift: 0 }
-    const t0 = performance.now()
-    let processed: ProcessedStroke[] = processedStrokes
-    let raw: Stroke[] = rawStrokes
-    let stamped: Stroke[] | null = null
-    let drift = 0
-    if (wantHand) {
-      const stampResample = mutate === "clock-stamp-resampled"
-      stamped = stampPenClock(
-        (stampResample ? processedStrokes : rawStrokes).map((s) => s.points),
-        mutate === "clock-uniform" ? "uniform" : "lognormal",
-        { nibDiameter: clockNib },
-      )
-      const cs = settingsRef.current
-      processed = processedStrokes.map((s, i) => {
-        const q = stamped![i]
-        if (!q) { drift++; return s }
-        if (stampResample) return { ...s, points: s.points.map((p, j) => ({ ...p, t: q.points[j].t })) }
-        const r = rawStrokes[i]
-        if (!r || q.points.length !== r.points.length) { drift++; return { ...s, points: carryTimeByArc(s.points, q.points) } }
-        const timed = processStroke({ ...r, points: r.points.map((p, j) => ({ ...p, t: q.points[j].t })) }, cs.spacing, cs.smoothing, cs.preserveCorners).points
-        if (timed.length === s.points.length) return { ...s, points: s.points.map((p, j) => ({ ...p, t: timed[j].t })) }
-        drift++
-        return { ...s, points: carryTimeByArc(s.points, timed) }
-      })
-      raw = processed as Stroke[]
-    }
-    processed = rateScaled(processed, rate)
-    raw = wantHand ? (processed as Stroke[]) : rateScaled(raw, rate)
-    clockMsRef.current = performance.now() - t0
-    return { raw, processed, hand: wantHand, stamped, drift }
-  }, [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, clockNib])
+  const clocked = useMemo(
+    () => clockStrokesFor(rawStrokes, processedStrokes, revealEnvelope, clockNib, settingsRef.current),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, clockNib],
+  )
+  clockMsRef.current = clocked.ms
+  /* What a clock change re-reads (`rebaseForClock`): the recording and the nib. */
+  const clockInRef = useRef({ raw: rawStrokes, processed: processedStrokes, nib: clockNib })
+  clockInRef.current = { raw: rawStrokes, processed: processedStrokes, nib: clockNib }
   const takePenMs = useMemo(() => {
     const knock = typeof window !== "undefined" && (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "clock-strip-recorded"
     return penMsOf(knock ? rawStrokes : clocked.raw)
@@ -1494,16 +1488,14 @@ export default function Home() {
     const preset = findPresetIn(docRef.current.styleState, id)
     const envelope = { ...REVEAL_ENVELOPE_DEFAULTS, ...patch.envelope }
     const curEnv = docRef.current.revealEnvelope
-    const clockHold = clockUnderTake(clockKeyOf(curEnv), clockKeyOf(envelope), docRef.current.take)
-    if (clockHold.held) {
-      envelope.clock = curEnv.clock
-      envelope.rate = curEnv.rate
-      toast(`${preset?.label ?? "This preset"} is on, but the clock and speed stay put: this take has performed strokes, and either would move them.`)
-    }
+    const drawIn = { ...DRAW_IN_DEFAULTS, ...patch.drawIn }
+    const revealWindow = { ...REVEAL_WINDOW_DEFAULTS, ...patch.revealWindow }
+    const rebased = rebaseForClock(curEnv, envelope, drawIn, revealWindow)
     edit(`Preset ${preset?.label ?? id}`, null, {
-      drawIn: { ...DRAW_IN_DEFAULTS, ...patch.drawIn },
-      revealWindow: { ...REVEAL_WINDOW_DEFAULTS, ...patch.revealWindow },
+      drawIn,
+      revealWindow,
       revealEnvelope: envelope,
+      ...(rebased ? { take: rebased } : {}),
       styleState: { ...docRef.current.styleState, activePresetFamily: "geometryAnimation", activePresetId: id },
     })
     return true
@@ -2653,4 +2645,73 @@ export default function Home() {
     </div>
     </StrokeTakeProvider>
   )
+}
+
+/* THE CLOCK, as a pure function (HAND-DRAW-P2): the memo on / calls it for the
+ * clock that plays, and a clock change calls it for the old clock and the new
+ * one, so `rebasePerformed` reads both from the same code. */
+function clockStrokesFor(
+  rawStrokes: Stroke[],
+  processedStrokes: ProcessedStroke[],
+  env: { clock: string; rate: number },
+  clockNib: number,
+  cs: Pick<ExportSettings, "spacing" | "smoothing" | "preserveCorners">,
+) {
+  const mutate = typeof window !== "undefined" ? (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE : undefined
+  const wantHand = env.clock === "hand" || mutate === "clock-always-hand"
+  const rate = mutate === "clock-rate-off" ? 1 : mutate === "clock-rate-leak" ? HAND_DRAW_RATE : env.rate
+  if ((!wantHand && rate === 1) || processedStrokes.length === 0)
+    return { raw: rawStrokes, processed: processedStrokes, hand: false, stamped: null as Stroke[] | null, drift: 0, ms: 0 }
+  const t0 = performance.now()
+  let processed: ProcessedStroke[] = processedStrokes
+  let raw: Stroke[] = rawStrokes
+  let stamped: Stroke[] | null = null
+  let drift = 0
+  if (wantHand) {
+    const stampResample = mutate === "clock-stamp-resampled"
+    stamped = stampPenClock(
+      (stampResample ? processedStrokes : rawStrokes).map((s) => s.points),
+      mutate === "clock-uniform" ? "uniform" : "lognormal",
+      { nibDiameter: clockNib },
+    )
+    processed = processedStrokes.map((s, i) => {
+      const q = stamped![i]
+      if (!q) { drift++; return s }
+      if (stampResample) return { ...s, points: s.points.map((p, j) => ({ ...p, t: q.points[j].t })) }
+      const r = rawStrokes[i]
+      if (!r || q.points.length !== r.points.length) { drift++; return { ...s, points: carryTimeByArc(s.points, q.points) } }
+      const timed = processStroke({ ...r, points: r.points.map((p, j) => ({ ...p, t: q.points[j].t })) }, cs.spacing, cs.smoothing, cs.preserveCorners).points
+      if (timed.length === s.points.length) return { ...s, points: s.points.map((p, j) => ({ ...p, t: timed[j].t })) }
+      drift++
+      return { ...s, points: carryTimeByArc(s.points, timed) }
+    })
+    raw = processed as Stroke[]
+  }
+  processed = rateScaled(processed, rate)
+  raw = wantHand ? (processed as Stroke[]) : rateScaled(raw, rate)
+  return { raw, processed, hand: wantHand, stamped, drift, ms: performance.now() - t0 }
+}
+
+/* HAND-DRAW-P2. The base slots the strip lays a take on (`components/stroke-strip.tsx`,
+ * its `slots` memo with no rows) for one clock's strokes: the schedule's tracks
+ * through that clock's pace, times its pen ms. The hybrid blend is the viewport's
+ * default, 0.4, read only by the compare view's hybrid mode. */
+function baseSlotsFor(
+  strokes: ProcessedStroke[],
+  penMs: number,
+  drawIn: Parameters<typeof scheduleFromStrokes>[2],
+  windowMode: Parameters<typeof liftsLandBetweenStrokes>[1],
+  revealMode: Parameters<typeof revealDistanceFraction>[2],
+  nib: number,
+): Float64Array {
+  const unitOf = drawIn.unit === "stroke" || strokes.length === 0 ? null : assignLetters(strokes, nib).of
+  const schedule = scheduleFromStrokes(strokes, unitOf, drawIn)
+  const lifts = liftsLandBetweenStrokes(schedule, windowMode)
+  const pace = paceFromCurve((c) => revealDistanceFraction(strokes, c, revealMode, 0.4, lifts))
+  const s = new Float64Array(schedule.tracks.length * 2)
+  schedule.tracks.forEach((t, i) => {
+    s[i * 2] = pace.beatToLanding(t.start) * penMs
+    s[i * 2 + 1] = pace.beatToClock(t.end) * penMs
+  })
+  return s
 }

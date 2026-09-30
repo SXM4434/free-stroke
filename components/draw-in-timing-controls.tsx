@@ -32,7 +32,7 @@ import {
   SPEED_MIN,
   SPEED_MAX,
 } from "@/components/stroke-strip"
-import { rowOf, withRow, withoutRow, takeHasPerformed, curveOfEase, curveProblem, type StrokeEase } from "@/lib/stroke-timing"
+import { rowOf, withRow, withoutRow, curveOfEase, curveProblem, type StrokeEase } from "@/lib/stroke-timing"
 import {
   ORDER_LABELS,
   ORDER_NOTES,
@@ -121,7 +121,6 @@ export function DrawInTimingControls({
   showPace?: boolean
 }) {
   const W = wrap ?? ((_keys: string[], node: React.ReactNode) => node)
-  const clockHeld = takeHasPerformed(useStrokeTake()?.take)
   const revealDelaySeconds = envelope.delaySeconds
   const revealEase = envelope.ease
   const revealCadence = envelope.cadence
@@ -592,7 +591,6 @@ export function DrawInTimingControls({
               key={id}
               type="button"
               data-clock={id}
-              disabled={clockHeld && envelope.clock !== id}
               onClick={() => patchEnvelope({ clock: id })}
               aria-pressed={envelope.clock === id}
               className={`fs-press rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-40 ${
@@ -606,11 +604,9 @@ export function DrawInTimingControls({
           ))}
         </div>
         <span className="text-[10px] leading-snug text-muted-foreground" data-clock-note>
-          {clockHeld
-            ? `This take has performed strokes. A new clock would move them, so it stays on ${REVEAL_CLOCK_LABELS[envelope.clock]}.`
-            : envelope.clock === "hand"
-              ? "A modelled hand times your strokes: slower into corners, a short lift inside a letter, a longer one between words."
-              : "Recorded plays the timing you drew with."}
+          {envelope.clock === "hand"
+            ? "A modelled hand times your strokes: slower into corners, a short lift inside a letter, a longer one between words."
+            : "Recorded plays the timing you drew with."}
         </span>
       </div>
     ))}
@@ -631,7 +627,6 @@ export function DrawInTimingControls({
               key={r}
               type="button"
               data-rate={r}
-              disabled={clockHeld && envelope.rate !== r}
               onClick={() => { if (r >= REVEAL_RATE_MIN && r <= REVEAL_RATE_MAX) patchEnvelope({ rate: r }) }}
               aria-pressed={envelope.rate === r}
               className={`fs-press rounded-full border px-2 py-0.5 text-[10px] font-medium tabular-nums transition-colors disabled:opacity-40 ${
@@ -645,11 +640,9 @@ export function DrawInTimingControls({
           ))}
         </div>
         <span className="text-[10px] leading-snug text-muted-foreground" data-rate-note>
-          {clockHeld
-            ? "Held with the clock: a new speed would move the performed strokes."
-            : envelope.rate === 1
-              ? "The clock plays at the pace it was timed."
-              : `The whole clock plays ${envelope.rate}x as fast, so a longer drawing still takes longer.`}
+          {envelope.rate === 1
+            ? "The clock plays at the pace it was timed."
+            : `The whole clock plays ${envelope.rate}x as fast, so a longer drawing still takes longer.`}
         </span>
       </div>
     ))}

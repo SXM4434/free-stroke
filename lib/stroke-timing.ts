@@ -431,6 +431,41 @@ export function isTimedTake(take: StrokeTimingTake | null | undefined): boolean 
  * Build the timed schedule, or null when the take has no rows. Null is the
  * shipped path: the caller keeps `remapRevealKeys` and `scheduleArcCoeffs`.
  */
+/** Every stroke's on-screen `[t0, t1]`, ms, from its row and its base slot: the
+ *  walk `buildTimedSchedule` places slots with, and `rebasePerformed` reads the
+ *  old clock with, so the two can never disagree. Rows are already read clean. */
+export function placeSlots(rows: readonly StrokeTiming[], baseSlots: ArrayLike<number>, ripple: boolean): Float64Array {
+  const n = baseSlots.length / 2
+  const order = Array.from({ length: n }, (_, i) => i).sort(
+    (a, b) => baseSlots[a * 2] - baseSlots[b * 2] || a - b,
+  )
+  const slots = new Float64Array(n * 2)
+  let carry = 0
+  let lastEnd = 0
+  for (const i of order) {
+    const row = rows[i]
+    if (row.holdBack) continue
+    const B0 = baseSlots[i * 2]
+    const B1 = baseSlots[i * 2 + 1]
+    const t0 = Math.max(0, B0 + (ripple ? carry : 0) + row.delayMs)
+    const t1 = t0 + (B1 - B0) / row.speed
+    slots[i * 2] = t0
+    slots[i * 2 + 1] = t1
+    if (ripple) carry = t1 - B1
+    if (t1 > lastEnd) lastEnd = t1
+  }
+  for (const i of order) {
+    const row = rows[i]
+    if (!row.holdBack) continue
+    const dur = (baseSlots[i * 2 + 1] - baseSlots[i * 2]) / row.speed
+    const t0 = Math.max(0, lastEnd + row.delayMs)
+    slots[i * 2] = t0
+    slots[i * 2 + 1] = t0 + dur
+    lastEnd = Math.max(lastEnd, t0 + dur)
+  }
+  return slots
+}
+
 export function buildTimedSchedule(
   base: StrokeSchedule,
   take: StrokeTimingTake | null | undefined,
@@ -473,33 +508,7 @@ export function buildTimedSchedule(
     baseSlots[i * 2 + 1] = pace.beatToClock(tr[i].end) * baseMs
   }
 
-  const order = Array.from({ length: n }, (_, i) => i).sort(
-    (a, b) => baseSlots[a * 2] - baseSlots[b * 2] || a - b,
-  )
-  const slots = new Float64Array(n * 2)
-  let carry = 0
-  let lastEnd = 0
-  for (const i of order) {
-    const row = rows[i]
-    if (row.holdBack) continue
-    const B0 = baseSlots[i * 2]
-    const B1 = baseSlots[i * 2 + 1]
-    const t0 = Math.max(0, B0 + (t.ripple ? carry : 0) + row.delayMs)
-    const t1 = t0 + (B1 - B0) / row.speed
-    slots[i * 2] = t0
-    slots[i * 2 + 1] = t1
-    if (t.ripple) carry = t1 - B1
-    if (t1 > lastEnd) lastEnd = t1
-  }
-  for (const i of order) {
-    const row = rows[i]
-    if (!row.holdBack) continue
-    const dur = (baseSlots[i * 2 + 1] - baseSlots[i * 2]) / row.speed
-    const t0 = Math.max(0, lastEnd + row.delayMs)
-    slots[i * 2] = t0
-    slots[i * 2 + 1] = t0 + dur
-    lastEnd = Math.max(lastEnd, t0 + dur)
-  }
+  const slots = placeSlots(rows, baseSlots, t.ripple)
 
   let takeMs = 0
   for (let i = 0; i < n; i++) if (slots[i * 2 + 1] > takeMs) takeMs = slots[i * 2 + 1]
@@ -750,27 +759,70 @@ export function takeHasPerformed(take: StrokeTimingTake | null | undefined): boo
 }
 
 /**
- * HAND-DRAW, Phase 1. A performed row is stored against the base slots of the
- * clock it was performed on (`withPerformed`: delay from B0, speed from B1 - B0),
- * so swapping the clock under it moves and stretches the stroke he performed.
- * Until `rebasePerformed` lands (the plan's PEN-7), the clock does not change
- * under a performed take: the request is held and the caller says so.
+ * HAND-DRAW-P2, the plan's PEN-7. A performed row is stored against the base
+ * slots of the clock it was performed on (`withPerformed`: delay from B0, speed
+ * from B1 - B0), so a new clock under it would move and stretch the stroke he
+ * performed. This re-stores the take for `newBaseSlots`: each performed row is
+ * read as its on-screen `[t0, t1]` on `oldBaseSlots` (the build's own walk,
+ * `placeSlots`) and written back against the new slots by `withPerformed`, so
+ * it keeps its start and its length. Every other row keeps its delay and speed,
+ * so those strokes follow the new clock. The row's ease is kept, since
+ * `withPerformed` resets it. A held-back performed row is solved on the second
+ * walk, where the build places held-back rows after the last stroke.
  */
-export function clockUnderTake<C extends string>(
-  current: C,
-  requested: C,
-  take: StrokeTimingTake | null | undefined,
-): { clock: C; held: boolean } {
-  const noYield =
-    typeof window !== "undefined" &&
-    (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "clock-no-yield"
-  if (requested === current || noYield || !takeHasPerformed(take)) return { clock: requested, held: false }
-  return { clock: current, held: true }
+export function rebasePerformed(
+  take: StrokeTimingTake,
+  oldBaseSlots: ArrayLike<number>,
+  newBaseSlots: ArrayLike<number>,
+): StrokeTimingTake {
+  if (!takeHasPerformed(take)) return take
+  if (oldBaseSlots.length !== newBaseSlots.length || oldBaseSlots.length % 2 !== 0) {
+    throw new Error(`rebasePerformed: ${oldBaseSlots.length / 2} strokes on the old clock, ${newBaseSlots.length / 2} on the new one`)
+  }
+  const n = oldBaseSlots.length / 2
+  const clean = (t: StrokeTimingTake): StrokeTiming[] => {
+    const rows: StrokeTiming[] = new Array(n).fill(STROKE_TIMING_NEUTRAL)
+    for (const key of Object.keys(t.strokes)) {
+      const i = Number(key)
+      const r = t.strokes[i]
+      if (!Number.isInteger(i) || i < 0 || i >= n || !r) continue
+      const speed = Number.isFinite(r.speed) && r.speed > 0 ? r.speed : 1
+      rows[i] = { delayMs: Number.isFinite(r.delayMs) ? r.delayMs : 0, speed, ease: r.ease, holdBack: !!r.holdBack }
+    }
+    return rows
+  }
+  const old = placeSlots(clean(take), oldBaseSlots, take.ripple)
+  const isPerformed = (i: number) => {
+    const r = take.strokes[i]
+    return !!r && Array.isArray(r.performed) && r.performed.length > 0 && !performedFault(r.performed)
+  }
+  const fits = new Map<number, { t0: number; t1: number; performed: number[] }>()
+  const heldBack: number[] = []
+  for (let i = 0; i < n; i++) {
+    if (!isPerformed(i)) continue
+    if (take.strokes[i].holdBack) heldBack.push(i)
+    else fits.set(i, { t0: old[i * 2], t1: old[i * 2 + 1], performed: take.strokes[i].performed! })
+  }
+  const out = fits.size ? withPerformed(take, newBaseSlots, fits) : { ...take, strokes: { ...take.strokes } }
+  for (const i of fits.keys()) out.strokes[i] = { ...out.strokes[i], ease: take.strokes[i].ease }
+  // Held-back rows land in base order after the last stroke, each after the one before it,
+  // so fixing them in that order never moves one already fixed.
+  heldBack.sort((a, b) => newBaseSlots[a * 2] - newBaseSlots[b * 2] || a - b)
+  for (const i of heldBack) {
+    const now = placeSlots(clean(out), newBaseSlots, out.ripple)
+    const r = out.strokes[i]
+    const len = old[i * 2 + 1] - old[i * 2]
+    out.strokes[i] = {
+      ...r,
+      delayMs: r.delayMs + old[i * 2] - now[i * 2],
+      speed: len > 0 ? (newBaseSlots[i * 2 + 1] - newBaseSlots[i * 2]) / len : r.speed,
+    }
+  }
+  return out
 }
 
-/** What `clockUnderTake` holds under a performed take: the clock AND the rate,
- *  because a performed row is stored against its clock's base slots and either
- *  one moves them (HAND-DRAW-3). */
+/** The pair a performed take is stored against: the clock AND the rate, since
+ *  either one moves the base slots (HAND-DRAW-3). */
 export function clockKeyOf(env: { clock: string; rate: number }): string {
   return `${env.clock}|${env.rate}`
 }
