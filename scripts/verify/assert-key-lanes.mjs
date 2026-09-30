@@ -314,8 +314,9 @@ try {
     })
 
     // ── 2 · dragging a diamond changes its tMs ──────────────────────────────
-    // The lane row includes the 72 px label gutter (KEY_GUTTER_PX); the time axis is the rest.
-    const laneW = (await ev(() => document.querySelector("[data-key-lane='azimuth']")?.clientWidth ?? 0)) - 72
+    // The lane row includes the label gutter (KEY_GUTTER_PX, 84 px since L6); the time axis is the rest,
+    // read as the key's own track so the gutter's width is never assumed.
+    const laneW = await ev(() => document.querySelector("[data-key='azimuth:0']")?.parentElement?.clientWidth ?? 0)
     const t0 = after1[0]?.tMs
     const DX = 60
     const expect2 = (DX / laneW) * L
@@ -717,7 +718,10 @@ try {
     const exportOnce = async (mf) => {
       await ev((m) => window.__akRunReset(m), mf)
       await ev(() => (window.__akRec = []))
+      // Since L3 the Video button is in the dock's Export tab; the lanes are back on Timeline after it.
+      await openDock(page, { tab: "export" })
       await Promise.all([page.waitForEvent("download", { timeout: 300000 }), page.locator('button[title*="Save the animation"]').click()])
+      await openDock(page, { tab: "timeline" })
       await settle(500)
       const rec = await ev(() => {
         const r = window.__akRec

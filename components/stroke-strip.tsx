@@ -177,8 +177,15 @@ const BAND_MAX_PX = 144
  *  scrolls. The dock reads this as the strip's floor when its Draw-in section
  *  opens, so opening the section never hides a row the closed strip showed. */
 export const stripBandPx = (strokeCount: number) => Math.min(BAND_MAX_PX, strokeCount * PITCH)
-/** The end zone a pointer grabs to change speed. */
+/** The end zone a pointer grabs to change speed, inside the bar. */
 const END_PX = 6
+/** L6: each end is grabbed over at least 24 px (BUILD-PLAN.md §4, "Hit
+ *  targets"), half of it outside the bar, so a short bar still has a body to
+ *  move. The drawn grip stays the thin 2 px line. */
+const END_HIT_PX = 24
+/** The must-fail arm of scripts/verify/assert-hit-targets.mjs, read once. */
+const HIT_OLD = typeof window !== "undefined" && (window as unknown as { __fsHitMutant?: string }).__fsHitMutant === "old"
+if (HIT_OLD && typeof document !== "undefined") document.documentElement.dataset.fsHitOld = "1"
 
 export interface StrokeStripProps {
   strokes: ProcessedStroke[]
@@ -329,18 +336,21 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
     commit(withRow(take, i, patch), key)
   }
 
-  const onBarDown = (e: PointerEvent<HTMLDivElement>, i: number) => {
+  const onBarDown = (e: PointerEvent<HTMLDivElement>, i: number, forced?: "start" | "end") => {
     if (e.button !== 0 || dragRef.current) return
     e.stopPropagation()
     const band = bandRef.current
     if (!band) return
     const W = band.clientWidth
-    const barBox = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
+    // An end handle (L6) sits beside the bar, so the bar's own box is read by id.
+    const barBox = (document.getElementById(`stroke-bar-${i}`) ?? (e.currentTarget as HTMLDivElement)).getBoundingClientRect()
     const off = e.clientX - barBox.left
     const zone = Math.min(END_PX, barBox.width / 3)
     const canResize = baseLen(i) > 0 && barBox.width >= 9
-    const kind: Drag["kind"] =
-      canResize && off <= zone ? "start" : canResize && off >= barBox.width - zone ? "end" : "body"
+    // An end handle resizes; on a bar too short to resize it moves the bar, as the bar's own ends do.
+    const kind: Drag["kind"] = forced
+      ? canResize ? forced : "body"
+      : canResize && off <= zone ? "start" : canResize && off >= barBox.width - zone ? "end" : "body"
     select(i)
     ;(e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId)
     const t0 = slots[i * 2]
@@ -482,7 +492,7 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
             <div
               key={i}
               data-take-row={i}
-              className="pointer-events-none relative w-full"
+              className="group/row pointer-events-none relative w-full"
               style={{ height: `${PITCH}px` }}
             >
               <div
@@ -506,7 +516,7 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
                   row?.holdBack ? ", lands last" : ""
                 }`}
                 className={`group pointer-events-auto absolute touch-none select-none overflow-hidden rounded-[3px] transition-colors duration-100 ${
-                  isSel ? "bg-foreground/20 ring-1 ring-inset ring-foreground" : "bg-foreground/15 hover:bg-foreground/25"
+                  isSel ? "bg-foreground/20 ring-1 ring-inset ring-foreground" : "bg-foreground/15 group-hover/row:bg-foreground/25"
                 } ${isSel && dragKind === "body" ? "cursor-grabbing" : "cursor-grab"}`}
                 style={{
                   left: `${a * 100}%`,
@@ -548,12 +558,42 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
                   >
                     <span
                       className={`block h-[6px] w-[2px] rounded-full bg-white mix-blend-difference transition-opacity duration-100 ${
-                        isSel ? "opacity-100" : "opacity-0 group-hover:opacity-60"
+                        isSel ? "opacity-100" : "opacity-0 group-hover/row:opacity-60"
                       }`}
                     />
                   </div>
                 ))}
               </div>
+              {/* THE END HANDLES (L6): a 24 px hit area on each end, reaching 12 px
+                  into the bar (a third of a short bar, so its middle still moves
+                  it) and the rest outside; at the axis's edge, all of it inside.
+                  Invisible; the grip drawn in the bar is what shows. */}
+              {!HIT_OLD && baseLen(i) > 0 &&
+                (["start", "end"] as const).map((side) => {
+                  // How far the handle reaches into the bar: 12 px, or a third of a
+                  // short bar. The rest of its 24 px lies outside the bar.
+                  // At the axis's own edge there is no outside, so the handle
+                  // shifts in and keeps its 24 px (the scroll box clips the rest).
+                  const inside = `min(${END_HIT_PX / 2}px, ${Math.max(0, span) * 100}% / 3)`
+                  const left =
+                    side === "start"
+                      ? `max(0px, calc(${a * 100}% + ${inside} - ${END_HIT_PX}px))`
+                      : `min(calc(100% - ${END_HIT_PX}px), calc(${(a + Math.max(0, span)) * 100}% - ${inside}))`
+                  return (
+                    <div
+                      key={`h-${side}`}
+                      data-grip-hit={side}
+                      data-stroke-drag
+                      aria-hidden="true"
+                      onPointerDown={(e) => onBarDown(e, i, side)}
+                      onPointerMove={onBarMove}
+                      onPointerUp={onBarUp}
+                      onPointerCancel={onBarUp}
+                      className="pointer-events-auto absolute top-0 z-10 cursor-ew-resize touch-none"
+                      style={{ left, width: `${END_HIT_PX}px`, height: `${PITCH}px` }}
+                    />
+                  )
+                })}
             </div>
           )
         })}

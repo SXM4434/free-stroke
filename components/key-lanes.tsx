@@ -55,9 +55,28 @@ import type { StrokeTakeContextValue } from "@/components/stroke-strip"
 
 /** The label column. The strip's band gets the same column while the lanes
  *  are open, so the two time axes line up to the pixel. */
-export const KEY_GUTTER_PX = 72
-/** The strip's row pitch, so a lane reads as one more row of the strip. */
-const PITCH = 12
+export const KEY_GUTTER_PX = 84
+/** L6 (BUILD-PLAN.md §4 "Hit targets", §5 row L6): a key row is 32 px, and 36
+ *  px while the dock is maximized (L5 marks the root with `data-fs-dock-max`).
+ *  Until L6 a lane was one more 12 px row of the strip, and a key a 12x12
+ *  button: too small to grab, his "hot mess" (rulings 2026-09-26). */
+const KEY_ROW_PX_MIN = 32
+const KEY_ROW_PX_MAX = 36
+/** The must-fail arm of scripts/verify/assert-hit-targets.mjs: the pre-L6
+ *  sizes, read once. Nothing but that gate sets it. */
+const HIT_OLD = typeof window !== "undefined" && (window as unknown as { __fsHitMutant?: string }).__fsHitMutant === "old"
+function useKeyRowPx(): number {
+  const read = () =>
+    HIT_OLD ? 12 : typeof document !== "undefined" && document.documentElement.dataset.fsDockMax === "1" ? KEY_ROW_PX_MAX : KEY_ROW_PX_MIN
+  const [px, setPx] = useState(read)
+  useEffect(() => {
+    const mo = new MutationObserver(() => setPx(read()))
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-fs-dock-max"] })
+    setPx(read())
+    return () => mo.disconnect()
+  }, [])
+  return px
+}
 /** The disclosure row. Closed, this is all the lanes add. */
 export const KEY_ROW_PX = 22
 const BOX_H = 52
@@ -340,10 +359,11 @@ export function CurveEditor({
               onPointerMove={onMove}
               onPointerUp={onUp}
               onPointerCancel={onUp}
-              className="absolute z-10 flex h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none select-none items-center justify-center rounded-full outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 active:cursor-grabbing"
+              /* L6 (BUILD-PLAN.md §4): a 24 px hit circle around a 5 px dot. */
+              className={`absolute z-10 flex ${HIT_OLD ? "h-4 w-4" : "h-6 w-6"} -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none select-none items-center justify-center rounded-full outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 active:cursor-grabbing`}
               style={{ left: `${h.x * 100}%`, top: `${(1 - h.y) * 100}%` }}
             >
-              <span className="block h-[7px] w-[7px] rounded-full bg-foreground" />
+              <span data-curve-dot className={`block ${HIT_OLD ? "h-[7px] w-[7px]" : "h-[5px] w-[5px]"} rounded-full bg-foreground`} />
             </button>
           ))
         )}
@@ -517,6 +537,7 @@ export interface KeyLanesProps {
 }
 
 export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, lead, leadMaxPx = 0 }: KeyLanesProps) {
+  const PITCH = useKeyRowPx()
   const { keys, setKeys, liveRef, mode } = ctx
   const [sel, setSel] = useState<Sel | null>(null)
   const [span, setSpan] = useState<Sel | null>(null)
@@ -808,7 +829,11 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
           </div>
         )}
         <div className="flex" style={{ height: `${PITCH}px` }}>
-          <div className="flex shrink-0 items-center justify-between pr-2" style={{ width: `${KEY_GUTTER_PX}px` }}>
+          {/* L6: 14 px between the add button and the track, so a key at 0 s
+              (a 24 px hit box centred on the track's edge, reaching 12 px
+              into this gutter) never touches it. The gutter went from 72 to 84
+              px to keep the label's room for the 24 px button. */}
+          <div className={`flex shrink-0 items-center justify-between ${HIT_OLD ? "pr-2" : "pr-3.5"}`} style={{ width: `${KEY_GUTTER_PX}px` }}>
             {/* Line height = the row. At the inherited 1.5 the label is 15 px in a
                 12 px row, and the last lane's label pokes 1.5 px out of the body,
                 so the region scrolls 2 px and fades its top with nothing hidden. */}
@@ -825,11 +850,15 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
               aria-label={`Add a ${m.label} key at the playhead`}
               title={`Add a ${m.label} key at the playhead`}
               onClick={() => add(m)}
-              className="fs-press flex h-3 w-3 items-center justify-center rounded-[3px] text-muted-foreground transition-colors hover:bg-foreground/15 hover:text-foreground"
+              /* L6: a square 24x24 hit box (a rounded corner is not hit, so the
+                 rounding lives on the drawn plate inside it). */
+              className={`fs-press group/add flex ${HIT_OLD ? "h-3 w-3 rounded-[3px]" : "h-6 w-6"} shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`}
             >
-              <svg aria-hidden="true" width="7" height="7" viewBox="0 0 7 7">
-                <path d="M3.5 0.5v6M0.5 3.5h6" stroke="currentColor" strokeWidth="1" />
-              </svg>
+              <span className="flex h-full max-h-5 w-full max-w-5 items-center justify-center rounded-[3px] transition-colors group-hover/add:bg-foreground/15">
+                <svg aria-hidden="true" width={HIT_OLD ? 7 : 10} height={HIT_OLD ? 7 : 10} viewBox="0 0 7 7">
+                  <path d="M3.5 0.5v6M0.5 3.5h6" stroke="currentColor" strokeWidth="1" />
+                </svg>
+              </span>
             </button>
           </div>
           <div className="relative min-w-0 flex-1">
@@ -885,11 +914,15 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
                   onPointerMove={onKeyMove}
                   onPointerUp={onKeyUp}
                   onPointerCancel={onKeyUp}
-                  className="group absolute top-0 z-10 flex h-3 w-3 -translate-x-1/2 cursor-grab touch-none select-none items-center justify-center rounded-[3px] outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 active:cursor-grabbing"
+                  /* L6: the key is clickable over the whole row and 24 px wide (the
+                     plan's "at least 24x24"), and drawn as a 12 px diamond: a
+                     rotated 8.5 px square is 12 px corner to corner. */
+                  className={`group absolute top-0 z-10 flex ${HIT_OLD ? "h-3 w-3" : "h-full w-6"} -translate-x-1/2 cursor-grab touch-none select-none items-center justify-center rounded-[3px] outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 active:cursor-grabbing`}
                   style={{ left: `${x(k.tMs) * 100}%` }}
                 >
                   <span
-                    className={`block h-[7px] w-[7px] rotate-45 rounded-[1px] border ${
+                    data-key-mark
+                    className={`block ${HIT_OLD ? "h-[7px] w-[7px]" : "h-[8.5px] w-[8.5px]"} rotate-45 rounded-[1px] border ${
                       isSel ? "border-foreground bg-foreground" : "border-foreground/60 bg-background group-hover:border-foreground"
                     }`}
                   />

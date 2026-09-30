@@ -25,7 +25,7 @@
 // other widths, dark theme, and the group-mode strip (assert-take-timeline covers that view).
 import { chromium } from "./lib/browser.mjs"
 import { LAB_URL } from "./lib/dev-server.mjs"
-import { hideDock, openDock } from "./lib/dock.mjs"
+import { hideDock, openDock, openStyle, closeStyle } from "./lib/dock.mjs"
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
 import { join, dirname } from "node:path"
@@ -473,8 +473,8 @@ try {
       const g0 = await fsGet()
       const n0 = { t0: s.bars[K].t0, len: s.bars[K].t1 - s.bars[K].t0 }
 
-      // Door 1: the Animation tab.
-      await page.getByRole("button", { name: /^Animation/ }).first().click()
+      // Door 1: the Animation family of the Style panel (the style bar's Animation pill until L4).
+      await openStyle(page, "animation")
       await page.waitForTimeout(800)
       const blocks1 = await page.locator(`[data-stroke-block="${K}"]`).count()
       await page.locator(`[data-stroke-block="${K}"] [data-stroke-field="delay"]`).first().fill("250")
@@ -492,8 +492,10 @@ try {
         Math.abs(shift1k - 250) < 1,
         `selected ${sel}, click wrote ${Object.keys(afterClick.take.strokes).length} rows, blocks ${blocks1}, delay ${g1.take.strokes[K]?.delayMs}, slot moved ${f1(shift1)} (knocked ${f1(shift1k)})`,
       )
-      // Close the panel, so the popover's block is the only one.
-      await page.getByRole("button", { name: /^Animation/ }).first().click()
+      // Close the panel, so the popover's block is the only one: another family first, so the
+      // Animation family's blocks leave the page, then the panel itself.
+      await openStyle(page, "presets")
+      await closeStyle(page)
       await page.waitForTimeout(600)
 
       // Door 2: the Timing popover.

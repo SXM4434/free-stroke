@@ -67,3 +67,15 @@
 .fs-dock-theme .dv-render-overlay-float [data-camera-bar] {
   display: none;
 }
+
+/* RESIZE EDGES (L6, BUILD-PLAN.md §4): an 8 px grab strip over the 1 px line.
+   dockview places its sash for a 4 px width (splitview, sashWidth = 4), so the
+   strip is widened by 2 px each way around the same centre. */
+:root:not([data-fs-hit-old]) .fs-dock-theme .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash {
+  width: 8px;
+  margin-left: -2px;
+}
+:root:not([data-fs-hit-old]) .fs-dock-theme .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash {
+  height: 8px;
+  margin-top: -2px;
+}
