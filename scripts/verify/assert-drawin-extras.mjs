@@ -398,7 +398,8 @@ sections.push(["pressure", async () => {
  * not off Play-to-end wall time: the first run showed Play itself costs 190 to
  * 250 ms before the playhead moves, on main's 13,116 ms take as much as on a
  * 2 s one, and that start-up is not the rate this row grades. Wall time is
- * still printed. */
+ * still printed. The fit reads the UNEASED clock (`getClock`, the value the
+ * ease is applied to), so an eased take is timed by its clock, not its curve. */
 async function playOnce(page) {
   return page.evaluate(async () => {
     const h = window.__revealHarness
@@ -415,9 +416,10 @@ async function playOnce(page) {
         frames++
         const now = performance.now()
         const p = h.getProgress()
-        if (p >= 0.1 && p <= 0.9) {
+        const c = h.getClock()
+        if (c >= 0.1 && c <= 0.9) {
           xs.push(now)
-          ys.push(p)
+          ys.push(c)
         }
         if (p >= 1 || now - t0 > 60000) r(now - t0)
         else requestAnimationFrame(tick)
@@ -486,6 +488,66 @@ sections.push(["duration", async () => {
     pillsOff = await page.evaluate(() => [...document.querySelectorAll("[data-preset-customize] [data-rate]")].every((b) => b.disabled))
   }
   row(listed === 1 && after > 0 && pillsOff, "DURATION 3 CONTROL: Customize under Hand Draw lists Duration, one step writes it, and the Speed pills hold", `listed ${listed}, durationSeconds after ArrowRight ${after}, speed pills disabled ${pillsOff}`)
+  await page.context().close()
+}])
+
+/* ═══ 4 · THE FIFTH REVEAL STYLE, PRESENTATION ════════════════════════════ */
+async function presetRecord(page, id) {
+  await page.evaluate((id) => window.__styleHarness.selectMotionPreset(id), id)
+  await settle(page, 800)
+  await page.evaluate(() => window.__revealHarness.setPlaying(false))
+  return { frame: sha(await frame(page, 0.45)), clock: await clockOf(page) }
+}
+sections.push(["presentation", async () => {
+  const page = await openPage()
+  await setMode(page, "rod")
+  /* OFF: the six shipped presets, in the base phase's order, each equal to main. */
+  const bad = []
+  for (const id of SHIPPED_PRESETS) {
+    const r = await presetRecord(page, id)
+    if (r.frame !== base.presets[id].frame) bad.push(`${id} frame ${r.frame} != ${base.presets[id].frame}`)
+    if (J(r.clock) !== J(base.presets[id].clock)) bad.push(`${id} clock ${r.clock.total} vs ${base.presets[id].clock.total}`)
+  }
+  row(bad.length === 0, "PRESENTATION 1 OFF: each of the six shipped draw-in presets plays as main (frame at 0.45, clock)", bad.join("; ") || `${SHIPPED_PRESETS.length} of ${SHIPPED_PRESETS.length} equal`)
+  const pres = await presetRecord(page, "presentationDraw")
+  const asAuthentic = pres.frame === base.presets.authenticDraw.frame && J(pres.clock) === J(base.presets.authenticDraw.clock)
+  mustFail("PRESENTATION 1 OFF compare, Presentation held to Authentic Draw's main record", asAuthentic, `frame ${pres.frame} vs ${base.presets.authenticDraw.frame}, clock ${pres.clock.total} vs ${base.presets.authenticDraw.clock.total}`)
+
+  /* ON: what its description claims. Four seconds, eased both ends, a light on the pen. */
+  const claim = async (id) => {
+    await presetRecord(page, id)
+    const env = await page.evaluate(() => window.__styleHarness.envelope())
+    const c = await clockOf(page)
+    await frame(page, 0.45)
+    const glow = await page.evaluate(() => window.__fsTipGlow?.get() ?? { on: false, heads: [] })
+    const run = await playOnce(page)
+    const ok =
+      Math.abs(c.total - 4000) <= 0.5 &&
+      Math.abs(run.fitMs - 4000) <= 0.02 * 4000 &&
+      env.ease === "inOut" &&
+      glow.on && glow.heads.length > 0
+    return { ok, detail: `total ${c.total.toFixed(1)} ms, playback clock slope ${run.fitMs.toFixed(0)} ms, ease ${J(env.ease)}, tip ${env.tipHighlight} with ${glow.heads.length} heads at 0.45` }
+  }
+  const on = await claim("presentationDraw")
+  row(on.ok, "PRESENTATION 2 ON: picked, the take is 4 s, eased both ends, and the tip is lit at 0.45", on.detail)
+  const other = await claim("smoothReveal")
+  mustFail("PRESENTATION 2 ON, the same claim held to Smooth Reveal", other.ok, other.detail)
+
+  /* On the rail beside the others, and Customize lists every field it sets. */
+  await page.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click()
+  await settle(page, 600)
+  await page.locator("select").filter({ has: page.locator('option[value="geometryAnimation"]') }).first().selectOption("geometryAnimation")
+  await settle(page, 500)
+  const pill = page.locator('button[data-preset-id="presentationDraw"]').first()
+  const onRail = await pill.count()
+  let listed = []
+  if (onRail) {
+    await pill.click()
+    await settle(page, 600)
+    listed = await page.evaluate(() => [...document.querySelectorAll("[data-preset-customize] [data-field-keys]")].flatMap((n) => n.dataset.fieldKeys.split(" ")))
+  }
+  const extras = ["envelope.tipHighlight", "envelope.pressureReveal", "envelope.durationSeconds"]
+  row(onRail === 1 && extras.every((k) => listed.includes(k)), "PRESENTATION 3 CONTROL: on the rail, and its Customize lists the draw-in extras", `on rail ${onRail}, ${listed.length} fields listed, extras ${extras.filter((k) => listed.includes(k)).length} of ${extras.length}`)
   await page.context().close()
 }])
 

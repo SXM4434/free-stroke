@@ -4836,6 +4836,27 @@ export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
     },
   },
   {
+    /* DRAWIN-EXTRAS, 2026-09-30. The one reveal style PRD Phase 22 names that
+     * was never built: "authentic/smooth/presentation/snappy/slow gel"
+     * (coverage row 15). Presentation is the take made to be watched: a fixed
+     * length however long he drew, so a long signature and a short word play
+     * the same in a deck, eased at both ends, units overlapping a little so
+     * nothing sits still, and the tip lit so the eye follows the pen. The
+     * values are this lane's reading of one word in the plan, not his; LOG.md
+     * asks him. */
+    id: "presentationDraw",
+    label: "Presentation",
+    family: "geometryAnimation",
+    enabled: true,
+    implemented: true,
+    description: "Made to be watched: four seconds however long you drew it, eased at both ends, with a light riding the pen.",
+    motion: {
+      drawIn: { order: "asDrawn", overlap: 0.2, align: "start", unit: "group", reverse: "off" },
+      revealWindow: { mode: "grow", length: 0.25 },
+      envelope: { mode: "hybrid", ease: "inOut", delaySeconds: 0.4, loop: false, reverse: false, ...DRAW_IN_EXTRAS_OFF, durationSeconds: 4, tipHighlight: 0.6 },
+    },
+  },
+  {
     id: "snappyDraw",
     label: "Snappy Draw",
     family: "geometryAnimation",
