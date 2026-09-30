@@ -154,6 +154,8 @@ import {
   REVEAL_CLOCK_LABELS,
   REVEAL_RATE_MIN,
   REVEAL_RATE_MAX,
+  DURATION_MIN_SECONDS,
+  DURATION_MAX_SECONDS,
 } from "@/lib/stroke-schedule"
 import {
   type StrokeTiming,
@@ -949,6 +951,13 @@ export function validateSession(input: unknown): { session: SessionDoc; repairs:
     const v = revealEnvelope.pressureReveal
     revealEnvelope.pressureReveal = v > 1 ? 1 : 0
     repairs.push(`revealEnvelope.pressureReveal ${JSON.stringify(v)} is outside 0 to 1, read as ${revealEnvelope.pressureReveal}`)
+  }
+  /* 0 is off. Anything else outside the slider's range would play the drawing
+   * at a length nothing can set, so it reads back as off, and says so. */
+  const dur = revealEnvelope.durationSeconds
+  if (!(dur === 0 || (dur >= DURATION_MIN_SECONDS && dur <= DURATION_MAX_SECONDS))) {
+    repairs.push(`revealEnvelope.durationSeconds ${JSON.stringify(dur)} is outside ${DURATION_MIN_SECONDS} to ${DURATION_MAX_SECONDS}, read as off`)
+    revealEnvelope.durationSeconds = 0
   }
   /* GATE ONLY. assert-hand-clock.mjs sets this in a must-fail pass to drop the
    * clock on read, so its save-and-reload row can be seen to fail. */

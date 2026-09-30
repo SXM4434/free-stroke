@@ -392,6 +392,103 @@ sections.push(["pressure", async () => {
   await pp.context().close()
 }])
 
+/* ═══ 3 · DURATION ════════════════════════════════════════════════════════ */
+/* One real playback from the start, sampled in the page on rAF. The length is
+ * read off the SLOPE of the playhead between 10% and 90% (a least-squares fit),
+ * not off Play-to-end wall time: the first run showed Play itself costs 190 to
+ * 250 ms before the playhead moves, on main's 13,116 ms take as much as on a
+ * 2 s one, and that start-up is not the rate this row grades. Wall time is
+ * still printed. */
+async function playOnce(page) {
+  return page.evaluate(async () => {
+    const h = window.__revealHarness
+    h.setPlaying(false)
+    h.setProgress(0)
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    const t0 = performance.now()
+    let frames = 0
+    const xs = []
+    const ys = []
+    h.setPlaying(true)
+    const ms = await new Promise((r) => {
+      const tick = () => {
+        frames++
+        const now = performance.now()
+        const p = h.getProgress()
+        if (p >= 0.1 && p <= 0.9) {
+          xs.push(now)
+          ys.push(p)
+        }
+        if (p >= 1 || now - t0 > 60000) r(now - t0)
+        else requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
+    h.setPlaying(false)
+    const n = xs.length
+    const mx = xs.reduce((a, b) => a + b, 0) / n
+    const my = ys.reduce((a, b) => a + b, 0) / n
+    let sxy = 0
+    let sxx = 0
+    for (let i = 0; i < n; i++) {
+      sxy += (xs[i] - mx) * (ys[i] - my)
+      sxx += (xs[i] - mx) ** 2
+    }
+    return { ms, frameMs: ms / Math.max(1, frames), fitMs: sxx > 0 && sxy > 0 ? sxx / sxy : NaN, samples: n }
+  })
+}
+sections.push(["duration", async () => {
+  const page = await openPage()
+  const off = await offEqualsMain(page)
+  row(off.ok, "DURATION 1 OFF: durationSeconds 0 renders every frame and clock as main", off.detail)
+  await page.evaluate(() => window.__styleHarness.setEnvelope({ durationSeconds: 5 }))
+  const on5 = await offEqualsMain(page)
+  mustFail("DURATION 1 OFF compare, run with a 5 s duration", on5.ok, on5.detail)
+  await page.evaluate(() => window.__styleHarness.setEnvelope({ durationSeconds: 0 }))
+
+  const grade = async (sec, clock, knock) => {
+    await page.evaluate((k) => { window.__FS_GATE_MUTATE = k }, knock)
+    await page.evaluate(([s, c]) => { window.__styleHarness.setEnvelope({ clock: c }); window.__styleHarness.setEnvelope({ durationSeconds: s }) }, [sec, clock])
+    await settle(page, 800)
+    const c = await page.evaluate(() => { const g = window.__fsClock.get(); return { takePenMs: g.takePenMs, total: window.__revealHarness.getTotalDuration() } })
+    const run = await playOnce(page)
+    await page.evaluate(() => { window.__FS_GATE_MUTATE = undefined })
+    await page.evaluate(() => { window.__styleHarness.setEnvelope({ durationSeconds: 0 }); window.__styleHarness.setEnvelope({ clock: "recorded" }) })
+    await settle(page, 600)
+    const want = sec * 1000
+    const tol = 0.02 * want
+    const ok = Math.abs(c.takePenMs - want) <= 0.5 && Math.abs(c.total - want) <= 0.5 && run.samples >= 8 && Math.abs(run.fitMs - want) <= tol
+    return { ok, detail: `clock ${clock}: take ${c.takePenMs.toFixed(1)} ms, total ${c.total.toFixed(1)} ms, playhead slope says ${run.fitMs.toFixed(0)} ms over ${run.samples} frames (bar +/- ${tol.toFixed(0)}, 2%), Play-to-end wall ${run.ms.toFixed(0)} ms, want ${want}` }
+  }
+  for (const [sec, clock] of [[2, "recorded"], [7, "recorded"], [2, "hand"]]) {
+    const g = await grade(sec, clock, undefined)
+    row(g.ok, `DURATION 2 ON ${sec} s on the ${clock} clock: the take is ${sec} s and a real playback lasts ${sec} s`, g.detail)
+  }
+  const k = await grade(2, "recorded", "duration-ignored")
+  mustFail("DURATION 2 ON with the duration dropped from the clock (duration-ignored)", k.ok, k.detail)
+
+  /* The control, and the Speed pills it takes over. */
+  await page.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click()
+  await settle(page, 600)
+  await page.locator("select").filter({ has: page.locator('option[value="geometryAnimation"]') }).first().selectOption("geometryAnimation")
+  await settle(page, 500)
+  await page.locator('button[data-preset-id="handDraw"]').first().click()
+  await settle(page, 600)
+  const slider = page.locator('[data-preset-customize] [data-field-keys="envelope.durationSeconds"] input[type=range]')
+  const listed = await slider.count()
+  let after = null
+  let pillsOff = null
+  if (listed) {
+    await slider.focus()
+    await page.keyboard.press("ArrowRight")
+    await settle(page)
+    after = await page.evaluate(() => window.__styleHarness.envelope().durationSeconds)
+    pillsOff = await page.evaluate(() => [...document.querySelectorAll("[data-preset-customize] [data-rate]")].every((b) => b.disabled))
+  }
+  row(listed === 1 && after > 0 && pillsOff, "DURATION 3 CONTROL: Customize under Hand Draw lists Duration, one step writes it, and the Speed pills hold", `listed ${listed}, durationSeconds after ArrowRight ${after}, speed pills disabled ${pillsOff}`)
+  await page.context().close()
+}])
+
 for (const [name, run] of sections) if (want(name)) await run()
 
 row(errors.length === 0, "no page errors", errors.slice(0, 3).join(" | "))

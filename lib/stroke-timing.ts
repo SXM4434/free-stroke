@@ -772,9 +772,10 @@ export function clockUnderTake<C extends string>(
  *  because a performed row is stored against its clock's base slots and either
  *  one moves them (HAND-DRAW-3). DRAWIN-EXTRAS adds the pressure reveal, which
  *  re-times the clock too; at 0 the key is the string it always was. */
-export function clockKeyOf(env: { clock: string; rate: number; pressureReveal?: number }): string {
+export function clockKeyOf(env: { clock: string; rate: number; pressureReveal?: number; durationSeconds?: number }): string {
   const p = env.pressureReveal ?? 0
-  return `${env.clock}|${env.rate}${p > 0 ? `|p${p}` : ""}`
+  const d = env.durationSeconds ?? 0
+  return `${env.clock}|${env.rate}${p > 0 ? `|p${p}` : ""}${d > 0 ? `|d${d}` : ""}`
 }
 
 /** Carry `t` from `src` onto `dst` by arc-length fraction, geometry untouched.

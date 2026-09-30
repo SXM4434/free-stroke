@@ -705,6 +705,7 @@ export default function Home() {
         next.clock = cur.clock
         next.rate = cur.rate
         next.pressureReveal = cur.pressureReveal
+        next.durationSeconds = cur.durationSeconds
       }
       edit(`Playback ${humanise(key).toLowerCase()}`, gesture ?? null, { revealEnvelope: next })
     },
@@ -772,8 +773,12 @@ export default function Home() {
      * with none comes back the same object, so at any value a mouse drawing
      * reaches the `rateScaled` below with main's arrays. */
     const pressure = revealEnvelope.pressureReveal
-    if ((!wantHand && rate === 1 && !(pressure > 0)) || processedStrokes.length === 0)
-      return { raw: rawStrokes, processed: processedStrokes, hand: false, stamped: null as Stroke[] | null, drift: 0 }
+    /* DRAWIN-EXTRAS · Duration. Above 0 the rate becomes the one that lands the
+     * pen's first ink to its last in exactly that long, measured on the clock
+     * as it stands after the hand and the pressure, so it holds on either. */
+    const durationMs = mutate === "duration-ignored" ? 0 : revealEnvelope.durationSeconds * 1000
+    if ((!wantHand && rate === 1 && !(pressure > 0) && !(durationMs > 0)) || processedStrokes.length === 0)
+      return { raw: rawStrokes, processed: processedStrokes, hand: false, stamped: null as Stroke[] | null, drift: 0, rate: 1 }
     const t0 = performance.now()
     let processed: ProcessedStroke[] = processedStrokes
     let raw: Stroke[] = rawStrokes
@@ -808,11 +813,14 @@ export default function Home() {
         pressured = true
       }
     }
-    processed = rateScaled(processed, rate)
-    raw = wantHand || pressured ? (processed as Stroke[]) : rateScaled(raw, rate)
+    /* Measured on the array the take's length is read from (`takePenMs` below
+     * reads `raw`), so the played length is the duration and not the resample's. */
+    const played = durationMs > 0 ? penMsOf(wantHand || pressured ? processed : raw) / durationMs : rate
+    processed = rateScaled(processed, played)
+    raw = wantHand || pressured ? (processed as Stroke[]) : rateScaled(raw, played)
     clockMsRef.current = performance.now() - t0
-    return { raw, processed, hand: wantHand, stamped, drift }
-  }, [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, revealEnvelope.pressureReveal, clockNib])
+    return { raw, processed, hand: wantHand, stamped, drift, rate: played }
+  }, [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, revealEnvelope.pressureReveal, revealEnvelope.durationSeconds, clockNib])
   const takePenMs = useMemo(() => {
     const knock = typeof window !== "undefined" && (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "clock-strip-recorded"
     return penMsOf(knock ? rawStrokes : clocked.raw)
@@ -829,6 +837,8 @@ export default function Home() {
         takePenMs,
         memoMs: clockMsRef.current,
         rate: revealEnvelope.rate,
+        playedRate: clocked.rate,
+        durationSeconds: revealEnvelope.durationSeconds,
         drift: clocked.drift,
         recorded: processedStrokes.map((s) => s.points),
         clocked: clocked.processed.map((s) => s.points),
@@ -1514,6 +1524,7 @@ export default function Home() {
       envelope.clock = curEnv.clock
       envelope.rate = curEnv.rate
       envelope.pressureReveal = curEnv.pressureReveal
+      envelope.durationSeconds = curEnv.durationSeconds
       toast(`${preset?.label ?? "This preset"} is on, but the clock and speed stay put: this take has performed strokes, and either would move them.`)
     }
     edit(`Preset ${preset?.label ?? id}`, null, {
