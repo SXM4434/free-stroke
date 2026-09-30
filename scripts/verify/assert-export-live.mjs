@@ -64,7 +64,7 @@ const paired = makePaired(row)
 /*  ACTUAL source files, transpiled on the way through, so this gate  */
 /*  can never drift from what ships.                                  */
 /* ------------------------------------------------------------------ */
-const MODULES = ["frame-plan", "webm", "apng", "gif", "encoders", "recorder", "index"]
+const MODULES = ["frame-plan", "webm", "webm-alpha", "apng", "gif", "encoders", "recorder", "index"]
 function transpiled(name) {
   const src = readFileSync(join(ROOT, "lib", "export", `${name}.ts`), "utf8")
   const js = ts.transpileModule(src, {

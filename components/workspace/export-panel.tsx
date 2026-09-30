@@ -60,6 +60,9 @@ export type ExportPanelProps = {
   setVideoScale: (s: number) => void
   videoTransparent: boolean
   setVideoTransparent: (v: boolean) => void
+  /** What Transparent is written as: WebM with a VP9 alpha stream, or APNG. */
+  videoAlphaFormat: "webm" | "apng"
+  setVideoAlphaFormat: (f: "webm" | "apng") => void
   videoPanelOpen: boolean
   setVideoPanelOpen: (f: (v: boolean) => boolean) => void
   hasAnimatedStyleLayer: boolean
@@ -164,7 +167,9 @@ export function ExportPanel(p: ExportPanelProps) {
             ? "Stop the export"
             : p.compare3Up
               ? "Leave 3-Up compare to save a film. An export is one view, not three"
-              : `Save the animation as ${p.videoTransparent ? "an animated PNG" : "a video"}. ${p.videoPlanNote}`
+              : `Save the animation as ${
+                  p.videoTransparent ? (p.videoAlphaFormat === "webm" ? "a transparent WebM video" : "an animated PNG") : "a video"
+                }. ${p.videoPlanNote}`
         }
         className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium tabular-nums text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
       >
@@ -288,14 +293,25 @@ export function ExportPanel(p: ExportPanelProps) {
             </button>
           </div>
           {/* NAMES MUST MATCH BEHAVIOUR, so the format is stated rather
-              than implied. Video has no alpha channel (VP9's rides a
-              Matroska side channel this muxer does not write) so
-              "transparent" is an animated PNG, which is lossless and
-              larger. Saying so is the difference between a setting and a
+              than implied. "Transparent" is a WebM with a VP9 alpha stream
+              (lib/export/webm-alpha.ts) or, one click away, a lossless
+              animated PNG; each sentence says where it plays and what it
+              costs. Saying so is the difference between a setting and a
               surprise. */}
+          {p.videoTransparent && (
+            <div className="mt-1.5 flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
+              {(["webm", "apng"] as const).map((f) => (
+                <button key={f} type="button" onClick={() => p.setVideoAlphaFormat(f)} className={seg(p.videoAlphaFormat === f)}>
+                  {f === "webm" ? "WebM" : "APNG"}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">
             {p.videoTransparent
-              ? "Animated PNG (.png), lossless, keeps alpha, no contact shadow. Larger than a video, and the only format that can carry a see-through ground."
+              ? p.videoAlphaFormat === "webm"
+                ? "WebM video (.webm) with alpha, no contact shadow. Plays see-through in Chrome and Edge and in editors that read VP9 alpha; other players may show it without its alpha. A browser that cannot encode WebM gets an animated PNG instead, and is told."
+                : "Animated PNG (.png), lossless, keeps alpha, no contact shadow. Larger than a video, and it plays see-through everywhere, Safari included."
               : "WebM video (.webm) on the studio ground, exactly as you see it."}
           </div>
           <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">

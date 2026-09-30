@@ -102,8 +102,12 @@ function decodeGray(file, w, h) {
 }
 /** Every frame as raw RGBA — used for the APNG's alpha and for hashing. */
 function decodeRgba(file, w, h) {
-  const buf = execFileSync(FFMPEG, ["-v", "error", "-i", file, "-f", "rawvideo", "-pix_fmt", "rgba", "-"], {
-    maxBuffer: 1 << 28,
+  /* 2 ** 31, not 1 << 28 (2026-09-30). At the 1600 x 1500 page this gate
+   * opens, a Rod film is 798 x 1182: 3.77 MB a frame, so 1 << 28 held 71
+   * frames and the APNG arm died with ENOBUFS at 84 (73 on the unchanged base
+   * in the cloud session), before any of its paired rows ran. Same cliff as
+   * `pixelHash`'s note below; this reader still has to hold the film. */
+    maxBuffer: 2 ** 31,
   })
   const size = w * h * 4
   const out = []
@@ -452,6 +456,12 @@ console.log(`      control sheet → ${controlSheet}`)
 await page.locator('button[aria-label="Video export settings"]').click()
 await page.waitForTimeout(150)
 await page.locator('button:has-text("Transparent")').last().click()
+await page.waitForTimeout(120)
+/* TRANSPARENT HAS TWO CONTAINERS NOW (2026-09-30): WebM with a VP9 alpha
+ * stream, the default, and APNG. The rows below are about APNG, lossless on
+ * purpose (see above), so it is picked by name; the WebM arm has its own gate,
+ * assert-export-webm-alpha-app.mjs. */
+await page.locator('button:has-text("APNG")').last().click()
 await page.waitForTimeout(120)
 await page.locator('button[aria-label="Video export settings"]').click()
 await page.waitForTimeout(150)

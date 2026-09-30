@@ -19,12 +19,11 @@
 //
 //   FS_PORT=3138 FS_HEADED=0 node scripts/verify/assert-export-gif-app.mjs [--keep]
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
-import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { makePaired } from "./lib/paired.mjs"
 import { parseGif } from "./lib/gif-walk.mjs"
-import { openApp, drawArc, clickDownload, inPanel, probe, frameAt, stillRgba, compareToLive, parsePlanNote } from "./lib/export-app.mjs"
+import { openApp, drawArc, clickDownload, inPanel, probe, frameAt, frameHashes, stillRgba, compareToLive, parsePlanNote } from "./lib/export-app.mjs"
 
 const TMP = mkdtempSync(join(tmpdir(), "fs-gifapp-"))
 const KEEP = process.argv.includes("--keep")
@@ -110,8 +109,7 @@ try {
 
   /* ---- count and size ------------------------------------------------- */
   {
-    const hashes = new Set()
-    for (let n = 0; n < walk.frames; n++) hashes.add(createHash("sha1").update(frameAt(gif.path, n)).digest("hex"))
+    const hashes = new Set(await frameHashes(gif.path, walk.width, walk.height))
     const wantW = liveLast.width - (liveLast.width % 2)
     const wantH = liveLast.height - (liveLast.height % 2)
     paired(

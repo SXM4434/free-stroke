@@ -4,6 +4,9 @@
  *   WebCodecsWebmEncoder   VP9/VP8 in WebM. The thing you post.
  *   ApngEncoder            Lossless RGBA with alpha. The thing you composite.
  *
+ *   WebCodecsWebmAlphaEncoder
+ *                          VP9/VP8 WebM WITH alpha, two encodes in one track.
+ *                          The thing you lay over footage. See `./webm-alpha`.
  *   GifEncoder             256 colours on paper. The thing that plays inline
  *                          everywhere else. See `./gif` for the palette.
  *
@@ -28,6 +31,7 @@
 import { WebmMuxer, type WebmCodec } from "./webm"
 import { ApngWriter } from "./apng"
 import { GifWriter, PaletteMapper, buildInkPalette, gifDelaysCs, type InkPalette } from "./gif"
+import { rgbaToI420Pair, WEBM_ALPHA_COLOR_SPACE } from "./webm-alpha"
 
 /* ------------------------------------------------------------------ */
 /*  Frames, in whatever shape the host can cheaply produce            */
@@ -269,6 +273,195 @@ export class WebCodecsWebmEncoder implements AnimationEncoder {
       /* closing an already-errored encoder throws; nothing to do about it */
     }
     this.encoder = null
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  WebM WITH ALPHA via WebCodecs                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Whether this browser can write a transparent WebM, asked rather than
+ * assumed: it needs `VideoFrame` built from an I420 buffer and a VP9 or VP8
+ * `VideoEncoder` at this size. `alpha: "keep"` is deliberately NOT asked for,
+ * because the alpha is a second opaque encode (see `./webm-alpha`).
+ */
+export interface WebmAlphaChoice extends WebmCodecChoice {
+  /**
+   * The alpha stream is coded LOSSLESSLY (VP9, `bitrateMode: "quantizer"`,
+   * quantizer 0). Measured in this repo's Chromium 141: at the colour stream's
+   * bitrate the alpha of a mostly empty keyframe came back with 1261 pixels at
+   * alpha 1 to 3 spread from the frame's top-left corner, far from any ink (VP9
+   * intra prediction at the frame edge, quantised coarsely), a faint veil over
+   * whatever the film is laid on. Quantizer 0 decodes exactly and was SMALLER
+   * on the probe (198 bytes against 265). VP8 has no per-frame quantizer, so a
+   * VP8 film keeps a bitrate-coded alpha and the export says so.
+   */
+  alphaLossless: boolean
+}
+
+export async function pickWebmAlphaCodec(width: number, height: number, fps: number): Promise<WebmAlphaChoice | null> {
+  if (typeof (globalThis as { VideoFrame?: unknown }).VideoFrame !== "function") return null
+  const choice = await pickWebmCodec(width, height, fps)
+  if (!choice) return null
+  let alphaLossless = false
+  if (choice.webmCodec === "V_VP9") {
+    try {
+      const res = await VideoEncoder.isConfigSupported({ codec: choice.codec, width, height, framerate: fps, bitrateMode: "quantizer" })
+      alphaLossless = !!res.supported
+    } catch {
+      alphaLossless = false
+    }
+  }
+  return { ...choice, alphaLossless }
+}
+
+interface HalfFrame {
+  data: Uint8Array
+  key: boolean
+}
+
+/**
+ * TWO ENCODERS, ONE TRACK. The colour frame goes to one `VideoEncoder`, the
+ * alpha frame (luma = alpha) to another with the same configuration, and the
+ * two chunks of each timestamp are paired into one Block: colour in the Block,
+ * alpha in its `BlockAdditional`.
+ *
+ * A Block is marked a keyframe only when BOTH halves are keyframes. Keyframes
+ * are requested on the same frames for both, but libvpx may add one of its own
+ * to one stream; a Block whose alpha still depends on the previous frame is not
+ * a place a player can start, so it is written as an ordinary frame and the
+ * Cues never point at it.
+ */
+export class WebCodecsWebmAlphaEncoder implements AnimationEncoder {
+  readonly id = "webm" as const
+  readonly mimeType = "video/webm"
+  readonly extension = "webm"
+  readonly alpha = true
+
+  private colorEnc: VideoEncoder | null = null
+  private alphaEnc: VideoEncoder | null = null
+  private muxer: WebmMuxer
+  private reader: PixelReader
+  private halves = new Map<number, { color?: HalfFrame; alpha?: HalfFrame; durationUs: number }>()
+  private error: Error | null = null
+
+  constructor(
+    private readonly width: number,
+    private readonly height: number,
+    private readonly fps: number,
+    private readonly choice: WebmAlphaChoice,
+    private readonly keyFrameInterval = 30,
+  ) {
+    this.muxer = new WebmMuxer({ width, height, codec: choice.webmCodec, fps, alpha: true })
+    this.reader = new PixelReader(width, height)
+  }
+
+  private make(which: "color" | "alpha") {
+    const enc = new VideoEncoder({
+      output: (chunk) => {
+        const data = new Uint8Array(chunk.byteLength)
+        chunk.copyTo(data)
+        const slot = this.halves.get(chunk.timestamp) ?? { durationUs: chunk.duration ?? Math.round(1e6 / this.fps) }
+        slot[which] = { data, key: chunk.type === "key" }
+        this.halves.set(chunk.timestamp, slot)
+      },
+      error: (e) => {
+        this.error = e instanceof Error ? e : new Error(String(e))
+      },
+    })
+    enc.configure(
+      which === "alpha" && this.choice.alphaLossless
+        ? { codec: this.choice.codec, width: this.width, height: this.height, framerate: this.fps, bitrateMode: "quantizer" }
+        : {
+            codec: this.choice.codec,
+            width: this.width,
+            height: this.height,
+            bitrate: bitrateFor(this.width, this.height, this.fps),
+            framerate: this.fps,
+            latencyMode: "quality",
+          },
+    )
+    return enc
+  }
+
+  async addFrame(frame: EncoderFrame): Promise<void> {
+    if (this.error) throw this.error
+    this.colorEnc ??= this.make("color")
+    this.alphaEnc ??= this.make("alpha")
+    const rgba = await this.reader.read(frame.source)
+    const pair = rgbaToI420Pair(rgba, this.width, this.height)
+    const init = {
+      format: "I420" as const,
+      codedWidth: this.width,
+      codedHeight: this.height,
+      timestamp: frame.timestampUs,
+      duration: frame.durationUs,
+    }
+    const cf = new VideoFrame(pair.color, { ...init, colorSpace: WEBM_ALPHA_COLOR_SPACE })
+    const af = new VideoFrame(pair.alpha, { ...init, colorSpace: { ...WEBM_ALPHA_COLOR_SPACE, fullRange: true } })
+    const keyFrame = frame.index % this.keyFrameInterval === 0
+    try {
+      this.colorEnc.encode(cf, { keyFrame })
+      /* `vp9.quantizer` is in the WebCodecs VP9 registration and in Chrome, not
+       * yet in TypeScript's DOM typings. */
+      this.alphaEnc.encode(af, (this.choice.alphaLossless ? { keyFrame, vp9: { quantizer: 0 } } : { keyFrame }) as VideoEncoderEncodeOptions)
+    } finally {
+      cf.close()
+      af.close()
+    }
+    for (const enc of [this.colorEnc, this.alphaEnc]) {
+      if (enc.encodeQueueSize > 8) {
+        await new Promise<void>((r) => {
+          const tick = () => (enc.encodeQueueSize <= 4 ? r() : setTimeout(tick, 4))
+          tick()
+        })
+      }
+    }
+  }
+
+  async finish(): Promise<Blob> {
+    if (this.error) throw this.error
+    for (const enc of [this.colorEnc, this.alphaEnc]) {
+      if (enc) {
+        await enc.flush()
+        enc.close()
+      }
+    }
+    this.colorEnc = null
+    this.alphaEnc = null
+    if (this.error) throw this.error
+    const times = [...this.halves.keys()].sort((a, b) => a - b)
+    for (const t of times) {
+      const h = this.halves.get(t)!
+      if (!h.color || !h.alpha) {
+        throw new Error(`export: the ${h.color ? "alpha" : "colour"} stream lost the frame at ${(t / 1000).toFixed(1)} ms`)
+      }
+      this.muxer.addFrame({
+        data: h.color.data,
+        additional: h.alpha.data,
+        keyFrame: h.color.key && h.alpha.key,
+        timestampUs: t,
+        durationUs: h.durationUs,
+      })
+    }
+    this.halves.clear()
+    const bytes = this.muxer.finish()
+    return new Blob([bytes as unknown as BlobPart], { type: this.mimeType })
+  }
+
+  dispose() {
+    for (const enc of [this.colorEnc, this.alphaEnc]) {
+      try {
+        if (enc && enc.state !== "closed") enc.close()
+      } catch {
+        /* closing an already-errored encoder throws; nothing to do about it */
+      }
+    }
+    this.colorEnc = null
+    this.alphaEnc = null
+    this.reader.dispose()
+    this.halves.clear()
   }
 }
 
