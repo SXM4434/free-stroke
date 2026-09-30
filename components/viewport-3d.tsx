@@ -175,7 +175,7 @@ import {
 import { assignLetters } from "@/lib/hero-letters"
 import TakeTimeline from "@/components/take-timeline"
 import { DrawInTimingControls, REVEAL_EASES, OPEN_ANIMATION_PANEL_EVENT } from "@/components/draw-in-timing-controls"
-import { useTakeTransport, useTransportSlot, createTakeTransport, useProgressValue, type ProgressStore, type TakeTransport } from "@/lib/take-transport"
+import { useTakeTransport, useTransportSlot, createTakeTransport, useProgressValue, unEaseReveal, revealModeOf, transportLengths, seamWindowOf, type ProgressStore, type TakeTransport } from "@/lib/take-transport"
 /* K7's PAPER BREAK. The junction SET is measured by the page and published on
  * `window.__heroJunctions`; this turns it into the samples the shader needs and
  * measures which junctions have an over/under to show at all. It lives in
@@ -8025,41 +8025,10 @@ export { REVEAL_EASES }
  * so anything that imported it from here still does. */
 export { easeReveal }
 
-/**
- * The inverse, by bisection rather than by algebra.
- *
- * Closed forms exist for all four of these, but they are three different
- * formulas plus a piecewise split, and each one is a chance for the scrubber to
- * disagree with the clock by a hair — which reads as the playhead twitching
- * when you let go. Thirty bisection steps on a monotonic function is exact to
- * ~1e-9 on any of them, costs nothing (it runs once per scrub, not per frame),
- * and CANNOT drift from `easeReveal`, because it calls it.
- */
-export function unEaseReveal(p: number, ease: RevealEase): number {
-  /* ⚠ THE ENDPOINTS ARE RETURNED EXACTLY, AND THAT IS NOT TIDINESS.
-   *
-   * Bisection converges TOWARD 1 and lands one ulp short of it (1 − 2⁻³⁰), so
-   * `setProgress(1)` under an ease left the clock at 0.999999999. The playback
-   * loop then asked `clockRef.current >= 1` to decide whether a REVERSE pass was
-   * starting from the top and therefore whether to arm the delay — the answer
-   * was false, the delay never armed, and "wait half a second, then un-draw"
-   * un-drew immediately. Caught by `assert-drawin-timing.mjs` §F reading a
-   * playhead of 0.9948 where 1 was required.
-   *
-   * The inverse of a monotonic map must be exact at the ends, because the ends
-   * are where every "have we finished / are we at the start" test lives. */
-  if (p <= 0) return 0
-  if (p >= 1) return 1
-  if (ease === "linear") return p
-  let lo = 0
-  let hi = 1
-  for (let i = 0; i < 30; i++) {
-    const mid = (lo + hi) / 2
-    if (easeReveal(mid, ease) < p) lo = mid
-    else hi = mid
-  }
-  return (lo + hi) / 2
-}
+/* `unEaseReveal`, the inverse of `easeReveal`, lives in `lib/take-transport.ts`
+ * since L2, so a panel outside this file can map a scrub back to the clock.
+ * Re-exported so anything that imported it from here still does. */
+export { unEaseReveal }
 
 /* ---- The transport's readout value, kept OUT of the host's React state ----
  *
@@ -11092,7 +11061,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     if (!revealReverseRef.current && clock <= 1e-6) openingRef.current = true
   }, [])
   const revealCadence = revealEnvelope.cadence
-  const revealMode: RevealMode = modeOverride ?? revealEnvelope.mode
+  const revealMode: RevealMode = revealModeOf(modeOverride, revealEnvelope)
   /* The two transport pills only ever pass `hybrid` or `raw`, which is what
    * `RevealPace` is; the narrowing is the guard that keeps `smooth` out of the
    * document rather than a cast that hopes. */
@@ -11305,8 +11274,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   useEffect(() => {
     if (keyRefusal.length) console.error(`ANIM-3B: the viewport refused the take's keys: ${keyRefusal.join("; ")}`)
   }, [keyRefusal])
-  const takeLen = takeMs ?? penMs
-  const totalDuration = Math.max(takeLen, keysEndMs(keys))
+  const { takeLen, totalDuration } = transportLengths(takeMs, penMs, keysEndMs(keys))
   const exportMs = takeKnockout === "exportpen" ? penMs : totalDuration
   const keyReader = useMemo(
     () => (keys ? makeKeyReader(playheadRef, keys, totalDuration, takeLen) : undefined),
@@ -11983,11 +11951,18 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    * same three inputs through the same function; the harness, the rest playhead
    * and the export ends read this one. */
   const seamWindow = useMemo(
-    () => effectiveWindow(revealWindow, { loop: revealLoop, delaySeconds: revealDelaySeconds }),
+    () => seamWindowOf(revealWindow, { loop: revealLoop, delaySeconds: revealDelaySeconds }),
     [revealWindow, revealLoop, revealDelaySeconds],
   )
   const revealWindowRef = useRef<RevealWindowParams>(seamWindow)
   revealWindowRef.current = seamWindow
+  /* L2 · WHAT THE TRANSPORT DERIVES, for readers outside this component. This
+   * component reads its own render's values; the publish runs after the
+   * commit, before paint, so a panel in L3 shows the same numbers on the same
+   * frame. The store drops a publish that changes nothing. */
+  useLayoutEffect(() => {
+    transport.publishDerived({ totalDuration, takeLen, revealEase, revealMode, seamWindow })
+  }, [transport, totalDuration, takeLen, revealEase, revealMode, seamWindow])
   useEffect(() => {
     const prevCount = prevStrokeCountRef.current
     const newCount = processedStrokes.length
