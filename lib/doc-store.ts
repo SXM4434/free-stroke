@@ -945,6 +945,11 @@ export function validateSession(input: unknown): { session: SessionDoc; repairs:
     revealEnvelope.tipHighlight = v > 1 ? 1 : 0
     repairs.push(`revealEnvelope.tipHighlight ${JSON.stringify(v)} is outside 0 to 1, read as ${revealEnvelope.tipHighlight}`)
   }
+  if (!(revealEnvelope.pressureReveal >= 0 && revealEnvelope.pressureReveal <= 1)) {
+    const v = revealEnvelope.pressureReveal
+    revealEnvelope.pressureReveal = v > 1 ? 1 : 0
+    repairs.push(`revealEnvelope.pressureReveal ${JSON.stringify(v)} is outside 0 to 1, read as ${revealEnvelope.pressureReveal}`)
+  }
   /* GATE ONLY. assert-hand-clock.mjs sets this in a must-fail pass to drop the
    * clock on read, so its save-and-reload row can be seen to fail. */
   if (typeof window !== "undefined" && (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "clock-not-persisted") {

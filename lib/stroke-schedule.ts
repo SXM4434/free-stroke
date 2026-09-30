@@ -426,6 +426,10 @@ export interface RevealEnvelopeParams {
   /** DRAWIN-EXTRAS · a glow on the pen's moving end, 0..1. 0 is off and mounts
    *  nothing, so it is main. `lib/tip-highlight.ts`. */
   tipHighlight: number
+  /** DRAWIN-EXTRAS · how far the pace inside a stroke follows its recorded pen
+   *  pressure, 0..1. 0 is off; a stroke with no pressure plays as recorded at
+   *  any value. `lib/pressure-reveal.ts`. */
+  pressureReveal: number
 }
 
 export const REVEAL_ENVELOPE_DEFAULTS: RevealEnvelopeParams = {
@@ -438,6 +442,7 @@ export const REVEAL_ENVELOPE_DEFAULTS: RevealEnvelopeParams = {
   loop: false,
   reverse: false,
   tipHighlight: 0,
+  pressureReveal: 0,
 }
 
 export interface RevealWindow {

@@ -85,6 +85,7 @@ import {
 import type { ViewportApi } from "@/components/viewport-3d"
 import { toast } from "sonner"
 import { setPenTipMode, readPenTipMode, stampPenClock, type PenTipMode } from "@/lib/pen-reveal"
+import { pressureTimed } from "@/lib/pressure-reveal"
 /* THE CHANNEL THAT TURNS A DRAWING INTO AN OBJECT. `flatten` is what the hero
  * beat animates, and until now `app/page.tsx` did not mention it once: the
  * viewport defaulted the prop to SOLID_STATE on every render, so the product
@@ -703,6 +704,7 @@ export default function Home() {
         if (Object.keys(patch).length === 1) return
         next.clock = cur.clock
         next.rate = cur.rate
+        next.pressureReveal = cur.pressureReveal
       }
       edit(`Playback ${humanise(key).toLowerCase()}`, gesture ?? null, { revealEnvelope: next })
     },
@@ -765,7 +767,12 @@ export default function Home() {
     const mutate = typeof window !== "undefined" ? (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE : undefined
     const wantHand = revealEnvelope.clock === "hand" || mutate === "clock-always-hand"
     const rate = mutate === "clock-rate-off" ? 1 : mutate === "clock-rate-leak" ? HAND_DRAW_RATE : revealEnvelope.rate
-    if ((!wantHand && rate === 1) || processedStrokes.length === 0)
+    /* DRAWIN-EXTRAS · the pressure reveal re-times inside each stroke that
+     * carries pressure, on whichever clock is on, before the rate. A stroke
+     * with none comes back the same object, so at any value a mouse drawing
+     * reaches the `rateScaled` below with main's arrays. */
+    const pressure = revealEnvelope.pressureReveal
+    if ((!wantHand && rate === 1 && !(pressure > 0)) || processedStrokes.length === 0)
       return { raw: rawStrokes, processed: processedStrokes, hand: false, stamped: null as Stroke[] | null, drift: 0 }
     const t0 = performance.now()
     let processed: ProcessedStroke[] = processedStrokes
@@ -793,11 +800,19 @@ export default function Home() {
       })
       raw = processed as Stroke[]
     }
+    let pressured = false
+    if (pressure > 0) {
+      const pt = pressureTimed(processed, pressure)
+      if (pt !== processed) {
+        processed = pt
+        pressured = true
+      }
+    }
     processed = rateScaled(processed, rate)
-    raw = wantHand ? (processed as Stroke[]) : rateScaled(raw, rate)
+    raw = wantHand || pressured ? (processed as Stroke[]) : rateScaled(raw, rate)
     clockMsRef.current = performance.now() - t0
     return { raw, processed, hand: wantHand, stamped, drift }
-  }, [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, clockNib])
+  }, [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, revealEnvelope.pressureReveal, clockNib])
   const takePenMs = useMemo(() => {
     const knock = typeof window !== "undefined" && (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "clock-strip-recorded"
     return penMsOf(knock ? rawStrokes : clocked.raw)
@@ -1498,6 +1513,7 @@ export default function Home() {
     if (clockHold.held) {
       envelope.clock = curEnv.clock
       envelope.rate = curEnv.rate
+      envelope.pressureReveal = curEnv.pressureReveal
       toast(`${preset?.label ?? "This preset"} is on, but the clock and speed stay put: this take has performed strokes, and either would move them.`)
     }
     edit(`Preset ${preset?.label ?? id}`, null, {
