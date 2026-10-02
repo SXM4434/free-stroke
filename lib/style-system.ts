@@ -21,6 +21,7 @@
 // only (`import type`), which is erased at compile time, so this does not
 // create a runtime cycle.
 import { completionTrigger } from "./style-clock"
+import type { LandingParams } from "./landing-motion"
 /* Family 14's patch names the take's three objects. `stroke-schedule.ts`
  * imports nothing from here, so this direction is the only one and there is no
  * cycle. Types only. */
@@ -582,6 +583,11 @@ export interface StyleState {
    * other form, on the lab's own law (`lib/flip-pose.ts`). Absent or "off"
    * leaves the take exactly as main plays it. */
   flip?: FlipChoice
+  /* --- the landing (PERSTROKE) ---
+   * What each stroke does once its ink is whole: Desk Doodles' landing
+   * spring, a settle, a wobble or a pulse (`lib/landing-motion.ts`). Absent
+   * is Off, and Off leaves the take exactly as main plays it. */
+  landing?: LandingParams
 }
 
 /**
@@ -714,7 +720,10 @@ export type NumericLeafPath<T, P extends string = ""> = {
         : never
 }[keyof T & string]
 
-export type StyleNumericPath = NumericLeafPath<StyleState>
+/* PERSTROKE · `landing` is left out until it has a default and a scaffold
+ * slider per number, which is what `KEYABLE_PATHS` and assert-key-paths read.
+ * Keying it is a question for the owner in LOG.md, not a silent gap. */
+export type StyleNumericPath = NumericLeafPath<Omit<StyleState, "landing">>
 
 /** One numeric style value's range: the slider's `min`, `max` and `step`. */
 export interface StyleRange {

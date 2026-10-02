@@ -258,6 +258,21 @@ import { evaluateFusion, resolveFusionDrive } from "@/lib/style-fusion"
 // — the main lab at `/` — is byte-identical to before this existed.
 import { RegisterRig, StudioContactShadow, applyRimGlow } from "@/components/studio-rig"
 import { FREE_STROKE, type RegisterLighting } from "@/lib/registers"
+import {
+  firstReach,
+  isLandingOn,
+  landingPose,
+  landingStarts,
+  landingTailMs,
+  LANDING_REST,
+  meshUnits,
+  pivotPoint,
+  poseOffset,
+  resolveLanding,
+  UNIT_MARK,
+  UNIT_NONE,
+  type LandingBox,
+} from "@/lib/landing-motion"
 /* THE ANIMATED EXPORT. Frame-locked, not a screen recording — the module's own
  * header carries the argument and `docs/research/competitive-landscape-and-the-
  * missing-export.md` carries the reason it is the product surface rather than a
@@ -4293,6 +4308,16 @@ function AnimatedStrokesInner({
   const startCapRefs = useRef<(THREE.Mesh | null)[]>([])
   // Refs to joint groups (one group per stroke)
   const jointGroupRefs = useRef<(THREE.Group | null)[]>([])
+  /* PERSTROKE · each mesh's own group, the one its caps and joints share, so a
+   * landing turns and scales the whole stroke about its own pivot. Only the
+   * landing block writes them, and only while a landing is on. */
+  const strokeGroupRefs = useRef<(THREE.Group | null)[]>([])
+  const landing = useMemo(() => resolveLanding(styleState?.landing), [styleState?.landing])
+  /** True while any group carries a pose, so turning the landing off puts each back once. */
+  const landingDirtyRef = useRef(false)
+  /** Each stroke's start and landing as a fraction of the take, rebuilt when an input changes. */
+  const landingTimesRef = useRef<{ inputs: unknown[]; startP: Float64Array; landP: Float64Array } | null>(null)
+  const landingBoxes = useRef(new WeakMap<THREE.BufferGeometry, LandingBox>()).current
 
   /* ANIM-3C-W · ROD WIDTH, PER FRAME. Every Rod tube vertex is `centre +
    * TUBE_RADIUS * normal`, so a width key moves each vertex along its own normal
@@ -7743,6 +7768,162 @@ function AnimatedStrokesInner({
         }
       }
     }
+    /* ═══ PERSTROKE · THE LANDING, a pose per stroke once its ink is whole ═══
+     *
+     * `lib/landing-motion.ts` has the math; this block finds WHEN each stroke
+     * lands and writes the pose onto that stroke's group. Off, reduced motion,
+     * or no reader (the landing builds one, see `landingTail`), and the block
+     * only puts back what it moved, once: main's frame is untouched.
+     *
+     * WHEN A STROKE LANDS is read from the clock its own engine draws by, so
+     * the pose starts on the frame the ink closes: a timed take's slot end;
+     * Rod's own per-stroke clock (`timelines`, `currentTimeMs` below) when
+     * nothing reorders it; otherwise the first playhead where the reveal
+     * distance reaches the stroke's end in the schedule, which is the number
+     * Solid, Extrude and Inflate cut by. Only the `grow` window lands: under
+     * travel, vanish and shrink ink leaves again, so there is no landing. */
+    const landOn =
+      isLandingOn(landing) && !!keyReader && windowParamsRef.current.mode === "grow" && !reduceMotionRef.current
+    if (!landOn) {
+      if (landingDirtyRef.current) {
+        for (const g of strokeGroupRefs.current) {
+          if (!g) continue
+          g.position.set(0, 0, 0)
+          g.scale.set(1, 1, 1)
+          g.rotation.set(0, 0, 0)
+        }
+        landingDirtyRef.current = false
+      }
+      LANDING_LIVE.on = false
+      LANDING_LIVE.units.length = 0
+    } else {
+      const n = strokes.length
+      const tl = timelines
+      const rodOwnClock = !timedNow && (!schedNow || schedNow.identity) && meshes.every((m) => m.mode === "rod")
+      const inputs = [strokes, timedNow, schedNow, revealMode, hybridBlend, timelines, totalDuration, rodOwnClock]
+      let times = landingTimesRef.current
+      if (!times || times.inputs.length !== inputs.length || times.inputs.some((v, i) => v !== inputs[i])) {
+        const startP = new Float64Array(n)
+        const landP = new Float64Array(n)
+        if (timedNow && timedNow.takeMs > 0) {
+          for (let i = 0; i < n; i++) {
+            startP[i] = (timedNow.slots[i * 2] ?? 0) / timedNow.takeMs
+            landP[i] = (timedNow.slots[i * 2 + 1] ?? timedNow.takeMs) / timedNow.takeMs
+          }
+        } else if (rodOwnClock && totalDuration > 0) {
+          for (let i = 0; i < n; i++) {
+            startP[i] = (tl[i]?.tStart ?? 0) / totalDuration
+            landP[i] = (tl[i]?.tEnd ?? totalDuration) / totalDuration
+          }
+        } else {
+          const lifts = liftsLandBetweenStrokes(schedNow, "grow")
+          const beat = (p: number) => revealDistanceFraction(strokes, p, revealMode, hybridBlend, lifts)
+          const tracks = schedNow?.tracks
+          for (let i = 0; i < n; i++) {
+            const tr = tracks?.[i]
+            startP[i] = tr ? firstReach(beat, tr.start + 1e-9, 30) : 0
+            landP[i] = tr ? firstReach(beat, tr.end - 1e-9, 30) : 1
+          }
+        }
+        times = { inputs, startP, landP }
+        landingTimesRef.current = times
+      }
+      const lp = landing!
+      const takeLenMs = keyReader!.takeLen
+      const nowMs = keyReader!.clockMs()
+      const revealP = playheadRef.current
+      const landMs = new Float64Array(n)
+      let markMs = 0
+      for (let i = 0; i < n; i++) {
+        landMs[i] = times.landP[i] * takeLenMs
+        if (landMs[i] > markMs) markMs = landMs[i]
+      }
+      const startMs = lp.scope === "mark" ? null : landingStarts(landMs, lp.staggerMs)
+
+      /* WHICH STROKE EACH MESH IS. Rod, Desk Doodles and Inflate's fused
+       * surface are built from every stroke; Solid, Extrude and the Inflate
+       * loft rebuild from the strokes the reveal has reached, in as-drawn
+       * order, so their list index goes through `pieces`. */
+      const rebuild = meshes.some(
+        (m) => m.mode === "solid" || m.mode === "extrude" || (m.mode === "inflate" && !m.revealKeys),
+      )
+      let pieces: number[] | null = null
+      if (rebuild) {
+        pieces = []
+        for (let i = 0; i < n; i++) if (revealP > times.startP[i] || times.startP[i] <= 0) pieces.push(i)
+      }
+      const units = meshUnits(meshes.map((m) => m.key), n, pieces)
+
+      /* THE PIVOTS. A mesh that is the whole stroke is measured off its own
+       * geometry; a rebuilt piece grows while it draws, so its x and y come
+       * from the whole stroke's points through `strokeTo3D`'s map instead, or
+       * the pivot would slide with the pen. */
+      const scale = 3 / Math.max(canvasWidth || 1, canvasHeight || 1)
+      const geoBox = (geo: THREE.BufferGeometry): LandingBox => {
+        let b = landingBoxes.get(geo)
+        if (!b) {
+          geo.computeBoundingBox()
+          const bb = geo.boundingBox
+          b = bb && !bb.isEmpty()
+            ? { minX: bb.min.x, maxX: bb.max.x, minY: bb.min.y, maxY: bb.max.y, minZ: bb.min.z, maxZ: bb.max.z }
+            : { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 }
+          landingBoxes.set(geo, b)
+        }
+        return b
+      }
+      const inkBox = (si: number, z: LandingBox): LandingBox => {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+        for (const p of strokes[si]?.points ?? []) {
+          const x = (p.x - canvasWidth / 2) * scale
+          const y = -(p.y - canvasHeight / 2) * scale
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+        return Number.isFinite(minX) ? { minX, maxX, minY, maxY, minZ: z.minZ, maxZ: z.maxZ } : z
+      }
+      const unionBox = (boxes: LandingBox[]): LandingBox =>
+        boxes.reduce((a, b) => ({
+          minX: Math.min(a.minX, b.minX), maxX: Math.max(a.maxX, b.maxX),
+          minY: Math.min(a.minY, b.minY), maxY: Math.max(a.maxY, b.maxY),
+          minZ: Math.min(a.minZ, b.minZ), maxZ: Math.max(a.maxZ, b.maxZ),
+        }))
+      const boxOf = (mi: number, si: number): LandingBox => {
+        const geo = meshes[mi].tubeGeometry
+        return rebuild && si >= 0 ? inkBox(si, geoBox(geo)) : geoBox(geo)
+      }
+      const allBoxes: LandingBox[] = []
+      for (let mi = 0; mi < meshes.length; mi++) if (units[mi] !== UNIT_NONE) allBoxes.push(boxOf(mi, units[mi]))
+      const markBox = allBoxes.length ? unionBox(allBoxes) : null
+
+      LANDING_LIVE.on = true
+      LANDING_LIVE.effect = lp.effect
+      LANDING_LIVE.nowMs = nowMs
+      LANDING_LIVE.units.length = 0
+      for (let mi = 0; mi < meshes.length; mi++) {
+        const g = strokeGroupRefs.current[mi]
+        if (!g) continue
+        const u = units[mi]
+        const asMark = lp.scope === "mark" || u === UNIT_MARK
+        const box = asMark ? markBox : u === UNIT_NONE ? null : boxOf(mi, u)
+        const t0 = asMark ? markMs : u >= 0 && startMs ? startMs[u] : NaN
+        let pose = box && Number.isFinite(t0) ? landingPose(lp, (nowMs - t0) / 1000) : LANDING_REST
+        /* NO HELD POSE UNDER THE PEN'S FIELD. The tip and carve read world
+         * positions back through the flatten group (`uFsTipInv`), so a mesh
+         * that carries them is posed only once it has landed; before that it
+         * stays at rest and the field stays on the ink. */
+        const md = meshes[mi]
+        if (nowMs < t0 && md.mode === "inflate" && md.revealKeys) pose = LANDING_REST
+        const [ox, oy, oz] = box ? poseOffset(pose, pivotPoint(box, pose.pivot)) : [0, 0, 0]
+        g.position.set(ox, oy, oz)
+        g.scale.set(pose.scale, pose.scale, pose.scale)
+        g.rotation.set(0, 0, pose.rotZ)
+        LANDING_LIVE.units.push({ mesh: mi, stroke: u, startMs: t0, scale: pose.scale, rotZ: pose.rotZ })
+      }
+      landingDirtyRef.current = true
+    }
+
     /* ANIM-1A3 · WHAT THIS FRAME ACTUALLY DREW, per mesh, read back off the
      * geometry after every write above. `__fsTake.get()` reports this and not
      * the schedule's own slots, so a gate built on it measures the render. */
@@ -7775,7 +7956,7 @@ function AnimatedStrokesInner({
       <group ref={exportGroupRef}>
         {meshes.map((data, si) => {
           return (
-          <group key={data.key}>
+          <group key={data.key} ref={(el) => { strokeGroupRefs.current[si] = el }}>
             {/* Main geometry (tube, extrude, or solid) */}
             <mesh
               ref={(el) => { tubeMeshRefs.current[si] = el }}
@@ -7863,6 +8044,14 @@ function AnimatedStrokesInner({
  *  AnimatedStrokesInner's frame loop and read by `__fsTake.get()`. One per
  *  page: the compare panels would overwrite each other, so read it with
  *  compare off. */
+/** PERSTROKE · the last frame's landing poses, read by `__fsTake.get().landing`. */
+const LANDING_LIVE: {
+  on: boolean
+  effect: string
+  nowMs: number
+  units: { mesh: number; stroke: number; startMs: number; scale: number; rotZ: number }[]
+} = { on: false, effect: "off", nowMs: 0, units: [] }
+
 const TAKE_LIVE: {
   playhead: number
   timed: boolean
@@ -11444,12 +11633,18 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    * extends its total afterwards, the same max(take, keys, flip end) as before. */
   const flipDir = styleState?.flip === "flatToSolid" || styleState?.flip === "solidToFlat" ? styleState.flip : undefined
   const flipOpts = useMemo(() => (flipDir ? flipOptsFor(flipDir, takeLen) : undefined), [flipDir, takeLen])
-  const totalDuration = flipOpts ? Math.max(takeTotal, flipEndMs(flipOpts)) : takeTotal
+  /* PERSTROKE · THE LANDING'S CLOCK, the flip's own mechanism. The last stroke
+   * lands as the take ends, so the take runs on by `landingTailMs` and the
+   * reveal holds whole past `takeLen`, live and in export. Off adds nothing and
+   * builds no reader, so the clock is main's. */
+  const landing = useMemo(() => resolveLanding(styleState?.landing), [styleState?.landing])
+  const landingTail = landingTailMs(landing, rawStrokes.length)
+  const totalDuration = Math.max(flipOpts ? Math.max(takeTotal, flipEndMs(flipOpts)) : takeTotal, landingTail > 0 ? takeLen + landingTail : 0)
   const exportMs = takeKnockout === "exportpen" ? penMs : totalDuration
   const keyReader = useMemo(
     () =>
-      keys || flipOpts ? makeKeyReader(playheadRef, keys ?? NO_KEYS, totalDuration, takeLen, flipOpts) : undefined,
-    [keys, flipOpts, totalDuration, takeLen],
+      keys || flipOpts || landingTail > 0 ? makeKeyReader(playheadRef, keys ?? NO_KEYS, totalDuration, takeLen, flipOpts) : undefined,
+    [keys, flipOpts, landingTail, totalDuration, takeLen],
   )
 
   // Sync progress from the frame loop at ~15fps to avoid React re-render storms
@@ -12481,6 +12676,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
             timed: TAKE_LIVE.timed,
             meshes: TAKE_LIVE.meshes.map((m) => ({ ...m })),
           },
+          landing: { ...LANDING_LIVE, units: LANDING_LIVE.units.map((u) => ({ ...u })) },
         }
       },
     }
