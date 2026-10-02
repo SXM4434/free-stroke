@@ -99,7 +99,7 @@ function same(a, b) {
 const extrasOff = (env) => EXTRA_KEYS.every((k) => Object.is(env?.[k], EXTRAS[k]))
 const DRAW_IN_PRESETS = (SS) => SS.GEOMETRY_ANIMATION_PRESET_DEFS.filter((p) => p.motion?.envelope)
 /* Presets this lane adds. Each extra step that adds one names it here. */
-const NEW_PRESETS = new Set([])
+const NEW_PRESETS = new Set(["presentationDraw"])
 
 async function runRows() {
   const S = loadTs("lib/stroke-schedule.ts")
@@ -492,6 +492,49 @@ async function runRows() {
     row("DUR-WIRED", bad.length === 0, "/ reads the duration in its clock function and re-runs on it, and the speed pills step aside while it is on (source text; browser rows not run)", bad.join("; ") || "5 checks")
   }
 
+  /* ══ 4 · PRESENTATION, THE FIFTH REVEAL STYLE ═════════════════════════════ */
+  {
+    const ids = SS.GEOMETRY_ANIMATION_PRESET_DEFS.map((p) => p.id)
+    const p = SS.GEOMETRY_ANIMATION_PRESET_DEFS.find((x) => x.id === "presentationDraw")
+    const order = ["authenticDraw", "smoothReveal", "presentationDraw", "snappyDraw", "slowGel"].map((id) => ids.indexOf(id))
+    const bad = []
+    if (!p) bad.push("no presentationDraw")
+    else {
+      if (p.label !== "Presentation" || !p.enabled || !p.implemented || p.family !== "geometryAnimation") bad.push(`label ${J(p.label)} enabled ${p.enabled} implemented ${p.implemented}`)
+      if (SS.resolveMotionPreset("presentationDraw") !== p.motion) bad.push("resolveMotionPreset does not find it")
+      if (!SS.PRESET_REGISTRY || !J(SS.PRESET_REGISTRY).includes("presentationDraw")) bad.push("not in PRESET_REGISTRY")
+    }
+    if (!order.every((v, i) => v >= 0 && (i === 0 || v > order[i - 1]))) bad.push(`plan order broken: ${J(order)}`)
+    row("PRES-EXISTS", bad.length === 0, "Presentation is a shipped draw-in preset, found by the preset lookup and registry, in the plan's order: authentic, smooth, presentation, snappy, slow gel", bad.join("; ") || `${ids.length} draw-in presets: ${ids.join(", ")}`)
+  }
+  {
+    /* What it claims: the take made to be watched. Applied as / applies a
+     * preset (defaults, then the preset's envelope), the hero word plays in
+     * 4.000 s whatever its recorded length, eased both ends, tip lit. And it
+     * is not any other preset: no shipped preset plays this envelope. */
+    const p = SS.GEOMETRY_ANIMATION_PRESET_DEFS.find((x) => x.id === "presentationDraw")
+    const bad = []
+    let len = NaN
+    if (p) {
+      const env = { ...S.REVEAL_ENVELOPE_DEFAULTS, ...p.motion.envelope }
+      const raw = HW.rawHeroStrokes()
+      const slow = T.rateScaled(raw, 0.5)
+      for (const [name, r] of [["hero", raw], ["hero drawn at half speed", slow]]) {
+        const t = T.clockTail(hero, r, env.clock === "hand", env.rate, env.pressureReveal, env.durationSeconds * 1000)
+        len = T.penMsOf(t.raw)
+        if (Math.abs(len - 4000) > 1e-6) bad.push(`${name}: take ${len.toFixed(3)} ms`)
+      }
+      if (env.ease !== "inOut") bad.push(`ease ${env.ease}`)
+      if (!(env.tipHighlight > 0)) bad.push(`tip ${env.tipHighlight}`)
+      if (!(env.delaySeconds > 0)) bad.push(`delay ${env.delaySeconds}`)
+      const others = SS.GEOMETRY_ANIMATION_PRESET_DEFS.filter((x) => x !== p && x.motion)
+      const twin = others.find((x) => same({ ...x.motion, envelope: { ...S.REVEAL_ENVELOPE_DEFAULTS, ...x.motion.envelope } }, { ...p.motion, envelope: env }))
+      if (twin) bad.push(`plays the same take as ${twin.id}`)
+    }
+    row("PRES-ON", p && bad.length === 0, "Presentation plays the word in exactly 4 s however long it was drawn, eased at both ends, tip lit, a beat before; no other preset plays that take",
+      bad.join("; ") || `take ${len.toFixed(3)} ms on the hero and on the hero drawn at half speed`)
+  }
+
   rmSync(base.dir, { recursive: true, force: true })
 }
 
@@ -528,6 +571,10 @@ const MUTANTS = [
   { name: "/ early return ignores duration", file: "app/page.tsx", find: "!(pressure > 0) && !(durationMs > 0)) || processedStrokes.length === 0)", text: "!(pressure > 0)) || processedStrokes.length === 0)", red: ["DUR-WIRED"] },
   { name: "/ memo does not re-run on duration", file: "app/page.tsx", find: "revealEnvelope.pressureReveal, revealEnvelope.durationSeconds, clockNib]", text: "revealEnvelope.pressureReveal, clockNib]", red: ["DUR-WIRED"] },
   { name: "speed pills live under a duration", file: "components/draw-in-timing-controls.tsx", find: "disabled={envelope.durationSeconds > 0}", text: "disabled={false}", red: ["DUR-WIRED"] },
+  /* 4 · Presentation */
+  { name: "Presentation held to Smooth Reveal's take", file: "lib/style-system.ts", find: "...DRAW_IN_EXTRAS_OFF, durationSeconds: 4, tipHighlight: 0.6 }", text: "...DRAW_IN_EXTRAS_OFF }", red: ["PRES-ON"] },
+  { name: "Presentation not shipped", file: "lib/style-system.ts", find: `id: "presentationDraw",\n    label: "Presentation",\n    family: "geometryAnimation",\n    enabled: true,\n    implemented: true,`, text: `id: "presentationDraw",\n    label: "Presentation",\n    family: "geometryAnimation",\n    enabled: true,\n    implemented: false,`, red: ["PRES-EXISTS"] },
+  { name: "Presentation also changes Smooth Reveal", file: "lib/style-system.ts", find: `envelope: { mode: "hybrid", ease: "inOut", delaySeconds: 0, loop: false, reverse: false, ...DRAW_IN_EXTRAS_OFF },`, text: `envelope: { mode: "hybrid", ease: "inOut", delaySeconds: 0, loop: false, reverse: false, ...DRAW_IN_EXTRAS_OFF, durationSeconds: 4 },`, red: ["OFF-PRESETS"] },
   { name: "tip ignores the timed take", file: "lib/tip-highlight.ts", find: "if (timed) return headsFromSpans(timed.spans, timed.reversed)", text: "if (timed) return []", red: ["TIP-TIMED"] },
 ]
 
