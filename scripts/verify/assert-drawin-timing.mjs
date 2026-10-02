@@ -129,15 +129,19 @@ async function main() {
    * re-run away. So the play, the wait, the sample and the pause all happen
    * inside ONE page call: the window is bounded by the page's own clock and no
    * round trip can stretch it. */
-  const playFor = (ms) =>
-    R(async (d) => {
-      const h = window.__revealHarness
-      h.setPlaying(true)
-      await new Promise((r) => setTimeout(r, d))
-      const out = { clock: h.getClock(), head: h.getProgress(), playing: h.isPlaying() }
-      h.setPlaying(false)
-      return out
-    }, ms)
+  /* CLOUD-FLAKES: the window is now exact, not merely bounded. The in-page
+   * setTimeout above still let the page's frames decide how far the pass got
+   * (a 756 ms sleep read clocks 0.37 to 0.46 over ten quiet runs), and the
+   * coverage CONTROL in B ("the same ease at the same moment draws the same
+   * amount of mark", bar 12%) compares two such windows: measured 0.333% vs
+   * 0.281%, 16% apart, red, on unchanged code. So the play runs on the driven
+   * clock (`playDriven`, below): exactly `ms` of the reveal's own clock, read
+   * on the frame after. The parked prior, for the record:
+   *
+   *     R(async (d) => { h.setPlaying(true); await sleep(d)
+   *                      read clock, head, playing; h.setPlaying(false) }, ms)
+   */
+  const playFor = (ms) => playDriven(ms)
 
   /* PLAY UNTIL THE PLAYHEAD IS ACTUALLY WHERE WE WANT TO READ IT. F108.
    *
@@ -185,6 +189,91 @@ async function main() {
       h.setPlaying(false)
       return { ...last, landed, head0, waitedMs: Math.round(performance.now() - t0) }
     }, [lo, hi, capMs])
+
+  /* PLAY EXACTLY `ms` OF THE PAGE'S OWN CLOCK, AT A FIXED FRAME. CLOUD-FLAKES.
+   *
+   * `playUntilHead` still SAMPLED: it polled the playhead once a frame and
+   * read it if it happened to be inside 0.3..0.5. The band is 0.2 of a 1680 ms
+   * pass, 336 ms, so one stalled frame of 336 ms or more steps clean over it.
+   * The poll then sees 0.55, is not in the band, is not at 1, and keeps
+   * polling until the pass ends, so the row reads 1.000000 and goes red. That
+   * is the 24 of 25 on main: a loaded frame, not the transport.
+   *
+   * The reveal advances on `performance.now()` deltas taken once a frame
+   * (PlaybackController in components/viewport-3d.tsx). So this DRIVES that
+   * clock instead of racing it: inside one page call `performance.now` reads a
+   * value this function sets, and it moves only when this function moves it.
+   *   1. Press play and step the clock 1 ms a frame until the playhead moves.
+   *      The controller arms on its first playing frame and advances on the
+   *      next, so the first move is exactly one 1 ms step, however many frames
+   *      React takes to deliver `playing`.
+   *   2. Step it once more by `ms - 1`. The controller spends the whole step on
+   *      its next frame, so the pass has run exactly `ms`, read on the frame
+   *      after it, whatever the frame rate and however long the frames took.
+   * Nothing is read off the wall. A busy machine makes this slower, never
+   * different.
+   *
+   * ⚠ IT KEEPS ITS TEETH. A transport that does not move never takes the 1 ms
+   * step, so the loop runs out at `capFrames` and returns the head where it
+   * sat with `moved: false`; the CONTROL below then fails on "did not move",
+   * exactly as Codex's frozen-transport sabotage requires. The bar is not
+   * touched: 0.2 < head < 0.8 still, and the identity row still to 1e-9.
+   *
+   * `performance.now` is put back before the call returns, and only once the
+   * real clock has caught up with the driven one, so nothing in the page sees
+   * time run backwards. */
+  const playDriven = (ms, capFrames = 900) =>
+    R(async ([d, cap]) => {
+      const h = window.__revealHarness
+      const perf = window.performance
+      const hadOwn = Object.prototype.hasOwnProperty.call(perf, "now")
+      const ownNow = perf.now
+      const realNow = Performance.prototype.now.bind(perf)
+      const t0 = realNow()
+      let virt = t0
+      perf.now = () => virt
+      const frame = () => new Promise((r) => requestAnimationFrame(() => r()))
+      try {
+        const head0 = h.getProgress()
+        const clock0 = h.getClock()
+        h.setPlaying(true)
+        let frames = 0
+        let moved = false
+        while (frames < cap) {
+          await frame()
+          frames++
+          if (h.getClock() !== clock0) { moved = true; break }
+          virt += 1
+        }
+        const clockArmed = h.getClock()
+        const armSteps = Math.round(virt - t0)
+        if (moved && d > 1) {
+          virt += d - 1
+          moved = false
+          while (frames < cap) {
+            await frame()
+            frames++
+            if (h.getClock() !== clockArmed) { moved = true; break }
+          }
+        }
+        /* Let the frame's consequences land before reading: an end of pass pauses the transport
+         * through React state, a commit or two later. The driven clock stands still meanwhile,
+         * so these frames advance nothing; they only let `isPlaying` catch up. */
+        for (let k = 0; k < 4; k++) await frame()
+        await new Promise((r) => setTimeout(r, 100))
+        await frame()
+        const out = { clock: h.getClock(), head: h.getProgress(), playing: h.isPlaying(), head0, moved, frames, armSteps, drivenMs: d }
+        h.setPlaying(false)
+        while (h.isPlaying() && frames < cap + 60) { await frame(); frames++ }
+        await frame()
+        await frame()
+        while (realNow() < virt) await new Promise((r) => setTimeout(r, 10))
+        return out
+      } finally {
+        if (hadOwn) perf.now = ownNow
+        else delete perf.now
+      }
+    }, [ms, capFrames])
 
   /* ================================================================== */
   /*  A · THE CONTROL SURFACE EXISTS AND CARRIES ITS STATE               */
@@ -487,15 +576,18 @@ async function main() {
     window.__revealHarness.setProgress(0)
   })
   await wait(300)
-  /* Aim for the middle of the pass and READ WHEN WE GET THERE. The band sits
-   * well inside the control's own 0.2..0.8, and the cap is generous because a
-   * loaded machine is exactly the case this exists for. */
-  const def = await playUntilHead(0.3, 0.5, Math.round(totalMs * 2 + 1500))
+  /* Play exactly 40% of the pass on the DRIVEN clock and read on the frame
+   * after (`playDriven`, CLOUD-FLAKES). 0.4 is the middle of the old 0.3..0.5
+   * band, well inside the control's own 0.2..0.8. The old `playUntilHead`
+   * stays in the file for the record; nothing calls it. */
+  const DEF_FRAC = 0.4
+  const def = await playDriven(totalMs * DEF_FRAC)
   const defClock = def.clock
   const defHead = def.head
   console.log(
-    `  (defaults: head BEFORE play ${def.head0.toFixed(4)} · sampled at ${defHead.toFixed(4)} after ${def.waitedMs}ms` +
-      `${def.landed ? "" : " — NEVER LANDED IN BAND, the control below will say so"})`,
+    `  (defaults: head BEFORE play ${def.head0.toFixed(4)} · read at ${defHead.toFixed(6)} after ${def.drivenMs.toFixed(1)} ms of driven clock` +
+      ` (arm steps ${def.armSteps}, ${def.frames} frames)` +
+      `${def.moved ? "" : "; THE DRIVEN CLOCK NEVER MOVED THE PLAYHEAD, the control below will say so"})`,
   )
   /* ⚠ THIS WAS ONE ROW AND IT REPORTED TWO DIFFERENT FAILURES THE SAME WAY.
    *
@@ -539,18 +631,21 @@ async function main() {
    * the row that claims "the clock was still moving" never checked that it moved.
    * The sample now also has to be taken WHILE PLAYING and AHEAD of where the head
    * sat before play was pressed. The 0.2..0.8 bar is unchanged. */
-  const sampleMoved = (s) => s.playing === true && Number.isFinite(s.head) && Number.isFinite(s.head0) && s.head > s.head0
+  /* CLOUD-FLAKES: `moved` is the driven sampler's own word that the playhead
+   * answered the driven clock; it is ANDed in, never instead of the checks
+   * Codex's sabotage needs. */
+  const sampleMoved = (s) =>
+    s.playing === true && s.moved === true && Number.isFinite(s.head) && Number.isFinite(s.head0) && s.head > s.head0
   say(
     defHead > 0.2 && defHead < 0.8 && sampleMoved(def),
     "CONTROL · that sample landed mid-pass, so the identity above was read while the clock was still moving",
-    `playhead ${defHead.toFixed(6)} after playing ${def.waitedMs}ms of a ${Math.round(totalMs)}ms pass` +
+    `playhead ${defHead.toFixed(6)} after ${def.drivenMs.toFixed(1)} ms of driven clock in a ${Math.round(totalMs)}ms pass` +
       ` · head before play ${def.head0.toFixed(6)} · playing at the sample: ${def.playing}` +
       (sampleMoved(def) ? "" : " — THE PLAYHEAD DID NOT MOVE while playing, so no clock was read in motion") +
-      (def.landed ? " (sampled ON the page's own playhead, not a wall-clock sleep)" : " (the playhead never entered 0.3..0.5)") +
+      (def.moved ? " (read on the frame after a driven step, not a wall-clock sleep)" : " (the driven clock never moved the playhead)") +
       (defHead >= 0.8
-        ? " — AT OR PAST THE END. The pass finished before the sample was taken, so this run is measuring a stalled or " +
-          "overloaded page and the identity row above was read against a pinned clock. A dev server recompiling under " +
-          "another lane does this. Re-run alone before believing either row."
+        ? "; AT OR PAST THE END. The driven clock was stepped 40% of the pass and the playhead reads past 0.8, so the " +
+          "transport ran on something other than the clock it reads, or ran faster than 1x."
         : defHead <= 0.2
           ? " — BARELY STARTED. The pass had hardly moved, so the identity above was read against a clock near its anchor."
           : ""),
