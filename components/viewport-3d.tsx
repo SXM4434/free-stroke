@@ -178,7 +178,7 @@ import { LiveTakeTimeline, TransportRow, TimingNote, DrawInBody, type TransportR
 import { ExportPanel, type ExportPanelProps } from "@/components/workspace/export-panel"
 import { useDockHost, useHasDock } from "@/components/workspace/dock-hosts"
 import { DrawInTimingControls, REVEAL_EASES, OPEN_ANIMATION_PANEL_EVENT } from "@/components/draw-in-timing-controls"
-import { useTakeTransport, useTransportSlot, createTakeTransport, useProgressValue, unEaseReveal, revealModeOf, transportLengths, seamWindowOf, type ProgressStore, type TakeTransport } from "@/lib/take-transport"
+import { useTakeTransport, useTransportSlot, createTakeTransport, createProgressThrottle, useProgressValue, unEaseReveal, revealModeOf, transportLengths, seamWindowOf, type ProgressStore, type TakeTransport } from "@/lib/take-transport"
 /* K7's PAPER BREAK. The junction SET is measured by the page and published on
  * `window.__heroJunctions`; this turns it into the samples the shader needs and
  * measures which junctions have an over/under to show at all. It lives in
@@ -11637,15 +11637,34 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   )
 
   // Sync progress from the frame loop at ~15fps to avoid React re-render storms
-  const progressUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const onProgressUpdate = useCallback((p: number) => {
-    // Throttled UI update
-    if (progressUpdateTimerRef.current) return
-    progressUpdateTimerRef.current = setTimeout(() => {
-      setProgress(p)
-      progressUpdateTimerRef.current = null
-    }, 66) // ~15fps UI updates
+  /* ~15 readout writes a second while playing, each reading the playhead when
+   * it fires, and flushed exact on a pause or the end of a pass (REVIEW 1
+   * finding 7, `createProgressThrottle`). It used to write the `p` captured
+   * when its timer was armed, so the readout and the key clock could settle
+   * short of what the view showed. */
+  const progressThrottle = useMemo(() => createProgressThrottle(() => playheadRef.current, setProgress), [playheadRef, setProgress])
+  useEffect(() => () => progressThrottle.cancel(), [progressThrottle])
+  /* `__fsProgressThrottle = "armed"` parks the prior throttle for the gate's
+   * must-fail (assert-keyed-playback-live L5): the value captured when the
+   * timer was armed, and no flush on a pause. */
+  const armedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (armedTimerRef.current) clearTimeout(armedTimerRef.current)
   }, [])
+  const onProgressUpdate = useCallback(
+    (p: number) => {
+      if (readDevLaw("__fsProgressThrottle", ["armed"], "latest") === "armed") {
+        if (armedTimerRef.current) return
+        armedTimerRef.current = setTimeout(() => {
+          setProgress(p)
+          armedTimerRef.current = null
+        }, 66)
+        return
+      }
+      progressThrottle.tick()
+    },
+    [progressThrottle, setProgress],
+  )
 
   /* THE END-OF-PASS PAUSE MOVED OUT OF THE THROTTLED CALLBACK.
    *
@@ -11667,14 +11686,9 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   const playingRef = useRef(false)
   useEffect(() => {
     playingRef.current = playing
-  }, [playing])
-
-  // Cleanup throttle timer
-  useEffect(() => {
-    return () => {
-      if (progressUpdateTimerRef.current) clearTimeout(progressUpdateTimerRef.current)
-    }
-  }, [])
+    // Paused (by Pause, or at the end of a pass): the readout is the playhead, exactly.
+    if (!playing && readDevLaw("__fsProgressThrottle", ["armed"], "latest") === "latest") progressThrottle.flush()
+  }, [playing, progressThrottle])
 
   /* ==================================================================== */
   /*  THE CAMERA API — ONE IMPLEMENTATION, TWO CONSUMERS                   */

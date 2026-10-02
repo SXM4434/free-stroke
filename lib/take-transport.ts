@@ -286,6 +286,64 @@ export function createTakeTransport(): TakeTransport {
   }
 }
 
+/* ---- The key clock and the readout, on the frame loop's playhead ----------
+ *
+ * REVIEW 1 finding 7. The key clock (the Style panel's sampled values, the key
+ * button's "on a key" look and the time a diamond click keys at) used to read
+ * the throttled `progress`, and the throttle wrote the `p` captured when its
+ * timer was armed, dropping every later one. A pass that ended while a timer
+ * was pending left the readout near 0.97 of a take the view showed whole, and
+ * a mid-play Pause was off by up to one throttle period times the speed. */
+
+/** The key clock in ms: the frame loop's own playhead times the keyed length,
+ *  the number `makeKeyReader` (components/viewport-3d.tsx) samples. */
+export function keyClockMs(store: TakeTransport | null): number {
+  return store ? store.playheadRef.current * (store.derived()?.totalDuration ?? 0) : 0
+}
+
+export interface ProgressThrottle {
+  /** A frame moved the playhead: write the readout within `ms`, at most once per `ms`. */
+  tick(): void
+  /** Write the readout now (a pause, the end of a pass). */
+  flush(): void
+  /** Drop a pending write (unmount). */
+  cancel(): void
+}
+
+type Timers = { setTimeout: (fn: () => void, ms: number) => unknown; clearTimeout: (t: unknown) => void }
+
+/**
+ * THE READOUT'S THROTTLE, about 15 writes a second while playing. Each write
+ * reads the playhead WHEN IT FIRES, so the readout trails the frame loop by at
+ * most one period and lands on its last value; `flush` makes it exact at once.
+ */
+export function createProgressThrottle(
+  readPlayhead: () => number,
+  write: (p: number) => void,
+  ms = 66,
+  timers: Timers = { setTimeout: (fn, t) => setTimeout(fn, t), clearTimeout: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) },
+): ProgressThrottle {
+  let pending: unknown = null
+  return {
+    tick() {
+      if (pending !== null) return
+      pending = timers.setTimeout(() => {
+        pending = null
+        write(readPlayhead())
+      }, ms)
+    },
+    flush() {
+      if (pending !== null) timers.clearTimeout(pending)
+      pending = null
+      write(readPlayhead())
+    },
+    cancel() {
+      if (pending !== null) timers.clearTimeout(pending)
+      pending = null
+    },
+  }
+}
+
 /* ---- React ---------------------------------------------------------------- */
 
 const TakeTransportContext = createContext<TakeTransport | null>(null)

@@ -235,6 +235,66 @@ async function runRows() {
     row("F6-CADENCE", onStep && distinct === 25 && holds && ones && behind, "Twos steps the shown clock at 12 Hz of take time; Ones leaves it",
       `Twos: on 12 Hz steps ${onStep}, ${distinct} distinct over 61 frames, holds ${[...new Set(runs.slice(0, -1))].join("/")} frames, never ahead and under a step behind ${behind}; Ones unchanged ${ones}`)
   })
+
+  /* ---- F7: the key clock and the readout read the frame loop's playhead --
+   * CLOCK: keyClockMs reads the transport's playheadRef, not the readout.
+   * THROTTLE: a 2 s pass at 60 fps reports every frame to the throttle on a
+   * fake clock; the pass ends (playhead exactly 1) on a frame while a write is
+   * pending. The readout lands on 1. A Pause at 1234 ms, mid-period, flushes:
+   * the readout is that frame's playhead at once. */
+  check("F7-CLOCK", "the key clock is the frame loop's playhead times the keyed length", () => {
+    const T = loadTs("lib/take-transport.ts")
+    const store = T.createTakeTransport()
+    store.publishDerived({ totalDuration: 2000, takeLen: 2000, revealEase: "linear", revealMode: "hybrid", seamWindow: { mode: "grow", length: 1 } })
+    store.playheadRef.current = 0.75
+    store.progress.set(0.7)
+    const ms = T.keyClockMs(store)
+    row("F7-CLOCK", ms === 1500 && T.keyClockMs(null) === 0, "the key clock is the frame loop's playhead times the keyed length", `playhead 0.75, readout 0.7, length 2000: key clock ${ms} ms`)
+  })
+  check("F7-THROTTLE", "the readout lands on the frame loop's playhead at the end of a pass and on a Pause", () => {
+    const T = loadTs("lib/take-transport.ts")
+    // A fake clock: timers run when `now` passes them.
+    let now = 0
+    let timers = []
+    const fake = { setTimeout: (fn, ms) => { const t = { at: now + ms, fn }; timers.push(t); return t }, clearTimeout: (t) => { timers = timers.filter((x) => x !== t) } }
+    const advance = (to) => {
+      for (;;) {
+        const due = timers.filter((t) => t.at <= to).sort((a, b) => a.at - b.at)[0]
+        if (!due) break
+        now = due.at
+        timers = timers.filter((x) => x !== due)
+        due.fn()
+      }
+      now = to
+    }
+    const pass = (pauseAtMs) => {
+      now = 0
+      timers = []
+      let playhead = 0
+      let readout = 0
+      const th = T.createProgressThrottle(() => playhead, (p) => (readout = p), 66, fake)
+      const frame = 1000 / 60
+      let pendingAtEnd = false
+      for (let t = frame; ; t += frame) {
+        advance(t)
+        if (pauseAtMs !== null && t >= pauseAtMs) {
+          th.flush()
+          return { playhead, readout, pendingAtEnd }
+        }
+        playhead = Math.min(1, t / 2000)
+        th.tick()
+        if (playhead >= 1) {
+          pendingAtEnd = timers.length > 0
+          advance(t + 200)
+          return { playhead, readout, pendingAtEnd }
+        }
+      }
+    }
+    const end = pass(null)
+    const pause = pass(1234)
+    row("F7-THROTTLE", end.pendingAtEnd && end.readout === 1 && pause.readout === pause.playhead, "the readout lands on the frame loop's playhead at the end of a pass and on a Pause",
+      `end of pass: a write pending on the last frame ${end.pendingAtEnd}, readout ${end.readout} for playhead ${end.playhead}; Pause at 1234 ms: readout ${pause.readout.toFixed(4)} for playhead ${pause.playhead.toFixed(4)}`)
+  })
 }
 
 /* ---- the must-fails ----------------------------------------------------- */
@@ -251,6 +311,9 @@ const MUTANTS = [
   { name: "the refusal's range words are dropped", file: "lib/key-edit.ts", find: "    if (range) return `${verb}: ${num(range[1])} is outside ${num(range[2])} to ${num(range[3])}`\n", text: "\n", red: ["F5-EDIT", "F5-WORDS"] },
   { name: "Twos is ignored", file: "lib/stroke-schedule.ts", find: "  if (cadence !== \"twos\" || !(totalDurationMs > 0)) return clock\n", text: "  if (true) return clock\n", red: ["F6-CADENCE"] },
   { name: "Twos steps on wall seconds, not take time", file: "lib/stroke-schedule.ts", find: "  return quantiseToCadence(clock * sec, CADENCE_HZ) / sec\n", text: "  return quantiseToCadence(clock, CADENCE_HZ)\n", red: ["F6-CADENCE"] },
+  { name: "the key clock reads the throttled readout", file: "lib/take-transport.ts", find: "  return store ? store.playheadRef.current * (store.derived()?.totalDuration ?? 0) : 0\n", text: "  return store ? store.progress.get() * (store.derived()?.totalDuration ?? 0) : 0\n", red: ["F7-CLOCK"] },
+  { name: "the throttle writes the value captured when its timer was armed", file: "lib/take-transport.ts", find: "      if (pending !== null) return\n      pending = timers.setTimeout(() => {\n        pending = null\n        write(readPlayhead())\n", text: "      if (pending !== null) return\n      const armed = readPlayhead()\n      pending = timers.setTimeout(() => {\n        pending = null\n        write(armed)\n", red: ["F7-THROTTLE"] },
+  { name: "a Pause does not flush the readout", file: "lib/take-transport.ts", find: "      pending = null\n      write(readPlayhead())\n    },\n    cancel() {", text: "      pending = null\n    },\n    cancel() {", red: ["F7-THROTTLE"] },
   { name: "the GLB writes a value that never changes", file: "lib/export/glb-material-keys.ts", find: "    if (!varies(t.values)) return false\n", text: "\n", red: ["F1-GLB"] },
 ]
 

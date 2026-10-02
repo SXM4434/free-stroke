@@ -35,7 +35,7 @@ import {
   type ReactNode,
 } from "react"
 import { useStrokeTake } from "@/components/stroke-strip"
-import { useTakeTransport } from "@/lib/take-transport"
+import { keyClockMs, useTakeTransport } from "@/lib/take-transport"
 import {
   KEYABLE_PATHS,
   KEY_DISABLED,
@@ -110,16 +110,21 @@ if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
  *  (each keyed value sampled, `styleAt`). Absent, no key button draws. */
 export const KeyStyleCtx = createContext<{ styleState: StyleState } | null>(null)
 
-/** The key clock the frame loop samples: the transport's playhead times the
- *  keyed length (`makeKeyReader` in components/viewport-3d.tsx). */
+/** The key clock the frame loop samples: the frame loop's own playhead times
+ *  the keyed length (`keyClockMs`, lib/take-transport.ts; `makeKeyReader` in
+ *  components/viewport-3d.tsx). Not the throttled readout, which trails it
+ *  (REVIEW 1 finding 7). `__fsKeyMutant = "readout"` is the gate's must-fail
+ *  arm: the readout, as before. */
 function readKeyClock(store: ReturnType<typeof useTakeTransport>): number {
-  return store ? store.progress.get() * (store.derived()?.totalDuration ?? 0) : 0
+  if (KEY_UI_MUTANT === "readout") return store ? store.progress.get() * (store.derived()?.totalDuration ?? 0) : 0
+  return keyClockMs(store)
 }
 
-/** The key clock, as state. Read from the throttled progress readout, so a
- *  reader re-renders about 15 times a second while playing, not every frame;
- *  and only while `on` (something is keyed), so an unkeyed panel never
- *  re-renders for the playhead. */
+/** The key clock, as state. Re-rendered by the throttled progress readout, so
+ *  a reader renders about 15 times a second while playing, not every frame,
+ *  and reads the frame loop's playhead each time; and only while `on`
+ *  (something is keyed), so an unkeyed panel never re-renders for the
+ *  playhead. */
 export function useKeyClockMs(on = true): number {
   const store = useTakeTransport()
   const sub = useCallback(

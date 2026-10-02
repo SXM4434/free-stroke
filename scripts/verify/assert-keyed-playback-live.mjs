@@ -32,6 +32,13 @@
 //       panel's default 30 fps: every key clock the frame loop drew, live and in the film, sits on a
 //       12 Hz step of take time (a multiple of 1000/12 ms), and the film's frames hold each step for 2
 //       or 3 frames. must-fail: `__fsExportCadence = "ignored"`, the film eased with no cadence.
+//   L5  THE KEY CLOCK IS THE VIEW'S (finding 7). textureIntensity keyed 0.2 at 0 and 0.9 at the take's
+//       end. (a) Played from 0.9 to the end without loop: the readout is the playhead, 1, the
+//       Intensity diamond reads "on" (a key under the playhead), and its slider shows 0.9. (b) A Pause
+//       mid-play: the readout equals the frame loop's playhead. (c) Five Scale diamond clicks while
+//       playing: each key lands between the playhead read just before and just after the click.
+//       must-fails: `__fsProgressThrottle = "armed"` (the old throttle) for (a) and (b),
+//       `__fsKeyMutant = "readout"` (the key clock read off the readout) for (c).
 //   G1  no page error.
 
 const { chromium } = await import("./lib/browser.mjs")
@@ -343,6 +350,88 @@ async function twos(law) {
     `live: ${r.liveN} distinct clocks, furthest from a step ${r.liveOff.toFixed(4)} ms; film: ${r.filmN} frames, ${r.filmDistinct} distinct clocks, furthest from a step ${r.filmOff.toFixed(4)} ms, steps held ${r.holds.join("/")} frames`)
   const m = await twos("ignored")
   fired("L4", "the film eased with no cadence", !(m.filmOff < 0.01 && m.holdsOk), `film: ${m.filmN} frames, ${m.filmDistinct} distinct clocks, furthest from a step ${m.filmOff.toFixed(2)} ms, holds ${m.holds.join("/")}`)
+}
+
+// ---------------------------------------------------------------- L5
+async function clockPage(init) {
+  const ctx = await browser.newContext({ viewport: { width: 1512, height: 982 } })
+  await ctx.addInitScript(() => { try { for (const x of Object.keys(localStorage)) if (x.startsWith("fs.layout.")) localStorage.removeItem(x) } catch {} })
+  if (init) await ctx.addInitScript(init)
+  const page = await ctx.newPage()
+  page.on("pageerror", (e) => { if (!init) errors.push(e.message) })
+  await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 240000 })
+  await page.waitForFunction(() => window.__styleHarness && window.__revealHarness && window.__fsSetKeys && window.__dockHarness?.workspace && window.__fsTransport, null, { timeout: 240000 })
+  await page.evaluate((p) => window.__styleHarness.injectStrokes(p.slice(0, 5), { msPerPoint: 12, gapMs: 60 }), polys)
+  await page.waitForTimeout(1200)
+  await page.evaluate(() => { window.__revealHarness.setPlaying(false); window.__revealHarness.setEase?.("linear"); window.__revealHarness.setLoop?.(false) })
+  await page.evaluate((st) => window.__styleHarness.setStyle({ ...st, textureEnabled: true, textureMode: "grain", textureIntensity: 0.5 }), STILL)
+  const L = await page.evaluate(() => window.__fsTransport.derived()?.totalDuration ?? 0)
+  await page.evaluate((x) => window.__fsSetKeys(x), { textureIntensity: [k(0, 0.2), k(L, 0.9)] })
+  await openStyle(page, "texture")
+  await settle(page, 400)
+  return { ctx, page, L }
+}
+async function endAndPause(law) {
+  const { ctx, page } = await clockPage(law ? (l) => { window.__fsProgressThrottle = "armed" } : null)
+  await page.evaluate(() => window.__revealHarness.setProgress(0.9))
+  await settle(page, 300)
+  await page.evaluate(() => window.__revealHarness.setPlaying(true))
+  await page.waitForFunction(() => !window.__fsTransport.get("playing"), null, { timeout: 60000 })
+  await settle(page, 400)
+  const end = await page.evaluate(() => ({
+    readout: window.__fsTransport.progress(),
+    playhead: window.__fsTransport.playhead(),
+    look: document.querySelector('[data-key-button="textureIntensity"]')?.getAttribute("data-key-look") ?? null,
+    slider: Number(document.querySelector('[data-key-spot="textureIntensity"] input[type="range"]')?.value),
+  }))
+  // A Pause mid-play, five times at different instants.
+  const pauses = []
+  for (let i = 0; i < 5; i++) {
+    await page.evaluate(() => window.__revealHarness.setProgress(0.1))
+    await settle(page, 200)
+    await page.evaluate(() => window.__revealHarness.setPlaying(true))
+    await page.waitForTimeout(300 + i * 37)
+    await page.evaluate(() => window.__revealHarness.setPlaying(false))
+    await settle(page, 200)
+    pauses.push(await page.evaluate(() => Math.abs(window.__fsTransport.progress() - window.__fsTransport.playhead())))
+  }
+  await ctx.close()
+  return { end, pauseWorst: Math.max(...pauses) }
+}
+async function clicks(mutant) {
+  const { ctx, page, L } = await clockPage(mutant ? () => { window.__fsKeyMutant = "readout" } : null)
+  const out = []
+  for (let i = 0; i < 5; i++) {
+    await page.evaluate((L) => window.__fsSetKeys({ textureIntensity: [{ tMs: 0, value: 0.2, easeOut: "linear", easeIn: "linear" }, { tMs: L, value: 0.9, easeOut: "linear", easeIn: "linear" }] }), L)
+    await page.evaluate(() => window.__revealHarness.setProgress(0.05))
+    await settle(page, 200)
+    await page.evaluate(() => window.__revealHarness.setPlaying(true))
+    await page.waitForTimeout(250 + i * 53)
+    const r = await page.evaluate(() => {
+      const before = window.__fsTransport.playhead()
+      document.querySelector('[data-key-button="textureScale"]').click()
+      const after = window.__fsTransport.playhead()
+      return { before, after }
+    })
+    await page.evaluate(() => window.__revealHarness.setPlaying(false))
+    await settle(page, 200)
+    const keys = await page.evaluate(() => window.__fsKeys?.() ?? {})
+    const t = keys.textureScale?.[0]?.tMs
+    out.push({ ...r, t, ok: typeof t === "number" && t >= r.before * L - 0.01 && t <= r.after * L + 0.01, behind: typeof t === "number" ? r.before * L - t : NaN })
+  }
+  await ctx.close()
+  return out
+}
+{
+  const r = await endAndPause(false)
+  const okEnd = r.end.readout === 1 && r.end.playhead === 1 && r.end.look === "on" && Math.abs(r.end.slider - 0.9) < 1e-9
+  const c = await clicks(false)
+  row("L5", "the key clock reads the view's playhead: at the end of a take, on a Pause, on a click", okEnd && r.pauseWorst < 1e-12 && c.every((x) => x.ok),
+    `end: readout ${r.end.readout}, playhead ${r.end.playhead}, Intensity diamond ${r.end.look}, slider ${r.end.slider}; Pause: worst |readout - playhead| ${r.pauseWorst.toExponential(2)}; clicks keyed inside [before, after]: ${c.filter((x) => x.ok).length}/5 (${c.map((x) => x.behind.toFixed(1)).join(" ")} ms behind the playhead before the click)`)
+  const m = await endAndPause(true)
+  fired("L5", "the old throttle (captured value, no flush)", !(m.end.readout === 1 && m.end.look === "on") || m.pauseWorst > 1e-12, `end: readout ${m.end.readout}, diamond ${m.end.look}, slider ${m.end.slider}; Pause: worst |readout - playhead| ${m.pauseWorst.toFixed(4)}`)
+  const mc = await clicks(true)
+  fired("L5", "the key clock read off the readout", mc.some((x) => !x.ok), `clicks keyed inside [before, after]: ${mc.filter((x) => x.ok).length}/5 (${mc.map((x) => x.behind.toFixed(1)).join(" ")} ms behind)`)
 }
 
 row("G1", "the pages threw nothing", errors.length === 0, errors.length ? errors.slice(0, 3).join(" | ") : "0 pageerror events")
