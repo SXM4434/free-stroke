@@ -115,7 +115,7 @@ import {
   REVEAL_WINDOW_DEFAULTS,
   REVEAL_ENVELOPE_DEFAULTS,
 } from "@/lib/stroke-schedule"
-import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, takeHasPerformed, rebasePerformed, paceFromCurve, carryTimeByArc, rateScaled } from "@/lib/stroke-timing"
+import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, takeHasPerformed, rebasePerformed, paceFromCurve, carryTimeByArc, rateScaled, withStagger } from "@/lib/stroke-timing"
 import { StrokeTakeProvider } from "@/components/stroke-strip"
 import { KeyedStyle, keyedStyleEdit } from "@/components/key-button"
 import { TakeTransportProvider } from "@/lib/take-transport"
@@ -1492,11 +1492,21 @@ export default function Home() {
     const drawIn = { ...DRAW_IN_DEFAULTS, ...patch.drawIn }
     const revealWindow = { ...REVEAL_WINDOW_DEFAULTS, ...patch.revealWindow }
     const rebased = rebaseForClock(curEnv, envelope, drawIn, revealWindow)
+    /* Plan 3b · Stagger writes each stroke's delay against the base slots of
+     * the clock the preset sets, in this same edit, so the preset and its
+     * delays are one undo step. Every other preset leaves the take alone. */
+    let take = rebased
+    if (patch.stagger) {
+      const { raw, processed, nib } = clockInRef.current
+      const c = clockStrokesFor(raw, processed, envelope, nib, settingsRef.current)
+      const slots = baseSlotsFor(c.processed, penMsOf(c.raw), drawIn, revealWindow.mode, envelope.mode, nib)
+      take = withStagger(rebased ?? docRef.current.take ?? STROKE_TIMING_TAKE_DEFAULTS, slots, patch.stagger)
+    }
     edit(`Preset ${preset?.label ?? id}`, null, {
       drawIn,
       revealWindow,
       revealEnvelope: envelope,
-      ...(rebased ? { take: rebased } : {}),
+      ...(take ? { take } : {}),
       styleState: { ...docRef.current.styleState, activePresetFamily: "geometryAnimation", activePresetId: id },
     })
     return true

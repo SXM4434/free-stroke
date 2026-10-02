@@ -1584,6 +1584,10 @@ export interface MotionPresetPatch {
   drawIn?: Partial<DrawInParams>
   revealWindow?: Partial<RevealWindowParams>
   envelope?: Partial<RevealEnvelopeParams>
+  /** Plan 3b. Present, the preset also writes each stroke's delay so starts
+   *  fall `gapMs` apart (`withStagger` in `lib/stroke-timing.ts`), in the same
+   *  edit as the rest of the patch. Absent on every other preset. */
+  stagger?: { gapMs: number }
 }
 
 /* ====================================================================== */
@@ -4863,6 +4867,26 @@ export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
       drawIn: { order: "asDrawn", overlap: 0.2, align: "start", unit: "group", reverse: "off" },
       revealWindow: { mode: "travel", length: 0.3 },
       envelope: { mode: "hybrid", ease: "linear", delaySeconds: 0.4, loop: true, reverse: false },
+    },
+  },
+  {
+    /* Plan 3b, Desk Doodles' stagger (coverage row 120). Every stroke sets off
+     * 50 ms after the one before at its own pace, written as per-stroke delays
+     * into the take (`withStagger`), so the strip shows where each one went and
+     * one undo takes it back. 50 is `STAGGER_GAP_MS` in `lib/stroke-timing.ts`,
+     * a literal here because this module keeps one runtime import;
+     * `assert-schedule-controls.mjs` holds the two together. */
+    id: "stagger",
+    label: "Stagger",
+    family: "geometryAnimation",
+    enabled: true,
+    implemented: true,
+    description: "Every stroke sets off 50 ms after the one before, at its own pace, so the word lands as one quick ripple.",
+    motion: {
+      drawIn: { order: "asDrawn", overlap: 0, align: "start", unit: "stroke", reverse: "off" },
+      revealWindow: { mode: "grow", length: 0.25 },
+      envelope: { mode: "hybrid", ease: "linear", delaySeconds: 0, loop: false, reverse: false },
+      stagger: { gapMs: 50 },
     },
   },
   {

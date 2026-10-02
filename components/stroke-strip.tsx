@@ -66,6 +66,8 @@ import {
   rowOf,
   takeLiftsMs,
   withRow,
+  withStagger,
+  STAGGER_GAP_MS,
   type StrokeTiming,
   type StrokeTimingTake,
 } from "@/lib/stroke-timing"
@@ -689,6 +691,17 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
               onClose={() => setPerforming(false)}
             />
           )}
+          {/* Plan 3b · Stagger: every stroke sets off STAGGER_GAP_MS after the
+              one before, written as delays into this take, one undo step. */}
+          <button
+            type="button"
+            data-strip-stagger
+            onClick={() => commit(withStagger(take, baseSlots, { gapMs: STAGGER_GAP_MS }), null)}
+            title={`Every stroke sets off ${STAGGER_GAP_MS} ms after the one before, at its own pace. Writes each stroke's delay; held-back strokes stay last.`}
+            className="fs-press rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Stagger
+          </button>
           <button
             type="button"
             data-strip-ripple

@@ -1212,3 +1212,65 @@ export function withPerformed(
   }
   return { ...take, strokes }
 }
+
+/* ==========================================================================
+ * §8 · STAGGER (plan 3b, coverage row 120): a preset that writes delays
+ *
+ * Desk Doodles' stagger: every stroke sets off a fixed beat after the one
+ * before it, 40 to 60 ms, at its own pace. Nothing here keeps time of its own:
+ * it writes each stroke's `delayMs` into the take that already exists, so the
+ * page commits it as one edit and one undo step, and the strip shows the bars
+ * where they now sit. No schedule change.
+ *
+ * The strokes are counted in base order (base slot start, then index), the
+ * order the take already walks. The first keeps its start, so the lead-in
+ * stays; the k-th starts `k * gapMs` after it. A held-back stroke is left
+ * alone and out of the count: it still lands after the rest. Every other field
+ * of a row (speed, ease, a performed pace) is kept. Under Ripple the carry the
+ * earlier strokes leave is taken out of each delay, the walk `withPerformed`
+ * does, so the starts fall where they were asked for either way. Delays are
+ * whole ms, like every delay the strip writes.
+ * ======================================================================== */
+
+/** The stagger Desk Doodles uses, inside its 40 to 60 ms band. The Stagger
+ *  preset in `lib/style-system.ts` carries the same number as a literal, since
+ *  that module keeps one runtime import; the gate holds the two together. */
+export const STAGGER_GAP_MS = 50
+
+export interface StaggerOpts {
+  /** Between one start and the next, ms. */
+  gapMs: number
+}
+
+/** Where the k-th of `m` staggered strokes starts, ms after the first. */
+export function staggerStarts(m: number, gapMs: number): Float64Array {
+  const out = new Float64Array(Math.max(0, m))
+  for (let k = 0; k < m; k++) out[k] = k * gapMs
+  return out
+}
+
+/** The take with every stroke but the held-back ones staggered `gapMs` apart. */
+export function withStagger(take: StrokeTimingTake, baseSlots: ArrayLike<number>, opts: StaggerOpts): StrokeTimingTake {
+  const n = Math.floor(baseSlots.length / 2)
+  const gap = Number.isFinite(opts.gapMs) && opts.gapMs >= 0 ? opts.gapMs : STAGGER_GAP_MS
+  const order = Array.from({ length: n }, (_, i) => i).sort((x, y) => baseSlots[x * 2] - baseSlots[y * 2] || x - y)
+  const lead = order.filter((i) => !rowOf(take, i).holdBack)
+  if (lead.length === 0) return take
+  const starts = staggerStarts(lead.length, gap)
+  const first = baseSlots[lead[0] * 2]
+  const strokes = { ...take.strokes }
+  let carry = 0
+  lead.forEach((i, k) => {
+    const B0 = baseSlots[i * 2]
+    const B1 = baseSlots[i * 2 + 1]
+    const at = first + starts[k]
+    const want = at - B0 - (take.ripple ? carry : 0)
+    const delayMs = Math.round(want)
+    strokes[i] = { ...rowOf(take, i), delayMs }
+    if (!take.ripple) return
+    const speed = Number.isFinite(strokes[i].speed) && strokes[i].speed > 0 ? strokes[i].speed : 1
+    const t0 = Math.max(0, B0 + carry + delayMs)
+    carry = t0 + (B1 - B0) / speed - B1
+  })
+  return { ...take, strokes }
+}
