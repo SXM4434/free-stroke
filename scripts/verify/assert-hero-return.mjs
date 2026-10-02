@@ -58,6 +58,23 @@ function phaseSeries(P, phase) {
   return rows
 }
 
+/* THE INK SWAPS ACROSS THE SLIVER'S OWN BOUNDARY, on one side or the other.
+ * The out-turn swaps on the dwell's FIRST frame (drawing 106 px at f12, solid
+ * sliver 14 px at f13). Since F118 (2026-09-25, ruled: the return's dwell is the
+ * solid, because a drawing at the edge is either the carve's white ghost on a
+ * thick sliver or a 0.004-deep blank card) the return swaps on the frame AFTER
+ * the dwell's LAST (solid sliver 14 px at f14, drawing 37 px at f15): the mirror
+ * of the out-turn. This used to accept the first dwell frame plus or minus one,
+ * which read the mirror as a defect and passed a swap one frame BEFORE the edge,
+ * where the outgoing frame is still 106 px wide. Either side of the sliver hides
+ * the swap; any other frame shows it. */
+function swapAtSliver(rows, edgeFloor) {
+  const dwell = rows.filter((r) => r.sx <= edgeFloor + 1e-9)
+  const flip = rows.findIndex((r) => r.flat >= 1)
+  if (dwell.length === 0 || flip < 0) return false
+  return flip === dwell[0].i || flip === dwell[dwell.length - 1].i + 1
+}
+
 function claims(P) {
   const { rows, N, fps } = returnSeries(P)
   const e = P.emerge
@@ -125,7 +142,7 @@ function claims(P) {
   // THE INK, AND THE NEWS, BOTH SWAP AT THE EDGE.
   const inkFlip = rows.findIndex((r) => r.flat >= 1)
   const newsFlip = rows.findIndex((r) => r.jointBreak > 0)
-  const inkAtEdge = atEdge !== null && inkFlip >= 0 && Math.abs(inkFlip - atEdge.i) <= 1
+  const inkAtEdge = swapAtSliver(rows, e.edgeFloor)
   const newsAtEdge = atEdge !== null && newsFlip >= 0 && Math.abs(newsFlip - atEdge.i) <= 1
 
   // K7 vs K1 — the two shots the round trip claims are the same picture.
@@ -215,8 +232,9 @@ function claims(P) {
       detail:
         inkFlip < 0
           ? "the ink never returns to flat — the beat still ends on an object"
-          : `ink returns to flat at frame ${inkFlip}, edge-on at frame ${atEdge ? atEdge.i : "n/a"}; ` +
-            `K7 flat on all ${k7.length} frames: ${k7Flat}`,
+          : `ink returns to flat at frame ${inkFlip} (${px(rows[inkFlip - 1]?.sx ?? 1)} px to ${px(rows[inkFlip].sx)} px), ` +
+            `edge-on at frames ${atEdge ? `${atEdge.i}-${dwellRows[dwellRows.length - 1].i}` : "n/a"} ` +
+            `(needs the first edge frame or the one after the last); K7 flat on all ${k7.length} frames: ${k7Flat}`,
     },
     {
       name: "K7 is K1's FRAMING — the two shots are the same picture",
@@ -354,6 +372,30 @@ console.log(
   `  real K7 still: ${stillOf(k7Real)} · nudged K7 still: ${stillOf(k7Bent)} → ` +
     `${detectorWorks ? "the detector can fail, so its green means something" : "BLIND: it cannot tell a moving hold from a still one"}`,
 )
+
+/* The swap predicate gets the same treatment: the shipped return's own rows
+ * with the ink moved to every frame from 3 before the edge to 3 after it. It
+ * must say yes on exactly the two frames that touch the sliver and no on the
+ * rest, the frame before the edge included. */
+{
+  const ret = returnSeries(P).rows
+  const dw = ret.filter((r) => r.sx <= P.emerge.edgeFloor + 1e-9)
+  const want = new Set([dw[0].i, dw[dw.length - 1].i + 1])
+  const verdicts = []
+  let ok = dw.length > 0
+  for (let k = dw[0].i - 3; k <= dw[dw.length - 1].i + 4; k++) {
+    const moved = ret.map((r) => ({ ...r, flat: r.i >= k ? 1 : 0 }))
+    const got = swapAtSliver(moved, P.emerge.edgeFloor)
+    if (got !== want.has(k)) ok = false
+    verdicts.push(`f${k} ${got ? "yes" : "no"}`)
+  }
+  if (!ok) blind = true
+  console.log(`\nDETECTOR MUTATION TEST: the swap predicate with the ink moved frame by frame (edge-on f${dw[0].i}-f${dw[dw.length - 1].i})`)
+  console.log(
+    `  ${verdicts.join(" · ")} → ` +
+      `${ok ? "yes only where the swap touches the sliver, so its green means something" : "BLIND: it passes a swap the eye can see, or fails one it cannot"}`,
+  )
+}
 
 const failed = shipped.filter((c) => !c.pass)
 console.log(`\n${shipped.length - failed.length}/${shipped.length} claims hold on the shipped return.`)
