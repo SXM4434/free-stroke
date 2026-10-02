@@ -1,4 +1,4 @@
-NOT MERGE-READY (duplicate: the controller says claude/trace-animation-asks-j2uyvo is the finished job; merge that one, not both)
+MERGE-READY (this branch now carries claude/trace-animation-asks-j2uyvo's doc plus 4 corrected lines; merge this one or that one plus the fix, not both)
 
 # CLOUD-UNKNOWN log, 2026-10-02
 
@@ -56,3 +56,13 @@ Asked by the controller session to stop redoing the job, check the other branch'
 - Rows 105 and 106: my row says `makeFlatRenderer` has "no caller outside two comments in `lib/hero-motion.ts`". That is wrong. Five scripts in `scripts/verify/` call it (`assert-pen-field.mjs`, `assert-drawin-2d-parity.mjs`, `_probe-pen-vs-tube-hero.mjs`, `_probe-carve-preview.mjs`, `lib/nib-carve.mjs`). It has no caller in `app/`, `components/` or the product code in `lib/`. Theirs is closer (it names two of the scripts).
 
 **Recommendation.** Merge `claude/trace-animation-asks-j2uyvo` and drop this branch's doc changes. Before merging, delete the sentence in its row 106 that says no check compares 2D with 3D. This branch's build list is an extra if that one lacks it; the two build lists were not compared.
+
+## Step 4 · the controller's branch adopted, with its two errors fixed
+
+The user asked for the recommendation above to be carried out. `docs/research-2026-09-26/animation-asks-coverage.md` on this branch is now `origin/claude/trace-animation-asks-j2uyvo`'s version (999326d) with four lines changed. My own third pass and build list are replaced by theirs; they stay in this branch's history (2ce9a4d, cc2d426).
+
+- Row 106: "nothing compares 2D with 3D" replaced by `scripts/verify/assert-drawin-2d-parity.mjs`, which does, not run here.
+- Row 105: `makeFlatRenderer` callers corrected from two scripts to the five in `scripts/verify/`, none in product code.
+- The third-pass summary line on 105 and 106, and the build-list line for 106, corrected to match.
+
+Grades unchanged from theirs: 55 PRESENT, 35 PARTIAL, 26 MISSING, 0, 8 UNKNOWN. `git diff origin/claude/trace-animation-asks-j2uyvo -- docs/research-2026-09-26/animation-asks-coverage.md`: 4 insertions, 4 deletions. tsc: 6, the baseline. Em dashes in the doc: 0.
