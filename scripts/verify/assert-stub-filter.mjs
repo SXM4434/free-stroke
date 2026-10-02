@@ -39,7 +39,27 @@
  *
  * Every row below is turned red by at least one arm and the matrix prints which,
  * because "about 52 of 101 gates cannot report the failure they exist for"
- * (`docs/RUN-QUEUE.md`, measured 2026-08-28) and this must not be the 53rd.
+ * (`docs/RUN-QUEUE.md`, measured 2026-08-28) and this must not be the 53rd. *
+ * ── 2026-10-02 · THE SHIPPED WORD HAS NO STUBS LEFT, SO THE FILTER IS GRADED
+ *    ON THE WORD THAT HAD THEM ───────────────────────────────────────────
+ *
+ * The retrace `77a44826b` (2026-09-24, `scripts/capture/trace-logo.mjs`) took
+ * the stubs out at the source: 12 strokes, one per letter plus the k's arm, 0
+ * under the nib. The 2026-09-25 ruling (`docs/rulings/2026-09-25-animation-comes-
+ * back.md`, "The five re-derived gates") re-derives the gates on that word. On
+ * it `dropped` read 12 -> 12 and `clock` read -0.000 s, and the regularity row
+ * lost its control: none of the three rows can say anything about a filter that
+ * has nothing to drop. They were true claims about the 22-piece trace.
+ *
+ * So the rows are split by what they are about, and no bar moved:
+ *   FILTER rows (dropped, margin, travel, clock, regularity, letters and their
+ *     known-bad matrix) run on the parked trace,
+ *     `scripts/capture/logo-strokes.before-2026-09-24.json`, the word the filter
+ *     was written for. Same arms, same thresholds.
+ *   SHIPPED rows grade the live word: `shipped-clean`, no polyline shorter than
+ *     one nib, the filter a no-op on it, all 11 letters found; and the guard.
+ *     Its must-fail is the regression it exists for, the old trace shipped
+ *     again: 9 stubs, so the row goes red, and that is shown on every run.
  */
 
 // gate-integrity: differential — neither constant channel D reaches here can affect a row.
@@ -65,7 +85,11 @@ const SP = loadTs("lib/stroke-processing.ts")
 const HF = loadTs("lib/hand-feel.ts")
 const LETTERS = loadTs("lib/hero-letters.ts")
 
+/** The live word, the one `buildTracedStrokes` draws. */
 const polylines = heroPolylines()
+/** The parked 22-piece trace, the word the filter was derived on. */
+const PARKED_TRACE = "scripts/capture/logo-strokes.before-2026-09-24.json"
+const parked = JSON.parse(readFileSync(join(ROOT, PARKED_TRACE), "utf8")).polylines
 const NIB = HERO_INK_WIDTH_PX
 
 /** "DeskDoodles" — a fact about the trace, which will never be another word. */
@@ -78,9 +102,9 @@ const MARGIN_MIN = 2.0
 /* ---------------------------------------------------------------------- */
 /*  ONE ARM = one threshold and one on/off, measured end to end            */
 /* ---------------------------------------------------------------------- */
-function measureArm({ drop, nib = NIB }) {
-  const census = PR.subNibStubCensus(polylines, nib)
-  const strokes = PR.stampPenClock(polylines, HERO_PEN_CLOCK, {
+function measureArm({ drop, nib = NIB, word = parked }) {
+  const census = PR.subNibStubCensus(word, nib)
+  const strokes = PR.stampPenClock(word, HERO_PEN_CLOCK, {
     nibDiameter: nib,
     dropSubNibStubs: drop,
   })
@@ -129,6 +153,10 @@ function measureArm({ drop, nib = NIB }) {
 const subject = measureArm({ drop: true })
 const off = measureArm({ drop: false })
 const crowded = measureArm({ drop: true, nib: NIB * 9 })
+/** The live word through the same filter. */
+const shipped = measureArm({ drop: true, word: polylines })
+/** The old trace read as if it shipped again: the must-fail for `shipped-clean`. */
+const regressed = measureArm({ drop: true, word: parked })
 
 /* ---------------------------------------------------------------------- */
 const rows = []
@@ -152,7 +180,10 @@ const KEYS = Object.keys(ROW)
 console.log(`\n=== THE STUBS: ARE THE ACCIDENTAL TAPS GONE, AND THEIR TIME WITH THEM? ===\n`)
 console.log(
   `nib diameter ${NIB.toFixed(3)} units (derived from computeSolidEffectiveThicknessPx, never written down)\n` +
-    `dropped ${subject.census.droppedIdx.length} of ${polylines.length}: strokes ${subject.census.droppedIdx.join(", ")}\n`,
+    `FILTER rows on the parked trace ${PARKED_TRACE}: ` +
+    `dropped ${subject.census.droppedIdx.length} of ${parked.length}: strokes ${subject.census.droppedIdx.join(", ")}\n` +
+    `SHIPPED rows on scripts/capture/logo-strokes.json: ${polylines.length} strokes, ` +
+    `${shipped.census.droppedIdx.length} under one nib\n`,
 )
 
 say("shipped", HERO_DROP_SUB_NIB_STUBS === true,
@@ -269,7 +300,7 @@ const CALL_SITES_OK = (a) =>
 
 say("dropped", ROW.dropped(subject),
   "every polyline shorter than one nib diameter is gone, and nothing else is",
-  `${polylines.length} → ${subject.strokes} strokes`)
+  `${parked.length} → ${subject.strokes} strokes`)
 
 say("margin", ROW.margin(subject),
   `the threshold sits in CLEAR AIR (shortest kept ≥ ${MARGIN_MIN}× longest dropped)`,
@@ -294,6 +325,22 @@ say("regularity", ROW.regularity(subject),
 say("letters", ROW.letters(subject),
   `the letter law still finds every letter of the word (${WORD_LETTERS})`,
   `${off.letters} pieces before, ${subject.letters} after, word gap after piece ${subject.gapAfter}`)
+
+/* THE SHIPPED WORD. The retrace removed the stubs at the source; this row holds
+ * that, so a trace that brings them back is caught here and not only by eye. */
+const SHIPPED_CLEAN = (a, word) =>
+  a.census.droppedIdx.length === 0 && a.strokes === word.length && a.letters === WORD_LETTERS
+say("shipped-clean", SHIPPED_CLEAN(shipped, polylines),
+  "the SHIPPED word has no polyline shorter than one nib, so the filter is a no-op on it, and it still finds every letter",
+  `${shipped.census.droppedIdx.length} under the nib · ${polylines.length} → ${shipped.strokes} strokes · ` +
+    `shortest ${shipped.census.shortestKept.toFixed(3)} nib · ${shipped.letters} letters`)
+{
+  const red = !SHIPPED_CLEAN(regressed, parked)
+  say("kb-shipped-clean", red,
+    "KNOWN-BAD `regressed`, the parked 22-piece trace shipped again, turns `shipped-clean` RED",
+    `${regressed.census.droppedIdx.length} under the nib · ${parked.length} → ${regressed.strokes} strokes` +
+      (red ? "" : " — NOT RED, this row cannot say no"))
+}
 
 /* THE GUARD. An unset or NaN dial must not be able to delete the drawing. */
 say("guard", PR.dropSubNibStubs(polylines, NaN).length === polylines.length &&
