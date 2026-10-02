@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en-US" dir="ltr" class="normal">
+  <head><!-- MADE BY SEAN -->
+
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" /><title>Vertex buffer is not big enough on Mac only</title>
+<meta property="og:title" content="Vertex buffer is not big enough on Mac only" />
+<meta name="twitter:title" content="Vertex buffer is not big enough on Mac only" />
+
+<meta name="author" content="SheepTester" />
+<meta name="twitter:site" content="@Sheep_tester" />
+<meta name="twitter:creator" content="@Sheep_tester" />
+
+<meta name="description" content="A weird bug that only occurred on Mac computers." />
+<meta property="og:description" content="A weird bug that only occurred on Mac computers." />
+<meta name="twitter:description" content="A weird bug that only occurred on Mac computers." />
+
+<link rel="canonical" href="https://sheeptester.github.io/longer-tweets/vertex-buffer-not-big-enough/" />
+<link property="og:url" href="https://sheeptester.github.io/longer-tweets/vertex-buffer-not-big-enough/" /><meta property="og:type" content="article" />
+<meta property="og:site_name" content="Longer Tweets" />
+
+<meta
+  property="article:published_time"
+  content="2024-04-18T18:21:00-07:00"
+/>
+<meta
+  property="article:modified_time"
+  content="2024-04-18T18:21:00-07:00"
+/>
+
+<!----><meta property="og:image" content="https://sheeptester.github.io/longer-tweets/images/generated-thumbnails/vertex-buffer-not-big-enough.jpg" />
+<meta name="twitter:image" content="https://sheeptester.github.io/longer-tweets/images/generated-thumbnails/vertex-buffer-not-big-enough.jpg" />
+<meta property="og:image:alt" content="Post title shown over a blurred photo of leaves in rain" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" /><script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "@id":"https://sheeptester.github.io/longer-tweets/vertex-buffer-not-big-enough/#article",
+    "url":"https://sheeptester.github.io/longer-tweets/vertex-buffer-not-big-enough/",
+    "mainEntityOfPage": {
+      "@type": "WebPage",
+      "@id":"https://sheeptester.github.io/longer-tweets/vertex-buffer-not-big-enough/"},
+    "name":"Vertex buffer is not big enough on Mac only",
+    "headline":"Vertex buffer is not big enough on Mac only",
+    "description":"A weird bug that only occurred on Mac computers.",
+    "datePublished":"2024-04-18T18:21:00-07:00",
+    "dateModified":"2024-04-18T18:21:00-07:00",
+    "author": [
+      {
+        "@type": "Person",
+        "name": "SheepTester",
+        "url": "https://sheeptester.github.io/"
+      }
+    ],
+    "publisher": {
+      "@type": "Organization",
+      "name": "SheepTester",
+      "url": "https://sheeptester.github.io/"
+    },
+    "inLanguage": "en-US"
+  }
+</script><meta property="og:locale" content="en-US" />
+<meta name="theme-color" content="#396226" />
+
+<meta name="generator" content="Jekyll v3.10.0" />
+
+<link rel="stylesheet" type="text/css" href="/sheep3.css" />
+<script src="/sheep3.js" charset="utf-8"></script>
+<link rel="stylesheet" href="/longer-tweets/css/styles.css" />
+    <script
+      defer
+      src="/longer-tweets/js/accessible.js"
+      charset="utf-8"
+    ></script><link
+      rel="stylesheet"
+      href="/longer-tweets/css/tomorrow-night.css"
+    />
+    <link rel="stylesheet" href="/longer-tweets/css/content.css" />
+    <script
+      defer
+      src="/longer-tweets/js/post.js"
+      charset="utf-8"
+    ></script></head>
+  <body>
+    <div class="background"></div>
+    <button class="toggle-accessible" id="toggle-accessible">
+      <span class="toggle-accessible-badge">Enable accessible theme</span>
+    </button>
+    <header class="links">
+      <a href="/longer-tweets/">home</a> &middot;
+      <a href="/longer-tweets/">main</a> &middot;
+      <a href="/longer-tweets/">index</a>
+    </header>
+    <main><article>
+  <header>
+    <time class="date" datetime="2024-04-18">2024-04-18, a Thursday</time>
+    <h1 class="title">Vertex buffer is not big enough on Mac only</h1>
+    <p class="tags"><a class="tag" href="/longer-tweets/#programming">programming</a>
+<a class="tag" href="/longer-tweets/#bug">bug</a>
+</p>
+  </header>
+  <div class="content"><p>I’m working on a glTF parser for a game engine I’m making as part of a <a href="https://cse125.ucsd.edu/">class at my university</a>, and while it worked on my Windows laptop and later my Android phone, it crashed whenever it was opened on a Macbook, regardless of browser, with an <code class="language-plaintext highlighter-rouge">INVALID_OPERATION</code> error. In the console, it said,</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[.WebGL-0x128007a3800] GL_INVALID_OPERATION: Vertex buffer is not big enough for the draw call
+</code></pre></div></div>
+
+<p><em><strong>TL;DR</strong>: For me, it was because the offset parameter for <code class="language-js highlighter-rouge"><span class="nx">gl</span><span class="p">.</span><span class="nx">vertexAttribPointer</span></code> was too big.</em></p>
+
+<p><a href="https://discourse.threejs.org/t/vertex-buffer-is-not-big-enough-for-the-draw-call-only-on-mac-computers/43628">I don’t seem to be the only one that experienced this issue</a>, but Googling around, there wasn’t much else. People tended to experience this issue when updating vertices, but I was just drawing a static model. In fact, I was drawing two glTF models, but only the one I exported from Blender worked.</p>
+
+<p>In glTF, vertex attribute data (e.g. the positions of vertices) are packed in one binary file. The glTF file defines various buffer views—sections of bytes in the binary file:</p>
+
+<div class="language-json highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">{</span><span class="w">
+  </span><span class="nl">"buffer"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w">
+  </span><span class="nl">"byteLength"</span><span class="p">:</span><span class="w"> </span><span class="mi">16224</span><span class="p">,</span><span class="w">
+  </span><span class="nl">"byteOffset"</span><span class="p">:</span><span class="w"> </span><span class="mi">31680</span><span class="p">,</span><span class="w">
+  </span><span class="nl">"byteStride"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w">
+  </span><span class="nl">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"floatBufferViews"</span><span class="p">,</span><span class="w">
+  </span><span class="nl">"target"</span><span class="p">:</span><span class="w"> </span><span class="mi">34962</span><span class="w">
+</span><span class="p">}</span><span class="w">
+</span></code></pre></div></div>
+
+<p>These in turn are referenced by “accessors,” which define how to interpret the bytes in the buffer.</p>
+
+<div class="language-json highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">{</span><span class="w">
+  </span><span class="nl">"bufferView"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w">
+  </span><span class="nl">"byteOffset"</span><span class="p">:</span><span class="w"> </span><span class="mi">8112</span><span class="p">,</span><span class="w">
+  </span><span class="nl">"componentType"</span><span class="p">:</span><span class="w"> </span><span class="mi">5126</span><span class="p">,</span><span class="w">
+  </span><span class="nl">"count"</span><span class="p">:</span><span class="w"> </span><span class="mi">676</span><span class="p">,</span><span class="w">
+  </span><span class="nl">"max"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">0.9999581575393677</span><span class="p">,</span><span class="w"> </span><span class="mf">0.999707818031311</span><span class="p">,</span><span class="w"> </span><span class="mf">0.9990392327308655</span><span class="p">],</span><span class="w">
+  </span><span class="nl">"min"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">-0.9999986886978149</span><span class="p">,</span><span class="w"> </span><span class="mf">-1.0</span><span class="p">,</span><span class="w"> </span><span class="mf">-0.9999558925628662</span><span class="p">],</span><span class="w">
+  </span><span class="nl">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"VEC3"</span><span class="w">
+</span><span class="p">}</span><span class="w">
+</span></code></pre></div></div>
+
+<p>Notice how both of these have their own <code class="language-js highlighter-rouge"><span class="nx">byteOffset</span></code>! This is because accessors themselves can define a range of bytes within a buffer view. In other words, accessors are a range of bytes in a range of bytes.</p>
+
+<p>In my glTF parser, I used these ranges to create a <code class="language-js highlighter-rouge"><span class="nx">TypedArray</span></code> view into the binary file’s <code class="language-js highlighter-rouge"><span class="nb">ArrayBuffer</span></code>:</p>
+
+<div class="language-ts highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">const</span> <span class="nx">data</span> <span class="o">=</span> <span class="k">new</span> <span class="nb">Uint8Array</span><span class="p">(</span>
+  <span class="nx">arrayBuffer</span><span class="p">,</span>
+  <span class="p">(</span><span class="nx">bufferView</span><span class="p">.</span><span class="nx">byteOffset</span> <span class="o">??</span> <span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="nx">accessor</span><span class="p">.</span><span class="nx">byteOffset</span> <span class="o">??</span> <span class="mi">0</span><span class="p">),</span>
+  <span class="nx">accessor</span><span class="p">.</span><span class="nx">count</span> <span class="o">*</span>
+    <span class="nx">componentTypes</span><span class="p">[</span><span class="nx">accessor</span><span class="p">.</span><span class="nx">componentType</span><span class="p">].</span><span class="nx">BYTES_PER_ELEMENT</span> <span class="o">*</span>
+    <span class="nx">componentSizes</span><span class="p">[</span><span class="nx">accessor</span><span class="p">.</span><span class="kd">type</span><span class="p">]</span>
+<span class="p">)</span>
+<span class="kd">const</span> <span class="nx">glBuffer</span> <span class="o">=</span> <span class="nx">gl</span><span class="p">.</span><span class="nx">createBuffer</span><span class="p">()</span> <span class="o">??</span> <span class="nx">expect</span><span class="p">(</span><span class="dl">'</span><span class="s1">Failed to create buffer</span><span class="dl">'</span><span class="p">)</span>
+<span class="nx">gl</span><span class="p">.</span><span class="nx">bindBuffer</span><span class="p">(</span><span class="nx">bufferView</span><span class="p">.</span><span class="nx">target</span><span class="p">,</span> <span class="nx">glBuffer</span><span class="p">)</span>
+<span class="nx">gl</span><span class="p">.</span><span class="nx">bufferData</span><span class="p">(</span><span class="nx">bufferView</span><span class="p">.</span><span class="nx">target</span><span class="p">,</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">gl</span><span class="p">.</span><span class="nx">STATIC_DRAW</span><span class="p">)</span>
+<span class="nx">gl</span><span class="p">.</span><span class="nx">vertexAttribPointer</span><span class="p">(</span>
+  <span class="nx">material</span><span class="p">.</span><span class="nx">attrib</span><span class="p">(</span><span class="nx">vbo</span><span class="p">.</span><span class="nx">attribName</span><span class="p">),</span>
+  <span class="nx">componentSizes</span><span class="p">[</span><span class="nx">accessor</span><span class="p">.</span><span class="kd">type</span><span class="p">],</span>
+  <span class="nx">accessor</span><span class="p">.</span><span class="nx">componentType</span><span class="p">,</span>
+  <span class="nx">accessor</span><span class="p">.</span><span class="nx">normalized</span> <span class="o">??</span> <span class="kc">false</span><span class="p">,</span>
+  <span class="nx">bufferView</span><span class="p">.</span><span class="nx">byteStride</span> <span class="o">??</span> <span class="mi">0</span><span class="p">,</span>
+  <span class="nx">accessor</span><span class="p">.</span><span class="nx">byteOffset</span> <span class="o">??</span> <span class="mi">0</span>
+<span class="p">)</span>
+</code></pre></div></div>
+
+<p>There were various tricks I did here that I thought were a bit suspicious, so I tried changing them first:</p>
+
+<ul>
+  <li>I wanted to slice into an <code class="language-js highlighter-rouge"><span class="nb">ArrayBuffer</span></code> without copying the data (so I couldn’t use <code class="language-js highlighter-rouge"><span class="nx">slice</span></code>), so I needed to use a <code class="language-js highlighter-rouge"><span class="nx">TypedArray</span></code>. I used a <code class="language-js highlighter-rouge"><span class="nb">Uint8Array</span></code> for all data types, even if the data was actually composed of other data types, like floats.</li>
+  <li>I wasn’t sure if “stride” meant the number of bytes between the last byte of one value and the first byte of the next value, or between the first bytes of both values. Usually I see <code class="language-js highlighter-rouge"><span class="mi">0</span></code> passed to <code class="language-js highlighter-rouge"><span class="nx">vertexAttribPointer</span></code>’s stride parameter, so I thought it was the former, but the few resources online suggested it was the latter. It was hard to get clarification whether, for example, 0 and 12 were equivalent for a <code class="language-glsl highlighter-rouge"><span class="kt">vec3</span></code>.</li>
+</ul>
+
+<p>So I tried using the appropriate <code class="language-js highlighter-rouge"><span class="nx">TypedArray</span></code> and passing</p>
+
+<p>After some more 3 am Googling, I managed to find where the error came from. In <a href="https://chromium.googlesource.com/angle/angle/+/0844f2db017f42f50105e85fb7e7acfdc62ddca9/src/libANGLE/validationES.cpp#136">Chromium’s cross-platform WebGL implementation</a>, it throws the error after checking the size of the attribute data.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// [OpenGL ES 3.0.2] section 2.9.4 page 40:</span>
+<span class="c1">// We can return INVALID_OPERATION if our vertex attribute does not have</span>
+<span class="c1">// enough backing data.</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">attribDataSizeWithOffset</span> <span class="o">&gt;</span> <span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">buffer</span><span class="o">-&gt;</span><span class="n">getSize</span><span class="p">()))</span>
+<span class="p">{</span>
+    <span class="n">context</span><span class="o">-&gt;</span><span class="n">handleError</span><span class="p">(</span><span class="n">Error</span><span class="p">(</span><span class="n">GL_INVALID_OPERATION</span><span class="p">,</span>
+                               <span class="s">"Vertex buffer is not big enough for the draw call"</span><span class="p">));</span>
+    <span class="k">return</span> <span class="nb">false</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>This is weird, though, because this code is supposed to work across platforms (nothing in the file path suggested it was MacOS-specific), yet it somehow only throws an error on Macs.</p>
+
+<p>Still, though, the code gave a hint. Maybe on Macs, there’s an issue with how they compute <code class="language-cpp highlighter-rouge"><span class="n">attribDataSizeWithOffset</span></code>, which is defined in the previous line:</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// An overflow can happen when adding the offset, check for it.</span>
+<span class="kt">uint64_t</span> <span class="n">attribOffset</span> <span class="o">=</span> <span class="n">attrib</span><span class="p">.</span><span class="n">offset</span><span class="p">;</span>
+<span class="p">...</span>
+<span class="kt">uint64_t</span> <span class="n">attribDataSizeWithOffset</span> <span class="o">=</span> <span class="n">attribDataSizeNoOffset</span> <span class="o">+</span> <span class="n">attribOffset</span><span class="p">;</span>
+</code></pre></div></div>
+
+<p>I printed out the arguments I passed to <code class="language-js highlighter-rouge"><span class="nx">gl</span><span class="p">.</span><span class="nx">vertexAttribPointer</span></code>, and compared the output from the two models. My Blender model, which worked on all devices, had 0 for both the stride and offset. Meanwhile, the stride and offset for <a href="https://sketchfab.com/3d-models/red-finned-fish-caba782285704b339dcc552b5455d2f6">the model I found online</a> were both nonzero. I already knew that making the stride 0 didn’t change anything.</p>
+
+<p>Look again at my code above. When constructing my <code class="language-js highlighter-rouge"><span class="nb">Uint8Array</span></code> view, I set the <code class="language-js highlighter-rouge"><span class="nx">byteOffset</span></code> to <code class="language-js highlighter-rouge"><span class="p">(</span><span class="nx">bufferView</span><span class="p">.</span><span class="nx">byteOffset</span> <span class="o">??</span> <span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="nx">accessor</span><span class="p">.</span><span class="nx">byteOffset</span> <span class="o">??</span> <span class="mi">0</span><span class="p">)</span></code>. And when calling <code class="language-js highlighter-rouge"><span class="nx">gl</span><span class="p">.</span><span class="nx">vertexAttribPointer</span></code>, I pass <code class="language-js highlighter-rouge"><span class="nx">accessor</span><span class="p">.</span><span class="nx">byteOffset</span> <span class="o">??</span> <span class="mi">0</span></code> as the offset.</p>
+
+<p>??</p>
+
+<p>I accidentally applied <code class="language-js highlighter-rouge"><span class="nx">accessor</span><span class="p">.</span><span class="nx">byteOffset</span></code> twice. Replacing the second value with 0 fixed it. 🎉</p>
+
+<p>But what’s very curious is that applying <code class="language-js highlighter-rouge"><span class="nx">accessor</span><span class="p">.</span><span class="nx">byteOffset</span></code> twice <em>didn’t</em> break on other devices. On Windows and Android, the models rendered fine. I guess it’s because they’re more lenient about it and modulo or ignore the parameter if the offset is out of bounds, while MacOS doesn’t do this.</p>
+</div>
+  <footer>
+    <p class="revisions">
+      See source and revision history on <a
+        id="github"
+        href="https://github.com/SheepTester/longer-tweets/commits/master/_posts/2024-04-18-vertex-buffer-not-big-enough.md"
+        >GitHub</a
+      >.
+    </p>
+  </footer><section class="comments" aria-label="Comments">
+    <a
+      href="https://github.com/SheepTester/longer-tweets/issues/new?template=comment.md&labels=comment&title=💬/vertex-buffer-not-big-enough💬&body=&lt;!-- Write your comment here! You can use Markdown. Do NOT change the issue title. 💬/vertex-buffer-not-big-enough💬 --&gt;%0A%0A"
+      class="add-comment"
+    >
+      <!-- https://github.com/feathericons/feather/blob/main/icons/edit-3.svg -->
+      <svg
+        width="24"
+        height="24"
+        viewBox="0 0 24 24"
+        xmlns="http://www.w3.org/2000/svg"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+      </svg>
+      Write a comment
+    </a></section>
+</article>
+</main>
+    <footer class="links"><a href="/longer-tweets/">back</a> &middot; <a
+        href="https://github.com/SheepTester/longer-tweets/blob/master/_posts/2024-04-18-vertex-buffer-not-big-enough.md?plain=1"
+        >source</a
+      > &middot;
+      <a href="/longer-tweets/feed.xml">feed</a>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,48 @@
+SOURCE_URL: https://css-tricks.com/how-to-get-handwriting-animation-with-irregular-svg-strokes/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: CSS-Tricks article explaining why traditional SVG stroke animation fails for calligraphy and handwriting, offering masking solution
+
+# Handwriting Animation with Irregular SVG Strokes
+
+## The Challenge
+
+Creating handwriting animations for calligraphy fonts presents a unique problem. Traditional SVG stroke animation techniques rely on consistent stroke widths, but calligraphy fonts feature "uneven stroke widths (they actually aren't even strokes in terms of SVG)," making standard approaches ineffective.
+
+This is the core of why SVG trim path / stroke-dasharray animation reads as fake for handwriting: real handwriting has pressure-dependent stroke width variation. SVG stroke-width property cannot express this variation when animated as a single uniform line.
+
+## The Solution: SVG Masking
+
+The technique employs a two-layer approach using SVG masks. As the author explains, "there will be two layers of same sentence. Since the mask sits on top, we'll make it white so it will hide the original sentence below it."
+
+### Layer Setup
+
+- Bottom layer: The text rendered in the desired calligraphy font (HaveHeartOne recommended)
+- Top layer: A hand-traced path approximating the letters, created using illustration software
+
+## Implementation Steps
+
+1. Convert text to paths in your design application (Illustrator: Properties > Create Outline)
+2. Name layers meaningfully for clean SVG export with proper IDs and classes
+3. Trace stroke paths using the pen tool with no fill and appropriate stroke width
+4. Export as SVG with optimized settings
+5. Edit SVG code to move masks into <defs> elements and apply mask attributes to character paths
+6. Animate using stroke-dasharray with CSS keyframes or JavaScript calculations
+
+## Animation Approaches
+
+Two methods work effectively:
+- CSS + JavaScript: Calculate path length and animate stroke-dashoffset
+- GSAP with drawSVG plugin: Simplifies progressive stroke reveal animation
+
+## Why This Works Better Than Direct SVG Animation
+
+The technique successfully achieves handwriting effects for fonts with irregular stroke characteristics that defeat conventional animation methods. By masking real handwriting text underneath, the visual result preserves the authentic ink qualities that pure SVG stroke animation cannot reproduce.
+
+---
+
+## Key Insight for the Trim-Path Problem
+
+This article identifies the exact reason trim path looks fake: "No SVG stroke will ever have all these things [texture, ink bleed, variation in width and saturation of the ink depending on how quickly you write]. And without these things, you get very dead, very not-handwritten looking type."
+
+The masking approach abandons pure vector animation in favor of revealing authentic handwritten letterforms, trading animation flexibility for visual authenticity.

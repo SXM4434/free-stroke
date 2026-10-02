@@ -1,0 +1,44 @@
+#!/bin/sh
+# Strip third-party AI attribution trailers before the message is written.
+#
+# WHY, and the line this draws. Measured 2026-08-25 on this machine:
+#   portfolio     646 Co-Authored-By trailers naming EIGHT model versions
+#                 (Opus 5, Opus 5 1M, Opus 4.8, Opus 4.8 1M, Opus 4.7,
+#                  Sonnet 4.6, Fable 5)
+#   free-stroke   80% of commits authored by v0 / v0agent / vercel bots
+# GitHub PARSES Co-authored-by: and renders those names as contributors on every
+# commit, so whichever model happened to be running becomes a permanent,
+# searchable co-author of Sebs's portfolio.
+#
+# Claude-Session: is DELIBERATELY KEPT. It is provenance, not credit -- GitHub
+# does not parse it, and his journal and memory system read session ids. This
+# hook removes CREDIT, not TRACEABILITY.
+#
+# A HUMAN co-author is kept. Only known agent identities are removed.
+
+f="$1"
+[ -f "$f" ] || exit 0
+[ "$KEEP_AI_TRAILERS" = "1" ] && exit 0
+
+AGENTS='claude|anthropic|cursor|factory-droid|factory|devin|copilot|codeium|windsurf|aider|codex|openai|gemini|jules|v0|v0agent|vercel|bolt|lovable|replit|gpt-engineer|sourcegraph|cline|roocode|tabnine|qodo|augment|bot'
+
+before=$(grep -icE '^(co-authored-by|generated with)' "$f" 2>/dev/null); [ -z "$before" ] && before=0
+
+awk -v agents="$AGENTS" '
+  # Match an agent token only at a WORD BOUNDARY. Without this, "amp"
+  # (Sourcegraph Amp) matched inside ex-amp-le.com and deleted a HUMAN
+  # co-author -- caught by this hooks own test, 2026-08-25.
+  function isagent(line,   re) {
+    re = "(^|[^a-z0-9])(" agents ")([^a-z0-9]|$)"
+    return tolower(line) ~ re
+  }
+  tolower($0) ~ /^co-authored-by:/ && isagent($0) { next }
+  tolower($0) ~ /^generated with/ { next }
+  /^\xf0\x9f\xa4\x96/ { next }
+  { print }
+' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+
+after=$(grep -icE '^(co-authored-by|generated with)' "$f" 2>/dev/null); [ -z "$after" ] && after=0
+removed=$((before - after))
+[ "$removed" -gt 0 ] && printf '\033[33m# stripped %d AI attribution trailer(s); Claude-Session kept\033[0m\n' "$removed" >&2
+exit 0

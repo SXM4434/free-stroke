@@ -1,0 +1,7 @@
+# Media Index — 2026-08-28
+
+No downloadable media files (images, video, GIF) were successfully verified and indexed.
+
+See research for video links in search results (YouTube tutorials on trim path and handwriting animation), 
+but those are not archived in this raw collection.
+duc-kanjivg-example-04e00.svg | https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji/04e00.svg | KanjiVG SVG stroke order file - character 一 (one) with explicit stroke numbering in SVG metadata

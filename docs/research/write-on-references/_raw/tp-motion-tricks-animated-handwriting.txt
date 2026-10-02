@@ -1,0 +1,33 @@
+SOURCE_URL: https://www.motiontricks.com/animated-handwriting-effect-part-1/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Motion Tricks tutorial on creating authentic animated handwriting by tracing paths and using GSAP DrawSVG
+
+# Animated Handwriting Effect Tutorial
+
+## Core Process
+
+The tutorial explains that authentic handwriting animation requires open paths rather than standard font outlines. The author recommends selecting a cursive font with consistent stroke width, such as HaloHandletter Bold, then manually tracing it using Adobe Illustrator's pencil tool.
+
+## Key Technique Steps
+
+Font Selection & Path Creation:
+Start by choosing an appropriate typeface and creating a new layer for path work. The pencil tool works best when fidelity smoothness is maximized for smoother curves.
+
+Tracing Method:
+As the author notes, "trace the font as best you can. Remember to draw in the order you would for cursive writing." Multiple passes are acceptable—retracing areas mimics natural handwriting movements.
+
+Refinement:
+Adding strokes at 75% opacity helps visualize alignment with the original font. The Live Corners widget simplifies fixing irregular peaks where paths overlap. Then adjust individual points and Bezier handles to match the source letters more precisely.
+
+## Animation Implementation
+
+Part two covers using GSAP with DrawSVG and MotionPath plugins to animate the completed paths, allowing elements like pens or brushes to appear as if actively drawing the text.
+
+The tutorial emphasizes that perfection isn't necessary—approximation paired with point adjustments yields satisfactory results suitable for web animation.
+
+---
+
+## Practitioner Insight
+
+This approach is notable because it abandons pure vector accuracy in favor of hand-traced character geometry. The author explicitly acknowledges that recreating exact font forms is unnecessary—instead, the work focuses on capturing the order and flow of cursive strokes, which communicates "handwritten" more effectively than geometric perfection. This reflects the tacit understanding among practitioners that authentic-looking handwriting animation depends more on gesture and stroke sequence than on stroke uniformity.
