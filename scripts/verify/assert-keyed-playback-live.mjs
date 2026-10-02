@@ -27,6 +27,11 @@
 //       size diamond, on its line, and are gone after 6.5 s. Then, with Cell size unkeyed and the doc
 //       at 26, the diamond itself says the same when clicked. must-fails: `"dropall"` (the refused path drops the edit's other key) and
 //       `"silentrefusal"` (no words).
+//   L4  THE FILM STEPS ON TWOS AS PLAYBACK DOES (finding 6). Cadence Twos, linear ease, a textureIntensity
+//       key so the frame loop records its key clock. Played live, and then exported as Video at the
+//       panel's default 30 fps: every key clock the frame loop drew, live and in the film, sits on a
+//       12 Hz step of take time (a multiple of 1000/12 ms), and the film's frames hold each step for 2
+//       or 3 frames. must-fail: `__fsExportCadence = "ignored"`, the film eased with no cadence.
 //   G1  no page error.
 
 const { chromium } = await import("./lib/browser.mjs")
@@ -277,6 +282,67 @@ async function refusal(mutant) {
   fired("L3", "the refused path drops the edit's other key", !d.keyedTi, `textureIntensity keys ${d.ti}`)
   const q = await refusal("silentrefusal")
   fired("L3", "a refused key shows no words", !want(q.edit) && !want(q.click), `edit: ${JSON.stringify(q.edit.text)}, click: ${JSON.stringify(q.click.text)}`)
+}
+
+// ---------------------------------------------------------------- L4
+async function twos(law) {
+  const ctx = await browser.newContext({ viewport: { width: 1512, height: 982 }, acceptDownloads: true })
+  await ctx.addInitScript(() => { try { for (const x of Object.keys(localStorage)) if (x.startsWith("fs.layout.")) localStorage.removeItem(x) } catch {} })
+  if (law) await ctx.addInitScript((l) => { window.__fsExportCadence = l }, law)
+  const page = await ctx.newPage()
+  page.on("pageerror", (e) => { if (!law) errors.push(e.message) })
+  await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 240000 })
+  await page.waitForFunction(() => window.__styleHarness && window.__revealHarness?.setCadence && window.__fsSetKeys && window.__dockHarness, null, { timeout: 240000 })
+  await page.evaluate((p) => window.__styleHarness.injectStrokes(p.slice(0, 5), { msPerPoint: 12, gapMs: 60 }), polys)
+  await page.waitForTimeout(1200)
+  await page.evaluate(() => { window.__revealHarness.setPlaying(false); window.__revealHarness.setEase?.("linear"); window.__revealHarness.setCadence("twos") })
+  await page.evaluate((st) => window.__styleHarness.setStyle({ ...st, textureEnabled: true, textureMode: "grain" }), STILL)
+  await page.evaluate((x) => window.__fsSetKeys(x), { textureIntensity: [k(0, 0.3), k(1000, 0.6)] })
+  await page.evaluate(() => window.__revealHarness.setProgress(0))
+  await settle(page, 400)
+  const STEP = 1000 / 12
+  const off = (c) => { const r = c / STEP - Math.round(c / STEP); return Math.abs(r) * STEP }
+  // Live.
+  await page.evaluate(() => { window.__geomDebug.keyedStyle.record(true); window.__revealHarness.setPlaying(true) })
+  await page.waitForTimeout(1500)
+  await page.evaluate(() => window.__revealHarness.setPlaying(false))
+  const liveRows = await page.evaluate(() => window.__geomDebug.keyedStyle.rows())
+  await page.evaluate(() => window.__revealHarness.setProgress(0))
+  await settle(page, 300)
+  // The film.
+  await page.evaluate(() => window.__dockHarness?.dock.open("export"))
+  await settle(page, 300)
+  await page.evaluate(() => window.__geomDebug.keyedStyle.record(true))
+  const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 900000 }), page.getByRole("button", { name: "Video", exact: true }).click()])
+  await dl.path()
+  await settle(page, 400)
+  const filmRows = await page.evaluate(() => window.__geomDebug.keyedStyle.rows())
+  await page.evaluate(() => window.__geomDebug.keyedStyle.record(false))
+  await ctx.close()
+  const live = [...new Set(liveRows.filter((r) => r.clockMs > 0).map((r) => r.clockMs))]
+  // The film's frames, one row per frame: the driven style clock steps once per frame.
+  const byFrame = new Map()
+  for (const r of filmRows) byFrame.set(r.elapsed.toFixed(6), r.clockMs)
+  const film = [...byFrame.values()]
+  const runs = []
+  let run = 1
+  for (let i = 1; i < film.length; i++) {
+    if (film[i] === film[i - 1]) run++
+    else { runs.push(run); run = 1 }
+  }
+  const inner = runs.slice(1, -1)
+  return {
+    liveN: live.length, liveOff: Math.max(0, ...live.map(off)),
+    filmN: film.length, filmDistinct: new Set(film).size, filmOff: Math.max(0, ...film.map(off)),
+    holds: [...new Set(inner)].sort((a, b) => a - b), holdsOk: inner.length > 4 && inner.every((r) => r === 2 || r === 3),
+  }
+}
+{
+  const r = await twos(null)
+  row("L4", "under Twos the film's key clocks step at 12 Hz, as live playback's do", r.liveN >= 5 && r.liveOff < 0.01 && r.filmN >= 30 && r.filmOff < 0.01 && r.holdsOk,
+    `live: ${r.liveN} distinct clocks, furthest from a step ${r.liveOff.toFixed(4)} ms; film: ${r.filmN} frames, ${r.filmDistinct} distinct clocks, furthest from a step ${r.filmOff.toFixed(4)} ms, steps held ${r.holds.join("/")} frames`)
+  const m = await twos("ignored")
+  fired("L4", "the film eased with no cadence", !(m.filmOff < 0.01 && m.holdsOk), `film: ${m.filmN} frames, ${m.filmDistinct} distinct clocks, furthest from a step ${m.filmOff.toFixed(2)} ms, holds ${m.holds.join("/")}`)
 }
 
 row("G1", "the pages threw nothing", errors.length === 0, errors.length ? errors.slice(0, 3).join(" | ") : "0 pageerror events")

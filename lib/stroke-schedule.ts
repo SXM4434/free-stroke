@@ -379,6 +379,20 @@ export function quantiseToCadence(tSec: number, hz: number, anchor = 0): number 
   return anchor + Math.floor((tSec - anchor) * hz) / hz
 }
 
+/**
+ * THE CLOCK THE PICTURE SHOWS UNDER A CADENCE, one function for live playback
+ * and every export (REVIEW 1 finding 6). `clock` is the take's linear 0..1
+ * position and `totalDurationMs` its length; on `twos` the clock is sampled at
+ * `CADENCE_HZ` steps of take time, so each state holds a whole step. The stored
+ * clock stays continuous; only what is shown is stepped. `ones`, or no length,
+ * gives `clock` back unchanged.
+ */
+export function cadenceClock(clock: number, totalDurationMs: number, cadence: RevealCadence): number {
+  if (cadence !== "twos" || !(totalDurationMs > 0)) return clock
+  const sec = totalDurationMs / 1000
+  return quantiseToCadence(clock * sec, CADENCE_HZ) / sec
+}
+
 /* Natural / Authentic. The two the transport offers; `smooth` is a THIRD
  * `RevealMode` that exists only behind the Debug pill and inside the compare
  * harness, and it is deliberately not a member here. A diagnostic phase must

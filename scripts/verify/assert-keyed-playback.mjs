@@ -206,6 +206,35 @@ async function runRows() {
     row("F5-WORDS", okRm && addWords === "Not keyed: 26 is outside 4 to 24" && otherWords === `Not keyed: ${other}`, "a refused add or remove says why in words",
       `three keys accepted: ${accepted}; removing the middle: "${rm}"; adding 26 to Cell size: "${addWords}"; any other reason: "${otherWords}"`)
   })
+
+  /* ---- F6-CADENCE: the clock the picture shows under Twos ----------------
+   * cadenceClock is the one function live playback and every export step the
+   * clock through. On a 2 s take sampled at 30 fps, Twos shows clocks only on
+   * 12 Hz steps of take time (each a multiple of 1/24 of the take), 24 of them
+   * over the take, each held 2 or 3 frames; Ones gives every clock back as it
+   * came. */
+  check("F6-CADENCE", "Twos steps the shown clock at 12 Hz of take time; Ones leaves it", () => {
+    const SS = loadTs("lib/stroke-schedule.ts")
+    const L = 2000
+    const clocks = Array.from({ length: 61 }, (_, i) => i / 60)
+    const twos = clocks.map((c) => SS.cadenceClock(c, L, "twos"))
+    const onStep = twos.every((v) => Math.abs(v * 24 - Math.round(v * 24)) < 1e-9)
+    const distinct = new Set(twos.map((v) => v.toFixed(9))).size
+    const runs = []
+    let run = 1
+    for (let i = 1; i < twos.length; i++) {
+      if (twos[i] === twos[i - 1]) run++
+      else {
+        runs.push(run)
+        run = 1
+      }
+    }
+    const holds = runs.slice(0, -1).every((r) => r === 2 || r === 3)
+    const ones = clocks.every((c) => SS.cadenceClock(c, L, "ones") === c)
+    const behind = twos.every((v, i) => v <= clocks[i] + 1e-12 && clocks[i] - v < 1 / 24 + 1e-12)
+    row("F6-CADENCE", onStep && distinct === 25 && holds && ones && behind, "Twos steps the shown clock at 12 Hz of take time; Ones leaves it",
+      `Twos: on 12 Hz steps ${onStep}, ${distinct} distinct over 61 frames, holds ${[...new Set(runs.slice(0, -1))].join("/")} frames, never ahead and under a step behind ${behind}; Ones unchanged ${ones}`)
+  })
 }
 
 /* ---- the must-fails ----------------------------------------------------- */
@@ -220,6 +249,8 @@ const MUTANTS = [
   { name: "a refused path is written anyway", file: "lib/key-edit.ts", find: "    if (bad.length) {\n      if (KEY_UI_MUTANT", text: "    if (false) {\n      if (KEY_UI_MUTANT", red: ["F5-EDIT"] },
   { name: "the refusal says no reason", file: "lib/key-edit.ts", find: "  return reasons.length ? `${verb}: ${reasons[0]}` : verb\n", text: "  return verb\n", red: ["F5-WORDS"] },
   { name: "the refusal's range words are dropped", file: "lib/key-edit.ts", find: "    if (range) return `${verb}: ${num(range[1])} is outside ${num(range[2])} to ${num(range[3])}`\n", text: "\n", red: ["F5-EDIT", "F5-WORDS"] },
+  { name: "Twos is ignored", file: "lib/stroke-schedule.ts", find: "  if (cadence !== \"twos\" || !(totalDurationMs > 0)) return clock\n", text: "  if (true) return clock\n", red: ["F6-CADENCE"] },
+  { name: "Twos steps on wall seconds, not take time", file: "lib/stroke-schedule.ts", find: "  return quantiseToCadence(clock * sec, CADENCE_HZ) / sec\n", text: "  return quantiseToCadence(clock, CADENCE_HZ)\n", red: ["F6-CADENCE"] },
   { name: "the GLB writes a value that never changes", file: "lib/export/glb-material-keys.ts", find: "    if (!varies(t.values)) return false\n", text: "\n", red: ["F1-GLB"] },
 ]
 

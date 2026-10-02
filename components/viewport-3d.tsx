@@ -162,8 +162,7 @@ import {
    * until 2026-08-28, which is why the page could not persist it: the document
    * cannot hold a type only a component knows about. */
   REVEAL_ENVELOPE_DEFAULTS,
-  CADENCE_HZ,
-  quantiseToCadence,
+  cadenceClock,
   type RevealCadence,
   type RevealEase,
   type RevealEnvelopeParams,
@@ -8380,7 +8379,7 @@ function PlaybackController({
   playing: boolean
   speed: number
   ease: RevealEase
-  /** `twos` holds each state for a 12 Hz step. See `quantiseToCadence`. */
+  /** `twos` holds each state for a 12 Hz step. See `cadenceClock`. */
   cadence: RevealCadence
   /** Seconds of stillness before the reveal starts. */
   delaySeconds: number
@@ -8472,10 +8471,7 @@ function PlaybackController({
        * you do to the DISPLAY, which is exactly what "sample the animation
        * clock at 12 Hz" means. `totalDuration` is ms, the cadence is Hz, so it
        * converts to seconds and back. */
-      const shown =
-        cadence === "twos" && totalDuration > 0
-          ? quantiseToCadence(clock * (totalDuration / 1000), CADENCE_HZ) / (totalDuration / 1000)
-          : clock
+      const shown = cadenceClock(clock, totalDuration, cadence)
       const p = easeReveal(shown > 1 ? 1 : shown < 0 ? 0 : shown, ease)
       playheadRef.current = p
       onProgressUpdate(p)
@@ -11625,8 +11621,20 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     [styleState, frameKeys],
   )
   /* THE FILM'S PLAYHEAD AT A PLAN CLOCK, one function for the video, the GIF
-   * and the animated GLB: the plan's linear clock through the app's ease. */
-  const exportPlayhead = useCallback((c: number) => easeReveal(c, revealEaseRef.current), [])
+   * and the animated GLB: the plan's linear clock stepped by the cadence and
+   * then eased, the same two steps `PlaybackController` takes on every live
+   * frame (`cadenceClock`, REVIEW 1 finding 6), so Twos holds each state for a
+   * 12 Hz step of take time in the file as it does on screen. The
+   * `__fsExportCadence = "ignored"` dev law is the gate's must-fail arm: the
+   * film eased with no cadence, as before. */
+  const exportPlayhead = useCallback(
+    (c: number) => {
+      const stepped =
+        readDevLaw("__fsExportCadence", ["ignored"], "honoured") === "honoured" ? cadenceClock(c, totalDuration, revealCadence) : c
+      return easeReveal(stepped > 1 ? 1 : stepped < 0 ? 0 : stepped, revealEaseRef.current)
+    },
+    [totalDuration, revealCadence],
+  )
 
   // Sync progress from the frame loop at ~15fps to avoid React re-render storms
   const progressUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -12518,6 +12526,13 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         clockRef.current = unEaseReveal(playheadRef.current, e)
       },
       setDelay: (sec: number) => setRevealDelaySeconds(Math.max(0, sec)),
+      /* The cadence, drivable: the same envelope patch the Ones / Twos pills
+       * write. Refuses anything else, so a gate cannot film one arm twice. */
+      setCadence: (c: RevealCadence) => {
+        if (c !== "ones" && c !== "twos") return false
+        patchEnvelope({ cadence: c })
+        return true
+      },
       /* `DRAW IN`, drivable. The SAME state the popover writes, so a gate grades
        * what a user gets rather than a parallel path — and it returns a boolean
        * rather than void, because an assertion has to be able to tell "the
@@ -12585,7 +12600,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     // the request instead of the result. `revealWindow` is there for the same
     // reason and it is not optional: `windowAt` closes over it, so a stale
     // closure would hand a probe the shape of a mode nobody is in.
-  }, [totalDuration, exportMs, drawIn, patchDrawIn, revealWindow, seamWindow, patchWindow])
+  }, [totalDuration, exportMs, drawIn, patchDrawIn, revealWindow, seamWindow, patchWindow, patchEnvelope])
 
   /* ANIM-1A3 · THE TAKE, DRIVABLE. `set` writes the same state a panel would
    * (the host's `onTakeChange` when there is one), and returns false on a row
@@ -14116,6 +14131,8 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     download,
     playheadRef,
     clockRef,
+    /* The cadence and the ease, through the one playhead function (finding 6). */
+    exportPlayhead,
   ])
   const handleExportVideo = useCallback(() => runAnimatedExport("video"), [runAnimatedExport])
   const handleExportGif = useCallback(() => runAnimatedExport("gif"), [runAnimatedExport])
