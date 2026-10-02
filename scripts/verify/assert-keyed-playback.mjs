@@ -138,6 +138,31 @@ async function runRows() {
     row("F1-GLB", ok, "keyed material values become KHR_animation_pointer channels on the draw-in clip",
       `${found.length}/${want.length} channels hold the keyed values at the frame times (${chans.length} written); clearcoat extension added where missing: ${extAdded}; extensionsUsed: ${used}; an unkeyed value adds none: ${noFlat}; sheen named as not in glTF: ${sheenNamed}`)
   })
+
+  /* ---- F2-RELOAD: style keys survive a reload ----------------------------
+   * The session doc as the save path writes it, with a textureSpeed track, a
+   * customMaterial.roughness track and a turn track, read back through
+   * validateSession: all three come back exactly and there is no repair (so no
+   * "Restored with repairs" toast). A style key outside its slider's range,
+   * and a name that is no keyable property, are still dropped and named. */
+  check("F2-RELOAD", "style keys read back on reload, with no repair for a valid one", () => {
+    const D = loadTs("lib/doc-store.ts")
+    const keys = {
+      textureSpeed: [lin(0, 1), lin(1500, 2.5)],
+      "customMaterial.roughness": [lin(200, 0.2), lin(900, 0.8)],
+      turn: [lin(0, 0), lin(1000, 30)],
+    }
+    const saved = JSON.parse(JSON.stringify({ ...D.defaultSession(), keys }))
+    const v = D.validateSession(saved)
+    const same = !!v && JSON.stringify(v.session.keys) === JSON.stringify(keys)
+    const clean = !!v && v.repairs.length === 0
+    const bad = JSON.parse(JSON.stringify({ ...D.defaultSession(), keys: { ...keys, ditherLevels: [lin(0, 2), lin(500, 40)], notAPath: [lin(0, 1)] } }))
+    const vb = D.validateSession(bad)
+    const badKeys = vb ? Object.keys(vb.session.keys ?? {}).sort().join(",") : "none"
+    const named = !!vb && vb.repairs.some((r) => /keys\.ditherLevels dropped: .*outside 2\.\.8/.test(r)) && vb.repairs.some((r) => /keys\.notAPath: not a keyable property/.test(r))
+    row("F2-RELOAD", same && clean && named && badKeys === "customMaterial.roughness,textureSpeed,turn", "style keys read back on reload, with no repair for a valid one",
+      `round trip equal: ${same}; repairs on a valid doc: ${v ? v.repairs.length : "none"}${v && v.repairs.length ? " (" + v.repairs.join("; ") + ")" : ""}; with an out-of-range style track and an unknown name, kept ${badKeys}, both named: ${named}`)
+  })
 }
 
 /* ---- the must-fails ----------------------------------------------------- */
@@ -146,6 +171,8 @@ const MUTANTS = [
   { name: "the loop's mean speed is read over the wrong span", file: "lib/keyframes.ts", find: "  return ((loopPhaseAt(state, keys, speedPath, toMs) - loopPhaseAt(state, keys, speedPath, fromMs)) * 1000) / step\n", text: "  return ((loopPhaseAt(state, keys, speedPath, toMs) - loopPhaseAt(state, keys, speedPath, fromMs)) * 1000) / (step * 1.01)\n", red: ["F1-LOOP"] },
   { name: "the GLB writes no material channel", file: "lib/export/glb-material-keys.ts", find: "      anim!.channels.push({", text: "      if (false) anim!.channels.push({", red: ["F1-GLB"] },
   { name: "the GLB points a channel at an extension the file does not have", file: "lib/export/glb-material-keys.ts", find: "        const e = (exts[p.ext] ??= {})\n", text: "        const e = exts[p.ext] ?? {}\n", red: ["F1-GLB"] },
+  { name: "readKeys keeps only the seven take tracks", file: "lib/doc-store.ts", find: "    if (!isKeyPath(name)) {\n", text: "    if (!(KEY_PROPERTIES as readonly string[]).includes(name)) {\n", red: ["F2-RELOAD"] },
+  { name: "readKeys checks a style track without its range", file: "lib/doc-store.ts", find: "    const bad = validateTrack(track, name)\n", text: "    const bad = validateTrack(track)\n", red: ["F2-RELOAD"] },
   { name: "the GLB writes a value that never changes", file: "lib/export/glb-material-keys.ts", find: "    if (!varies(t.values)) return false\n", text: "\n", red: ["F1-GLB"] },
 ]
 

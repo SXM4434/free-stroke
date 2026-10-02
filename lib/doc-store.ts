@@ -166,7 +166,7 @@ import {
  * only needs to know the name is one of six. */
 import { PEN_TIP_SHAPES, readPenTipMode, type PenTipMode } from "@/lib/pen-reveal"
 import { SOLID_STATE, type FlatState } from "@/lib/flat-ink"
-import { KEY_PROPERTIES, compactKeys, validateTrack, type KeyProperty, type TakeKeys, type Track } from "@/lib/keyframes"
+import { KEY_PROPERTIES, KEYABLE_PATHS, compactKeys, isKeyPath, validateTrack, type KeyPath, type TakeKeys, type Track } from "@/lib/keyframes"
 import type { SchemaSpec } from "@/lib/storage"
 
 /* ========================================================================== */
@@ -1034,6 +1034,10 @@ function readTake(raw: unknown, repairs: string[]): StrokeTimingTake {
  * every reason it gave goes to `repairs`, named by its property: an unsorted or
  * non-finite track cannot be sampled, and a repaired one would play motion he
  * never keyed. A name that is not a keyable property is named and dropped too.
+ * Keyable means one of the seven take tracks or a numeric style value
+ * (`isKeyPath`, the same test `validateKeys` makes on write), so a style key
+ * the save path wrote (`textureSpeed`, `customMaterial.roughness`) reads back
+ * as it was saved, checked against its slider's range like any other track.
  * No field is no keys, with nothing to report. What survives is compacted, so
  * a field that ends up empty reads as no keys rather than `{}`.
  */
@@ -1045,16 +1049,18 @@ export function readKeys(raw: unknown, repairs: string[]): TakeKeys | undefined 
   }
   const kept: TakeKeys = {}
   for (const [name, track] of Object.entries(raw as Record<string, unknown>)) {
-    if (!(KEY_PROPERTIES as readonly string[]).includes(name)) {
-      repairs.push(`keys.${name}: not a keyable property (${KEY_PROPERTIES.join(", ")}), dropped`)
+    if (!isKeyPath(name)) {
+      repairs.push(
+        `keys.${name}: not a keyable property (the take tracks ${KEY_PROPERTIES.join(", ")}, or one of the ${KEYABLE_PATHS.length} numeric style values), dropped`,
+      )
       continue
     }
-    const bad = validateTrack(track, name as KeyProperty)
+    const bad = validateTrack(track, name)
     if (bad.length) {
       for (const r of bad) repairs.push(`keys.${name} dropped: ${r}`)
       continue
     }
-    kept[name as KeyProperty] = track as Track
+    kept[name as KeyPath] = track as Track
   }
   return compactKeys(kept)
 }
