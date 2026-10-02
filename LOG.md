@@ -46,6 +46,26 @@ Branch: pushed to `claude/node-tests-cloud-session-g2cb4v`, the branch this sess
   - unkeyed: exactly speed times time.
   The per-frame floor of 1e-4 s (1/166 of a frame) was set after the first run. With a 1e-6 s floor, one frame read 1.0015x its bound, 1.5e-5 s over. That comes from the 64-step Simpson sum: on a 1.5 s span its nodes sit 23 ms apart, so the sum wobbles. It is continuous, not a jump. The speed-times-time mutant is caught at this floor.
 
+## Product defects, each with the input that shows it
+
+D1. `layoutProblem` passes a save dockview throws on (`components/workspace/workspaces.ts:179`, the leaf walk never reads `data.id`; thrown out of `components/dock-shell.tsx:757-766`, no catch). Input: `defaultLayout("animate", 1464, 942, true)` with the first leaf's `data.id = 7`. `layoutProblem` returns null; dockview-core `fromJSON` throws "dockview: group id must be of type string" and leaves 0 panels.
+
+D2. `layoutProblem` passes a leaf root (`workspaces.ts:188`, the walk accepts any leaf as root). Input: the same default with `grid.root = { type: "leaf", data: { views: [all six], activeView: "drawing", id: "g-all" }, size: 942 }`. It returns null; dockview throws "dockview: root must be of type branch".
+
+D3. `layoutProblem` passes a null panel entry (`workspaces.ts:170`, only the keys are read). Input: the default with `panels.style = null`. It returns null; dockview loads drawin, drawing, export, timeline and view3d, with one empty group. Style is lost until Reset.
+
+D4. `layoutProblem` passes an entry naming another panel id. Input: the default with `panels.drawing.id = "ghost"`. It returns null; on first load dockview builds a panel `ghost` and no `drawing`.
+
+D5. (Read from code, not run.) An entry naming an unknown component. Input: `panels.view3d.contentComponent = "ghost"`. It returns null; dockview-react renders `components["ghost"]`, which is undefined.
+
+D1 to D4 are reproduced by `node scripts/verify/_probe-layout-fromjson.mjs`.
+
+D6. Easy Ease sampled one ulp past a range (`lib/flip-pose.ts:59` calc, lerped at `lib/keyframes.ts:433`). Input: `customMaterial.roughness` keys `{tMs, value: 0.4963588328100741, easeOut: {x: 0.3505, y: -0.2279}}` to `{value: 1, easeIn: EASY_EASE_IN}`, sampled at u = 0.9999999999988765 of the span. The ease reads 1.0000000000000004 and roughness reads 1.0000000000000002, range 0..1.
+
+D7. The `reachReasons` tolerance accepts a curve that dips under its range (`lib/keyframes.ts:285`, `eps = 1e-9 * range`). Input: `asciiDelay` keys from value 0 (easeOut `{x: 1/3, y: 0}`) to 2.980888083577156 (easeIn `{x: 0.1113, y: -0.000152}`). `acceptKeys` accepts it, and `styleAt` samples -1.14e-26 at u = 2.9e-12, range min 0.
+
+D6 and D7 are found by `node scripts/verify/assert-keyed-ranges.mjs`, RANGES row (seed 20261002).
+
 ## Checks
 | check | this branch | unchanged base (2cc9e98) |
 |---|---|---|
