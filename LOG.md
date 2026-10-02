@@ -43,7 +43,7 @@ Rows A to D need a browser and were not run.
   `scripts/capture/trace-logo.mjs`. The bar is in `scripts/verify/assert-nib-contrast.mjs:102` (`COUNTER_WORST_MIN = 0.25`).
   The 09-25 ruling's "the e's eye stays parked" is about the Solid line (STATUS:195, `lib/solid-mask.ts`), not
   Inflate's nib, so I read it as not covering this. That reading is a question for him, below.
-- **harness-surface row B**: `scripts/verify/assert-keyed-style.mjs:84-85` calls `__geomDebug.keyedStyle`, but
+- **harness-surface row B** (merge order, see decision 5): `scripts/verify/assert-keyed-style.mjs:84-85` calls `__geomDebug.keyedStyle`, but
   `components/viewport-3d.tsx:12683` never publishes it. The viewport also never calls `styleAt` (grep: only
   `lib/keyframes.ts` and `components/key-button.tsx`). So keyframe phase K2's gate is in the tree and K2's
   viewport side is not. Keyframe anything is ruled (2026-09-26), so this is a missing build, not a stale row.
@@ -112,18 +112,17 @@ because a must-fail could not be shown firing:**
 - The drawin-pentip, screen-layers and eye-* verdicts: they need captures or a film.
 - key-paths EXISTING and stroke-timing: no pinned commits in this clone.
 
-## Questions for him
+## Decided here, nothing waits on him
 
-1. The retrace `77a44826b` has no ruling of its own in `docs/rulings/`. I treated the 09-25 line "The five
-   re-derived gates: closed-loops merges now; the other four merge once their open red is fixed" as accepting
-   the 12-stroke word. Is that right?
-2. hero-k7-news tests the k joint break, which the live beat no longer opens. Should it be retired while the
-   break stays off? Or should it be re-derived so a crossing junction counts two gaps per break (the 09-25
-   gates PLAN §2)?
-3. The eye checks need a film folder, and the battery runs them bare. Should the battery hand them the newest
-   film, or list them as "needs a film, not run" the way it lists browser gates? And should `sharp` go into
-   `package.json`?
-4. The "e" of Desk has no eye in Inflate on the 12-stroke word (nib-contrast). Does "the e's eye stays parked"
-   cover Inflate too, or should the trace's e loop open up?
-5. K2's gate (`assert-keyed-style.mjs`) is in this snapshot without its viewport side. Did K2 not merge, or was
-   it lost in the integration?
+1. **The retrace counts as accepted.** The 09-25 ruling re-derives the gates on the 12-stroke word, so rows
+   that only described the old 22-piece trace are stale (stub-filter, step 3).
+2. **hero-k7-news is kept, not retired.** Retiring it removes coverage, and that loosens a bar. A browser lane
+   re-derives it by the gates PLAN §2 rule (a crossing junction counts two gaps per break). Its must-fail is
+   the break forced open at width 0.
+3. **The eye checks are film gates.** A browser lane films first and then runs them on that film. `sharp` goes
+   into `package.json` in a lane that may change the lockfile; this lane installs with a frozen lockfile.
+4. **The missing eye on the "e" of Desk is a defect, and the row stays red.** The fix belongs in the trace
+   (`scripts/capture/trace-logo.mjs`, polyline 1), not in the gate.
+5. **K2 is not merged, so nothing was lost.** Checked on origin: `cloud/layout-l3` (3bd02a1) has
+   `__geomDebug.keyedStyle` in `components/viewport-3d.tsx`; `main` and this snapshot do not. harness-surface
+   row B goes green when layout-l3 merges. Until then the gate is in the tree ahead of its code.
