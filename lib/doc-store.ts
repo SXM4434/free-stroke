@@ -156,6 +156,7 @@ import {
   REVEAL_RATE_MAX,
   DURATION_MIN_SECONDS,
   DURATION_MAX_SECONDS,
+  TAKE_TIMING_LABELS,
 } from "@/lib/stroke-schedule"
 import {
   type StrokeTiming,
@@ -738,6 +739,9 @@ const REVEAL_ENVELOPE_UNIONS: Record<string, ReadonlySet<string>> = {
   /* A document from before HAND-DRAW has no `clock`, and `coerceAgainst` keeps
    * the default for a missing key, so it opens on `recorded`, unchanged. */
   clock: new Set(Object.keys(REVEAL_CLOCK_LABELS)),
+  /* DRAWIN-EXTRAS. A document from before it has no `timing` and opens on
+   * `authored`, which is main. */
+  timing: new Set(Object.keys(TAKE_TIMING_LABELS)),
 }
 
 /** The slider position `app/page.tsx` initialises to. Derived from the engine's

@@ -1002,6 +1002,14 @@ export function clockTail<P extends { points: { t: number; pressure?: number }[]
   return { processed: p, raw: follows ? (p as unknown as R[]) : rateScaled(raw, played), pressured, rate: played }
 }
 
+/** DRAWIN-EXTRAS · coverage row 47, "Authored vs recorded timing, as a
+ *  choice". The take the viewport plays: `authored` hands back `take` itself
+ *  (main), `recorded` the empty take, so the recording plays with every row
+ *  set aside. The rows are kept; only the viewport stops playing them. */
+export function playedTakeOf<T extends StrokeTimingTake | null | undefined>(take: T, timing: string | undefined): T | StrokeTimingTake {
+  return timing === "recorded" ? STROKE_TIMING_TAKE_DEFAULTS : take
+}
+
 export function penMsOf(strokes: { points: { t: number }[] }[]): number {
   if (strokes.length === 0) return 0
   let lo = Infinity

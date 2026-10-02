@@ -434,6 +434,10 @@ export interface RevealEnvelopeParams {
    *  its last. 0 is off and the rate above decides; above 0 it replaces the
    *  rate with the one that lands the drawing in exactly this long. */
   durationSeconds: number
+  /** DRAWIN-EXTRAS · which timing the take plays: `authored`, his per-stroke
+   *  rows over the recording (main), or `recorded`, the recording with every
+   *  row set aside. Recorded keeps the rows; it only stops playing them. */
+  timing: TakeTiming
 }
 
 export const REVEAL_ENVELOPE_DEFAULTS: RevealEnvelopeParams = {
@@ -448,7 +452,12 @@ export const REVEAL_ENVELOPE_DEFAULTS: RevealEnvelopeParams = {
   tipHighlight: 0,
   pressureReveal: 0,
   durationSeconds: 0,
+  timing: "authored",
 }
+
+/* DRAWIN-EXTRAS · coverage row 47, "Authored vs recorded timing, as a choice". */
+export type TakeTiming = "authored" | "recorded"
+export const TAKE_TIMING_LABELS: Record<TakeTiming, string> = { authored: "Authored", recorded: "Recorded" }
 
 /* DRAWIN-EXTRAS · the Duration slider's range, seconds. 0 is off. */
 export const DURATION_MIN_SECONDS = 0.5

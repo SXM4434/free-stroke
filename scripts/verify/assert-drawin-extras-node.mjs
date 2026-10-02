@@ -43,6 +43,7 @@ const EXTRAS = {
   tipHighlight: 0,
   pressureReveal: 0,
   durationSeconds: 0,
+  timing: "authored",
 }
 const EXTRA_KEYS = Object.keys(EXTRAS)
 
@@ -486,7 +487,7 @@ async function runRows() {
     const bad = []
     if (!fn.includes("!(pressure > 0) && !(durationMs > 0)) || processedStrokes.length === 0)")) bad.push("early return ignores duration")
     if (!fn.includes("clockTail(processed, raw, wantHand, rate, pressure, durationMs)")) bad.push("tail does not get the duration")
-    if (!fn.includes("const durationMs = (env.durationSeconds ?? 0) * 1000")) bad.push("duration not read from the envelope")
+    if (!fn.includes("(env.durationSeconds ?? 0) * 1000")) bad.push("duration not read from the envelope")
     if (!/revealEnvelope\.pressureReveal, revealEnvelope\.durationSeconds, clockNib\],/.test(page)) bad.push("memo does not re-run on duration")
     if (!dtc.includes("disabled={envelope.durationSeconds > 0}")) bad.push("speed pills stay live while duration sets the speed")
     row("DUR-WIRED", bad.length === 0, "/ reads the duration in its clock function and re-runs on it, and the speed pills step aside while it is on (source text; browser rows not run)", bad.join("; ") || "5 checks")
@@ -535,6 +536,52 @@ async function runRows() {
       bad.join("; ") || `take ${len.toFixed(3)} ms on the hero and on the hero drawn at half speed`)
   }
 
+  /* ══ 5 · AUTHORED OR RECORDED ═════════════════════════════════════════════ */
+  {
+    const bad = []
+    for (const [v, want, said] of [["recorded", "recorded", false], ["authored", "authored", false], ["bogus", "authored", true], [3, "authored", false]]) {
+      const doc = JSON.parse(J(D.defaultSession()))
+      doc.revealEnvelope = { ...doc.revealEnvelope, timing: v }
+      const r = D.validateSession(doc)
+      if (r.session.revealEnvelope.timing !== want) bad.push(`${J(v)} read as ${J(r.session.revealEnvelope.timing)}`)
+      if (said && !r.repairs.some((x) => x.includes("timing"))) bad.push(`${J(v)} repaired without saying so ${J(r.repairs)}`)
+    }
+    row("TIMING-PERSIST", bad.length === 0, "the timing switch persists: Recorded reads back, an unknown value reads Authored and is said", bad.join("; ") || "4 documents")
+  }
+  const sched = S.scheduleFromStrokes(hero, null, S.DRAW_IN_DEFAULTS)
+  const rowsTake = { strokes: { 1: { ...T.STROKE_TIMING_NEUTRAL, speed: 2 }, 5: { ...T.STROKE_TIMING_NEUTRAL, holdBack: true } }, ripple: false }
+  {
+    const bad = []
+    for (const [name, tk] of [["null", null], ["undefined", undefined], ["empty", T.STROKE_TIMING_TAKE_DEFAULTS], ["two rows", rowsTake]]) {
+      for (const tm of ["authored", undefined]) if (T.playedTakeOf(tk, tm) !== tk) bad.push(`${name} under ${tm}: not the same object`)
+    }
+    const a = T.buildTimedSchedule(sched, T.playedTakeOf(rowsTake, "authored"), { baseMs: 3000 })
+    const b = base.T.buildTimedSchedule(base.S.scheduleFromStrokes(hero, null, base.S.DRAW_IN_DEFAULTS), rowsTake, { baseMs: 3000 })
+    if (!a || !b || a.takeMs !== b.takeMs || !same(a.slots, b.slots)) bad.push(`authored take ${a?.takeMs} vs base ${b?.takeMs}`)
+    row("TIMING-OFF", bad.length === 0, "Authored hands the viewport the take itself, the same object, and plays the base's timed take", bad.join("; ") || `4 takes; two rows play ${a?.takeMs.toFixed(1)} ms as on base`)
+  }
+  {
+    const before = J(rowsTake)
+    const p = T.playedTakeOf(rowsTake, "recorded")
+    const ts = T.buildTimedSchedule(sched, p, { baseMs: 3000 })
+    const authored = T.buildTimedSchedule(sched, rowsTake, { baseMs: 3000 })
+    const bad = []
+    if (ts !== null) bad.push(`recorded still builds a timed take (${ts.takeMs} ms)`)
+    if (T.isTimedTake && T.isTimedTake(p)) bad.push("recorded take still has rows")
+    if (J(rowsTake) !== before) bad.push("the rows were changed")
+    if (!(authored && authored.takeMs > 3000)) bad.push(`control: authored take ${authored?.takeMs}`)
+    row("TIMING-ON", bad.length === 0, "Recorded plays the recording: no timed take is built from the rows, and the rows themselves are kept untouched",
+      bad.join("; ") || `authored ${authored.takeMs.toFixed(1)} ms with the rows, recorded 3000 ms (no timed take)`)
+  }
+  {
+    const page = readSrc("app/page.tsx")
+    const bad = []
+    if (!/<Viewport3DWrapper [^\n]*take=\{playedTake\}/.test(page)) bad.push("viewport does not get the played take")
+    if (!/<StrokeTakeProvider take=\{take\}/.test(page)) bad.push("strip and Perform do not keep the real take")
+    if (!page.includes("playedTakeOf(take, timingIgnored ? \"authored\" : revealEnvelope.timing)")) bad.push("played take does not read the switch")
+    row("TIMING-WIRED", bad.length === 0, "/ hands the viewport the played take and the strip the real one, chosen by the switch (source text; browser rows not run)", bad.join("; ") || "3 checks")
+  }
+
   rmSync(base.dir, { recursive: true, force: true })
 }
 
@@ -575,6 +622,13 @@ const MUTANTS = [
   { name: "Presentation held to Smooth Reveal's take", file: "lib/style-system.ts", find: "...DRAW_IN_EXTRAS_OFF, durationSeconds: 4, tipHighlight: 0.6 }", text: "...DRAW_IN_EXTRAS_OFF }", red: ["PRES-ON"] },
   { name: "Presentation not shipped", file: "lib/style-system.ts", find: `id: "presentationDraw",\n    label: "Presentation",\n    family: "geometryAnimation",\n    enabled: true,\n    implemented: true,`, text: `id: "presentationDraw",\n    label: "Presentation",\n    family: "geometryAnimation",\n    enabled: true,\n    implemented: false,`, red: ["PRES-EXISTS"] },
   { name: "Presentation also changes Smooth Reveal", file: "lib/style-system.ts", find: `envelope: { mode: "hybrid", ease: "inOut", delaySeconds: 0, loop: false, reverse: false, ...DRAW_IN_EXTRAS_OFF },`, text: `envelope: { mode: "hybrid", ease: "inOut", delaySeconds: 0, loop: false, reverse: false, ...DRAW_IN_EXTRAS_OFF, durationSeconds: 4 },`, red: ["OFF-PRESETS"] },
+  /* 5 · timing */
+  { name: "timing union dropped from the reader", file: "lib/doc-store.ts", find: "  timing: new Set(Object.keys(TAKE_TIMING_LABELS)),", text: "", red: ["TIMING-PERSIST"] },
+  { name: "Recorded ignored", file: "lib/stroke-timing.ts", find: `return timing === "recorded" ? STROKE_TIMING_TAKE_DEFAULTS : take`, text: "return take", red: ["TIMING-ON"] },
+  { name: "Authored copies the take", file: "lib/stroke-timing.ts", find: `return timing === "recorded" ? STROKE_TIMING_TAKE_DEFAULTS : take`, text: `return timing === "recorded" ? STROKE_TIMING_TAKE_DEFAULTS : (take && { ...take })`, red: ["TIMING-OFF"] },
+  { name: "Recorded clears the rows", file: "lib/stroke-timing.ts", find: `return timing === "recorded" ? STROKE_TIMING_TAKE_DEFAULTS : take`, text: `return timing === "recorded" ? ((take && Object.keys(take.strokes).forEach((k) => delete take.strokes[k])), STROKE_TIMING_TAKE_DEFAULTS) : take`, red: ["TIMING-ON"] },
+  { name: "/ viewport plays the real take", file: "app/page.tsx", find: "take={playedTake} onTakeChange", text: "take={take} onTakeChange", red: ["TIMING-WIRED"] },
+  { name: "/ strip gets the played take", file: "app/page.tsx", find: "<StrokeTakeProvider take={take}", text: "<StrokeTakeProvider take={playedTake}", red: ["TIMING-WIRED"] },
   { name: "tip ignores the timed take", file: "lib/tip-highlight.ts", find: "if (timed) return headsFromSpans(timed.spans, timed.reversed)", text: "if (timed) return []", red: ["TIP-TIMED"] },
 ]
 

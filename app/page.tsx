@@ -115,7 +115,7 @@ import {
   REVEAL_WINDOW_DEFAULTS,
   REVEAL_ENVELOPE_DEFAULTS,
 } from "@/lib/stroke-schedule"
-import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, takeHasPerformed, rebasePerformed, paceFromCurve, carryTimeByArc, clockTail } from "@/lib/stroke-timing"
+import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, takeHasPerformed, rebasePerformed, paceFromCurve, carryTimeByArc, clockTail, playedTakeOf } from "@/lib/stroke-timing"
 import { StrokeTakeProvider } from "@/components/stroke-strip"
 import { KeyedStyle, keyedStyleEdit } from "@/components/key-button"
 import { TakeTransportProvider } from "@/lib/take-transport"
@@ -795,6 +795,14 @@ export default function Home() {
   /* What a clock change re-reads (`rebaseForClock`): the recording and the nib. */
   const clockInRef = useRef({ raw: rawStrokes, processed: processedStrokes, nib: clockNib })
   clockInRef.current = { raw: rawStrokes, processed: processedStrokes, nib: clockNib }
+  /* DRAWIN-EXTRAS · Authored or Recorded (`playedTakeOf`). Recorded hands the
+   * viewport (the render, the clock, export) an empty take, so it plays the
+   * recording; the strip and Perform keep the real take through the provider,
+   * so his rows stay where he can see and edit them, and nothing is written.
+   * Authored hands over `take` itself, the same object, which is main. */
+  /* GATE ONLY: assert-drawin-extras.mjs's must-fail plays Authored under Recorded. */
+  const timingIgnored = process.env.NODE_ENV !== "production" && typeof window !== "undefined" && (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "timing-ignored"
+  const playedTake = playedTakeOf(take, timingIgnored ? "authored" : revealEnvelope.timing)
   const takePenMs = useMemo(() => {
     const knock = typeof window !== "undefined" && (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "clock-strip-recorded"
     return penMsOf(knock ? rawStrokes : clocked.raw)
@@ -1805,6 +1813,7 @@ export default function Home() {
        * call, so a gate's write takes the same holds and undo step. */
       setEnvelope: (patch: Partial<RevealEnvelopeParams>) => handleRevealEnvelopeChange(patch),
       envelope: () => docRef.current.revealEnvelope,
+      take: () => docRef.current.take,
       // DEV capture: drive the Inflate fusion dials (same state the config
       // strip sets) so the verification scripts exercise the real control
       // path instead of a parallel one.
@@ -2522,7 +2531,7 @@ export default function Home() {
           />
         }
         view={
-          <Viewport3DWrapper processedStrokes={viewportStrokes} rawStrokes={clocked.raw} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} inflateParams={geometryMode === "inflate" ? inflateParams : undefined} styleState={styleState} engineFamily={engineFamily} drawIn={drawIn} onDrawInChange={handleDrawInChange} revealWindow={revealWindow} onRevealWindowChange={handleRevealWindowChange} revealEnvelope={revealEnvelope} onRevealEnvelopeChange={handleRevealEnvelopeChange} take={take} onTakeChange={handleTakeChange} flatten={flatten} onFlattenChange={handleFlattenChange} settingsRef={settingsRef} apiRef={viewportApiRef} />
+          <Viewport3DWrapper processedStrokes={viewportStrokes} rawStrokes={clocked.raw} geometryMode={geometryMode} extrudeParams={geometryMode === "extrude" ? extrudeParams : undefined} solidParams={geometryMode === "solid" || geometryMode === "inflate" ? solidParams : undefined} inflateParams={geometryMode === "inflate" ? inflateParams : undefined} styleState={styleState} engineFamily={engineFamily} drawIn={drawIn} onDrawInChange={handleDrawInChange} revealWindow={revealWindow} onRevealWindowChange={handleRevealWindowChange} revealEnvelope={revealEnvelope} onRevealEnvelopeChange={handleRevealEnvelopeChange} take={playedTake} onTakeChange={handleTakeChange} flatten={flatten} onFlattenChange={handleFlattenChange} settingsRef={settingsRef} apiRef={viewportApiRef} />
         }
         style={
           <KeyedStyle styleState={styleState} clockRef={keyClockRef}>
@@ -2661,7 +2670,7 @@ function clockStrokesFor(
   const pressure = env.pressureReveal ?? 0
   /* DRAWIN-EXTRAS · Duration. Above 0 the rate becomes the one that lands the
    * pen's first ink to its last in exactly that long (`clockTail`). */
-  const durationMs = (env.durationSeconds ?? 0) * 1000
+  const durationMs = mutate === "duration-ignored" ? 0 : (env.durationSeconds ?? 0) * 1000
   if ((!wantHand && rate === 1 && !(pressure > 0) && !(durationMs > 0)) || processedStrokes.length === 0)
     return { raw: rawStrokes, processed: processedStrokes, hand: false, stamped: null as Stroke[] | null, drift: 0, ms: 0, rate: 1 }
   const t0 = performance.now()

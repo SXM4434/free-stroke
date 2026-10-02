@@ -24,9 +24,14 @@
 // STATUS ON cloud/drawin (2026-10-02): NOT RUN. Written and run for the
 // 52982e8 snapshot by the earlier DRAWIN-EXTRAS lane, ported here unrun: this
 // lane had no browser. The Node rows are assert-drawin-extras-node.mjs.
+// Changed for this snapshot, unrun: Customize opens from the rail
+// (openStyle, lib/dock.mjs) instead of the old Preset pill; Clock and Speed
+// are no longer held under a performed take (hand-p3 rebases instead), and
+// no row here relies on the hold.
 
 import { chromium } from "./lib/browser.mjs"
 import { LAB_URL } from "./lib/dev-server.mjs"
+import { openStyle } from "./lib/dock.mjs"
 import { readFileSync, writeFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { createRequire } from "node:module"
@@ -278,7 +283,7 @@ sections.push(["tip", async () => {
   row(offEnd === onEnd && liveEnd.heads.length === 0, "TIP 3 ON at the end: the finished mark carries no glow (no must-fail arm)", `${offEnd} vs ${onEnd}, heads ${liveEnd.heads.length}`)
 
   /* The control: Customize under a draw-in preset lists it and the slider writes it. */
-  await page.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click()
+  await openStyle(page, "presets")
   await settle(page, 600)
   await page.locator("select").filter({ has: page.locator('option[value="geometryAnimation"]') }).first().selectOption("geometryAnimation")
   await settle(page, 500)
@@ -377,7 +382,7 @@ sections.push(["pressure", async () => {
   mustFail("PRESSURE 3 ON with the pressure read backwards (pressure-inverted)", inv.ok, inv.detail)
 
   /* The control. */
-  await pp.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click()
+  await openStyle(pp, "presets")
   await settle(pp, 600)
   await pp.locator("select").filter({ has: pp.locator('option[value="geometryAnimation"]') }).first().selectOption("geometryAnimation")
   await settle(pp, 500)
@@ -474,7 +479,7 @@ sections.push(["duration", async () => {
   mustFail("DURATION 2 ON with the duration dropped from the clock (duration-ignored)", k.ok, k.detail)
 
   /* The control, and the Speed pills it takes over. */
-  await page.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click()
+  await openStyle(page, "presets")
   await settle(page, 600)
   await page.locator("select").filter({ has: page.locator('option[value="geometryAnimation"]') }).first().selectOption("geometryAnimation")
   await settle(page, 500)
@@ -538,7 +543,7 @@ sections.push(["presentation", async () => {
   mustFail("PRESENTATION 2 ON, the same claim held to Smooth Reveal", other.ok, other.detail)
 
   /* On the rail beside the others, and Customize lists every field it sets. */
-  await page.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click()
+  await openStyle(page, "presets")
   await settle(page, 600)
   await page.locator("select").filter({ has: page.locator('option[value="geometryAnimation"]') }).first().selectOption("geometryAnimation")
   await settle(page, 500)
@@ -552,6 +557,61 @@ sections.push(["presentation", async () => {
   }
   const extras = ["envelope.tipHighlight", "envelope.pressureReveal", "envelope.durationSeconds"]
   row(onRail === 1 && extras.every((k) => listed.includes(k)), "PRESENTATION 3 CONTROL: on the rail, and its Customize lists the draw-in extras", `on rail ${onRail}, ${listed.length} fields listed, extras ${extras.filter((k) => listed.includes(k)).length} of ${extras.length}`)
+  await page.context().close()
+}])
+
+/* ═══ 5 · AUTHORED OR RECORDED TIMING ═════════════════════════════════════ */
+/* Rows through the viewport's own dev setter, which writes the page's take:
+ * stroke 1 at twice its speed, stroke 5 held back to land last. */
+const ROWS = {
+  1: { delayMs: 0, speed: 2, holdBack: false, ease: { kind: "preset", id: "linear" } },
+  5: { delayMs: 0, speed: 1, holdBack: true, ease: { kind: "preset", id: "linear" } },
+}
+sections.push(["timing", async () => {
+  const page = await openPage()
+  const off = await offEqualsMain(page)
+  row(off.ok, "TIMING 1 OFF: Authored with no rows renders every frame and clock as main", off.detail)
+  const set = await page.evaluate((r) => window.__fsTake.set(r), ROWS)
+  await settle(page, 800)
+  const authored = await offEqualsMain(page)
+  mustFail("TIMING 1 OFF compare, run with two authored rows playing", authored.ok, `rows set ${set}; ${authored.detail}`)
+
+  /* ON: Recorded plays main's take with the rows still in the document. */
+  const grade = async (knock) => {
+    await page.evaluate((k) => { window.__FS_GATE_MUTATE = k }, knock)
+    await page.evaluate(() => window.__styleHarness.setEnvelope({ timing: "recorded" }))
+    await settle(page, 800)
+    const r = await offEqualsMain(page)
+    const kept = await page.evaluate(() => Object.keys(window.__styleHarness.take().strokes).sort().join(","))
+    await page.evaluate(() => { window.__FS_GATE_MUTATE = undefined })
+    await page.evaluate(() => window.__styleHarness.setEnvelope({ timing: "authored" }))
+    await settle(page, 800)
+    const back = await page.evaluate(() => window.__revealHarness.getTotalDuration())
+    return { ok: r.ok && kept === "1,5", detail: `${r.detail}; rows kept in the document: ${kept}; back on Authored the take is ${back.toFixed(1)} ms`, back }
+  }
+  const rec = await grade(undefined)
+  row(rec.ok, "TIMING 2 ON: Recorded plays every frame and clock as main while the two rows stay in the document", rec.detail)
+  const authoredTotal = await page.evaluate(() => window.__revealHarness.getTotalDuration())
+  row(authoredTotal > base.clock.rod.total && rec.back === authoredTotal, "TIMING 3 ON: back on Authored, the rows play again (the held-back stroke lengthens the take)", `authored ${authoredTotal.toFixed(1)} ms vs main ${base.clock.rod.total} ms`)
+  const ign = await grade("timing-ignored")
+  mustFail("TIMING 2 ON with the switch not reaching the viewport (timing-ignored)", ign.ok, ign.detail)
+
+  /* The control. */
+  await openStyle(page, "presets")
+  await settle(page, 600)
+  await page.locator("select").filter({ has: page.locator('option[value="geometryAnimation"]') }).first().selectOption("geometryAnimation")
+  await settle(page, 500)
+  await page.locator('button[data-preset-id="authenticDraw"]').first().click()
+  await settle(page, 600)
+  const pill = page.locator('[data-preset-customize] [data-field-keys="envelope.timing"] button[data-timing="recorded"]')
+  const listed = await pill.count()
+  let after = null
+  if (listed) {
+    await pill.click()
+    await settle(page)
+    after = await page.evaluate(() => window.__styleHarness.envelope().timing)
+  }
+  row(listed === 1 && after === "recorded", "TIMING 4 CONTROL: Customize under Authentic Draw lists Timing, and Recorded writes it", `listed ${listed}, timing after click ${after}`)
   await page.context().close()
 }])
 

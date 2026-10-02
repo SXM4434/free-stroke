@@ -4786,6 +4786,7 @@ export const DRAW_IN_EXTRAS_OFF = {
   tipHighlight: 0,
   pressureReveal: 0,
   durationSeconds: 0,
+  timing: "authored",
 } as const satisfies Partial<RevealEnvelopeParams>
 
 export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [

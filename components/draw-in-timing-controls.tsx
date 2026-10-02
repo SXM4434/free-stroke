@@ -44,6 +44,8 @@ import {
   CADENCE_HZ,
   REVEAL_CLOCK_LABELS,
   type RevealClock,
+  TAKE_TIMING_LABELS,
+  type TakeTiming,
   REVEAL_RATE_MIN,
   REVEAL_RATE_MAX,
   DURATION_MAX_SECONDS,
@@ -546,6 +548,40 @@ export function DrawInTimingControls({
       </span>
     </label>
     </>)}
+    {/* TIMING (DRAWIN-EXTRAS). Authored plays his per-stroke rows; Recorded
+        sets them aside and plays the recording. Rows are kept either way.
+        Not the Clock row: Clock picks which recording, this picks whether his
+        rows ride on it. */}
+    {W(["envelope.timing"], (
+      <div className="mb-2 flex flex-col gap-1" data-timing-row>
+        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          Timing
+        </span>
+        <div className="flex flex-wrap gap-1">
+          {(Object.keys(TAKE_TIMING_LABELS) as TakeTiming[]).map((id) => (
+            <button
+              key={id}
+              type="button"
+              data-timing={id}
+              onClick={() => patchEnvelope({ timing: id })}
+              aria-pressed={envelope.timing === id}
+              className={`fs-press rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                envelope.timing === id
+                  ? "border-foreground/20 bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {TAKE_TIMING_LABELS[id]}
+            </button>
+          ))}
+        </div>
+        <span className="text-[10px] leading-snug text-muted-foreground" data-timing-note>
+          {envelope.timing === "recorded"
+            ? "Plays the drawing as recorded, without the strokes you timed one by one. Your timings are kept in the strip; switch back to Authored to play them."
+            : "Plays the strokes you timed one by one over the recording. Recorded sets them aside without losing them."}
+        </span>
+      </div>
+    ))}
     {/* DURATION (DRAWIN-EXTRAS). The whole draw's length, first ink to last.
         0 is off and the Speed pills decide. It re-times the clock, so under
         a take with performed strokes / re-stores them (rebaseForClock). */}
