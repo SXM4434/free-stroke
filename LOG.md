@@ -65,11 +65,13 @@ No new panel was added, and the docked and floating forms both get the controls 
 - **ffmpeg-static:** its postinstall did not leave a binary after `pnpm install --frozen-lockfile`, which itself succeeded here. I fetched the binary by running its `install.js` by hand; nothing is committed for it.
 - **Playback outside Chrome, a VP8-only browser:** not run, as in that lane.
 
-## Questions for the owner
-1. Those four browser gates need a run on this tree before merge. Should a browser lane do it, or should I, in a session that allows it?
-2. That lane's six questions stand, unchanged (section below): WebM as the Transparent default; the relative 4:2:0 bar in `assert-export-webm-alpha`; Rod's one-ring dot at playhead 0; GIF always on paper, sharing the Video settings; Anim GLB's label, morph budget and sizes; the lockfile. The lockfile one is resolved on this snapshot: a frozen install works here.
-3. Your ruling says every panel can always be rearranged. GIF and Anim GLB sit inside the Export panel's one bar, not as panels of their own. Is that the right home, or should Video, GIF and Anim GLB get a row of their own inside the Export panel?
-4. The branch name: keep `claude/export-formats-gif-webm-glb-yfwhh2`, or also push it as `cloud/export`?
+## For the orchestrator (the local Free Stroke session)
+Defaults this lane took, so nothing here waits on the owner. Overrule any of them in the next brief.
+1. Browser gates: not run here, as briefed. The next browser lane runs these on this branch and compares each with its own run on `2cc9e98`: `assert-export-gif-app`, `assert-export-webm-alpha-app`, `assert-export-glb-anim-app`, `assert-export-app`. That lane flips line 1 of this log to MERGE-READY if they match.
+2. Placement: GIF and Anim GLB stay in the Export panel's bar, beside Video and GLB. The panel itself is a dock panel and can be moved, shown and hidden, which is what the ruling asks for.
+3. Branch: the work stays on `claude/export-formats-gif-webm-glb-yfwhh2`, the only branch this session may push. If you want it as `cloud/export`, it is the same commits.
+4. The 2026-09-30 lane's six owner questions are carried below, unanswered by this lane. Its lockfile question is moot on this snapshot, where a frozen install works.
+5. Message delivery: I could not reply to your cross-session message. This cloud session is refused when it sends to another session, so this log is the reply.
 
 ---
 
