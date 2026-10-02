@@ -1,4 +1,4 @@
-MERGE-READY
+NOT MERGE-READY (duplicate: the controller says claude/trace-animation-asks-j2uyvo is the finished job; merge that one, not both)
 
 # CLOUD-UNKNOWN log, 2026-10-02
 
@@ -37,3 +37,22 @@ Rows 22, 37, 38, 43, 105, 106, 108, 118, 121, 123, each from the control that wo
 - No browser. Nothing in this diff runs, so `scripts/verify` was not started, Playwright was not installed and no dev server was opened. Every PRESENT in the third pass is source level; 105 and 106 rest on the reveal not reading `flatten`, not on a look at the screen.
 - The node gates were not run: the diff is one Markdown file.
 - PLAN:1784 (row 22) could not be read; the pasted plan is not in the repo.
+
+## Cross-check of claude/trace-animation-asks-j2uyvo, at the controller's request
+
+Asked by the controller session to stop redoing the job, check the other branch's rows against the code, and log any disagreement. Fetched `origin/claude/trace-animation-asks-j2uyvo` (999326d). Its counts line is 55 PRESENT, 35 PARTIAL, 26 MISSING, 0, 8 UNKNOWN. It changed only the same ten rows.
+
+**Spot-check of five PRESENT rows.** Its updates have only one PRESENT row, 38, so I checked all of 38's cites and four older PRESENT rows (1, 11, 20, 21) that both branches leave as they were.
+- Row 38: every cite opens on what it claims. scaffold:3062 and :3079 render `DrawInTimingControls`, `app/page.tsx:790` is `clockStrokesFor`, `lib/pen-reveal.ts:1633` is `humanLiftsMs`, `lib/stroke-timing.ts:647` is `takeLiftsMs`, vp:5482 publishes `entry.lifts`, vp:7135 holds the tip on them, `lib/pen-reveal.ts:211-215` is the switch-off. Agree, PRESENT.
+- Rows 1, 11, 20, 21: the code is still there, but every line number has moved since main `95f724f87`. Add-a-key is now `components/key-lanes.tsx:888` (cited :809-813), `sampleKeys` `lib/keyframes.ts:450` (:237), `easeReveal` `lib/stroke-timing.ts:269` (:255), "Ease over the whole draw" dtc:655 (:457), Delay dtc:528 (:366), Reverse dtc:755 and Loop dtc:768 (:523, :536). Neither branch claims to have refreshed these. Grades stand, cites are stale.
+
+**Grades that disagree (3 of 10).** The other seven (37, 38, 43, 108, 118, 121, 123) match mine.
+- Row 22: theirs PARTIAL ("no choice of restart behaviour, fixed in code"), mine PRESENT. Both describe the same code. Whether the ask means "pick a restart behaviour" or "restart works" depends on PLAN:1784's wording, which neither branch could read. Theirs is the stricter reading; I would take it.
+- Row 105: theirs PARTIAL (no draw-in on 2D strokes themselves), mine PRESENT, needs his eye. Same facts again: 2D on `/` is Flat ink over the 3D mesh. Theirs is the stricter reading, and I would take it.
+- Row 106: theirs PARTIAL, mine PRESENT, needs his eye. Theirs says nothing compares 2D with 3D, which is wrong: `scripts/verify/assert-drawin-2d-parity.mjs` does exactly that, running both registers through the shared clock and measuring the 2D raster's ink against it, with negative controls. Neither branch ran it. The grade is still a judgement call, but that sentence should come out.
+
+**Where theirs is better than mine.**
+- Row 37: it names the authored hand-order table, `LETTERS` in `scripts/capture/trace-logo.mjs:47`, which I missed (I cited the font's glyph order).
+- Rows 105 and 106: my row says `makeFlatRenderer` has "no caller outside two comments in `lib/hero-motion.ts`". That is wrong. Five scripts in `scripts/verify/` call it (`assert-pen-field.mjs`, `assert-drawin-2d-parity.mjs`, `_probe-pen-vs-tube-hero.mjs`, `_probe-carve-preview.mjs`, `lib/nib-carve.mjs`). It has no caller in `app/`, `components/` or the product code in `lib/`. Theirs is closer (it names two of the scripts).
+
+**Recommendation.** Merge `claude/trace-animation-asks-j2uyvo` and drop this branch's doc changes. Before merging, delete the sentence in its row 106 that says no check compares 2D with 3D. This branch's build list is an extra if that one lacks it; the two build lists were not compared.
