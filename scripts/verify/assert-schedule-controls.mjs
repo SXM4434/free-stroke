@@ -391,6 +391,79 @@ async function runRows() {
     row("REV-FRONT", checked > 0 && bad === 0, `the cull's front walks a reversed stroke from its far end: every triangle within the margin ahead of the pen is submitted`, `${checked} triangle x clock checks on strokes ${K} and 8: ${bad} left out${bad ? `, worst ${worst.toFixed(1)} ms late` : ""}`)
   }
 
+  /* ── MAX GAP (coverage row 32) ─────────────────────────────────────────── */
+  {
+    const lifts0 = T.takeLiftsMs(null, pace, baseSlots, BASE_MS)
+    const lens = []
+    for (let k = 0; k < lifts0.length; k += 2) lens.push(lifts0[k + 1] - lifts0[k])
+    const cap = Math.round(Math.max(...lens) / 2)
+    const ts = build({ strokes: {}, ripple: false, maxGapMs: cap })
+    const lifts = T.takeLiftsMs(ts, pace, baseSlots, BASE_MS)
+    const got = []
+    for (let k = 0; k < lifts.length; k += 2) got.push(lifts[k + 1] - lifts[k])
+    const excess = lens.reduce((a, l) => a + Math.max(0, l - cap), 0)
+    let worst = 0
+    lens.forEach((l, k) => (worst = Math.max(worst, Math.abs((got[k] ?? Infinity) - Math.min(l, cap)))))
+    const lenOk = got.length === lens.length && worst < 1e-6
+    const msOk = Math.abs(ts.takeMs - (BASE_MS - excess)) < 1e-6
+    const over = lens.filter((l) => l > cap).length
+    const big = build({ strokes: {}, ripple: false, maxGapMs: 1e9 })
+    const bigOk = big.identity && sameBytes(big.slots, baseSlots) && big.takeMs === BASE_MS
+    row("GAP-CAP", lens.length > 1 && over > 0 && over < lens.length && lenOk && msOk && bigOk, "max gap: every pause longer than the cap plays in the cap, shorter ones are untouched, and the take loses exactly the cut", `${lens.length} lifts on the hero's pace (${lens.map((l) => l.toFixed(0)).join(", ")} ms), cap ${cap} ms cuts ${over}; worst pause off by ${worst.toExponential(1)} ms; take ${ts.takeMs.toFixed(3)} ms, want ${(BASE_MS - excess).toFixed(3)}; a cap above every pause is today exactly ${bigOk}`)
+
+    /* Every key moves up by the cuts of the pauses that end before it: the ink keeps its pace. */
+    const ts0 = build({ strokes: { 0: { ...T.STROKE_TIMING_NEUTRAL } }, ripple: false })
+    const tsC = build({ strokes: { 0: { ...T.STROKE_TIMING_NEUTRAL } }, ripple: false, maxGapMs: cap })
+    const k0 = keysMs(sched, ts0)
+    const kC = keysMs(sched, tsC)
+    let checked = 0
+    let bad = 0
+    let worstK = 0
+    for (let t = 0; t < k0.length; t++) {
+      if (owner[t] < 0) continue
+      checked++
+      let cut = 0
+      for (let k = 0; k < lens.length; k++) if (lifts0[k * 2 + 1] <= k0[t] + 1e-6) cut += Math.max(0, lens[k] - cap)
+      const d = Math.abs(kC[t] - (k0[t] - cut))
+      if (!(d <= TOL)) bad++
+      if (d > worstK) worstK = d
+    }
+    row("GAP-INK", checked > 0 && bad === 0, "max gap leaves the ink's pace alone: each key moves up by the cuts before it and nothing else", `${checked - bad} of ${checked} triangles within ${TOL} ms, worst ${worstK.toFixed(4)} ms`)
+
+    /* Gaps the rows open are pauses too: a held-back stroke delayed 2 s lands one cap after the rest. */
+    const H = 5
+    const tsH = build({ strokes: { [H]: { ...T.STROKE_TIMING_NEUTRAL, holdBack: true, delayMs: 2000 } }, ripple: false, maxGapMs: 80 })
+    let lastOther = 0
+    for (let i = 0; i < n; i++) if (i !== H) lastOther = Math.max(lastOther, tsH.slots[i * 2 + 1])
+    const gapH = tsH.slots[H * 2] - lastOther
+    row("GAP-ROWS", Math.abs(gapH - 80) < 1e-6, "a pause a row opens is capped too: a held-back stroke delayed 2000 ms starts 80 ms after the rest end", `it starts ${gapH.toFixed(3)} ms after the last other stroke ends`)
+
+    /* Export's forward sample through the warp agrees with the live keys. */
+    const tsX = build({ strokes: { 3: { delayMs: 200, speed: 0.7, ease: { kind: "preset", id: "out" }, holdBack: false }, 9: { ...T.STROKE_TIMING_NEUTRAL, reverse: true } }, ripple: true, maxGapMs: cap })
+    const kt = T.timedRevealKeys(hero.keys, sched, tsX)
+    let cks = 0, mismatch = 0, ties = 0
+    for (const mode of ["grow", "travel"]) {
+      for (let j = 0; j < 60; j++) {
+        const c = (j + 0.37) / 60
+        const win = mode === "grow" ? { lo: 0, hi: c } : S.windowAt({ mode: "travel", length: 0.3 }, c)
+        const sp = T.sampleTake(tsX, c * tsX.takeMs, mode === "grow" ? undefined : win).spans
+        for (let t = 0; t < kt.length; t++) {
+          if (owner[t] < 0) continue
+          cks++
+          const tr = sched.tracks[owner[t]]
+          const q = tr.to > tr.from ? (hero.keys[t] - tr.from) / (tr.to - tr.from) : 1
+          const live = kt[t] <= win.hi && (win.lo <= 0 || kt[t] > win.lo)
+          const exp = q <= sp[owner[t] * 2 + 1] && q >= sp[owner[t] * 2] && sp[owner[t] * 2 + 1] > sp[owner[t] * 2]
+          if (live !== exp) {
+            if (Math.min(Math.abs(kt[t] - win.hi), Math.abs(kt[t] - win.lo)) * tsX.takeMs < 0.05) ties++
+            else mismatch++
+          }
+        }
+      }
+    }
+    row("GAP-CLOCK", cks > 0 && mismatch === 0 && tsX.warp !== null, "under a max gap, export's sampleTake draws the live keys' set (grow and travel, 60 clocks, with rows, Ripple and a reversed stroke)", `${cks} triangle x clock checks: ${mismatch} disagree, ${ties} ties within 0.05 ms of an edge; cuts ${tsX.warp ? tsX.warp.length / 3 : 0}`)
+  }
+
   /* ── SAVED: every new field survives the session reader, and junk is named ── */
   {
     const D = loadTs("lib/doc-store.ts")
@@ -398,6 +471,11 @@ async function runRows() {
     const got = D.validateSession({ take: { strokes: { 1: { ...row0, reverse: true }, 2: { ...row0, reverse: "yes" }, 3: { ...row0 } }, ripple: false } })
     const tk = got.session.take
     const ok = tk.strokes[1].reverse === true && !("reverse" in tk.strokes[2]) && !("reverse" in tk.strokes[3]) && got.repairs.some((r) => r.includes("strokes.2.reverse"))
+    const g1 = D.validateSession({ take: { strokes: {}, ripple: false, maxGapMs: 120 } })
+    const g2 = D.validateSession({ take: { strokes: {}, ripple: false, maxGapMs: -5 } })
+    const g3 = D.validateSession({ take: { strokes: {}, ripple: false } })
+    const gapOk = g1.session.take.maxGapMs === 120 && !("maxGapMs" in g2.session.take) && g2.repairs.some((r) => r.includes("maxGapMs")) && !("maxGapMs" in g3.session.take)
+    row("DOC-GAP", gapOk, "a max gap survives save and load; a negative one is read as off and named; none stays none", `120 -> ${g1.session.take.maxGapMs}; -5 -> ${g2.session.take.maxGapMs ?? "off"} (${g2.repairs.join(" | ") || "no repair"}); absent -> ${"maxGapMs" in g3.session.take ? "present" : "absent"}`)
     row("DOC-REVERSE", ok, "a reversed row survives save and load; a reverse that is not a boolean is read as off and named", `rows ${JSON.stringify(Object.fromEntries(Object.entries(tk.strokes).map(([k, v]) => [k, v.reverse ?? null])))}; repairs: ${got.repairs.join(" | ") || "none"}`)
   }
 
@@ -416,6 +494,12 @@ const MUTANTS = [
   { name: "the session reader drops reverse", file: "lib/doc-store.ts", find: "if (r.reverse === true) strokes[i].reverse = true", text: "if (false) strokes[i].reverse = true", red: ["DOC-REVERSE"] },
   { name: "stagger curve ignored", file: "lib/stroke-timing.ts", find: "const f = easeFnOf(ease)", text: "const f = easeFnOf(undefined)", red: ["CURVE"] },
   { name: "stagger curve read without its clamp", file: "lib/stroke-timing.ts", find: "(m - 1) * gapMs * f(k / (m - 1))", text: "(m - 1) * gapMs * bz(-0.6, 1.6, k / (m - 1))", red: ["CURVE-ENDS"] },
+  { name: "max gap ignored", file: "lib/stroke-timing.ts", find: "      if (cuts.length) {", text: "      if (false) {", red: ["GAP-CAP", "GAP-INK", "GAP-ROWS", "GAP-CLOCK"] },
+  { name: "max gap not undone in the sampler", file: "lib/stroke-timing.ts", find: "  if (ts.warp) tMs = unwarpMs(ts.warp, tMs)", text: "", red: ["GAP-CLOCK"] },
+  { name: "max gap left out of the keys", file: "lib/stroke-timing.ts", find: "  const at = t0 + (t1 - t0) * u\n  return ts.warp ? warpMs(ts.warp, at) : at", text: "  const at = t0 + (t1 - t0) * u\n  return at", red: ["GAP-INK", "GAP-CLOCK"] },
+  { name: "lifts read before the cut", file: "lib/stroke-timing.ts", find: "out.push(warpMs(w, g.a), warpMs(w, g.b))", text: "out.push(g.a, g.b)", red: ["GAP-CAP"] },
+  { name: "max gap cuts every pause to 0", file: "lib/stroke-timing.ts", find: "cuts.push(g.a, g.b, cap)", text: "cuts.push(g.a, g.b, 0)", red: ["GAP-CAP", "GAP-ROWS"] },
+  { name: "the session reader drops max gap", file: "lib/doc-store.ts", find: "return maxGapOk ? { strokes, ripple, maxGapMs: o.maxGapMs as number } : { strokes, ripple }", text: "return { strokes, ripple }", red: ["DOC-GAP"] },
   { name: "stagger preset at 500 ms", file: "lib/style-system.ts", find: "stagger: { gapMs: 50 }", text: "stagger: { gapMs: 500 }", red: ["STAGGER-PRESET"] },
 ]
 

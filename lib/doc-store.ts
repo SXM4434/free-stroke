@@ -991,10 +991,14 @@ function readTake(raw: unknown, repairs: string[]): StrokeTimingTake {
     repairs.push(`take: ${JSON.stringify(raw)} is not a take, read as no rows`)
     return STROKE_TIMING_TAKE_DEFAULTS
   }
-  const o = raw as { strokes?: unknown; ripple?: unknown }
+  const o = raw as { strokes?: unknown; ripple?: unknown; maxGapMs?: unknown }
   const ripple = o.ripple === true
   if (o.ripple !== undefined && typeof o.ripple !== "boolean") {
     repairs.push(`take.ripple: ${JSON.stringify(o.ripple)} read as off`)
+  }
+  const maxGapOk = typeof o.maxGapMs === "number" && Number.isFinite(o.maxGapMs) && o.maxGapMs >= 0
+  if (o.maxGapMs !== undefined && !maxGapOk) {
+    repairs.push(`take.maxGapMs: ${JSON.stringify(o.maxGapMs)} read as off`)
   }
   const strokes: Record<number, StrokeTiming> = {}
   const src = o.strokes && typeof o.strokes === "object" ? (o.strokes as Record<string, unknown>) : {}
@@ -1030,7 +1034,7 @@ function readTake(raw: unknown, repairs: string[]): StrokeTimingTake {
       repairs.push(`take.strokes.${key}.reverse: ${JSON.stringify(r.reverse)} read as off`)
     }
   }
-  return { strokes, ripple }
+  return maxGapOk ? { strokes, ripple, maxGapMs: o.maxGapMs as number } : { strokes, ripple }
 }
 
 /**

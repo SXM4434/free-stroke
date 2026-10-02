@@ -160,6 +160,8 @@ export const NUDGE_BIG_MS = 100
 /** Speeds outside this read as a mistake, not a choice. */
 export const SPEED_MIN = 0.1
 export const SPEED_MAX = 10
+/** What Max gap caps the pauses at when it is first turned on, ms. */
+export const MAX_GAP_MS_DEFAULT = 150
 
 /** A delay that would push t0 below zero moves nothing (`buildTimedSchedule`
  *  clamps it), so it is clamped here where the hand can see it stop. */
@@ -302,6 +304,9 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
    * are kept, in the take; these two are the button's settings. */
   const [staggerGap, setStaggerGap] = useState(STAGGER_GAP_MS)
   const [staggerEase, setStaggerEase] = useState<RevealEasePreset>("linear")
+  /* Coverage row 32 · Max gap: the cap is the take's own field while it is on;
+   * this keeps the number he last used while it is off. */
+  const [gapPick, setGapPick] = useState(MAX_GAP_MS_DEFAULT)
   const baseSlots = useMemo(() => {
     const s = new Float64Array(n * 2)
     schedule.tracks.forEach((t, i) => {
@@ -765,6 +770,49 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
               <option value="out">Ease out</option>
               <option value="inOut">Ease in-out</option>
             </select>
+          </span>
+          {/* Coverage row 32 · Max gap: every pause between strokes longer than
+              this plays in this, and the rest of the take moves up. */}
+          <span className="flex items-center gap-0.5">
+            <button
+              type="button"
+              data-strip-maxgap
+              aria-pressed={take.maxGapMs !== undefined}
+              onClick={() => {
+                if (take.maxGapMs === undefined) commit({ ...take, maxGapMs: gapPick }, null)
+                else {
+                  const { maxGapMs: _off, ...rest } = take
+                  void _off
+                  commit(rest, null)
+                }
+              }}
+              title="On: no pause between strokes runs longer than the gap, and everything after moves up. The strokes keep their pace."
+              className={`fs-press rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                take.maxGapMs !== undefined
+                  ? "border-foreground/20 bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Max gap
+            </button>
+            {take.maxGapMs !== undefined && (
+              <input
+                type="number"
+                data-strip-maxgap-ms
+                aria-label="Max gap, ms"
+                title="The longest a pause between strokes may run, ms"
+                min={0}
+                step={10}
+                value={take.maxGapMs}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  if (!(Number.isFinite(v) && v >= 0)) return
+                  setGapPick(Math.round(v))
+                  commit({ ...take, maxGapMs: Math.round(v) }, "take:maxgap")
+                }}
+                className="h-[18px] w-11 rounded-md border border-border bg-transparent px-1 text-[10px] tabular-nums text-foreground"
+              />
+            )}
           </span>
           <button
             type="button"

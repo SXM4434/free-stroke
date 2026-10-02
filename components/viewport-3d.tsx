@@ -6576,9 +6576,10 @@ function AnimatedStrokesInner({
      * the `sampleTake` spans, as before. */
     let timedRodMs: Float64Array | null = null
     /* A row that reverses its stroke (coverage row 31) runs the stroke from its
-     * far end, which Rod's own forward pen time cannot say, so a take with one
-     * keeps the `sampleTake` spans below, as a reordered schedule does. */
-    if (timedNow && winNow.identity && (!schedNow || schedNow.identity) && timedNow.flip.indexOf(1) < 0) {
+     * far end, and a max gap (row 32) cuts pauses inside a slot, neither of
+     * which Rod's own pen time through `[t0, t1]` can say, so a take with
+     * either keeps the `sampleTake` spans below, as a reordered schedule does. */
+    if (timedNow && winNow.identity && (!schedNow || schedNow.identity) && timedNow.flip.indexOf(1) < 0 && !timedNow.warp) {
       const n = timedNow.slots.length >> 1
       timedRodMs = new Float64Array(n)
       const T = winNow.hi * timedNow.takeMs

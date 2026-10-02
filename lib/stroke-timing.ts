@@ -106,6 +106,14 @@ export interface StrokeTimingTake {
   strokes: Record<number, StrokeTiming>
   /** "Ripple later strokes". Off keeps every other stroke where it was. */
   ripple: boolean
+  /**
+   * Coverage row 32, "clamp the pauses between strokes". Every stretch where
+   * no stroke lays ink (a pen lift, or a gap the rows opened) longer than this
+   * is cut down to it, and everything after moves up by the cut. The ink keeps
+   * its own pace. Absent (the default) is today, byte for byte; present with
+   * no rows it still times the take.
+   */
+  maxGapMs?: number
 }
 
 export const STROKE_TIMING_TAKE_DEFAULTS: StrokeTimingTake = { strokes: {}, ripple: false }
@@ -414,8 +422,14 @@ export interface TimedSchedule {
   takeMs: number
   /** `[B0, B1]` per stroke, ms. Where today's chain puts the stroke. */
   baseSlots: Float64Array
-  /** `[t0, t1]` per stroke, ms. Where the rows put it. */
+  /** `[t0, t1]` per stroke, ms. Where the rows put it, after the max gap. */
   slots: Float64Array
+  /** `[t0, t1]` per stroke before the max gap cut its pauses: the clock every
+   *  per-stroke map reads. The same array as `slots` when nothing was cut. */
+  rawSlots: Float64Array
+  /** The max gap's cuts, `[a, b, g]` per pause on the raw clock: `[a, b]` plays
+   *  in `g` ms. Null when the take has no max gap or no pause is longer. */
+  warp: Float64Array | null
   eases: EaseFn[]
   /** Per stroke, the validated performed pace, or null. */
   performed: (Float64Array | null)[]
@@ -445,6 +459,8 @@ export interface TimedSchedule {
 /** True when the take carries at least one row. */
 export function isTimedTake(take: StrokeTimingTake | null | undefined): boolean {
   if (!take || !take.strokes) return false
+  // A max gap times the take with no rows at all (coverage row 32).
+  if (typeof take.maxGapMs === "number") return true
   // Own keys only, the same set buildTimedSchedule reads (Codex crosscheck
   // 2026-09-25: `for...in` also saw inherited rows, so a take with none read as timed).
   return Object.keys(take.strokes).length > 0
@@ -532,16 +548,40 @@ export function buildTimedSchedule(
     baseSlots[i * 2 + 1] = pace.beatToClock(tr[i].end) * baseMs
   }
 
-  const slots = placeSlots(rows, baseSlots, t.ripple)
+  const rawSlots = placeSlots(rows, baseSlots, t.ripple)
+  const performed = rows.map((r) => (r.performed ? Float64Array.from(r.performed) : null))
+  const eases = rows.map((r, i) => (performed[i] ? null : easeFnOf(r.ease)))
+  const flip = Uint8Array.from(rows, (r) => (r.reverse ? 1 : 0))
+
+  /* MAX GAP (coverage row 32). The pauses are the gaps in the ink, read off the
+   * placed slots the way `takeLiftsMs` reads them, so a lift inside a slot (the
+   * Hand clock's) is cut as well as a gap between slots. Each pause longer
+   * than the cap plays in the cap: a time warp on the take's clock, the
+   * identity across ink, so no stroke draws faster. */
+  let slots = rawSlots
+  let warp: Float64Array | null = null
+  let gapSig = ""
+  if (t.maxGapMs !== undefined) {
+    const cap = t.maxGapMs
+    if (!(typeof cap === "number" && Number.isFinite(cap) && cap >= 0)) {
+      rejected.push(`max gap ${cap} is not a length in ms, read as off`)
+    } else {
+      gapSig = `|g${cap}`
+      const ink = inkPieces({ baseSlots, rawSlots, performed, eases, warp: null } as TimedSchedule, pace, baseSlots, baseMs)
+      const cuts: number[] = []
+      for (const g of liftGaps(ink)) if (g.b - g.a > cap) cuts.push(g.a, g.b, cap)
+      if (cuts.length) {
+        warp = Float64Array.from(cuts)
+        slots = rawSlots.map((v) => warpMs(warp, v))
+      }
+    }
+  }
 
   let takeMs = 0
   for (let i = 0; i < n; i++) if (slots[i * 2 + 1] > takeMs) takeMs = slots[i * 2 + 1]
   if (!(takeMs > 0)) takeMs = baseMs
 
-  const performed = rows.map((r) => (r.performed ? Float64Array.from(r.performed) : null))
-  const eases = rows.map((r, i) => (performed[i] ? null : easeFnOf(r.ease)))
-  const flip = Uint8Array.from(rows, (r) => (r.reverse ? 1 : 0))
-  let sig = `${base.sig}|ms${baseMs}|r${t.ripple ? 1 : 0}`
+  let sig = `${base.sig}|ms${baseMs}|r${t.ripple ? 1 : 0}${gapSig}`
   for (let i = 0; i < n; i++) {
     if (rows[i] === STROKE_TIMING_NEUTRAL) continue
     sig += `|${i}:${rows[i].delayMs},${rows[i].speed},${JSON.stringify(rows[i].ease)},${rows[i].holdBack ? 1 : 0}`
@@ -552,7 +592,41 @@ export function buildTimedSchedule(
   for (let i = 0; identity && i < n; i++) {
     if (eases[i] || performed[i] || flip[i] || slots[i * 2] !== baseSlots[i * 2] || slots[i * 2 + 1] !== baseSlots[i * 2 + 1]) identity = false
   }
-  return { base, baseMs, takeMs, baseSlots, slots, eases, performed, flip, pace, ripple: t.ripple, rejected, sig, identity }
+  return { base, baseMs, takeMs, baseSlots, slots, rawSlots, warp, eases, performed, flip, pace, ripple: t.ripple, rejected, sig, identity }
+}
+
+/** A raw take time through the max gap's cuts: each cut pause `[a, b]` plays
+ *  in `g`, and everything after it moves up by `b - a - g`. Increasing, and
+ *  the identity outside the pauses. */
+function warpMs(w: Float64Array | null, t: number): number {
+  if (!w) return t
+  let cut = 0
+  for (let k = 0; k + 2 < w.length; k += 3) {
+    const a = w[k]
+    const b = w[k + 1]
+    const g = w[k + 2]
+    if (t <= a) break
+    if (t < b) return t - cut - (t - a) * (1 - g / (b - a))
+    cut += b - a - g
+  }
+  return t - cut
+}
+
+/** `warpMs` backwards: a take time to the raw clock. A pause cut to 0 reads as
+ *  its start, where nothing changes on the page until its end anyway. */
+function unwarpMs(w: Float64Array | null, t: number): number {
+  if (!w) return t
+  let cut = 0
+  for (let k = 0; k + 2 < w.length; k += 3) {
+    const a = w[k]
+    const b = w[k + 1]
+    const g = w[k + 2]
+    const at = a - cut
+    if (t <= at) break
+    if (t < at + g) return a + ((t - at) * (b - a)) / g
+    cut += b - a - g
+  }
+  return t + cut
 }
 
 /* ==========================================================================
@@ -587,18 +661,20 @@ export function timedArcMsIn(ts: TimedSchedule, i: number, a: number): number {
     const tr = ts.base.tracks[i]
     const slot = tr.end - tr.start
     const r = slot > 0 ? (S - tr.start) / slot : 1
-    return ts.slots[i * 2] + (ts.slots[i * 2 + 1] - ts.slots[i * 2]) * performedInverse(pf, r)
+    const at = ts.rawSlots[i * 2] + (ts.rawSlots[i * 2 + 1] - ts.rawSlots[i * 2]) * performedInverse(pf, r)
+    return ts.warp ? warpMs(ts.warp, at) : at
   }
   const B0 = ts.baseSlots[i * 2]
   const B1 = ts.baseSlots[i * 2 + 1]
-  const t0 = ts.slots[i * 2]
-  const t1 = ts.slots[i * 2 + 1]
+  const t0 = ts.rawSlots[i * 2]
+  const t1 = ts.rawSlots[i * 2 + 1]
   const span = B1 - B0
   let w = span > 0 ? (ts.pace.beatToClock(S) * ts.baseMs - B0) / span : 1
   w = w < 0 ? 0 : w > 1 ? 1 : w
   const e = ts.eases[i]
   const u = e ? easeInverse(e, w) : w
-  return t0 + (t1 - t0) * u
+  const at = t0 + (t1 - t0) * u
+  return ts.warp ? warpMs(ts.warp, at) : at
 }
 
 /** Arc `a` mirrored inside its track, `from + to - a`, written from the near
@@ -679,7 +755,8 @@ export function takeLiftsMs(
   baseMs: number,
 ): Float64Array {
   const out: number[] = []
-  for (const g of liftGaps(inkPieces(ts, pace, baseSlots, baseMs))) out.push(g.a, g.b)
+  const w = ts ? ts.warp : null
+  for (const g of liftGaps(inkPieces(ts, pace, baseSlots, baseMs))) out.push(warpMs(w, g.a), warpMs(w, g.b))
   return Float64Array.from(out)
 }
 
@@ -696,7 +773,8 @@ function inkPieces(ts: TimedSchedule | null, pace: TimingPace, baseSlots: ArrayL
   const base = ts ? ts.baseSlots : baseSlots
   const n = Math.floor(base.length / 2)
   const H = pace.holds ?? new Float64Array(0)
-  const slots = ts ? ts.slots : base
+  // The raw clock, before a max gap: the cuts are read off these pieces.
+  const slots = ts ? ts.rawSlots : base
   const ink: InkPiece[] = []
   for (let i = 0; i < n; i++) {
     const t0 = slots[i * 2]
@@ -754,8 +832,9 @@ function liftGaps(ink: InkPiece[]): { a: number; b: number; up: number; down: nu
 
 /** Stroke i's drawn part of its OWN arc at take time `tMs`, as one number 0..1. */
 function reachedAt(ts: TimedSchedule, i: number, tMs: number): number {
-  const t0 = ts.slots[i * 2]
-  const t1 = ts.slots[i * 2 + 1]
+  if (ts.warp) tMs = unwarpMs(ts.warp, tMs)
+  const t0 = ts.rawSlots[i * 2]
+  const t1 = ts.rawSlots[i * 2 + 1]
   let u = t1 > t0 ? (tMs - t0) / (t1 - t0) : tMs >= t0 ? 1 : 0
   u = u < 0 ? 0 : u > 1 ? 1 : u
   const pf = ts.performed[i]
@@ -820,7 +899,7 @@ export function timedFront(ts: TimedSchedule, tMs: number, marginArc: number): n
       if (!(left > 0)) break
       const k = nextOf[j]
       if (k < 0) break
-      if (ts.slots[k * 2] - ts.slots[j * 2 + 1] !== ts.baseSlots[k * 2] - ts.baseSlots[j * 2 + 1]) break
+      if (ts.rawSlots[k * 2] - ts.rawSlots[j * 2 + 1] !== ts.baseSlots[k * 2] - ts.baseSlots[j * 2 + 1]) break
       j = k
       at = entry(k)
     }
