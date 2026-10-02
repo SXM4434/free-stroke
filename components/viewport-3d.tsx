@@ -177,7 +177,7 @@ import { assignLetters } from "@/lib/hero-letters"
 import { createPortal } from "react-dom"
 import { LiveTakeTimeline, TransportRow, TimingNote, DrawInBody, type TransportRowProps } from "@/components/workspace/timeline-panel"
 import { ExportPanel, type ExportPanelProps } from "@/components/workspace/export-panel"
-import { useDockHost, useHasDock } from "@/components/workspace/dock-hosts"
+import { useDockHost, useDockPreview, useHasDock } from "@/components/workspace/dock-hosts"
 import { DrawInTimingControls, REVEAL_EASES, OPEN_ANIMATION_PANEL_EVENT } from "@/components/draw-in-timing-controls"
 import { useTakeTransport, useTransportSlot, createTakeTransport, useProgressValue, unEaseReveal, revealModeOf, transportLengths, seamWindowOf, type ProgressStore, type TakeTransport } from "@/lib/take-transport"
 /* K7's PAPER BREAK. The junction SET is measured by the page and published on
@@ -9112,6 +9112,64 @@ function FusionProbe() {
   return null
 }
 
+/* ---- THE FLOATING PREVIEW'S FRAMING (CLOUD-LAYOUT) ---------------------
+ *
+ * While another panel is maximized the 3D view floats as a small preview
+ * (components/dock-shell.tsx, L5). The canvas shrinks under an unchanged
+ * camera, so the preview showed a 360x216 window cut out of the main view's
+ * framing at its own scale: the logo's top and right were cropped.
+ *
+ * Here the preview is framed through the camera's VIEW OFFSET only: every
+ * frame, the drawing's on-screen box (the export group's world box, its eight
+ * corners projected with no offset) is fitted into the canvas less a 16 px
+ * margin, and the projection renders that sub-window. The camera's position,
+ * target, zoom and fov are never written, so whatever drives them (orbit, a
+ * keyed camera, the flip's settle) keeps driving them, and the main view's
+ * framing is untouched: on unmount the offset is cleared and the projection
+ * is exactly what it was. Mounted last in the Scene, so it runs after every
+ * camera writer in the frame. */
+export const PREVIEW_FIT_MARGIN_PX = 16
+const fitBox = new THREE.Box3()
+const fitCorner = new THREE.Vector3()
+function PreviewFit({ groupRef }: { groupRef: React.RefObject<THREE.Group | null> }) {
+  const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera | THREE.OrthographicCamera
+  const size = useThree((s) => s.size)
+  useEffect(
+    () => () => {
+      camera.clearViewOffset()
+      camera.updateProjectionMatrix()
+    },
+    [camera],
+  )
+  useFrame(() => {
+    const g = groupRef.current
+    const W = size.width, H = size.height
+    if (!g || !(W > 2 * PREVIEW_FIT_MARGIN_PX) || !(H > 2 * PREVIEW_FIT_MARGIN_PX)) return
+    fitBox.setFromObject(g)
+    if (fitBox.isEmpty()) return
+    camera.clearViewOffset()
+    camera.updateProjectionMatrix()
+    camera.updateMatrixWorld()
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity
+    for (let i = 0; i < 8; i++) {
+      fitCorner.set(i & 1 ? fitBox.max.x : fitBox.min.x, i & 2 ? fitBox.max.y : fitBox.min.y, i & 4 ? fitBox.max.z : fitBox.min.z).project(camera)
+      x0 = Math.min(x0, fitCorner.x)
+      x1 = Math.max(x1, fitCorner.x)
+      y0 = Math.min(y0, fitCorner.y)
+      y1 = Math.max(y1, fitCorner.y)
+    }
+    if (![x0, x1, y0, y1].every(Number.isFinite)) return
+    // NDC half-extents the drawing may fill, and the zoom that fills them.
+    const ax = 1 - (2 * PREVIEW_FIT_MARGIN_PX) / W, ay = 1 - (2 * PREVIEW_FIT_MARGIN_PX) / H
+    const k = Math.min(ax / Math.max((x1 - x0) / 2, 1e-6), ay / Math.max((y1 - y0) / 2, 1e-6))
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2
+    const w = W / k, h = H / k
+    camera.setViewOffset(W, H, ((cx + 1) / 2) * W - w / 2, ((1 - cy) / 2) * H - h / 2, w, h)
+    camera.updateProjectionMatrix()
+  })
+  return null
+}
+
 function Scene({
   controlsRef,
   strokes,
@@ -9161,6 +9219,7 @@ function Scene({
   keyReader,
   orbitView,
   keyLiveRef,
+  previewFit = false,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   /** ANIM-1A3 · per-stroke timing rows. Null or empty is the shipped path. */
@@ -9258,6 +9317,8 @@ function Scene({
   orbitView?: (azimuthDeg?: number, elevationDeg?: number, fillK?: number) => boolean
   /** ANIM-3B · the key lanes' live values, written each frame by `KeyLive`. */
   keyLiveRef?: { current: KeyLiveValues | null }
+  /** CLOUD-LAYOUT · the 3D view is the floating preview: frame the drawing to it. */
+  previewFit?: boolean
 }) {
   /* ANIM-3B · THE TWO PLAYHEAD REFS. The transport ref is written by
    * PlaybackController and HostRevealTick and read by nothing else in here.
@@ -10606,6 +10667,7 @@ function Scene({
           boundsRef={boundsRef}
         />
       ) : null}
+      {previewFit ? <PreviewFit key={`${!!keyReader?.hasCamera}`} groupRef={exportGroupRef} /> : null}
     </>
   )
 }
@@ -14022,6 +14084,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   const hasDock = useHasDock()
   const docked = hasDock && !chromeless
   const transportHost = useDockHost("transport")
+  const previewShown = useDockPreview()
   const timelineHost = useDockHost("timeline")
   const drawInHost = useDockHost("drawin")
   const drawInSummaryHost = useDockHost("drawin-summary")
@@ -14289,6 +14352,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
                 keyReader={keyReader}
                 orbitView={apiOrbitView}
                 keyLiveRef={keyLiveRef}
+                previewFit={previewShown}
                 controlsRef={controlsRef}
                 strokes={processedStrokes}
                 rawStrokes={rawStrokes}

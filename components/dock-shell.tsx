@@ -97,6 +97,11 @@
      "nokeys"          Shift+Space and Esc do nothing
      "savemax"         the maximized layout is saved (a reload must come back
                        maximized)
+     CLOUD-LAYOUT, read by scripts/verify/assert-maximize.mjs rows X8 and X9:
+     "previewLoose"    the preview placed as before: 360x216 whatever the
+                       shell, a float only 100 px of which must stay on screen,
+                       its content free to grow past it (X8 must go red)
+     "previewNoFit"    the preview shows the main view's framing (X9 must go red)
    ================================================================== */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
@@ -112,7 +117,7 @@ import {
 } from "dockview-react"
 import "dockview-react/dist/styles/dockview.css"
 import "./workspace/dock.css"
-import { DockHostProvider, useDockHostRef, type DockHostName } from "@/components/workspace/dock-hosts"
+import { DockHostProvider, useDockHostRef, useSetDockPreview, type DockHostName } from "@/components/workspace/dock-hosts"
 import { useTakeTransport } from "@/lib/take-transport"
 import { toast } from "sonner"
 import { Rail, type RailPanel } from "@/components/workspace/rail"
@@ -132,8 +137,8 @@ import {
 } from "@/components/workspace/workspaces"
 
 type Slots = { drawing: ReactNode; view: ReactNode; style: ReactNode }
-type Mutant = "header" | "onlyWhenVisible" | "noReuse" | "stale" | "nodock" | "toast182" | "nosync" | "unguarded" | "silent" | "nosave" | "restoreDefault" | "nopreview" | "nokeys" | "savemax" | null
-const MUTANTS: readonly string[] = ["header", "onlyWhenVisible", "noReuse", "stale", "nodock", "toast182", "nosync", "unguarded", "silent", "nosave", "restoreDefault", "nopreview", "nokeys", "savemax"]
+type Mutant = "header" | "onlyWhenVisible" | "noReuse" | "stale" | "nodock" | "toast182" | "nosync" | "unguarded" | "silent" | "nosave" | "restoreDefault" | "nopreview" | "nokeys" | "savemax" | "previewLoose" | "previewNoFit" | null
+const MUTANTS: readonly string[] = ["header", "onlyWhenVisible", "noReuse", "stale", "nodock", "toast182", "nosync", "unguarded", "silent", "nosave", "restoreDefault", "nopreview", "nokeys", "savemax", "previewLoose", "previewNoFit"]
 
 const SlotContext = createContext<Slots>({ drawing: null, view: null, style: null })
 
@@ -419,6 +424,21 @@ const QUIET = {
 
 const LG = "(min-width: 1024px)"
 
+/* THE FLOATING PREVIEW'S BOX (L5, sized in CLOUD-LAYOUT). 360x216 and 12 px
+   in from the shell's bottom right, as before, but never larger than the shell
+   leaves: on a shell too small for 360x216 plus the 12 px margin on every side
+   it shrinks, keeping 5:3. Before, it was placed as 360x216 whatever the shell,
+   dockview kept only 100 px of a float on screen, and below `lg` the 3D column
+   grew to its content inside the float, so its box ran past the window's
+   bottom right (900x700: the view's bottom at 752 in a 700 px window). */
+const PREVIEW_W = 360
+const PREVIEW_H = 216
+const PREVIEW_MARGIN = 12
+export function previewBox(shellW: number, shellH: number): { width: number; height: number } {
+  const width = Math.max(0, Math.floor(Math.min(PREVIEW_W, shellW - 2 * PREVIEW_MARGIN, ((shellH - 2 * PREVIEW_MARGIN) * PREVIEW_W) / PREVIEW_H)))
+  return { width, height: Math.round((width * PREVIEW_H) / PREVIEW_W) }
+}
+
 /* TODAY'S SPLIT IS NOT HALF, AND L1 KEEPS IT. The columns were `flex-1`
    each with a 1 px border on the drawing side. Flex shares out what is left
    after that border, so the drawing column is (W + 1) / 2 and the 3D column
@@ -547,6 +567,7 @@ const RAIL_NONE: Record<RailPanel, boolean> = { drawing: false, view3d: false, s
 
 function DockShellInner({ drawing, view, style }: Slots) {
   const mutantRef = useRef<Mutant>(null)
+  const setPreview = useSetDockPreview()
   const apiRef = useRef<DockviewApi | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
   const store = useTakeTransport()
@@ -610,9 +631,35 @@ function DockShellInner({ drawing, view, style }: Slots) {
     })
   }, [])
 
+  /* THE PREVIEW, FLOATED (L5) at `previewBox` for the shell as it is now.
+     `tabbar`: no 22 px floating titlebar, so the preview's box is the 3D
+     view's own. On a resize while maximized the float is sized again to the
+     box the shell now leaves (its overlay follows the group's size), still
+     anchored 12 px in from the bottom right. */
+  const floatPreview = (api: DockviewApi) => {
+    const v = api.getPanel("view3d")
+    if (!v) return
+    const r = boxRef.current?.getBoundingClientRect()
+    const loose = mutantRef.current === "previewLoose"
+    const { width, height } = loose || !r ? { width: PREVIEW_W, height: PREVIEW_H } : previewBox(r.width, r.height)
+    api.addFloatingGroup(v, { position: { right: PREVIEW_MARGIN, bottom: PREVIEW_MARGIN }, width, height, dragHandle: "tabbar" })
+  }
+  const refitPreview = (api: DockviewApi) => {
+    if (!maxRef.current || mutantRef.current === "previewLoose") return
+    const v = api.getPanel("view3d")
+    const r = boxRef.current?.getBoundingClientRect()
+    if (!v || !r || v.group.api.location.type !== "floating") return
+    const float = v.group.element.closest(".dv-resize-container")
+    if (!float) return
+    const want = previewBox(r.width, r.height)
+    const has = float.getBoundingClientRect()
+    if (Math.abs(has.width - want.width) > 1 || Math.abs(has.height - want.height) > 1) v.group.api.setSize(want)
+  }
+
   const hold = useCallback(() => requestAnimationFrame(() => {
     const api = apiRef.current
     if (!api || !boxRef.current) return
+    refitPreview(api)
     const g = api.groups.find(isDockGroup)
     if (g && collapsedRef.current && g.api.isVisible && !api.hasMaximizedGroup() && Math.abs(g.element.getBoundingClientRect().height - DOCK_HEADER_PX) > 0.5)
       g.api.setSize({ height: DOCK_HEADER_PX })
@@ -793,6 +840,8 @@ function DockShellInner({ drawing, view, style }: Slots) {
   const setMax = (v: { id: string; from: SerializedDockview } | null) => {
     maxRef.current = v
     setMaximizedState(v ? v.id : null)
+    // The viewport frames the drawing to the preview while it shows (CLOUD-LAYOUT).
+    setPreview(!!v && v.id !== "view3d" && mutantRef.current !== "nopreview" && mutantRef.current !== "previewNoFit")
     const dockMax = !!v && (DOCK_PANELS as readonly string[]).includes(v.id)
     // The dock maximized draws its key rows at 36 px (§4, hit targets).
     if (dockMax) document.documentElement.dataset.fsDockMax = "1"
@@ -826,11 +875,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
     }
     for (const g of api.groups) if (g !== target && g.api.location.type === "grid" && g.api.isVisible) g.api.setVisible(false)
     if (!target.api.isVisible) target.api.setVisible(true)
-    if (id !== "view3d" && mutantRef.current !== "nopreview") {
-      const v = api.getPanel("view3d")
-      // `tabbar`: no 22 px floating titlebar, so the preview's box is the 3D view's own 360x216.
-      if (v) api.addFloatingGroup(v, { position: { right: 12, bottom: 12 }, width: 360, height: 216, dragHandle: "tabbar" })
-    }
+    if (id !== "view3d" && mutantRef.current !== "nopreview") floatPreview(api)
     hideHeaders(api)
     hold()
     syncDrawIn()
@@ -994,8 +1039,15 @@ function DockShellInner({ drawing, view, style }: Slots) {
     const mq = window.matchMedia(LG)
     const onChange = () => {
       if (!apiRef.current) return
+      // Maximized, the reload is under the maximize: drop it, load, and
+      // maximize the same panel again, so the preview is placed for the new shell.
+      const max = maxRef.current?.id ?? null
+      if (max) setMax(null)
       loadLayout(layoutFor(wsRef.current))
+      if (max) toggleMaxRef.current(max)
     }
+    // The "previewLoose" arm, set after hydration (the server renders no mutant).
+    if (mutantRef.current === "previewLoose") boxRef.current?.setAttribute("data-fs-preview-loose", "")
     mq.addEventListener("change", onChange)
     const ro = new ResizeObserver(hold)
     if (boxRef.current) ro.observe(boxRef.current)
@@ -1065,7 +1117,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
       <DockControlContext.Provider value={{ collapsed, show, toggleCollapsed, maximized, toggleMax: maximizePanel, hide: hidePanel }}>
         <div className="flex min-h-0 min-w-0 flex-1">
           <Rail workspace={workspace} onWorkspace={switchTo} shown={shown} onToggle={toggle} onReset={reset} />
-          <div ref={boxRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden" style={QUIET}>
+          <div ref={boxRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden" style={QUIET} data-fs-dock-box="">
             <DockviewReact
               className="absolute inset-0"
               components={COMPONENTS}
@@ -1076,6 +1128,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
               theme={THEME}
               defaultRenderer={readMutant() === "onlyWhenVisible" ? "onlyWhenVisible" : "always"}
               hideBorders
+              floatingGroupBounds={readMutant() === "previewLoose" ? undefined : "boundedWithinViewport"}
               disableDnd
               locked
             />

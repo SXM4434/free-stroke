@@ -36,12 +36,16 @@ type Hosts = Partial<Record<DockHostName, HTMLElement>>
 type Registry = {
   hosts: Hosts
   register: (name: DockHostName, el: HTMLElement | null) => void
+  /** True while the 3D view is the floating preview of a maximized panel. */
+  preview: boolean
+  setPreview: (on: boolean) => void
 }
 
 const DockHostContext = createContext<Registry | null>(null)
 
 export function DockHostProvider({ children }: { children: ReactNode }) {
   const [hosts, setHosts] = useState<Hosts>({})
+  const [preview, setPreview] = useState(false)
   const register = useCallback((name: DockHostName, el: HTMLElement | null) => {
     setHosts((prev) => {
       if ((prev[name] ?? null) === el) return prev
@@ -51,9 +55,23 @@ export function DockHostProvider({ children }: { children: ReactNode }) {
       return next
     })
   }, [])
-  const value = useMemo(() => ({ hosts, register }), [hosts, register])
+  const value = useMemo(() => ({ hosts, register, preview, setPreview }), [hosts, register, preview])
   return <DockHostContext.Provider value={value}>{children}</DockHostContext.Provider>
 }
+
+/** True while the 3D view shows as the floating preview (a maximized panel
+ *  that is not the 3D view). The viewport frames the drawing to the preview
+ *  for exactly as long as this holds, and puts nothing of it back into the
+ *  main view's camera. */
+export function useDockPreview(): boolean {
+  return useContext(DockHostContext)?.preview ?? false
+}
+
+/** The shell's setter for `useDockPreview`. */
+export function useSetDockPreview(): (on: boolean) => void {
+  return useContext(DockHostContext)?.setPreview ?? noop
+}
+const noop = () => {}
 
 /** The element a dock panel holds for `name`, or null with no dock on the page. */
 export function useDockHost(name: DockHostName): HTMLElement | null {

@@ -34,6 +34,13 @@
 //   X7  EVERY PANEL HAS ITS HEADER (§2): a 28 px header with its name and a maximize button on the
 //       Drawing, the 3D view and Style; the dock's 36 px header carries a maximize button too.
 //       must-fail: the reader under `workspace.today()`, where the headers are hidden, finds none.
+//   X8  (CLOUD-LAYOUT) THE PREVIEW INSIDE THE WINDOW. With the dock maximized, the float's box, the 3D
+//       panel and its canvas each sit 12 px (within 1) inside the shell and the window, at 1512x982,
+//       1280x720 and 900x700 (stacked), and after the window shrinks to 760x430 while maximized.
+//       must-fail: `"previewLoose"`, the preview placed as before.
+//   X9  (CLOUD-LAYOUT) THE DRAWING FITS THE PREVIEW. In the preview's own frame the ink clears every
+//       edge by 8 px and spans 70% of the width or height. must-fail: `"previewNoFit"`, the main view's
+//       framing in the preview (the logo cropped at the top and right).
 //   G1  no page error on the lane pages.
 
 const { chromium } = await import("./lib/browser.mjs")
@@ -303,6 +310,104 @@ async function reload(mutant) {
   const ht = await headers()
   fired("X7", "the reader under today(), headers hidden", !["drawing", "view3d"].every((id) => ht[id] && ht[id].h === 28 && ht[id].max), JSON.stringify({ drawing: ht.drawing, view3d: ht.view3d }))
   await ctx.close()
+}
+
+// ---------------------------------------------------------------- X8 (CLOUD-LAYOUT)
+// The preview sits fully inside the window, 12 px in, at every size: the float's box, the 3D panel and
+// its canvas, each against the shell. Below `lg` (900x700) the 3D column used to grow to its content in
+// the float and run 52 px past the window's bottom; a shell resized while maximized moves it too.
+async function previewInside(mutant) {
+  const out = []
+  const box = (page) => page.evaluate(() => {
+    const r = (e) => { if (!e) return null; const b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom } }
+    const c = document.querySelector('[data-dock-panel="view3d"] canvas')
+    return {
+      win: [innerWidth, innerHeight],
+      shell: r(document.querySelector("[data-fs-dock-box]")),
+      // The panel's content is drawn in an overlay layer, not inside the float, so the float is found
+      // through the 3D view's group.
+      parts: { float: r(window.__dockHarness.api.getPanel("view3d")?.group.element.closest(".dv-resize-container") ?? null), panel: r(document.querySelector('[data-dock-panel="view3d"]')), canvas: r(c) },
+    }
+  })
+  const grade = (m, label) => {
+    const bad = []
+    for (const [k, v] of Object.entries(m.parts)) {
+      if (!v) { bad.push(`${k} missing`); continue }
+      const ins = [v.l - m.shell.l, v.t - m.shell.t, m.shell.r - v.r, m.shell.b - v.b, m.win[0] - v.r, m.win[1] - v.b]
+      if (Math.min(...ins) < 11) bad.push(`${k} ${Math.round(v.l)},${Math.round(v.t)}..${Math.round(v.r)},${Math.round(v.b)}`)
+    }
+    out.push({ label, ok: bad.length === 0, bad })
+  }
+  for (const [w, h] of [[1512, 982], [1280, 720], [900, 700]]) {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h } })
+    await ctx.addInitScript(() => { try { for (const k of Object.keys(localStorage)) if (k.startsWith("fs.layout.")) localStorage.removeItem(k) } catch {} })
+    if (mutant) await ctx.addInitScript((m) => { window.__fsDockMutant = m }, mutant)
+    const { page } = await open({ mutant, ctx })
+    await M(page, "toggle", "timeline")
+    await settle(page, 600)
+    grade(await box(page), `${w}x${h}`)
+    if (w === 1512) {
+      await page.setViewportSize({ width: 760, height: 430 })
+      await settle(page, 900)
+      grade(await box(page), "1512x982 resized to 760x430 while maximized")
+    }
+    await ctx.close()
+  }
+  return out
+}
+{
+  const r = await previewInside(null)
+  row("X8", "the preview's float, panel and canvas sit inside the window, 12 px in, at 3 sizes and after a resize", r.every((x) => x.ok), r.map((x) => `${x.label} ${x.ok ? "inside" : `OUT: ${x.bad.join("; ")}`}`).join(" | "))
+  const m = await previewInside("previewLoose")
+  fired("X8", "the preview placed as before (360x216 whatever the shell, content free to grow)", m.some((x) => !x.ok), m.filter((x) => !x.ok).map((x) => `${x.label}: ${x.bad.join("; ")}`).join(" | "))
+}
+
+// ---------------------------------------------------------------- X9 (CLOUD-LAYOUT)
+// The drawing fits the preview: in the preview's own frame the ink (pixels darker than the grid, which
+// is light grey on #fafafa) clears every edge by at least 8 px (the fit's margin is 16) and spans at
+// least 70% of the width or the height. With the main view's framing the logo ran off the top and the
+// right. The main view's framing after restore is X2's byte-equal frame, which runs with this fit on.
+async function previewInk(mutant) {
+  const { ctx, page } = await open({ mutant })
+  await M(page, "toggle", "timeline")
+  await settle(page, 900)
+  await page.evaluate((st) => window.__styleHarness.setStyle(st), STILL)
+  await settle(page, 700)
+  const url = await page.evaluate(() => window.__captureHarness.grab())
+  const ink = await page.evaluate(async (u) => {
+    const img = new Image()
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = u })
+    const c = document.createElement("canvas")
+    c.width = img.width
+    c.height = img.height
+    const g = c.getContext("2d")
+    g.drawImage(img, 0, 0)
+    const d = g.getImageData(0, 0, c.width, c.height).data
+    let x0 = Infinity, x1 = -1, y0 = Infinity, y1 = -1, n = 0
+    for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+      const i = (y * c.width + x) * 4
+      if (d[i + 3] < 128) continue
+      if ((d[i] + d[i + 1] + d[i + 2]) / 3 > 140) continue
+      n++
+      if (x < x0) x0 = x
+      if (x > x1) x1 = x
+      if (y < y0) y0 = y
+      if (y > y1) y1 = y
+    }
+    return { w: c.width, h: c.height, n, box: n ? [x0, y0, x1, y1] : null }
+  }, url)
+  await ctx.close()
+  if (!ink.box) return { ok: false, detail: `no ink in a ${ink.w}x${ink.h} frame` }
+  const [x0, y0, x1, y1] = ink.box
+  const clear = Math.min(x0, y0, ink.w - 1 - x1, ink.h - 1 - y1)
+  const span = Math.max((x1 - x0 + 1) / ink.w, (y1 - y0 + 1) / ink.h)
+  return { ok: clear >= 8 && span >= 0.7, detail: `frame ${ink.w}x${ink.h}, ink ${x0},${y0}..${x1},${y1} (${ink.n} px), clears the edges by ${clear} px, spans ${(span * 100).toFixed(0)}%` }
+}
+{
+  const r = await previewInk(null)
+  row("X9", "the drawing fits the preview: clears every edge by 8 px and spans 70% of it", r.ok, r.detail)
+  const m = await previewInk("previewNoFit")
+  fired("X9", "the preview shows the main view's framing", !m.ok, m.detail)
 }
 
 row("G1", "the lane pages threw nothing", errors.length === 0, errors.length ? errors.slice(0, 3).join(" | ") : "0 pageerror events")

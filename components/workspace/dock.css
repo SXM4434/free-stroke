@@ -79,3 +79,14 @@
   height: 8px;
   margin-top: -2px;
 }
+
+/* THE PREVIEW HOLDS ITS CONTENT (CLOUD-LAYOUT). Below `lg` the 3D column is a
+   flex item in a column, whose `min-height: auto` let it grow to its content
+   inside the float: at 900x700 the view ran 64 px past its 216 px box and past
+   the window's bottom. In the float the column is the box, no larger. */
+[data-fs-dock-box]:not([data-fs-preview-loose]) .dv-render-overlay-float [data-dock-panel="view3d"] {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
