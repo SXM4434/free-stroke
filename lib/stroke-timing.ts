@@ -967,16 +967,23 @@ export function rateScaled<S extends { points: { t: number }[] }>(strokes: S[], 
 
 /** DRAWIN-EXTRAS · the clock's tail, after the clock (recorded or hand) is
  *  chosen: the pressure reveal inside each stroke that carries pressure, then
- *  the rate. At pressure 0 this is the two lines `/` always ran, the same
- *  arrays in and out at rate 1. A pressured clock lives on the processed
- *  points, so `raw` follows them, as it does under the hand. */
+ *  the rate. At pressure 0 and duration 0 this is the two lines `/` always
+ *  ran, the same arrays in and out at rate 1. A pressured clock lives on the
+ *  processed points, so `raw` follows them, as it does under the hand.
+ *
+ *  DURATION. Above 0, `durationMs` replaces the rate with the one that lands
+ *  the pen's first ink to its last in exactly that long, measured on the array
+ *  the take's length is read from (`takePenMs` reads `raw`) after the hand and
+ *  the pressure, so it holds on either clock. `rate` in the result is the rate
+ *  that played. */
 export function clockTail<P extends { points: { t: number; pressure?: number }[] }, R extends { points: { t: number }[] }>(
   processed: P[],
   raw: R[],
   wantHand: boolean,
   rate: number,
   pressure: number,
-): { processed: P[]; raw: R[]; pressured: boolean } {
+  durationMs = 0,
+): { processed: P[]; raw: R[]; pressured: boolean; rate: number } {
   let pressured = false
   if (pressure > 0) {
     const pt = pressureTimed(processed, pressure)
@@ -985,8 +992,14 @@ export function clockTail<P extends { points: { t: number; pressure?: number }[]
       pressured = true
     }
   }
-  const p = rateScaled(processed, rate)
-  return { processed: p, raw: wantHand || pressured ? (p as unknown as R[]) : rateScaled(raw, rate), pressured }
+  const follows = wantHand || pressured
+  let played = rate
+  if (durationMs > 0) {
+    const pen = penMsOf(follows ? processed : raw)
+    if (pen > 0) played = pen / durationMs
+  }
+  const p = rateScaled(processed, played)
+  return { processed: p, raw: follows ? (p as unknown as R[]) : rateScaled(raw, played), pressured, rate: played }
 }
 
 export function penMsOf(strokes: { points: { t: number }[] }[]): number {

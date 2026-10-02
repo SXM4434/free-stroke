@@ -46,6 +46,7 @@ import {
   type RevealClock,
   REVEAL_RATE_MIN,
   REVEAL_RATE_MAX,
+  DURATION_MAX_SECONDS,
   type DrawInParams,
   type StrokeOrder,
   type ReverseMode,
@@ -545,6 +546,34 @@ export function DrawInTimingControls({
       </span>
     </label>
     </>)}
+    {/* DURATION (DRAWIN-EXTRAS). The whole draw's length, first ink to last.
+        0 is off and the Speed pills decide. It re-times the clock, so under
+        a take with performed strokes / re-stores them (rebaseForClock). */}
+    {W(["envelope.durationSeconds"], <>
+    <label className="mb-2 flex flex-col gap-1" data-duration-row>
+      <span className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span>Duration</span>
+        <span className="tabular-nums text-foreground">
+          {envelope.durationSeconds === 0 ? "as drawn" : `${envelope.durationSeconds.toFixed(1)}s`}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={DURATION_MAX_SECONDS}
+        step={0.5}
+        aria-label="Duration"
+        value={envelope.durationSeconds}
+        onChange={(e) => patchEnvelope({ durationSeconds: Number(e.target.value) })}
+        className="h-1 w-full cursor-pointer appearance-none rounded-full bg-border accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
+      />
+      <span className="text-[10px] leading-snug text-muted-foreground" data-duration-note>
+        {envelope.durationSeconds === 0
+          ? "The drawing plays as long as the clock and speed make it. Slide right to set its length in seconds."
+          : "The drawing plays in exactly this long, however long it took to draw. Speed is set by this while it is on. Strokes you time one by one can still add to it."}
+      </span>
+    </label>
+    </>)}
     {/* PACE, the transport's Natural / Authentic, here so a draw-in preset's
         pace can be edited where its other fields are (MOTION-CUSTOM). */}
     {showPace && W(["envelope.mode"], (
@@ -627,6 +656,7 @@ export function DrawInTimingControls({
               key={r}
               type="button"
               data-rate={r}
+              disabled={envelope.durationSeconds > 0}
               onClick={() => { if (r >= REVEAL_RATE_MIN && r <= REVEAL_RATE_MAX) patchEnvelope({ rate: r }) }}
               aria-pressed={envelope.rate === r}
               className={`fs-press rounded-full border px-2 py-0.5 text-[10px] font-medium tabular-nums transition-colors disabled:opacity-40 ${
@@ -640,9 +670,11 @@ export function DrawInTimingControls({
           ))}
         </div>
         <span className="text-[10px] leading-snug text-muted-foreground" data-rate-note>
-          {envelope.rate === 1
-            ? "The clock plays at the pace it was timed."
-            : `The whole clock plays ${envelope.rate}x as fast, so a longer drawing still takes longer.`}
+          {envelope.durationSeconds > 0
+              ? "Duration sets the speed while it is on."
+              : envelope.rate === 1
+              ? "The clock plays at the pace it was timed."
+              : `The whole clock plays ${envelope.rate}x as fast, so a longer drawing still takes longer.`}
         </span>
       </div>
     ))}

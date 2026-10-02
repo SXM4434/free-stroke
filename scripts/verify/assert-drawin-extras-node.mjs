@@ -42,6 +42,7 @@ const BASE_REV = process.env.EXTRAS_BASE || "2cc9e98"
 const EXTRAS = {
   tipHighlight: 0,
   pressureReveal: 0,
+  durationSeconds: 0,
 }
 const EXTRA_KEYS = Object.keys(EXTRAS)
 
@@ -421,11 +422,74 @@ async function runRows() {
     const page = readSrc("app/page.tsx")
     const fn = page.slice(page.indexOf("function clockStrokesFor("), page.indexOf("function baseSlotsFor("))
     const bad = []
-    if (!fn.includes("if ((!wantHand && rate === 1 && !(pressure > 0)) || processedStrokes.length === 0)")) bad.push("early return ignores pressure")
-    if (!fn.includes("clockTail(processed, raw, wantHand, rate, pressure)")) bad.push("tail does not get pressure")
+    if (!fn.includes("if ((!wantHand && rate === 1 && !(pressure > 0) &&")) bad.push("early return ignores pressure")
+    if (!fn.includes("clockTail(processed, raw, wantHand, rate, pressure,")) bad.push("tail does not get pressure")
     if (!fn.includes("const pressure = env.pressureReveal ?? 0")) bad.push("pressure not read from the envelope")
     if (!/revealEnvelope\.rate, revealEnvelope\.pressureReveal[^\]]*\],/.test(page)) bad.push("memo does not re-run on pressure")
     row("PRESS-WIRED", bad.length === 0, "/ reads pen pressure in its clock function, and the clock memo re-runs on it (source text; the browser rows are not run)", bad.join("; ") || "4 checks")
+  }
+
+  /* ══ 3 · DURATION ═════════════════════════════════════════════════════════ */
+  {
+    const bad = []
+    const read = (v) => {
+      const doc = JSON.parse(J(D.defaultSession()))
+      doc.revealEnvelope = { ...doc.revealEnvelope, durationSeconds: v }
+      return D.validateSession(doc)
+    }
+    for (const [v, want, repaired] of [[0, 0, false], [4, 4, false], [S.DURATION_MIN_SECONDS, S.DURATION_MIN_SECONDS, false], [S.DURATION_MAX_SECONDS, S.DURATION_MAX_SECONDS, false], [0.2, 0, true], [31, 0, true], [-3, 0, true], ["x", 0, false]]) {
+      const r = read(v)
+      const got = r.session.revealEnvelope.durationSeconds
+      const said = r.repairs.some((x) => x.includes("durationSeconds"))
+      if (got !== want || (repaired && !said)) bad.push(`${J(v)} read as ${J(got)}${repaired && !said ? ", not said" : ""}`)
+    }
+    row("DUR-PERSIST", bad.length === 0, "duration persists: 0 is off, 0.5 to 30 s read back, anything else reads off and is said", bad.join("; ") || "8 documents")
+  }
+  {
+    const raw = HW.rawHeroStrokes()
+    const bad = []
+    for (const r of [1, 2]) {
+      const t = T.clockTail(hero, raw, false, r, 0, 0)
+      if (t.rate !== r || !same(pts(t.processed), pts(base.T.rateScaled(hero, r))) || !same(pts(t.raw), pts(base.T.rateScaled(raw, r)))) bad.push(`rate ${r}`)
+    }
+    row("DUR-OFF", bad.length === 0, "duration at 0 leaves the rate in charge: the base's clock at rate 1 and 2", bad.join("; ") || "2 rates")
+  }
+  {
+    /* On: the take's length, read off the array `takePenMs` reads (raw), is
+     * the duration on the recorded clock, on the hand path and with pressure,
+     * whatever the rate pill says. */
+    const raw = HW.rawHeroStrokes()
+    const varied = withP(hero, (j, n) => (j < n / 2 ? 0.25 : 0.95))
+    const bad = []
+    const got = []
+    const cases = [
+      ["recorded", hero, raw, false, 0],
+      /* A recording whose resample ends short of it: the take is read off raw. */
+      ["raw longer", hero, T.rateScaled(hero, 0.9), false, 0],
+      ["hand", hero, hero, true, 0],
+      ["pressure", varied, varied, false, 1],
+    ]
+    for (const [name, p, r0, hand, press] of cases) for (const ms of [2000, 7000]) for (const rate of [1, 2]) {
+      const t = T.clockTail(p, r0, hand, rate, press, ms)
+      const len = T.penMsOf(t.raw)
+      got.push(`${name} ${ms}: ${len.toFixed(3)}`)
+      if (Math.abs(len - ms) > 1e-6) bad.push(`${name} ${ms} ms at rate ${rate}: take ${len.toFixed(3)} ms`)
+    }
+    const pen0 = T.penMsOf(raw)
+    row("DUR-ON", bad.length === 0, "the whole draw plays in exactly the set duration on the recorded clock, the hand path and with pressure, whatever the speed pill",
+      `recorded take ${pen0.toFixed(1)} ms; ${[...new Set(got)].slice(0, 6).join(", ")}${bad.length ? `; ${bad.slice(0, 3).join("; ")}` : ""}`)
+  }
+  {
+    const page = readSrc("app/page.tsx")
+    const fn = page.slice(page.indexOf("function clockStrokesFor("), page.indexOf("function baseSlotsFor("))
+    const dtc = readSrc("components/draw-in-timing-controls.tsx")
+    const bad = []
+    if (!fn.includes("!(pressure > 0) && !(durationMs > 0)) || processedStrokes.length === 0)")) bad.push("early return ignores duration")
+    if (!fn.includes("clockTail(processed, raw, wantHand, rate, pressure, durationMs)")) bad.push("tail does not get the duration")
+    if (!fn.includes("const durationMs = (env.durationSeconds ?? 0) * 1000")) bad.push("duration not read from the envelope")
+    if (!/revealEnvelope\.pressureReveal, revealEnvelope\.durationSeconds, clockNib\],/.test(page)) bad.push("memo does not re-run on duration")
+    if (!dtc.includes("disabled={envelope.durationSeconds > 0}")) bad.push("speed pills stay live while duration sets the speed")
+    row("DUR-WIRED", bad.length === 0, "/ reads the duration in its clock function and re-runs on it, and the speed pills step aside while it is on (source text; browser rows not run)", bad.join("; ") || "5 checks")
   }
 
   rmSync(base.dir, { recursive: true, force: true })
@@ -453,9 +517,17 @@ const MUTANTS = [
   { name: "stroke not scaled back to its length", file: "lib/pressure-reveal.ts", find: "const k = before / after", text: "const k = 1", red: ["PRESS-ON"] },
   { name: "clockTail ignores pressure", file: "lib/stroke-timing.ts", find: "  if (pressure > 0) {\n    const pt = pressureTimed(processed, pressure)", text: "  if (false) {\n    const pt = pressureTimed(processed, pressure)", red: ["PRESS-ON"] },
   { name: "clockTail runs pressure at 0", file: "lib/stroke-timing.ts", find: "  if (pressure > 0) {\n    const pt = pressureTimed(processed, pressure)", text: "  if (true) {\n    const pt = pressureTimed(processed, pressure || 1)", red: ["PRESS-OFF"] },
-  { name: "raw does not follow a pressured clock", file: "lib/stroke-timing.ts", find: "raw: wantHand || pressured ?", text: "raw: wantHand ?", red: ["PRESS-ON"] },
-  { name: "/ early return ignores pressure", file: "app/page.tsx", find: "if ((!wantHand && rate === 1 && !(pressure > 0)) || processedStrokes.length === 0)", text: "if ((!wantHand && rate === 1) || processedStrokes.length === 0)", red: ["PRESS-WIRED"] },
-  { name: "/ memo does not re-run on pressure", file: "app/page.tsx", find: "revealEnvelope.rate, revealEnvelope.pressureReveal, clockNib]", text: "revealEnvelope.rate, clockNib]", red: ["PRESS-WIRED"] },
+  { name: "raw does not follow a pressured clock", file: "lib/stroke-timing.ts", find: "const follows = wantHand || pressured", text: "const follows = wantHand", red: ["PRESS-ON"] },
+  { name: "/ early return ignores pressure", file: "app/page.tsx", find: "rate === 1 && !(pressure > 0) &&", text: "rate === 1 &&", red: ["PRESS-WIRED"] },
+  { name: "/ memo does not re-run on pressure", file: "app/page.tsx", find: "revealEnvelope.rate, revealEnvelope.pressureReveal, revealEnvelope.durationSeconds, clockNib]", text: "revealEnvelope.rate, revealEnvelope.durationSeconds, clockNib]", red: ["PRESS-WIRED"] },
+  /* 3 · duration */
+  { name: "duration range check removed", file: "lib/doc-store.ts", find: "if (!(dur === 0 || (dur >= DURATION_MIN_SECONDS && dur <= DURATION_MAX_SECONDS))) {", text: "if (false) {", red: ["DUR-PERSIST"] },
+  { name: "duration ignored by the tail", file: "lib/stroke-timing.ts", find: "  if (durationMs > 0) {\n    const pen", text: "  if (false) {\n    const pen", red: ["DUR-ON"] },
+  { name: "duration measured on the resample, not the take's array", file: "lib/stroke-timing.ts", find: "const pen = penMsOf(follows ? processed : raw)", text: "const pen = penMsOf(processed)", red: ["DUR-ON"] },
+  { name: "duration applied at 0", file: "lib/stroke-timing.ts", find: "  if (durationMs > 0) {\n    const pen", text: "  if (durationMs >= 0) {\n    durationMs = durationMs || 1000\n    const pen", red: ["DUR-OFF"] },
+  { name: "/ early return ignores duration", file: "app/page.tsx", find: "!(pressure > 0) && !(durationMs > 0)) || processedStrokes.length === 0)", text: "!(pressure > 0)) || processedStrokes.length === 0)", red: ["DUR-WIRED"] },
+  { name: "/ memo does not re-run on duration", file: "app/page.tsx", find: "revealEnvelope.pressureReveal, revealEnvelope.durationSeconds, clockNib]", text: "revealEnvelope.pressureReveal, clockNib]", red: ["DUR-WIRED"] },
+  { name: "speed pills live under a duration", file: "components/draw-in-timing-controls.tsx", find: "disabled={envelope.durationSeconds > 0}", text: "disabled={false}", red: ["DUR-WIRED"] },
   { name: "tip ignores the timed take", file: "lib/tip-highlight.ts", find: "if (timed) return headsFromSpans(timed.spans, timed.reversed)", text: "if (timed) return []", red: ["TIP-TIMED"] },
 ]
 

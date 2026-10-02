@@ -430,6 +430,10 @@ export interface RevealEnvelopeParams {
    *  pressure, 0..1. 0 is off; a stroke with no pressure plays as recorded at
    *  any value. `lib/pressure-reveal.ts`. */
   pressureReveal: number
+  /** DRAWIN-EXTRAS · the whole draw's length in seconds, the pen's first ink to
+   *  its last. 0 is off and the rate above decides; above 0 it replaces the
+   *  rate with the one that lands the drawing in exactly this long. */
+  durationSeconds: number
 }
 
 export const REVEAL_ENVELOPE_DEFAULTS: RevealEnvelopeParams = {
@@ -443,7 +447,12 @@ export const REVEAL_ENVELOPE_DEFAULTS: RevealEnvelopeParams = {
   reverse: false,
   tipHighlight: 0,
   pressureReveal: 0,
+  durationSeconds: 0,
 }
+
+/* DRAWIN-EXTRAS · the Duration slider's range, seconds. 0 is off. */
+export const DURATION_MIN_SECONDS = 0.5
+export const DURATION_MAX_SECONDS = 30
 
 export interface RevealWindow {
   /** Trailing edge, scheduled space. Ink at or below this is NOT drawn. */

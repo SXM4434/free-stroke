@@ -4785,6 +4785,7 @@ export const HAND_DRAW_RATE = 3.333
 export const DRAW_IN_EXTRAS_OFF = {
   tipHighlight: 0,
   pressureReveal: 0,
+  durationSeconds: 0,
 } as const satisfies Partial<RevealEnvelopeParams>
 
 export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [

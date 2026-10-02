@@ -789,7 +789,7 @@ export default function Home() {
   const clocked = useMemo(
     () => clockStrokesFor(rawStrokes, processedStrokes, revealEnvelope, clockNib, settingsRef.current),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, revealEnvelope.pressureReveal, clockNib],
+    [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, revealEnvelope.pressureReveal, revealEnvelope.durationSeconds, clockNib],
   )
   clockMsRef.current = clocked.ms
   /* What a clock change re-reads (`rebaseForClock`): the recording and the nib. */
@@ -811,6 +811,8 @@ export default function Home() {
         takePenMs,
         memoMs: clockMsRef.current,
         rate: revealEnvelope.rate,
+        playedRate: clocked.rate,
+        durationSeconds: revealEnvelope.durationSeconds,
         drift: clocked.drift,
         recorded: processedStrokes.map((s) => s.points),
         clocked: clocked.processed.map((s) => s.points),
@@ -819,7 +821,7 @@ export default function Home() {
       }),
     }
     return () => { delete w.__fsClock }
-  }, [clocked, processedStrokes, rawStrokes, revealEnvelope.clock, revealEnvelope.rate, clockNib, takePenMs])
+  }, [clocked, processedStrokes, rawStrokes, revealEnvelope.clock, revealEnvelope.rate, revealEnvelope.durationSeconds, clockNib, takePenMs])
 
   const handleRevealWindowChange = useCallback(
     (patch: Partial<RevealWindowParams>) => {
@@ -2646,7 +2648,7 @@ export default function Home() {
 function clockStrokesFor(
   rawStrokes: Stroke[],
   processedStrokes: ProcessedStroke[],
-  env: { clock: string; rate: number; pressureReveal?: number },
+  env: { clock: string; rate: number; pressureReveal?: number; durationSeconds?: number },
   clockNib: number,
   cs: Pick<ExportSettings, "spacing" | "smoothing" | "preserveCorners">,
 ) {
@@ -2657,8 +2659,11 @@ function clockStrokesFor(
    * carries pressure, on whichever clock is on, before the rate (`clockTail`).
    * At 0, or on a drawing with no pressure, the arrays are main's. */
   const pressure = env.pressureReveal ?? 0
-  if ((!wantHand && rate === 1 && !(pressure > 0)) || processedStrokes.length === 0)
-    return { raw: rawStrokes, processed: processedStrokes, hand: false, stamped: null as Stroke[] | null, drift: 0, ms: 0 }
+  /* DRAWIN-EXTRAS · Duration. Above 0 the rate becomes the one that lands the
+   * pen's first ink to its last in exactly that long (`clockTail`). */
+  const durationMs = (env.durationSeconds ?? 0) * 1000
+  if ((!wantHand && rate === 1 && !(pressure > 0) && !(durationMs > 0)) || processedStrokes.length === 0)
+    return { raw: rawStrokes, processed: processedStrokes, hand: false, stamped: null as Stroke[] | null, drift: 0, ms: 0, rate: 1 }
   const t0 = performance.now()
   let processed: ProcessedStroke[] = processedStrokes
   let raw: Stroke[] = rawStrokes
@@ -2684,10 +2689,10 @@ function clockStrokesFor(
     })
     raw = processed as Stroke[]
   }
-  const tail = clockTail(processed, raw, wantHand, rate, pressure)
+  const tail = clockTail(processed, raw, wantHand, rate, pressure, durationMs)
   processed = tail.processed
   raw = tail.raw
-  return { raw, processed, hand: wantHand, stamped, drift, ms: performance.now() - t0 }
+  return { raw, processed, hand: wantHand, stamped, drift, ms: performance.now() - t0, rate: tail.rate }
 }
 
 /* HAND-DRAW-P2. The base slots the strip lays a take on (`components/stroke-strip.tsx`,
