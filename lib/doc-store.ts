@@ -166,6 +166,7 @@ import {
  * only needs to know the name is one of six. */
 import { PEN_TIP_SHAPES, readPenTipMode, type PenTipMode } from "@/lib/pen-reveal"
 import { SOLID_STATE, type FlatState } from "@/lib/flat-ink"
+import { LANDING_DEFAULTS, resolveLanding } from "@/lib/landing-motion"
 import { KEY_PROPERTIES, compactKeys, validateTrack, type KeyProperty, type TakeKeys, type Track } from "@/lib/keyframes"
 import type { SchemaSpec } from "@/lib/storage"
 
@@ -463,6 +464,7 @@ export function validateCustomPresets(input: unknown): { presets: StylePreset[];
         ["drawIn", DRAW_IN_DEFAULTS as unknown as Record<string, unknown>],
         ["revealWindow", REVEAL_WINDOW_DEFAULTS as unknown as Record<string, unknown>],
         ["envelope", REVEAL_ENVELOPE_DEFAULTS as unknown as Record<string, unknown>],
+        ["landing", LANDING_DEFAULTS as unknown as Record<string, unknown>],
       ]
       for (const [part, d] of parts) {
         const src = (r.motion as Record<string, unknown>)[part]
@@ -833,6 +835,24 @@ export function validateSession(input: unknown): { session: SessionDoc; repairs:
   if (flipRaw === "flatToSolid" || flipRaw === "solidToFlat") style.flip = flipRaw
   else if (flipRaw !== undefined && flipRaw !== "off")
     repairs.push(`the session's flip "${String(flipRaw)}" is not a choice, so the flip was turned off`)
+  /* PERSTROKE · `landing` is optional too. A stored one is read back through
+   * `resolveLanding`, which keeps its numbers inside the controls' ranges; an
+   * effect this build does not have turns it off and says so. */
+  const landingRaw =
+    styleCandidate && typeof styleCandidate === "object" ? (styleCandidate as Record<string, unknown>).landing : undefined
+  delete style.landing
+  const landing = resolveLanding(landingRaw as Parameters<typeof resolveLanding>[0])
+  if (landing) {
+    style.landing = landing
+    const raw = landingRaw as Record<string, unknown>
+    for (const k of ["amount", "durationSec", "staggerMs"] as const)
+      if (raw[k] !== undefined && raw[k] !== landing[k])
+        repairs.push(`the session's landing ${k} ${String(raw[k])} was outside what the controls offer, so it is ${landing[k]}`)
+  } else if (
+    landingRaw !== undefined &&
+    !(landingRaw && typeof landingRaw === "object" && (landingRaw as Record<string, unknown>).effect === "off")
+  )
+    repairs.push("the session's landing motion was not readable, so it was turned off")
   const presetsRaw =
     styleCandidate && typeof styleCandidate === "object"
       ? (styleCandidate as Record<string, unknown>).customPresets

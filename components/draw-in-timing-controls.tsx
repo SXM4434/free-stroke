@@ -60,6 +60,14 @@ import {
 import { HAND_DRAW_RATE } from "@/lib/style-system"
 import type { FlatState } from "@/lib/flat-ink"
 import type { FlipChoice } from "@/lib/style-system"
+import {
+  LANDING_DEFAULTS,
+  LANDING_LIMITS,
+  landingFor,
+  type LandingEffect,
+  type LandingParams,
+  type LandingScope,
+} from "@/lib/landing-motion"
 
 /* The Speed row's pills: slow, as timed, fast, and Hand Draw's own rate. */
 const RATE_PILLS = [0.5, 1, 2, HAND_DRAW_RATE]
@@ -90,6 +98,8 @@ export function DrawInTimingControls({
   patchFlatten,
   flip,
   patchFlip,
+  landing,
+  patchLanding,
   wrap,
   showPace,
 }: {
@@ -112,6 +122,10 @@ export function DrawInTimingControls({
   /** FLIP-3 · the flip after the draw-in. Absent `patchFlip` hides the pills. */
   flip?: FlipChoice
   patchFlip?: (flip: FlipChoice) => void
+  /** PERSTROKE · what each stroke does once it lands. Absent `landing` is Off;
+   *  absent `patchLanding` hides the block. */
+  landing?: LandingParams
+  patchLanding?: (patch: Partial<LandingParams>) => void
   /** Customize passes its <Field> here, so each block below shows under a
    *  preset that sets its keys, with the edited dot and Reset. Keys are the
    *  preset's flat names (`drawIn.overlap`). No wrap renders every block. */
@@ -507,6 +521,12 @@ export function DrawInTimingControls({
         </span>
       </div>
     ))}
+    {/* ═══ THE LANDING, what a stroke does once its ink is whole ═══
+        PERSTROKE. Coverage item 9 and plan 3d: Desk Doodles' landing
+        spring, a settle, a wobble, a pulse, as a pose per stroke after
+        the reveal (`lib/landing-motion.ts`). Picking an effect loads its
+        own numbers; the sliders then move them. */}
+    {patchLanding && W(LANDING_KEYS, <LandingBlock landing={landing} patchLanding={patchLanding} />)}
     {/* ═══ WHOLE DRAW, delay · pace · ease · cadence · playback ═══
         The clock the whole take runs on, one box like DRAW IN and
         WINDOW. These rows sat loose under WINDOW until 2026-09-26, so
@@ -782,6 +802,143 @@ export function DrawInTimingControls({
  * means no block, never a block whose inputs move nothing.
  *
  * Ease is the four presets, or Custom: a curve he shapes, overshoot included. */
+const LANDING_KEYS = ["landing.effect", "landing.scope", "landing.amount", "landing.durationSec", "landing.staggerMs"]
+
+const LANDING_EFFECT_PILLS: { id: LandingEffect; label: string; note: string }[] = [
+  { id: "off", label: "Off", note: "Strokes stop where the pen leaves them." },
+  { id: "spring", label: "Spring", note: "Desk Doodles' landing: in at 92 %, a touch past full at 62 % of the beat, then home." },
+  { id: "settle", label: "Settle", note: "The lab's pop-in: from 86 %, fast then easing, onto the page at its lowest edge." },
+  { id: "wobble", label: "Wobble", note: "A rock on its own centre, two swings, dying to still." },
+  { id: "pulse", label: "Pulse", note: "One swell above full size and back, the completion pulse's own envelope." },
+]
+
+const LANDING_SCOPE_PILLS: { id: LandingScope; label: string; note: string }[] = [
+  { id: "stroke", label: "Each stroke", note: "Each stroke on its own landing." },
+  { id: "mark", label: "Whole mark", note: "The whole mark once, as the last stroke lands." },
+]
+
+function LandingBlock({
+  landing,
+  patchLanding,
+}: {
+  landing?: LandingParams
+  patchLanding: (patch: Partial<LandingParams>) => void
+}) {
+  const cur = landing ?? LANDING_DEFAULTS
+  const on = cur.effect !== "off"
+  const degrees = cur.effect === "wobble"
+  const [aLo, aHi] = cur.effect === "off" ? [0, 1] : LANDING_LIMITS.amount[cur.effect]
+  const pill = (active: boolean) =>
+    `fs-press rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+      active
+        ? "border-foreground/20 bg-foreground text-background"
+        : "border-border text-muted-foreground hover:text-foreground"
+    }`
+  const slider = "h-1 w-full cursor-pointer appearance-none rounded-full bg-border accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
+  return (
+    <div data-landing className="mb-3 break-inside-avoid rounded-md border border-border/70 p-2">
+      <div className="mb-1.5 flex items-baseline justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-foreground">Landing</span>
+        <span className="text-[10px] tabular-nums text-muted-foreground">
+          {LANDING_EFFECT_PILLS.find((x) => x.id === cur.effect)?.label.toLowerCase()}
+        </span>
+      </div>
+      <div role="group" aria-label="Landing" className="mb-1 flex flex-wrap gap-1">
+        {LANDING_EFFECT_PILLS.map((x) => (
+          <button
+            key={x.id}
+            type="button"
+            onClick={() => patchLanding(landingFor(x.id, cur.scope))}
+            aria-pressed={cur.effect === x.id}
+            className={pill(cur.effect === x.id)}
+          >
+            {x.label}
+          </button>
+        ))}
+      </div>
+      <span className="mb-2 block text-[10px] leading-snug text-muted-foreground">
+        {LANDING_EFFECT_PILLS.find((x) => x.id === cur.effect)?.note}
+      </span>
+      {on && (
+        <>
+          <div role="group" aria-label="Landing scope" className="mb-1 flex flex-wrap gap-1">
+            {LANDING_SCOPE_PILLS.map((x) => (
+              <button
+                key={x.id}
+                type="button"
+                onClick={() => patchLanding({ scope: x.id })}
+                aria-pressed={cur.scope === x.id}
+                className={pill(cur.scope === x.id)}
+              >
+                {x.label}
+              </button>
+            ))}
+          </div>
+          <span className="mb-2 block text-[10px] leading-snug text-muted-foreground">
+            {LANDING_SCOPE_PILLS.find((x) => x.id === cur.scope)?.note}
+          </span>
+          <label className="mb-2 flex flex-col gap-1">
+            <span className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <span>Amount</span>
+              <span className="tabular-nums text-foreground">
+                {degrees ? `${cur.amount.toFixed(1)}\u00b0` : `${(cur.amount * 100).toFixed(1)}%`}
+              </span>
+            </span>
+            <input
+              type="range"
+              aria-label="Landing amount"
+              min={aLo}
+              max={aHi}
+              step={degrees ? 0.5 : 0.005}
+              value={cur.amount}
+              onChange={(e) => patchLanding({ amount: Number(e.target.value) })}
+              className={slider}
+            />
+          </label>
+          <label className="mb-2 flex flex-col gap-1">
+            <span className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <span>Length</span>
+              <span className="tabular-nums text-foreground">{cur.durationSec.toFixed(2)}s</span>
+            </span>
+            <input
+              type="range"
+              aria-label="Landing length"
+              min={LANDING_LIMITS.durationSec[0]}
+              max={LANDING_LIMITS.durationSec[1]}
+              step={0.01}
+              value={cur.durationSec}
+              onChange={(e) => patchLanding({ durationSec: Number(e.target.value) })}
+              className={slider}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <span>Stagger</span>
+              <span className="tabular-nums text-foreground">
+                {cur.scope === "mark" ? "one mark" : `${Math.round(cur.staggerMs)} ms`}
+              </span>
+            </span>
+            <input
+              type="range"
+              aria-label="Landing stagger"
+              min={LANDING_LIMITS.staggerMs[0]}
+              max={LANDING_LIMITS.staggerMs[1]}
+              step={5}
+              disabled={cur.scope === "mark"}
+              value={cur.staggerMs}
+              onChange={(e) => patchLanding({ staggerMs: Number(e.target.value) })}
+              className={slider}
+            />
+            <span className="text-[10px] leading-snug text-muted-foreground">
+              Strokes that land together start this far apart. Strokes already further apart keep their own times.
+            </span>
+          </label>
+        </>
+      )}
+    </div>
+  )
+}
+
 function SelectedStrokeBlock() {
   /* Which stroke has Custom open with its preset still in force. Keyed by
    * stroke so picking another bar does not carry the editor over. */

@@ -21,7 +21,7 @@
 // only (`import type`), which is erased at compile time, so this does not
 // create a runtime cycle.
 import { completionTrigger } from "./style-clock"
-import type { LandingParams } from "./landing-motion"
+import { landingFor, type LandingParams } from "./landing-motion"
 /* Family 14's patch names the take's three objects. `stroke-schedule.ts`
  * imports nothing from here, so this direction is the only one and there is no
  * cycle. Types only. */
@@ -1593,6 +1593,8 @@ export interface MotionPresetPatch {
   drawIn?: Partial<DrawInParams>
   revealWindow?: Partial<RevealWindowParams>
   envelope?: Partial<RevealEnvelopeParams>
+  /** PERSTROKE · what each stroke does once it lands. Absent is Off. */
+  landing?: Partial<LandingParams>
 }
 
 /* ====================================================================== */
@@ -4774,12 +4776,11 @@ export function findFusionShapeDef(
  * clicking two presets in a row left you with half of each, which is the
  * defect `railDefaults` exists to prevent one storey down.
  *
- * `completionPulse` is the one that is still a shell, and its reason is in its
- * own description rather than in a comment nobody reads: it needs the mark to
- * move AFTER it has arrived, and nothing in the engine does that. The whole
- * reveal is a prefix of a sorted key array, and a prefix cannot express a
- * settle. Building it is `docs/animation-toolset-map.md` §6.3, the per-stroke
- * transform work, which is capped at `FS_LETTER_MAX = 16`. */
+ * `completionPulse` was a shell until PERSTROKE (2026-10-02): it needs the
+ * mark to move AFTER it has arrived, and the reveal, a prefix of a sorted key
+ * array, cannot express that. It now carries a `landing` part, the per-stroke
+ * transform in `lib/landing-motion.ts`, which the viewport writes onto each
+ * stroke's group after the reveal; the prefix itself is unchanged. */
 /* HAND DRAW'S RATE (HAND-DRAW-3). Desk Doodles plays the logo's 15.55 s hand
  * record inside its 140/30 s draw beat (lib/hero-motion.ts, the draw beat), so
  * the word lands 3.333x faster than the pen model times it. A rate and not a
@@ -4875,17 +4876,27 @@ export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
     },
   },
   {
+    /* PERSTROKE. The hand's own take, Authentic Draw's, and then the whole
+     * mark swells once as the last stroke lands and settles back: style-clock's
+     * one completion envelope, the same one the layers and the stack pulse on,
+     * here as scale. */
     id: "completionPulse",
     label: "Completion Pulse",
     family: "geometryAnimation",
     enabled: true,
-    implemented: false,
-    description: "Needs the mark to move after it has arrived. Nothing in the engine does that yet.",
+    implemented: true,
+    description: "Your hand's own pace, then the whole mark swells once as the last stroke lands and settles back.",
+    motion: {
+      drawIn: { order: "asDrawn", overlap: 0, align: "start", unit: "group", reverse: "off" },
+      revealWindow: { mode: "grow", length: 0.25 },
+      envelope: { mode: "raw", ease: "linear", delaySeconds: 0, loop: false, reverse: false },
+      landing: landingFor("pulse", "mark"),
+    },
   },
 ]
 
-/** Family 14 only. The take a motion preset asks for, or undefined for the one
- *  that is still a shell. Same separation and same reason as
+/** Family 14 only. The take a motion preset asks for, or undefined when the
+ *  id is not a draw-in preset. Same separation and same reason as
  *  `resolveGeometryPreset` and `resolveViewPreset`. */
 export function resolveMotionPreset(
   id: string | null,
@@ -5315,13 +5326,16 @@ export interface TakeState {
   drawIn: DrawInParams
   revealWindow: RevealWindowParams
   revealEnvelope: RevealEnvelopeParams
+  /** PERSTROKE · lives on style state, read here so Customize can compare it. Absent is Off. */
+  landing?: LandingParams
 }
-const MOTION_PARTS = ["drawIn", "revealWindow", "envelope"] as const
+const MOTION_PARTS = ["drawIn", "revealWindow", "envelope", "landing"] as const
 type MotionPart = (typeof MOTION_PARTS)[number]
 const TAKE_KEY: Record<MotionPart, keyof TakeState> = {
   drawIn: "drawIn",
   revealWindow: "revealWindow",
   envelope: "revealEnvelope",
+  landing: "landing",
 }
 
 export function isMotionField(k: string): k is MotionFieldKey {

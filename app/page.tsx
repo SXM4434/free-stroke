@@ -67,6 +67,7 @@ import {
   viewPresetBlockers,
   HAND_DRAW_RATE,
 } from "@/lib/style-system"
+import { LANDING_DEFAULTS, resolveLanding, type LandingParams } from "@/lib/landing-motion"
 // `CustomFusion` is the localStorage shape-check's type at the restore effect
 // below; it was used there without being imported, which is 4 of the 4 tsc
 // errors this file was carrying.
@@ -1492,12 +1493,17 @@ export default function Home() {
     const drawIn = { ...DRAW_IN_DEFAULTS, ...patch.drawIn }
     const revealWindow = { ...REVEAL_WINDOW_DEFAULTS, ...patch.revealWindow }
     const rebased = rebaseForClock(curEnv, envelope, drawIn, revealWindow)
+    /* PERSTROKE · the landing is part of the take a preset sets, spread onto
+     * Off like the rest, so a preset without one turns a landing off. Off is
+     * the key's absence, so a session that never had one saves as before. */
+    const { landing: _was, ...styleRest } = docRef.current.styleState
+    const landing = patch.landing ? resolveLanding({ ...LANDING_DEFAULTS, ...patch.landing }) : null
     edit(`Preset ${preset?.label ?? id}`, null, {
       drawIn,
       revealWindow,
       revealEnvelope: envelope,
       ...(rebased ? { take: rebased } : {}),
-      styleState: { ...docRef.current.styleState, activePresetFamily: "geometryAnimation", activePresetId: id },
+      styleState: { ...styleRest, ...(landing ? { landing } : {}), activePresetFamily: "geometryAnimation", activePresetId: id },
     })
     return true
   }
@@ -2549,6 +2555,14 @@ export default function Home() {
                   patchFlatten: handleFlattenChange,
                   flip: styleState.flip,
                   patchFlip: (flip) => setStyleStateRecorded((s) => (s.flip === flip || (flip === "off" && s.flip === undefined) ? s : { ...s, flip })),
+                  landing: styleState.landing,
+                  patchLanding: (patch: Partial<LandingParams>) =>
+                    setStyleStateRecorded((s) => {
+                      const next = resolveLanding({ ...(s.landing ?? LANDING_DEFAULTS), ...patch })
+                      if (!next && !s.landing) return s
+                      const { landing: _was, ...rest } = s
+                      return next ? { ...rest, landing: next } : rest
+                    }),
                 }}
               />
             )}

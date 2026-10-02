@@ -27,6 +27,9 @@
  *   REACH       firstReach finds the first crossing of a curve with flats, to 1e-9
  *   UNITS       mesh keys map to strokes per engine, fused meshes to the mark, clipped lists through pieces
  *   OFF         Off and a zero amount are rest at every moment and need no tail
+ *   PRESET      Completion Pulse is implemented and its take carries a pulse on the whole mark,
+ *               and Customize lists the landing's five fields under it
+ *   SESSION     a stored landing comes back, a bad one is turned off and named, none stays none
  *
  * Must-fails run through GATE_MUTATE_FILE, so nothing on disk changes. Exit 0
  * only when every row passes, every mutant turns its rows red, and every row
@@ -239,6 +242,40 @@ async function runRows() {
   }
 }
 
+/* ---- the preset and the session (step 3) ---------------------------------- */
+async function runWiringRows() {
+  const L = loadTs(LM)
+  const S = loadTs("lib/style-system.ts")
+  const D = loadTs("lib/doc-store.ts")
+  {
+    const p = S.findPreset("completionPulse")
+    const m = S.resolveMotionPreset("completionPulse")
+    const lr = L.resolveLanding(m?.landing)
+    const fields = S.presetFields(p).filter((k) => k.startsWith("landing."))
+    row("PRESET",
+      p?.implemented === true && lr?.effect === "pulse" && lr.scope === "mark" && L.isLandingOn(lr) && fields.length === 5 &&
+        !!m.drawIn && !!m.revealWindow && !!m.envelope,
+      "Completion Pulse is implemented, its take carries a pulse on the whole mark, and Customize lists the landing's fields",
+      `implemented ${p?.implemented}; landing ${JSON.stringify(m?.landing)}; landing fields ${fields.join(", ") || "none"}`)
+  }
+  {
+    const base = S.DEFAULT_STYLE_STATE
+    const good = D.validateSession({ styleState: { ...base, landing: { effect: "spring", scope: "stroke", amount: 0.08, durationSec: 0.42, staggerMs: 50 } } })
+    const wide = D.validateSession({ styleState: { ...base, landing: { effect: "wobble", scope: "mark", amount: 99, durationSec: 0.8, staggerMs: 0 } } })
+    const bad = D.validateSession({ styleState: { ...base, landing: { effect: "boing" } } })
+    const none = D.validateSession({ styleState: { ...base } })
+    const g = good?.session.styleState.landing
+    const w = wide?.session.styleState.landing
+    const ok =
+      g?.effect === "spring" && g.amount === 0.08 && good.repairs.length === 0 &&
+      w?.amount === 20 && wide.repairs.some((r) => /landing amount 99/.test(r)) &&
+      bad?.session.styleState.landing === undefined && bad.repairs.some((r) => /landing/.test(r)) &&
+      !("landing" in none.session.styleState) && none.repairs.length === 0
+    row("SESSION", ok, "a stored landing comes back, a bad one is turned off and named, none stays none",
+      `kept ${JSON.stringify(g)}; wide amount ${w?.amount} with ${wide?.repairs.length} repair(s); bad ${bad?.session.styleState.landing} with "${bad?.repairs.find((r) => /landing/.test(r))}"; none has the key: ${"landing" in (none?.session.styleState ?? {})}`)
+  }
+}
+
 /* ---- must-fails ---------------------------------------------------------- */
 const MUTANTS = [
   { name: "spring starts at rest instead of settleFrom", find: "      const from = 1 - a\n", text: "      const from = 1\n", red: ["SP-START"] },
@@ -263,6 +300,10 @@ const MUTANTS = [
   { name: "pivot offset with the turn's sign flipped", find: "    px - q.scale * (c * px - s * py),", text: "    px - q.scale * (c * px + s * py),", red: ["PIVOT"] },
   { name: "first reach lands at the end of a flat", find: "    if (f(mid) >= target) hi = mid", text: "    if (f(mid) > target) hi = mid", red: ["REACH"] },
   { name: "fused Solid read as stroke 4", find: "const FUSED_KEY = /^(?:solid-|dd-solid-|inflate-implicit-|inflate-fallback-)/", text: "const FUSED_KEY = /^(?:inflate-implicit-|inflate-fallback-)/", red: ["UNITS"] },
+  { name: "Completion Pulse back to a shell", file: "lib/style-system.ts", find: "      landing: landingFor(\"pulse\", \"mark\"),\n", text: "", red: ["PRESET"] },
+  { name: "Completion Pulse pulses each stroke, not the mark", file: "lib/style-system.ts", find: "      landing: landingFor(\"pulse\", \"mark\"),\n", text: "      landing: landingFor(\"pulse\"),\n", red: ["PRESET"] },
+  { name: "the session drops the landing", file: "lib/doc-store.ts", find: "    style.landing = landing\n", text: "", red: ["SESSION"] },
+  { name: "the session clamps in silence", file: "lib/doc-store.ts", find: "        repairs.push(`the session's landing ${k} ${String(raw[k])} was outside what the controls offer, so it is ${landing[k]}`)", text: "        void k", red: ["SESSION"] },
   { name: "Off reads as on (isLandingOn ignores the effect)", find: "  return !!p && p.effect !== \"off\" && p.amount > 0 && p.durationSec > 0", text: "  return !!p && p.amount > 0 && p.durationSec > 0", red: ["OFF"] },
   { name: "a zero amount still counts as on", find: "  return !!p && p.effect !== \"off\" && p.amount > 0 && p.durationSec > 0", text: "  return !!p && p.effect !== \"off\" && p.durationSec > 0", red: ["OFF"] },
 ]
@@ -306,6 +347,7 @@ function runMutants() {
 /* ---- main ---------------------------------------------------------------- */
 try {
   await runRows()
+  await runWiringRows()
 } catch (e) {
   row("RUN", false, "the rows ran to completion", String(e && e.stack ? e.stack.split("\n").slice(0, 3).join(" / ") : e))
 }
@@ -321,4 +363,4 @@ const pass = rows.filter((r) => r.ok).length
 const caught = muts.filter((m) => m.caught).length
 const unguarded = rows.filter((r) => r.id !== "RUN" && !MUTANTS.some((m) => m.red.includes(r.id))).map((r) => r.id)
 console.log(`\n${pass} of ${rows.length} rows pass; ${caught} of ${muts.length} mutants caught; rows with no must-fail: ${unguarded.join(", ") || "none"}`)
-process.exit(pass === rows.length && rows.length >= 21 && caught === muts.length && unguarded.length === 0 ? 0 : 1)
+process.exit(pass === rows.length && rows.length >= 23 && caught === muts.length && unguarded.length === 0 ? 0 : 1)

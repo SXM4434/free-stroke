@@ -3445,6 +3445,7 @@ function PresetCustomize({
     drawIn: drawInTiming.drawIn,
     revealWindow: drawInTiming.revealWindow,
     revealEnvelope: drawInTiming.envelope,
+    landing: drawInTiming.landing,
   }
   const fields = presetFields(preset)
   const edited = presetEditedFields(styleState, preset, take)
@@ -3468,6 +3469,7 @@ function PresetCustomize({
     if (t.drawIn) drawInTiming?.patchDrawIn(t.drawIn)
     if (t.revealWindow) drawInTiming?.patchWindow(t.revealWindow)
     if (t.envelope) drawInTiming?.patchEnvelope(t.envelope)
+    if (t.landing) drawInTiming?.patchLanding?.(t.landing)
   }
   const scope: FieldScope = { keys: new Set(fields), edited: new Set(edited), onReset: reset }
   const readOnly = fields.filter((x) => !claimed.includes(x))
