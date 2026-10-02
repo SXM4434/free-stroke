@@ -1,74 +1,73 @@
-# HAND-DRAW-P3 cloud log, 2026-09-30
+NOT MERGE-READY: the code is done and every check matches this branch's own unchanged run, but two of the six required Node gates cannot run in this snapshot (their reference commits are not in it), and nothing was seen in a browser.
 
-Branch `cloud/hand-p3` (the snapshot of main at 4bba17b). Two steps, one commit each, both pushed. Nothing under `docs/thinking` or `docs/verification` is committed; the gates wrote there and it is left untracked.
+# FUSION-CHAOS cloud log, 2026-10-02
 
-## Step 1 · 4d76046 · phase 2 back on today's main
+Coverage item 12, rows 82 and 83 (`docs/research-2026-09-26/animation-asks-coverage.md`): fusion chaos, and the Phase 23 sync list. Branch `claude/fusion-chaos-phase-23-s3zo29`, from the snapshot `2cc9e98`. The brief said `cloud/<job-name>`; this session's harness pins the branch name above and forbids pushing any other, so the work is here. Four steps, one commit each, each pushed. Nothing under `docs/thinking` or `docs/verification` was written or committed.
 
-`git merge-file <path> base/<path> lane/<path>` on the four files. `lib/stroke-timing.ts` and `scripts/verify/assert-hand-clock.mjs` merged clean. Two conflicts, both kept:
-- `components/draw-in-timing-controls.tsx`, the import line: main's `curveOfEase, curveProblem` (Custom curve ease) with phase 2 dropping `takeHasPerformed` (the held clock controls are gone).
-- `app/page.tsx`, `handleRevealEnvelopeChange`: phase 2's `rebaseForClock`, so a clock or rate change and the rebase of performed rows are one `edit()`, one undo step, with main's `gesture ?? null` key. `clockUnderTake` and its toast are gone: Hand no longer yields to a performed take. Main's flip wiring (`flip`, `patchFlip`) is untouched.
-- Checked: base to main and lane to merged give the same diff on every file.
-- `docs/cloud-inbox` removed with `git rm -r`.
+## What the rows asked, and what each became
 
-## Step 2 · 802ccdb · R11, Inflate's holds, the export row
+Row 82 (PRD §4, animated fusion): "chaos/readability, reveal influence, completion behavior". Row 83 (plan Phase 23): "shimmer riding the tip, dither freezing on pause, a fusion bloom at completion". Five fields, all in the Fusion panel, all in every fusion preset (so Customize lists them), all reset by any composition pick. Each is the identity at its default.
 
-(a) R11, "Turn in the lifts". Under Hand a slot runs to the next stroke's landing (F120), so the logo's slots touch end to end ([0,520] [520,950] ...) and each lift sits in a slot's tail; only one gap existed (67 ms). The word space is 1792.8 to 1967.2 ms, 174.4 ms.
-- `paceFromCurve` returns its flats as `TimingPace.holds`. `takeLiftsMs(ts, pace, baseSlots, baseMs)` turns them into take-time lifts: each stroke inks over its slot less the holds in its base slot, carried through the row (delay, speed, ease inverse); a performed stroke inks its whole slot; lifts are the gaps in the union. Under rows it reads `ts.baseSlots`.
-- The strip publishes them on `ctx.liftsRef`; the picker passes them as `CameraTake.lifts`; `orbit-lifts` reads them when given and the slot gaps otherwise.
-- Live, logo under Hand: the move is offered and turns at 1792.8 to 1967.2 ms, 0.000 ms off the stamped lift.
+| Field | Control | Default (= today) | What it does |
+|---|---|---|---|
+| `fusionChaos` 0..1 | Chaos slider, keyable | 0 | How far the fused systems drift from each other. Each system runs the same relationship on its own lagged clock: texture 0, dither 0.9 s, ASCII 1.7 s, surface 2.6 s, times chaos. Breath, arrival and burst events come apart. Never a new random signal. Inert under Motion Off. |
+| `fusionRevealInfluence` 0..1 | Reveal slider, keyable | 1 | How much the draw gates the link. 1 is the smoothstep gate; 0 runs at full strength from the first frame. |
+| `fusionCompletion` | Pulse / Bloom / Off pills | Pulse | Pulse is today's kick. Bloom (Phase 23) rises over 0.35 s and settles over 1.4 s to the same peak, about 3x the pulse's area. Off has no accent. |
+| `fusionTipShimmer` 0..1 | Tip shimmer slider, keyable | 0 | A shine band at the draw front while the take plays, fading at both ends. It never dims a brighter band a relationship already has. |
+| `fusionPauseHold` | Off / Dither / Surface pills | Off | With the take paused part way (playhead still inside 0..1 for 0.12 s), Dither holds the dither phase. Surface holds dither, texture and ASCII, plus the fusion frame from before the pause. |
 
-(b) Inflate's shader holds. Measured with `scripts/verify/measure-hand-tip-creep.mjs` (Inflate, Hand, the 10 lifts of 50 ms or more, 5 frames per lift, control = the same span inside the stroke before):
-- No rows: 0 px change in all 10 lifts. The tip reads the beat, which the pace holds flat.
-- A timed take (+1 ms on the last stroke): 5, 28, 28, 27, 5, 26, 19, 52, 61, 18 px. It creeps: the tip reads the take's clock, which runs on through a lift, and the stroke end's nose fills in.
-- Fed as point holds at the pen-up and pen-down points (uFsTipHold): worst 13 px, single pixels where strokes cross (the LINEAR filter blends two arrivals).
-- A lift has no ink anywhere (that is how `takeLiftsMs` finds it), so the frame loop now holds the whole tip at the lift's start under a timed take (`entry.lifts`, published on `__heroPenTip.lifts`). Result: 0 px in all 10, controls 57 to 317 px. uFsTipHold still carries performed stops only; this is the hold with no radius, not the uniform. Say if you want it moved into the uniform instead.
+## Steps
 
-(c) The export row, R12 in `assert-hand-clock`: `exportAnimation` over `getTotalDuration()` (what the page's own export passes) against live at 8 plan clocks. No rows: 8/8, film 4666.7 ms = take. Last stroke at 0.5x: 8/8, film 5024.9 ms = take (pen 4666.7).
-
-Also in this commit: `assert-stroke-timing`'s two ripple mutants looked for `(t.ripple ? carry : 0)`, which phase 2 moved into `placeSlots` as `(ripple ? carry : 0)`; the mutants now find it (same sabotage, same rows).
+1. **1f629a0** · Fields and controls. `lib/style-system.ts`: the five fields, `FusionCompletion` and `FusionPauseHold` types, defaults, `STYLE_RANGES` rows, `FUSION_BASE`, `COMPOSITION_RAIL_KEYS`. `lib/style-key-meta.ts`: lane labels (Chaos, Reveal, Tip shimmer). `components/style-panel-scaffold.tsx`: three sliders under Link, Swing and Speed, then the two pill rows, each in a `Field` of its own key and in the panel's group `Field`. The dials stay above them, so the fold the old comments warn about is not touched by this change (not measured, see below). Keyable paths 38 to 41.
+2. **aee13e0** · Engine, `lib/style-fusion.ts`. `evaluateFusion` wraps the old body (`evaluateFusionCore`). New pure functions: `driftFusionFrame`, `revealGate`, `completionEnvelope`, `withTipShimmer`, `watchPause`, `pauseHoldLayers`, `holdValue`. At the defaults the wrapper returns the core's frame object.
+3. **3eac4eb** · Viewport, `components/viewport-3d.tsx`. The frame loop watches the playhead every frame. Under a fusion it applies the hold after fusion's own time push, so what stands still is what the screen shows. Tip shimmer arrives as the fusion frame's `sweep`, which the loop already applied.
+4. **5725bea** · Gate, `scripts/verify/assert-fusion-chaos.mjs`. Node only.
 
 ## Checks
 
-tsc: 6 errors, the baseline (snapshot 6, after step 1 6, after step 2 6).
+The baseline is this branch unchanged (`2cc9e98`), run in a separate worktree. The after-run is the branch head.
 
-Node gates, lane against the snapshot's own run:
-
-| gate | lane | snapshot |
+| Check | Baseline | After |
 |---|---|---|
+| tsc | 6 errors (5 geometry-engines, 1 handFeel) | 6, the same 6 |
+| **assert-fusion-chaos** (new) | n/a | **9 of 9 rows; 17 of 17 must-fails caught; no row without one** |
 | assert-keyframes | 16/16 rows, 21/21 mutants | 16/16, 21/21 |
-| assert-key-paths | 6/7, 8/8 (EXISTING red) | 6/7, 8/8 (EXISTING red) |
-| assert-camera-moves | 11/11, 20/20 (new IN-LIFTS, 3 new mutants) | 10/10, 17/17 |
-| assert-stroke-timing, `STROKE_TIMING_BASE=4bba17b` | 16/16, 12/12 | 16/16, 12/12 |
+| assert-key-paths | 6/7 rows (EXISTING), 8/8 mutants | 6/7 (EXISTING), 8/8; PATHS 41 of 41, SLIDERS 41 of 41 |
+| assert-width-keys | 12/12, 9/9 | 12/12, 9/9 |
+| assert-camera-moves | 11/11, 20/20 | 11/11, 20/20 |
+| assert-flip-pose | 8/8, 10/10 | 8/8, 10/10 |
+| assert-stroke-timing | 0/1 (RUN), 0/12 | 0/1 (RUN), 0/12 |
+| assert-fusion-combos | 34/34 | 34/34 |
+| assert-fusion-rail | 4/4 | 4/4 |
+| assert-preset-registry | 61/61 | 61/61 |
+| assert-style-contracts | 39/44, 5 failed | 39/44, the same 5 rows |
 
-Browser gates, headless, one browser at a time, lane on :3138 and the snapshot on :3140 from a worktree of 4bba17b:
+The new gate's rows:
+- **IDENT.** Off is byte-identical. The reference is `lib/style-fusion.ts` at `2cc9e98`, loaded from git beside the new one. 41,472 of 41,472 frames are identical, Object.is on every number: 36 relationships (14 shipped, the link built-ins, every sixth combination cell, two of the user's own) x 3 drives x 2 motion modes x 192 clocks. Also 41,472 of 41,472 with the fields absent (a state saved before them). Its control: Link 0.60 vs 0.61 must differ, and does.
+- **CHAOS.** The lag law is exact in 324 of 324. Chaos 1 on Loop moves 26 of 36 relationships (bar 60%). Inert under Motion Off in 324 of 324.
+- **REVEAL.** Smoothstep exact at 1, open at 0, monotone between; checked through the engine on Terminal Gel before the draw.
+- **COMPLETE.** Pulse exact at 801 of 801 times. Bloom peaks at 1.0000 at 0.35 s, area 1.569 against the pulse's 0.505. Off equals never completed.
+- **TIP.** The band is at the front in 99 of 99 reveals, stays on the mark, advances, is absent at 0 and 1, and keeps a brighter band.
+- **PAUSE.** Playing: 0 of 180 frames read paused. A stall holds from frame 38 (began 30). No hold at 0 or 1, no one-frame hiccups.
+- **FIELDS.** 42 of 42 fusion and animated-fusion presets list the five and reset them. 53 of 53 texture, dither, ASCII and stack presets reset them. The three numbers are keyable in the Fusion family.
+- **PANEL** and **WIRE** are source checks.
 
-| gate | lane | snapshot |
-|---|---|---|
-| assert-hand-clock | 13/13 rows, 13/13 must-fails fired, 0 page errors | 10/10, 10/10 |
-| assert-perform, run 1 / run 2 | 11/15, then 10/15 | 13/14 + 1 SELF, then 10/14 + 1 SELF |
-| assert-key-lanes (row 11 base re-pinned, see below) | 15/15 graded, row 11 BLIND | 15/15 graded, row 11 SELF |
-| assert-stroke-strip | 17/18 | 17/18 |
-| assert-take-timeline | 20/21 | 20/21 |
+Must-fails are listed in the gate. One was MISSED on the first run: dropping `fusionPauseHold` from the rail keys did nothing, because the fusion presets set it anyway. FIELDS now also picks the 53 other composition presets, and it fires.
 
-hand-clock must-fails: R11 has two (`lifts-slot-gaps`, `clock-uniform`), counted fired only when both turn it red; both refused the move. R12 `exportpen`: 1/8 clocks, film 4666.7 against take 5024.9. R13 `tip-no-liftholds`: 8 to 40 px per lift. Phase 2's R11 compared `__fsTake.get().slots` (empty with no rows) and called the move itself; it now reads what the picker writes, through the real Camera button. R11 also clears the move's keys after, since R12 and R13 read frames in the lifts it turns in.
+Fixes the gate forced on my own code and instruments, before step 2:
+- Chaos changed 48 of 324 frames under Motion Off. It is now skipped with style time stopped.
+- The IDENT control sat at reveal 0, where every frame is the identity. It now sits at reveal 1.
+- The bloom settle check flagged the step across its own peak. It now starts after the rise.
 
-Reds read as follows:
-- key-paths EXISTING and stroke-timing's own base need 747af8fa0 and b0da66626, which the squashed snapshot does not have. stroke-timing ran with its own `STROKE_TIMING_BASE` knob pointed at the snapshot.
-- perform: 1b inflate, extrude, solid and row 2 are red on the snapshot's second run too, so they swing run to run on this machine (4 cores, SwiftShader). Rod 1b passed 2 of 2 on the snapshot and 1 of 2 on the lane (held 1338.2 ms for a 1377.7 ms dwell). Nothing in this change touches Rod's playback, but I could not prove it here; worth one run on the Mac.
-- key-lanes row 11: my recorded base came from a docked canvas (755x533) and the full run is undocked (755x890), so the row is BLIND. Its intent holds: the lane's five no-key frame hashes equal the snapshot's, 5 of 5.
-- stroke-strip row 0: same cause, the base recorded with `--phase=base` is docked; 18/18 differ on both trees.
-- take-timeline E2: 36.0 rAF ticks/s on the lane and 35.9 and 27.4 on the snapshot, against a bar of 50. Headless on a loaded box.
+## What I could not run
 
-## What I could not run, and how the environment was bent
+- **assert-key-paths EXISTING** and **assert-stroke-timing** (its single RUN row) fail identically before and after. Each reads a commit by hash (`747af8fa0`, `b0da66626`) that this one-commit snapshot does not contain. Their other rows and mutants are unchanged. They need a clone with main's history.
+- **assert-fusion-combo-liveness, -two-dead, -combo-distinct, assert-inflate-fusion** read browser captures under `docs/verification`, which the snapshot leaves out. **assert-custom-presets** imports `jiti`, which is not installed. All fail identically before and after.
+- **No browser** (this lane's brief). Not run: assert-fusion-ui (the dial-fold check), assert-fusion-authoring, assert-key-buttons, assert-motion-customize, assert-layer-flicker. Nobody has seen the new controls, the bloom, the tip band or the pause hold on screen. assert-fusion-ui is the one most likely to move: the panel is taller now, though the new rows sit below the dials it measures.
 
-- `pnpm install --frozen-lockfile` refuses: `pnpm-lock.yaml` lacks `dialkit` and `motion`, which `package.json` lists. Installed with `--no-frozen-lockfile --config.node-linker=hoisted` (the gates import `jiti` directly, which pnpm's default layout does not hoist), then restored the lockfile. Not committed.
-- `npx playwright install` was not needed: Chromium 141 is preinstalled. `scripts/verify/lib/browser.mjs` pins channel `chrome`, so `/opt/google/chrome/chrome` was symlinked to it. Outside the repo.
-- `lsof` in this container cannot map sockets or cwd to pids, so `serverCommit` saw no server. A PATH-only shim answered its two queries from /proc; dev servers were bound to 127.0.0.1. Outside the repo.
-- Bases the snapshot does not carry were recorded from the snapshot server itself, into both trees' `docs/verification` (uncommitted): perform `base-main.json` (`--phase=base --base=4bba17b`), stroke-strip `base-3a211a36d.json` (`--phase=base`), key-lanes `nokeys-base.json` through an uncommitted copy of the gate with `KEYS_BASE` set to 4bba17b (the real one refuses any commit but ea31c5b38). So those rows compare to today's main, not to their named commits.
-- Not run: the rest of the plan's PEN rows beyond what these gates carry, `assert-stroke-timing-browser`, `assert-motion-customize`, `assert-custom-presets`, and any look at the result by eye. No Mac numbers were compared.
+## Questions for the owner
 
-## Next
-
-- Watch Hand Draw on your own drawing with one row set on the strip, on Inflate: the lifts should now hold as still as with no rows.
-- One perform run on the Mac to clear Rod 1b.
-- RUN-QUEUE row for HAND-DRAW-P3 is not written; this log is the record.
+1. **Tip shimmer rides the draw front, not the pen point.** The band travels left to right across the mark as the take plays, which matches writing. A stroke drawn right to left still has its band go left to right. Riding the exact pen point needs the tip's position published in the frame loop. Do you want that next?
+2. **Hold on pause sits in the Fusion panel and acts only while a fusion is on**, because that is where the rows put it. Should dither freeze on pause with no fusion too? If so, it moves to the Dither or Animation panel.
+3. **Chaos is drift in time only**: lag up to 2.6 s at 1. If you want chaos to also loosen the relationships (shuffled strengths, not only timing), that is a second dial, not this one.
+4. **Bloom's numbers** (0.35 s rise, 1.4 s settle, same peak as the pulse) are first guesses for your eye.
