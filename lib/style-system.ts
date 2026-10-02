@@ -4779,6 +4779,13 @@ export function findFusionShapeDef(
  * a change to the pen model that moves the record fails there, not quietly. */
 export const HAND_DRAW_RATE = 3.333
 
+/* DRAWIN-EXTRAS (2026-09-30). The draw-in extras every preset sets, each at
+ * off, so Customize lists them under every draw-in preset and a preset still
+ * fully determines the take. Off is main: nothing mounts and no clock moves. */
+export const DRAW_IN_EXTRAS_OFF = {
+  tipHighlight: 0,
+} as const satisfies Partial<RevealEnvelopeParams>
+
 export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
   {
     id: "authenticDraw",
@@ -4790,7 +4797,7 @@ export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
     motion: {
       drawIn: { order: "asDrawn", overlap: 0, align: "start", unit: "group", reverse: "off" },
       revealWindow: { mode: "grow", length: 0.25 },
-      envelope: { mode: "raw", ease: "linear", delaySeconds: 0, loop: false, reverse: false },
+      envelope: { mode: "raw", ease: "linear", delaySeconds: 0, loop: false, reverse: false, ...DRAW_IN_EXTRAS_OFF },
     },
   },
   {
@@ -4810,7 +4817,7 @@ export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
     motion: {
       drawIn: { order: "asDrawn", overlap: 0, align: "start", unit: "stroke", reverse: "off" },
       revealWindow: { mode: "grow", length: 0.25 },
-      envelope: { mode: "hybrid", clock: "hand", rate: HAND_DRAW_RATE, ease: "linear", delaySeconds: 0, loop: false, reverse: false },
+      envelope: { mode: "hybrid", clock: "hand", rate: HAND_DRAW_RATE, ease: "linear", delaySeconds: 0, loop: false, reverse: false, ...DRAW_IN_EXTRAS_OFF },
     },
   },
   {
@@ -4823,7 +4830,7 @@ export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
     motion: {
       drawIn: { order: "asDrawn", overlap: 0.45, align: "start", unit: "group", reverse: "off" },
       revealWindow: { mode: "grow", length: 0.25 },
-      envelope: { mode: "hybrid", ease: "inOut", delaySeconds: 0, loop: false, reverse: false },
+      envelope: { mode: "hybrid", ease: "inOut", delaySeconds: 0, loop: false, reverse: false, ...DRAW_IN_EXTRAS_OFF },
     },
   },
   {
@@ -4836,7 +4843,7 @@ export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
     motion: {
       drawIn: { order: "asDrawn", overlap: 0, align: "start", unit: "stroke", reverse: "off" },
       revealWindow: { mode: "grow", length: 0.25 },
-      envelope: { mode: "hybrid", ease: "out", delaySeconds: 0, loop: false, reverse: false },
+      envelope: { mode: "hybrid", ease: "out", delaySeconds: 0, loop: false, reverse: false, ...DRAW_IN_EXTRAS_OFF },
     },
   },
   {
@@ -4849,7 +4856,7 @@ export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
     motion: {
       drawIn: { order: "asDrawn", overlap: 0.85, align: "end", unit: "group", reverse: "off" },
       revealWindow: { mode: "grow", length: 0.25 },
-      envelope: { mode: "hybrid", ease: "inOut", delaySeconds: 0.6, loop: false, reverse: false },
+      envelope: { mode: "hybrid", ease: "inOut", delaySeconds: 0.6, loop: false, reverse: false, ...DRAW_IN_EXTRAS_OFF },
     },
   },
   {
@@ -4862,7 +4869,7 @@ export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [
     motion: {
       drawIn: { order: "asDrawn", overlap: 0.2, align: "start", unit: "group", reverse: "off" },
       revealWindow: { mode: "travel", length: 0.3 },
-      envelope: { mode: "hybrid", ease: "linear", delaySeconds: 0.4, loop: true, reverse: false },
+      envelope: { mode: "hybrid", ease: "linear", delaySeconds: 0.4, loop: true, reverse: false, ...DRAW_IN_EXTRAS_OFF },
     },
   },
   {

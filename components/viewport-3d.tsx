@@ -87,6 +87,7 @@ import {
   setPenTipShapeOverride,
   readPenTipShapeOverride,
   TIP_FIELD_UNITS_PER_TEXEL,
+  strokeArcSpans,
   type RevealMode,
   type TimingCharacter,
   type TipField,
@@ -102,6 +103,16 @@ import {
  * this feature walks straight past is that the reveal has TWO consumers, the
  * per-triangle keys and the tip field's `arc` channel, and one idea with two
  * implementations is this repo's most expensive recurring defect. */
+/* DRAWIN-EXTRAS · the glow on the pen's moving end. Where the heads are is
+ * worked out there, from the numbers the reveal already uses. */
+import {
+  tipHeadsAt,
+  tipTracksOf,
+  cumulativeArc,
+  pointAtFrac,
+  TIP_HEADS_MAX,
+  type TipHead,
+} from "@/lib/tip-highlight"
 import {
   buildTimedSchedule,
   easeReveal,
@@ -3970,6 +3981,63 @@ function wrapIndex(geo: THREE.BufferGeometry, on: boolean): THREE.BufferAttribut
   return orig
 }
 
+/* ═══ DRAWIN-EXTRAS · THE TIP HIGHLIGHT'S GLOW ══════════════════════════════
+ * One `Points` draw for every head. Alpha-blended amber, no depth test, drawn
+ * last, so it never hides behind the mark's own faces. Not additive: the page
+ * is near white, and white added to white is nothing (seen on the first
+ * smoke, 2026-09-30: a warm-white additive glow was a speck). It is
+ * NOT a child of the flatten or export group: bounds and GLB export walk those,
+ * and a glow is not part of the object. Its world matrix is copied from the
+ * flatten group each frame instead, so it rides the turn, depth and flip.
+ * `uSize` is the glow's diameter in the group's own units; the vertex stage
+ * turns it into pixels for a perspective or an orthographic camera. */
+const TIP_GLOW_COLOR = new THREE.Color("#ffab1f")
+function makeTipGlow(): THREE.Points {
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(TIP_HEADS_MAX * 3), 3))
+  geo.setDrawRange(0, 0)
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uSize: { value: 0.1 },
+      uHalfH: { value: 400 },
+      uAmount: { value: 0 },
+      uColor: { value: TIP_GLOW_COLOR.clone() },
+    },
+    vertexShader: `
+      uniform float uSize;
+      uniform float uHalfH;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mv;
+        float persp = projectionMatrix[3][3] < 0.5 ? max(-mv.z, 1e-3) : 1.0;
+        gl_PointSize = uSize * projectionMatrix[1][1] * uHalfH / persp;
+      }`,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform float uAmount;
+      void main() {
+        vec2 c = gl_PointCoord * 2.0 - 1.0;
+        float r2 = dot(c, c);
+        if (r2 > 1.0) discard;
+        float a = uAmount * min(1.0, 0.7 * exp(-r2 * 4.0) + 0.35 * (1.0 - smoothstep(0.0, 0.1, r2)));
+        gl_FragColor = vec4(uColor, a);
+      }`,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.NormalBlending,
+  })
+  const pts = new THREE.Points(geo, mat)
+  pts.frustumCulled = false
+  pts.renderOrder = 999
+  pts.matrixAutoUpdate = false
+  pts.matrixWorldAutoUpdate = false
+  return pts
+}
+
+/* Dev readout for assert-drawin-extras.mjs: the heads this frame, in NDC. */
+const TIP_LIVE: { on: boolean; heads: TipHead[]; ndc: number[] } = { on: false, heads: [], ndc: [] }
+
 function AnimatedStrokesInner({
   meshes,
   timelines,
@@ -3994,9 +4062,13 @@ function AnimatedStrokesInner({
   takeKnockout = null,
   revealWindow,
   keyReader,
+  tipHighlight = 0,
 }: {
   meshes: StrokeMeshData[]
   timelines: StrokeTimeline[]
+  /** DRAWIN-EXTRAS · the tip highlight, 0..1. 0 mounts nothing and runs
+   *  nothing, which is main. `lib/tip-highlight.ts`. */
+  tipHighlight?: number
   /**
    * WHICH INTERVAL of the schedule is on screen — `lib/stroke-schedule.ts` §1b.
    *
@@ -4168,6 +4240,30 @@ function AnimatedStrokesInner({
   const letterUniformsRef = useRef<LetterUniforms | null>(null)
   /** The pen TIP's uniforms, captured at compile like the carve's. */
   const penTipUniformsRef = useRef<PenTipUniforms | null>(null)
+  /* DRAWIN-EXTRAS · the tip highlight. Everything below is null at 0. */
+  const tipOn = tipHighlight > 0
+  const tipAmountRef = useRef(tipHighlight)
+  tipAmountRef.current = tipHighlight
+  const tipGlow = useMemo(() => (tipOn ? makeTipGlow() : null), [tipOn])
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") {
+      ;(window as unknown as Record<string, unknown>).__fsTipGlow = {
+        get: () => ({ on: TIP_LIVE.on, heads: TIP_LIVE.heads.map((h) => ({ ...h })), ndc: [...TIP_LIVE.ndc] }),
+      }
+    }
+    return () => {
+      tipGlow?.geometry.dispose()
+      ;(tipGlow?.material as THREE.Material | undefined)?.dispose()
+      TIP_LIVE.on = false
+      TIP_LIVE.heads = []
+      TIP_LIVE.ndc = []
+    }
+  }, [tipGlow])
+  const tipCum = useMemo(() => (tipOn ? strokes.map((s) => cumulativeArc(s.points)) : null), [tipOn, strokes])
+  const tipArcTracks = useMemo(
+    () => (tipOn ? strokeArcSpans(strokes).map((a) => ({ start: a.from, end: a.to })) : null),
+    [tipOn, strokes],
+  )
   /** The baked tip field and the identity that invalidates it. Built LAZILY on
    *  the first frame of a PARTIAL reveal — a page that never draws in (an
    *  export still, a settled hero) must not pay for it, and at 21 ms for the
@@ -7743,6 +7839,73 @@ function AnimatedStrokesInner({
         }
       }
     }
+    /* ═══ DRAWIN-EXTRAS · THE TIP HIGHLIGHT, THIS FRAME ═══════════════════
+     * Skipped whole at 0: `tipGlow` is null and nothing below runs. Each head
+     * is found from the numbers the reveal itself used this frame: the take's
+     * spans under a timed take, else the window's upper edge against the
+     * schedule's tracks, or against the plain arc spans when the schedule
+     * moves nothing. Rod at `grow` computes no beat above, so the beat is
+     * taken here the way the window takes it (`revealDistanceFraction`). */
+    if (tipGlow && tipCum && tipArcTracks) {
+      const knock =
+        process.env.NODE_ENV !== "production"
+          ? (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE
+          : undefined
+      const win =
+        timedNow || beatNow !== null
+          ? winNow
+          : windowAt(
+              winParams,
+              revealDistanceFraction(strokes, playheadRef.current, revealMode, hybridBlend, liftsLandBetweenStrokes(schedNow, winParams.mode)),
+              openingRef?.current === true,
+            )
+      const heads: TipHead[] = tipHeadsAt(
+        win,
+        timedNow && !win.whole && !win.empty
+          ? { spans: sampleTake(timedNow, 0, { lo: 0, hi: win.hi }).spans, reversed: (i) => !!timedNow.base.tracks[i]?.reverse }
+          : null,
+        tipTracksOf(schedNow) ?? tipArcTracks,
+      )
+      const sc = 3 / Math.max(canvasWidth || 1, canvasHeight || 1)
+      const pos = tipGlow.geometry.getAttribute("position") as THREE.BufferAttribute
+      const arr = pos.array as Float32Array
+      let n = 0
+      for (const h of heads) {
+        const pts = strokes[h.stroke]?.points
+        const cum = tipCum[h.stroke]
+        if (!pts || !cum) continue
+        const p = pointAtFrac(pts, cum, knock === "tip-at-start" ? 0 : h.frac)
+        if (!p) continue
+        arr[n * 3] = (p.x - canvasWidth / 2) * sc
+        arr[n * 3 + 1] = -(p.y - canvasHeight / 2) * sc
+        arr[n * 3 + 2] = 0
+        n++
+      }
+      pos.needsUpdate = true
+      tipGlow.geometry.setDrawRange(0, n)
+      const tg = flattenGroupRef.current
+      if (tg) {
+        tg.updateWorldMatrix(true, false)
+        tipGlow.matrixWorld.copy(tg.matrixWorld)
+      }
+      const mat = tipGlow.material as THREE.ShaderMaterial
+      const amount = Math.max(0, Math.min(1, tipAmountRef.current))
+      const nibPx = computeSolidEffectiveThicknessPx((solidParams ?? DEFAULT_SOLID_PARAMS).thickness)
+      mat.uniforms.uAmount.value = knock === "tip-dark" ? 0 : amount
+      mat.uniforms.uSize.value = (nibPx > 0 ? nibPx : 8) * sc * (2 + 2 * amount)
+      mat.uniforms.uHalfH.value = state.gl.domElement.height * 0.5
+      if (process.env.NODE_ENV !== "production") {
+        TIP_LIVE.on = true
+        TIP_LIVE.heads = heads.slice(0, n)
+        TIP_LIVE.ndc.length = 0
+        const v = new THREE.Vector3()
+        for (let k = 0; k < n; k++) {
+          v.set(arr[k * 3], arr[k * 3 + 1], arr[k * 3 + 2]).applyMatrix4(tipGlow.matrixWorld).project(state.camera)
+          TIP_LIVE.ndc.push(v.x, v.y)
+        }
+      }
+    }
+
     /* ANIM-1A3 · WHAT THIS FRAME ACTUALLY DREW, per mesh, read back off the
      * geometry after every write above. `__fsTake.get()` reports this and not
      * the schedule's own slots, so a gate built on it measures the render. */
@@ -7765,6 +7928,7 @@ function AnimatedStrokesInner({
 
   return (
     <>
+      {tipGlow && <primitive object={tipGlow} />}
       {/* DEPTH GROUP — the form's thickness, as a transform.
           Wraps the export group rather than living inside it, so flattening is
           a property of what is on SCREEN and never of what is exported: a GLB
@@ -9161,8 +9325,12 @@ function Scene({
   keyReader,
   orbitView,
   keyLiveRef,
+  tipHighlight = 0,
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
+  /** DRAWIN-EXTRAS · the tip highlight, 0..1. The main canvas and the 3-Up
+   *  compare panels both pass it, like every other draw-in dial. */
+  tipHighlight?: number
   /** ANIM-1A3 · per-stroke timing rows. Null or empty is the shipped path. */
   take?: StrokeTimingTake | null
   /** Dev only: the browser gate's must-fails. See `__fsTake.knockout`. */
@@ -10505,6 +10673,7 @@ function Scene({
             takeKnockout={takeKnockout}
             revealWindow={revealWindow}
             keyReader={keyReader}
+            tipHighlight={tipHighlight}
           />
 
       {/* The host's own draw-in playhead, if it drives one. Mounted before the
@@ -14215,6 +14384,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
                       take={take}
                       takeKnockout={takeKnockout}
                       onTimed={isMaster ? onTimed : undefined}
+                      tipHighlight={revealEnvelope.tipHighlight}
                     />
                   </Canvas>
                 </ViewportErrorBoundary>
@@ -14327,6 +14497,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
                 letterMap={letterMap}
                 drawIn={drawIn}
                 revealWindow={revealWindow}
+                tipHighlight={revealEnvelope.tipHighlight}
                 hideGrid={captureMode}
                 stillExport
               />

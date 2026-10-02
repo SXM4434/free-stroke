@@ -1772,7 +1772,7 @@ export default function Home() {
       // pixel space; timestamps are baked sequentially so the draw-in reveal
       // replays them in order. Used by the automated video script.
       injectStrokes: (
-        polylines: { x: number; y: number }[][],
+        polylines: { x: number; y: number; pressure?: number }[][],
         opts?: { msPerPoint?: number; gapMs?: number },
       ) => {
         const msPerPoint = opts?.msPerPoint ?? 16
@@ -1782,7 +1782,9 @@ export default function Home() {
         for (const poly of polylines) {
           if (poly.length < 2) continue
           const points: Point[] = poly.map((p) => {
-            const pt: Point = { x: p.x, y: p.y, t, pressure: 0.6 }
+            /* DRAWIN-EXTRAS: a gate can hand a pressure per point; without one
+             * every point reads 0.6, as it always has. */
+            const pt: Point = { x: p.x, y: p.y, t, pressure: typeof p.pressure === "number" ? p.pressure : 0.6 }
             t += msPerPoint
             return pt
           })
@@ -1797,6 +1799,10 @@ export default function Home() {
       clearStrokes: () => {
         edit("Clear canvas", null, { rawStrokes: [], processedStrokes: [] })
       },
+      /* DRAWIN-EXTRAS · the envelope, through the same handler the controls
+       * call, so a gate's write takes the same holds and undo step. */
+      setEnvelope: (patch: Partial<RevealEnvelopeParams>) => handleRevealEnvelopeChange(patch),
+      envelope: () => docRef.current.revealEnvelope,
       // DEV capture: drive the Inflate fusion dials (same state the config
       // strip sets) so the verification scripts exercise the real control
       // path instead of a parallel one.
