@@ -96,6 +96,14 @@ async function loadAdapter(edits = []) {
   const tag = `v${modN++}`
   const emit = (file, rewrite) => {
     let src = readFileSync(join(ROOT, "lib/export", file), "utf8")
+    /* GATE_MUTATE_FILE, the same offset edits `_ts-load.mjs` applies, so an
+     * outside driver (assert-export-formats.mjs) can sabotage these modules
+     * too. Unset changes nothing. */
+    const outside = process.env.GATE_MUTATE_FILE ? JSON.parse(readFileSync(process.env.GATE_MUTATE_FILE, "utf8"))[`lib/export/${file}`] : null
+    for (const e of [...(outside ?? [])].sort((x, y) => y.pos - x.pos)) {
+      if (e.was != null && src.slice(e.pos, e.end) !== e.was) throw new Error(`GATE_MUTATE_FILE: stale offset in ${file}`)
+      src = src.slice(0, e.pos) + e.text + src.slice(e.end)
+    }
     for (const [was, now] of edits.filter((e) => e[2] === file)) {
       const first = src.indexOf(was)
       if (first < 0 || src.indexOf(was, first + 1) >= 0) throw new Error(`mutant: ${file} must contain ${JSON.stringify(was)} exactly once`)
