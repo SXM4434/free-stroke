@@ -18,8 +18,10 @@
 // `performed` row. This gate drives it with real pointer events (CDP `Input.dispatchMouseEvent`
 // through `page.mouse`) on the stage's own paths, read off its `d` attributes.
 //
-// WHERE THE EXPECTATIONS COME FROM. Pointer times come from the page's own clock (`e.timeStamp` of
-// every stage pointer event, logged by an init script), never from this script's timers. What a
+// WHERE THE EXPECTATIONS COME FROM. Pointer times come from the clock the stage reads,
+// `performance.now()` in a capture listener ahead of the stage's handler (logged by an init
+// script). During a performance this script DRIVES that clock (CLOUD-FLAKES, `__fsDrive`): each
+// event happens at t0 plus the plan's milliseconds, never at whenever CDP delivered it. What a
 // performance wrote is read from `__fsTake.get()`. What the played take drew is Rod's per-stroke
 // drawRange, `get().live.meshes[i].count`, after `__revealHarness.setProgress`. On Inflate, Extrude
 // and Solid (row 1b, F121) no mesh count names one stroke, so it is the inked share of stroke D's
@@ -120,9 +122,38 @@ const counters = () => {
     if (this === w && t === "keydown") c.kdRem++
     return rem.call(this, t, ...a)
   }
+  /* CLOUD-FLAKES · THE STAGE'S CLOCK, DRIVEN. `components/perform-take.tsx` stamps every sample
+   * with `performance.now()` read in its handlers and in a per-frame loop, so what a performance
+   * writes is wall time at DELIVERY: a CDP move held up behind a slow SwiftShader frame lands late
+   * and leaves a flat run in the pace that nobody performed. Row 2's "no flat run of 200 ms" and
+   * row 1b's "held within one frame of the dwell" were graded on that noise. This makes
+   * `performance.now` drivable: `__fsDrive.begin(t)` freezes it at t, `__fsDrive.at(t)` sets the
+   * time the NEXT stage pointer event happens at, applied in this capture listener before the
+   * stage's own handler runs, and `__fsDrive.end()` hands it back to the real clock. Between
+   * events it stands still, so the stage's frame loop samples the time of the last event, as a
+   * held pen does on an infinitely fast machine. Undriven (the default) it is the real clock. */
+  const perf = w.performance
+  const realNow = Performance.prototype.now.bind(perf)
+  let virt = null
+  let pending = null
+  perf.now = () => (virt === null ? realNow() : virt)
+  w.__fsDrive = {
+    begin: (t) => { virt = t; pending = null },
+    at: (t) => { pending = t },
+    end: () => { virt = null; pending = null },
+    real: () => realNow(),
+    driven: () => virt,
+  }
+  /* The log reads the stage's own clock, so the dwell a row expects is the dwell the stage
+   * recorded. It used to read `e.timeStamp`, the event's creation time, a second clock that a
+   * busy main thread pulls away from the handler's. */
   w.__ptrLog = []
   for (const type of ["pointerdown", "pointermove", "pointerup"])
-    add.call(w, type, (e) => e.target?.closest?.("[data-perform-stage]") && w.__ptrLog.push({ type, t: e.timeStamp }), true)
+    add.call(w, type, (e) => {
+      if (!e.target?.closest?.("[data-perform-stage]")) return
+      if (virt !== null && pending !== null) (virt = pending), (pending = null)
+      w.__ptrLog.push({ type, t: perf.now() })
+    }, true)
 }
 let context = null
 let page = null
@@ -188,36 +219,64 @@ const at = (pts, arc, f) => {
  * Perform stroke i. `plan` is a list of `{ to, steps, ms }` moves along the arc and `{ dwell }`
  * holds. `onMove` runs after every move. Leaves the pointer up; returns the page's pointer log.
  */
+/* CLOUD-FLAKES: every pointer event of a performance happens at a time this script sets on the
+ * stage's driven clock (`__fsDrive` in `counters`): t0 plus the plan's own milliseconds, so a 1 s
+ * dwell is 1000 ms on the clock the stage reads however late the next move is delivered. t0 is
+ * a whole millisecond and every step a whole number of them, so each difference the stage takes
+ * is exact and two runs write the same take. The real waits stay, so the page lives through the
+ * performance at the old pace; they no longer decide what is recorded. */
 const perform = async (i, plan, onMove) => {
   const { pts } = (await stage())[i]
   const arc = arcOf(pts)
   let f = 0
-  const [x0, y0] = at(pts, arc, 0)
-  await page.mouse.move(x0, y0)
-  await page.mouse.down()
-  for (const s of plan) {
-    if (s.dwell) {
-      await page.waitForTimeout(s.dwell)
-      continue
+  const t0 = await page.evaluate(() => {
+    const t = Math.ceil(window.__fsDrive.real()) + 1
+    window.__fsDrive.begin(t)
+    return t
+  })
+  let off = 0
+  const at_ = () => page.evaluate((t) => window.__fsDrive.at(t), t0 + off)
+  try {
+    const [x0, y0] = at(pts, arc, 0)
+    await page.mouse.move(x0, y0)
+    await at_()
+    await page.mouse.down()
+    for (const s of plan) {
+      if (s.dwell) {
+        await page.waitForTimeout(s.dwell)
+        off += s.dwell
+        continue
+      }
+      if (s.xy) {
+        await at_()
+        await page.mouse.move(s.xy[0], s.xy[1])
+        if (onMove) await onMove(s)
+        continue
+      }
+      const from = f
+      for (let k = 1; k <= s.steps; k++) {
+        const g = from + ((s.to - from) * k) / s.steps
+        const [x, y] = at(pts, arc, Math.min(g, 1))
+        await at_()
+        await page.mouse.move(x, y)
+        if (onMove) await onMove({ f: g, x, y })
+        const ms = typeof s.ms === "function" ? s.ms(k) : s.ms ?? 16
+        if (ms) await page.waitForTimeout(ms)
+        off += ms
+      }
+      f = s.to
     }
-    if (s.xy) {
-      await page.mouse.move(s.xy[0], s.xy[1])
-      if (onMove) await onMove(s)
-      continue
-    }
-    const from = f
-    for (let k = 1; k <= s.steps; k++) {
-      const g = from + ((s.to - from) * k) / s.steps
-      const [x, y] = at(pts, arc, Math.min(g, 1))
-      await page.mouse.move(x, y)
-      if (onMove) await onMove({ f: g, x, y })
-      const ms = typeof s.ms === "function" ? s.ms(k) : s.ms ?? 16
-      if (ms) await page.waitForTimeout(ms)
-    }
-    f = s.to
+    await at_()
+    await page.mouse.up()
+    await settle(120)
+  } finally {
+    // Hand the clock back only once the real one has passed the driven one: nothing sees time go back.
+    await page.evaluate(async () => {
+      const d = window.__fsDrive
+      while (d.driven() !== null && d.real() < d.driven()) await new Promise((r) => setTimeout(r, 10))
+      d.end()
+    })
   }
-  await page.mouse.up()
-  await settle(120)
   return ptr()
 }
 const keep = async () => {
