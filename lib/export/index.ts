@@ -34,25 +34,23 @@
  * it exists to film (`docs/explainers/38-*`).
  *
  * The independence is still real and still load-bearing —
- * `assert-export-live.mjs` serves these files to a page as standalone ES
+ * `assert-export-live.mjs` serves these six files to a page as standalone ES
  * modules with nothing but relative specifiers rewritten, so an `@/lib/...`
  * import here breaks that gate outright. Facts about the app that this module
  * needs therefore arrive as PARAMETERS (`revealEnds`) or as gated copies
  * (`EXPORT_PAPER`, `REVEAL_WINDOW_ENDS`), never as imports.
  */
 import { planFrames, describePlan, type ExportTimebase, type FramePlan, type RevealEnds } from "./frame-plan"
-import { ApngEncoder, GifEncoder, WebCodecsWebmEncoder, pickWebmCodec, type AnimationEncoder } from "./encoders"
-import { GIF_MAX_FPS } from "./gif"
+import { ApngEncoder, WebCodecsWebmEncoder, pickWebmCodec, type AnimationEncoder } from "./encoders"
 import { recordAnimation, exportFilename, type ExportHost, type RecordResult } from "./recorder"
 
 export * from "./frame-plan"
 export * from "./webm"
 export * from "./apng"
-export * from "./gif"
 export * from "./encoders"
 export * from "./recorder"
 
-export type ExportFormat = "webm" | "apng" | "gif" | "auto"
+export type ExportFormat = "webm" | "apng" | "auto"
 
 /**
  * The studio ground an opaque export is composited onto.
@@ -117,22 +115,14 @@ export interface ExportAnimationResult extends RecordResult {
  * one thing an export may never be is a lie about what it contains.
  */
 function resolveFormat(requested: ExportFormat, transparent: boolean): ExportFormat {
-  /* GIF CARRIES ITS OWN TRANSPARENCY (one index, on or off), so it is the one
-   * format a transparent request does not move. */
-  if (requested === "gif") return "gif"
   if (transparent) return "apng"
   return requested
 }
 
 export async function exportAnimation(opts: ExportAnimationOptions): Promise<ExportAnimationResult> {
+  const fps = opts.fps ?? 30
   const scale = opts.scale ?? 2
   const transparent = !!opts.transparent
-  const wanted = resolveFormat(opts.format ?? "auto", transparent)
-  /* A GIF DELAY IS WHOLE CENTISECONDS AND BROWSERS PLAY ANYTHING UNDER 2 AS 10,
-   * so a 60 fps GIF would play at about a fifth of its speed. The plan is made
-   * at GIF's ceiling instead, and the result says so. */
-  const fpsAsked = opts.fps ?? 30
-  const fps = wanted === "gif" ? Math.min(fpsAsked, GIF_MAX_FPS) : fpsAsked
 
   const plan = planFrames({
     penDurationMs: opts.penDurationMs,
@@ -157,14 +147,10 @@ export async function exportAnimation(opts: ExportAnimationOptions): Promise<Exp
   const height = probe.height - (probe.height % 2)
   if (probe.kind === "bitmap") probe.bitmap.close()
 
+  const wanted = resolveFormat(opts.format ?? "auto", transparent)
   let encoder: AnimationEncoder
   let fellBack = false
-  if (wanted === "gif") {
-    encoder = new GifEncoder(width, height, 1000 / fps, {
-      transparent,
-      reserve: transparent ? [] : [opts.background ?? EXPORT_PAPER],
-    })
-  } else if (wanted === "apng") {
+  if (wanted === "apng") {
     encoder = new ApngEncoder(width, height, 1000 / fps)
   } else {
     const choice = await pickWebmCodec(width, height, fps)
@@ -183,11 +169,7 @@ export async function exportAnimation(opts: ExportAnimationOptions): Promise<Exp
    * video export composites the same paper back in rather than handing the
    * codec an alpha channel it will silently resolve to black. */
   const background =
-    opts.background !== undefined
-      ? opts.background
-      : (encoder.id === "apng" || encoder.id === "gif") && transparent
-        ? null
-        : EXPORT_PAPER
+    opts.background !== undefined ? opts.background : encoder.id === "apng" && transparent ? null : EXPORT_PAPER
 
   const res = await recordAnimation({
     plan,
@@ -200,12 +182,6 @@ export async function exportAnimation(opts: ExportAnimationOptions): Promise<Exp
     hasAnimatedStyleLayer: opts.hasAnimatedStyleLayer,
   })
 
-  if (fps !== fpsAsked) {
-    res.warnings.unshift(`GIF plays at ${fps} fps at most, so the GIF was made at ${fps} fps instead of ${fpsAsked}.`)
-  }
-  if (encoder instanceof GifEncoder && encoder.clampedDelays > 0) {
-    res.warnings.push(`${encoder.clampedDelays} GIF frames were held for the 2 cs minimum a browser will play.`)
-  }
   if (fellBack) {
     res.warnings.unshift("This browser has no WebCodecs video encoder, so the export is an animated PNG instead of a video.")
   }

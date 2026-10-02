@@ -3,7 +3,6 @@
  *
  *   WebCodecsWebmEncoder   VP9/VP8 in WebM. The thing you post.
  *   ApngEncoder            Lossless RGBA with alpha. The thing you composite.
- *   GifEncoder             256 colours a frame, plays anywhere. The thing you paste.
  *
  * Both take frames as "whatever the viewport handed us" — a canvas, an
  * ImageBitmap, or a PNG blob — because the app's existing grab
@@ -25,7 +24,6 @@
  */
 import { WebmMuxer, type WebmCodec } from "./webm"
 import { ApngWriter } from "./apng"
-import { GifWriter } from "./gif"
 
 /* ------------------------------------------------------------------ */
 /*  Frames, in whatever shape the host can cheaply produce            */
@@ -46,7 +44,7 @@ export interface EncoderFrame {
 }
 
 export interface AnimationEncoder {
-  readonly id: "webm" | "apng" | "gif"
+  readonly id: "webm" | "apng"
   readonly mimeType: string
   readonly extension: string
   addFrame(frame: EncoderFrame): Promise<void>
@@ -274,79 +272,6 @@ export class ApngEncoder implements AnimationEncoder {
     const img = ctx.getImageData(0, 0, this.width, this.height)
     await this.writer.addFrame({
       rgba: new Uint8Array(img.data.buffer, img.data.byteOffset, img.data.byteLength),
-      delayMs: frame.durationUs > 0 ? frame.durationUs / 1000 : this.frameIntervalMs,
-    })
-  }
-
-  async finish(): Promise<Blob> {
-    const bytes = this.writer.finish()
-    return new Blob([bytes as unknown as BlobPart], { type: this.mimeType })
-  }
-
-  dispose() {
-    this.scratch = null
-    this.ctx = null
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/*  GIF                                                               */
-/* ------------------------------------------------------------------ */
-
-/**
- * Same scratch-canvas readback as APNG, into `GifWriter`. `reserve` is the
- * ground the recorder composites onto, so the paper keeps an exact palette
- * entry in every frame (see `gif.ts`).
- */
-export class GifEncoder implements AnimationEncoder {
-  readonly id = "gif" as const
-  readonly mimeType = "image/gif"
-  readonly extension = "gif"
-
-  private writer: GifWriter
-  private scratch: HTMLCanvasElement | OffscreenCanvas | null = null
-  private ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null
-
-  constructor(
-    private readonly width: number,
-    private readonly height: number,
-    private readonly frameIntervalMs: number,
-    opts: { transparent?: boolean; reserve?: string[]; loops?: number } = {},
-  ) {
-    this.writer = new GifWriter({ width, height, loops: opts.loops ?? 0, transparent: opts.transparent, reserve: opts.reserve })
-  }
-
-  /** Frames whose delay was raised to GIF's 2 cs floor. */
-  get clampedDelays() {
-    return this.writer.clampedDelays
-  }
-
-  private ensureCtx() {
-    if (this.ctx) return this.ctx
-    if (typeof OffscreenCanvas !== "undefined") {
-      const c = new OffscreenCanvas(this.width, this.height)
-      this.scratch = c
-      this.ctx = c.getContext("2d", { willReadFrequently: true })
-    } else {
-      const c = document.createElement("canvas")
-      c.width = this.width
-      c.height = this.height
-      this.scratch = c
-      this.ctx = c.getContext("2d", { willReadFrequently: true })
-    }
-    if (!this.ctx) throw new Error("gif: no 2d context")
-    return this.ctx
-  }
-
-  async addFrame(frame: EncoderFrame): Promise<void> {
-    const ctx = this.ensureCtx()
-    const paintable = await toPaintable(frame.source)
-    ctx.clearRect(0, 0, this.width, this.height)
-    ctx.drawImage(paintable as CanvasImageSource, 0, 0, this.width, this.height)
-    releasePaintable(paintable, frame.source)
-    const img = ctx.getImageData(0, 0, this.width, this.height)
-    this.writer.addFrame({
-      rgba: img.data,
       delayMs: frame.durationUs > 0 ? frame.durationUs / 1000 : this.frameIntervalMs,
     })
   }

@@ -100,7 +100,7 @@ export interface RevealEnds {
  *
  * These four rows are `windowAt(mode, 0)` and `windowAt(mode, 1)` read off that
  * file's own model. `lib/export/` deliberately imports no app module — it is
- * served to `assert-export-live.mjs` as standalone ES modules with nothing
+ * served to `assert-export-live.mjs` as six standalone ES modules with nothing
  * but relative specifiers rewritten, and an `@/lib/...` import would break that
  * gate outright — so the copy cannot be avoided. It CAN be gated, and it is:
  * `assert-export-window.mjs` recomputes every cell from the real `windowAt` and

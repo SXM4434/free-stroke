@@ -176,7 +176,7 @@ import {
 import { assignLetters } from "@/lib/hero-letters"
 import { createPortal } from "react-dom"
 import { LiveTakeTimeline, TransportRow, TimingNote, DrawInBody, type TransportRowProps } from "@/components/workspace/timeline-panel"
-import { ExportPanel, type ExportPanelProps, type VideoFormat } from "@/components/workspace/export-panel"
+import { ExportPanel, type ExportPanelProps } from "@/components/workspace/export-panel"
 import { useDockHost, useHasDock } from "@/components/workspace/dock-hosts"
 import { DrawInTimingControls, REVEAL_EASES, OPEN_ANIMATION_PANEL_EVENT } from "@/components/draw-in-timing-controls"
 import { useTakeTransport, useTransportSlot, createTakeTransport, useProgressValue, unEaseReveal, revealModeOf, transportLengths, seamWindowOf, type ProgressStore, type TakeTransport } from "@/lib/take-transport"
@@ -264,7 +264,7 @@ import { FREE_STROKE, type RegisterLighting } from "@/lib/registers"
  * feature in a list. Nothing in `lib/export/` imports React, three or this file,
  * so the dependency runs one way: the component drives the exporter, never the
  * other way round. */
-import { exportAnimation, planFrames, describePlan, revealEndsFor, EXPORT_PAPER, GIF_MAX_FPS, type ExportTimebase } from "@/lib/export"
+import { exportAnimation, planFrames, describePlan, revealEndsFor, EXPORT_PAPER, type ExportTimebase } from "@/lib/export"
 import { useStrokeTake, type KeyLiveValues } from "@/components/stroke-strip"
 import { KEY_PROPERTIES, sampleKeys, revealClockMs, keysEndMs, validateKeys, type TakeKeys, type KeySample } from "@/lib/keyframes"
 import { flipPoseAt, type FlipDirection, type FlipOpts } from "@/lib/flip-pose"
@@ -11073,10 +11073,6 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   const [videoFps, setVideoFps] = useState(30)
   const [videoScale, setVideoScale] = useState(1)
   const [videoTransparent, setVideoTransparent] = useState(false)
-  /* THE FILE TYPE, beside PNG, Video and GLB rather than in a panel of its own.
-   * `webm` is the shipped default and keeps its APNG fallback where a browser
-   * has no WebCodecs; `gif` and `apng` are asked for by name. */
-  const [videoFormat, setVideoFormat] = useState<VideoFormat>("webm")
   const [videoTimebase, setVideoTimebase] = useState<ExportTimebase>("pen")
   const [videoFixedSeconds, setVideoFixedSeconds] = useState(3)
   const [videoPanelOpen, setVideoPanelOpen] = useState(false)
@@ -13246,7 +13242,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
      * indistinguishable from the still. `_anim` in the stem says which it is.
      * `lib/export` has a filename law of its own (`exportFilename` there) and
      * it is deliberately NOT used — one naming law per app, and this is it. */
-    (ext: "glb" | "png" | "webm" | "gif", kind?: "anim") => {
+    (ext: "glb" | "png" | "webm", kind?: "anim") => {
       const now = new Date()
       const pad = (n: number) => String(n).padStart(2, "0")
       const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
@@ -13571,7 +13567,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
          * not — and APNG unconditionally when the user asks for transparency,
          * because a video cannot carry alpha and the module refuses to write an
          * opaque file with a transparent label. */
-        format: priorGround ? "webm" : videoFormat === "webm" ? "auto" : videoFormat,
+        format: priorGround ? "webm" : "auto",
         /* THE TRANSPORT IS PART OF THE PICTURE. Speed, Reverse and Delay are
          * what the user judged the animation with, so the film is exported with
          * them rather than with a second set of defaults nobody chose. Loop is
@@ -13696,7 +13692,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         },
       })
 
-      const filename = exportFilename(res.encoderId === "webm" ? "webm" : res.encoderId === "gif" ? "gif" : "png", "anim")
+      const filename = exportFilename(res.encoderId === "webm" ? "webm" : "png", "anim")
       download(res.blob, filename)
       /* SAME ID — this REPLACES the progress toast rather than stacking under
        * it, so the thing that said "rendering" is the thing that says where the
@@ -13760,7 +13756,6 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     videoFps,
     videoScale,
     videoTransparent,
-    videoFormat,
     speed,
     revealReverse,
     revealDelaySeconds,
@@ -13893,8 +13888,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     if (totalDuration <= 0) return "Draw a stroke to see how long the film will be."
     const plan = planFrames({
       penDurationMs: exportMs,
-      /* The plan the GIF will actually get, at GIF's own frame-rate ceiling. */
-      fps: videoFormat === "gif" ? Math.min(videoFps, GIF_MAX_FPS) : videoFps,
+      fps: videoFps,
       timebase: videoTimebase,
       fixedDurationMs: videoFixedSeconds * 1000,
       speed,
@@ -13913,7 +13907,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         : {}),
     })
     return describePlan(plan)
-  }, [exportMs, videoFps, videoFormat, videoTimebase, videoFixedSeconds, speed, revealReverse, revealDelaySeconds, revealWindow, seamWindow])
+  }, [exportMs, videoFps, videoTimebase, videoFixedSeconds, speed, revealReverse, revealDelaySeconds, revealWindow, seamWindow])
 
   /* THE DRAWER'S DOOR INTO THE DOCK. Until 2026-09-26 the draw-in controls
    * also lived in a Timing popover over the canvas, and its title once landed
@@ -14128,8 +14122,6 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     setVideoScale,
     videoTransparent,
     setVideoTransparent,
-    videoFormat,
-    setVideoFormat,
     videoPanelOpen,
     setVideoPanelOpen,
     hasAnimatedStyleLayer,

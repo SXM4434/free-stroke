@@ -20,9 +20,6 @@ import type { ExportTimebase } from "@/lib/export"
 
 export type PngScale = { value: number; label: string; note: string }
 
-/** The animated file types the Video button writes. */
-export type VideoFormat = "webm" | "gif" | "apng"
-
 export type ExportPanelProps = {
   /** The container the popovers' outside-click test reads. */
   containerRef: React.RefObject<HTMLDivElement | null>
@@ -59,8 +56,6 @@ export type ExportPanelProps = {
   setVideoScale: (s: number) => void
   videoTransparent: boolean
   setVideoTransparent: (v: boolean) => void
-  videoFormat: VideoFormat
-  setVideoFormat: (f: VideoFormat) => void
   videoPanelOpen: boolean
   setVideoPanelOpen: (f: (v: boolean) => boolean) => void
   hasAnimatedStyleLayer: boolean
@@ -165,7 +160,7 @@ export function ExportPanel(p: ExportPanelProps) {
             ? "Stop the export"
             : p.compare3Up
               ? "Leave 3-Up compare to save a film. An export is one view, not three"
-              : `Save the animation as ${videoFileLabel(p.videoFormat, p.videoTransparent)}. ${p.videoPlanNote}`
+              : `Save the animation as ${p.videoTransparent ? "an animated PNG" : "a video"}. ${p.videoPlanNote}`
         }
         className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium tabular-nums text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
       >
@@ -233,17 +228,6 @@ export function ExportPanel(p: ExportPanelProps) {
           </div>
 
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Format
-          </div>
-          <div className="mb-1.5 flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
-            {(["webm", "gif", "apng"] as VideoFormat[]).map((f) => (
-              <button key={f} type="button" onClick={() => p.setVideoFormat(f)} className={seg(p.videoFormat === f)}>
-                {f === "webm" ? "WebM" : f === "gif" ? "GIF" : "APNG"}
-              </button>
-            ))}
-          </div>
-
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Frame rate
           </div>
           <div className="mb-1.5 flex items-center rounded-lg border border-border bg-muted/50 p-0.5">
@@ -283,7 +267,9 @@ export function ExportPanel(p: ExportPanelProps) {
               larger. Saying so is the difference between a setting and a
               surprise. */}
           <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">
-            {videoFormatNote(p.videoFormat, p.videoTransparent, p.videoFps)}
+            {p.videoTransparent
+              ? "Animated PNG (.png), lossless, keeps alpha, no contact shadow. Larger than a video, and the only format that can carry a see-through ground."
+              : "WebM video (.webm) on the studio ground, exactly as you see it."}
           </div>
           {p.hasAnimatedStyleLayer && (
             <div className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">
@@ -333,26 +319,4 @@ export function ExportPanel(p: ExportPanelProps) {
       )}
     </div>
   )
-}
-
-/** What the Video button will write, for its title. */
-function videoFileLabel(format: VideoFormat, transparent: boolean): string {
-  if (format === "gif") return transparent ? "a transparent GIF" : "a GIF"
-  if (format === "apng" || transparent) return "an animated PNG"
-  return "a video"
-}
-
-/* NAMES MUST MATCH BEHAVIOUR, so the file each pick writes is stated rather
-   than implied, cost included. */
-function videoFormatNote(format: VideoFormat, transparent: boolean, fps: number): string {
-  if (format === "gif") {
-    const rate = fps > 50 ? " GIF plays at 50 fps at most, so a 60 fps pick is made at 50." : ""
-    return transparent
-      ? `GIF (.gif), 256 colours a frame, no dithering. Each pixel is either ink or see-through, so soft edges go hard.${rate}`
-      : `GIF (.gif) on the studio ground, 256 colours a frame. The paper and flat ink keep their exact colour and nothing is dithered, so the ground stays clean.${rate}`
-  }
-  if (format === "apng" || transparent) {
-    return "Animated PNG (.png), lossless, keeps alpha, no contact shadow. Larger than a video, and the only format that can carry a see-through ground."
-  }
-  return "WebM video (.webm) on the studio ground, exactly as you see it."
 }
