@@ -20,6 +20,8 @@ import {
   viewPresetBlockers,
   presetStateGap,
   type FusionDrive,
+  type FusionCompletion,
+  type FusionPauseHold,
 } from "@/lib/style-system"
 import { KeySpot, isKeyablePath } from "@/components/key-button"
 import { KEY_UI_MUTANT } from "@/lib/style-key-meta"
@@ -1949,6 +1951,20 @@ const FUSION_DRIVES: { id: FusionDrive; label: string; blurb: string }[] = [
   },
 ]
 
+/* Row 82's completion behaviour and Phase 23's bloom, as one choice. */
+const FUSION_COMPLETIONS: { id: FusionCompletion; label: string; blurb: string }[] = [
+  { id: "pulse", label: "Pulse", blurb: "One quick shared kick through every linked system when the draw completes." },
+  { id: "bloom", label: "Bloom", blurb: "The fused systems swell together as the draw completes, then settle back slowly." },
+  { id: "off", label: "Off", blurb: "No completion accent. The relationship carries on as it was." },
+]
+
+/* Phase 23's "dither freezing on pause". */
+const FUSION_PAUSE_HOLDS: { id: FusionPauseHold; label: string; blurb: string }[] = [
+  { id: "off", label: "Off", blurb: "Pausing the draw-in leaves the surface moving." },
+  { id: "dither", label: "Dither", blurb: "Pausing the draw-in part way holds the dither still until it plays again." },
+  { id: "surface", label: "Surface", blurb: "Pausing the draw-in part way holds the dither, texture, ASCII and the fusion itself." },
+]
+
 /* ---- USER-AUTHORED FUSION: the authoring surface ------------------------
  *
  * WHY THIS IS HERE AND NOT IN A "SAVE PRESET" BUTTON.
@@ -2851,7 +2867,7 @@ function FusionControl({
       )}
       </Field>
 
-      <Field k={["fusionDrive", "fusionAnimationEnabled", "fusionIntensity", "fusionSwing", "fusionAnimationSpeed"]} group>
+      <Field k={["fusionDrive", "fusionAnimationEnabled", "fusionIntensity", "fusionSwing", "fusionAnimationSpeed", "fusionChaos", "fusionRevealInfluence", "fusionTipShimmer", "fusionCompletion", "fusionPauseHold"]} group>
       <div
         className={`flex flex-col gap-3 border-t border-border pt-2.5 ${
           on ? "" : "pointer-events-none opacity-50"
@@ -2955,6 +2971,126 @@ function FusionControl({
               event cadence.
             </span>
           </label>
+          </Field>
+        </div>
+
+        {/* ROW 82 AND THE PHASE 23 SYNC LIST (coverage item 12). Chaos is how
+            far the fused systems drift from each other; Reveal is how much the
+            draw gates the relationship; Tip shimmer rides the draw front. At
+            0, 1 and 0 they change nothing, and so do Pulse and Off below. */}
+        <div className="grid max-w-3xl grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-3">
+          <Field k={"fusionChaos"}>
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>
+              Chaos <span className="text-foreground">{styleState.fusionChaos.toFixed(2)}</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={styleState.fusionChaos}
+              onChange={(e) => setStyleState((s) => ({ ...s, fusionChaos: Number(e.target.value) }))}
+              className="fs-slider w-full"
+              disabled={!on}
+              data-fusion-chaos
+            />
+            <span className="text-[10px] leading-relaxed text-muted-foreground">
+              How far the fused systems drift from each other. 0 keeps them in step and readable;
+              1 lets each one breathe, arrive and fire on its own lag.
+            </span>
+          </label>
+          </Field>
+
+          <Field k={"fusionRevealInfluence"}>
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>
+              Reveal <span className="text-foreground">{styleState.fusionRevealInfluence.toFixed(2)}</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={styleState.fusionRevealInfluence}
+              onChange={(e) => setStyleState((s) => ({ ...s, fusionRevealInfluence: Number(e.target.value) }))}
+              className="fs-slider w-full"
+              disabled={!on}
+              data-fusion-reveal
+            />
+            <span className="text-[10px] leading-relaxed text-muted-foreground">
+              How much the draw-in gates the link. 1 locks the systems together as the stroke
+              draws; 0 runs them at full strength from the first frame.
+            </span>
+          </label>
+          </Field>
+
+          <Field k={"fusionTipShimmer"}>
+          <label className="flex flex-col gap-1">
+            <span className={fieldLabelClass}>
+              Tip shimmer <span className="text-foreground">{styleState.fusionTipShimmer.toFixed(2)}</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={styleState.fusionTipShimmer}
+              onChange={(e) => setStyleState((s) => ({ ...s, fusionTipShimmer: Number(e.target.value) }))}
+              className="fs-slider w-full"
+              disabled={!on}
+              data-fusion-tip
+            />
+            <span className="text-[10px] leading-relaxed text-muted-foreground">
+              A shine that rides the draw-in front while the take plays. 0 is off.
+            </span>
+          </label>
+          </Field>
+        </div>
+
+        <div className="grid max-w-3xl grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+          <Field k={"fusionCompletion"}>
+          <div>
+            <span className={fieldLabelClass}>Completion. What the fusion does when the draw finishes.</span>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {FUSION_COMPLETIONS.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setStyleState((s) => ({ ...s, fusionCompletion: c.id }))}
+                  aria-pressed={styleState.fusionCompletion === c.id}
+                  className={pillClass(styleState.fusionCompletion === c.id)}
+                  title={c.blurb}
+                  disabled={!on}
+                  data-fusion-completion={c.id}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          </Field>
+
+          <Field k={"fusionPauseHold"}>
+          <div>
+            <span className={fieldLabelClass}>Hold on pause. What stands still while the draw-in is paused.</span>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {FUSION_PAUSE_HOLDS.map((h) => (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => setStyleState((s) => ({ ...s, fusionPauseHold: h.id }))}
+                  aria-pressed={styleState.fusionPauseHold === h.id}
+                  className={pillClass(styleState.fusionPauseHold === h.id)}
+                  title={h.blurb}
+                  disabled={!on}
+                  data-fusion-pause-hold={h.id}
+                >
+                  {h.label}
+                </button>
+              ))}
+            </div>
+          </div>
           </Field>
         </div>
       </div>

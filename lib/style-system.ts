@@ -296,6 +296,27 @@ export type FusionPreset =
 export type FusionDrive = "loop" | "arc" | "burst"
 
 /**
+ * What a fusion does the moment the draw-in completes (PRD §4, "completion
+ * behavior"; coverage rows 82 and 83).
+ *
+ *   pulse  the shared decaying kick every relationship has always had (today)
+ *   bloom  Phase 23's "fusion bloom at completion": a slower rise and a longer
+ *          settle, so the fused systems swell together and then come back
+ *   off    no completion accent; the relationship carries on as it was
+ */
+export type FusionCompletion = "pulse" | "bloom" | "off"
+
+/**
+ * Phase 23's "dither freezing on pause". While the draw-in is paused part way
+ * through a take, the chosen layers hold the phase they had when it paused.
+ *
+ *   off      nothing holds (today)
+ *   dither   the threshold matrix holds still
+ *   surface  dither, texture and ASCII hold, and so does the fusion itself
+ */
+export type FusionPauseHold = "off" | "dither" | "surface"
+
+/**
  * StackAnimationType — how the WHOLE layer group animates as a container.
  * See lib/style-stack.ts. Distinct from per-layer animation (each layer moving
  * on its own) and from fusion animation (layers influencing each other).
@@ -546,6 +567,30 @@ export interface StyleState {
    */
   fusionSwing: number
   /**
+   * CHAOS, 0..1. How far the fused systems drift from each other in time. 0 is
+   * today: every system rides the one drive in lockstep, which is what keeps a
+   * fusion readable. Above 0 each system (texture, dither, ASCII, the surface)
+   * runs the same relationship on its own lagged clock, up to
+   * `FUSION_CHAOS_LAG` seconds behind at 1, so they breathe, arrive and fire
+   * apart. See `driftFusionFrame` in lib/style-fusion.ts.
+   */
+  fusionChaos: number
+  /**
+   * REVEAL INFLUENCE, 0..1. How much the draw-in gates the relationship. 1 is
+   * today: the systems lock together as the stroke draws. 0 runs them at full
+   * strength from the first frame of the take.
+   */
+  fusionRevealInfluence: number
+  /** What the fusion does when the draw-in completes. See FusionCompletion. */
+  fusionCompletion: FusionCompletion
+  /**
+   * SHIMMER RIDES THE TIP, 0..1 (Phase 23). A shine band that travels with the
+   * draw-in front while the take plays. 0 is off.
+   */
+  fusionTipShimmer: number
+  /** Which layers hold still while the draw-in is paused. See FusionPauseHold. */
+  fusionPauseHold: FusionPauseHold
+  /**
    * THE USER'S OWN FUSIONS. Each is a named set of authored relationships (see
    * lib/style-fusion.ts). Deliberately NOT in COMPOSITION_RAIL_KEYS: selecting
    * any other preset resets the composition rails, and a rail reset that also
@@ -686,6 +731,11 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   fusionAnimationSpeed: 1,
   fusionIntensity: 0.5,
   fusionSwing: 1,
+  fusionChaos: 0,
+  fusionRevealInfluence: 1,
+  fusionCompletion: "pulse",
+  fusionTipShimmer: 0,
+  fusionPauseHold: "off",
   customFusions: [],
   customPresets: [],
 
@@ -772,6 +822,9 @@ export const STYLE_RANGES: Readonly<Record<StyleNumericPath, StyleRange>> = {
   fusionAnimationSpeed: { min: 0.1, max: 3, step: 0.05 },
   fusionIntensity: { min: 0, max: 1, step: 0.05 },
   fusionSwing: { min: 0, max: 1, step: 0.05 },
+  fusionChaos: { min: 0, max: 1, step: 0.05 },
+  fusionRevealInfluence: { min: 0, max: 1, step: 0.05 },
+  fusionTipShimmer: { min: 0, max: 1, step: 0.05 },
   styleLoopSeconds: { min: 0.5, max: 12, step: 0.5 },
 }
 
@@ -3924,6 +3977,15 @@ const FUSION_BASE: Partial<StyleState> = {
   fusionAnimationSpeed: 1,
   fusionIntensity: 0.6,
   fusionSwing: 1,
+  /* The row 82 and Phase 23 controls, at the values that change nothing. They
+   * sit in the base so every fusion preset SETS them, which is what puts them
+   * in Customize (`presetFields` reads `applies`), and so picking a preset puts
+   * back a chaos or a hold the last one left behind. */
+  fusionChaos: 0,
+  fusionRevealInfluence: 1,
+  fusionCompletion: "pulse",
+  fusionTipShimmer: 0,
+  fusionPauseHold: "off",
   // Fusion's ambient drives need a running style clock; "off" freezes them.
   motionMode: "independent",
   textureEnabled: false,
@@ -5048,6 +5110,7 @@ const COMPOSITION_RAIL_KEYS = [
   // fusion
   "fusionPreset", "fusionDrive", "fusionAnimationEnabled", "fusionAnimationSpeed",
   "fusionIntensity", "fusionSwing",
+  "fusionChaos", "fusionRevealInfluence", "fusionCompletion", "fusionTipShimmer", "fusionPauseHold",
   // shared motion clock
   "motionMode", "styleLoopSeconds",
 ] as const satisfies readonly (keyof StyleState)[]

@@ -69,6 +69,9 @@ const META: Readonly<Record<string, { family: KeyFamily["id"]; label: string }>>
   fusionAnimationSpeed: { family: "fusion", label: "Speed" },
   fusionIntensity: { family: "fusion", label: "Link" },
   fusionSwing: { family: "fusion", label: "Swing" },
+  fusionChaos: { family: "fusion", label: "Chaos" },
+  fusionRevealInfluence: { family: "fusion", label: "Reveal" },
+  fusionTipShimmer: { family: "fusion", label: "Tip shimmer" },
 }
 
 export interface StyleKeyMeta {
