@@ -163,6 +163,49 @@ async function runRows() {
     row("F2-RELOAD", same && clean && named && badKeys === "customMaterial.roughness,textureSpeed,turn", "style keys read back on reload, with no repair for a valid one",
       `round trip equal: ${same}; repairs on a valid doc: ${v ? v.repairs.length : "none"}${v && v.repairs.length ? " (" + v.repairs.join("; ") + ")" : ""}; with an out-of-range style track and an unknown name, kept ${badKeys}, both named: ${named}`)
   })
+
+  /* ---- F5: a refused key says why, and never takes other keys with it ----
+   * EDIT: a preset-shaped edit moves two keyed values at once, textureIntensity
+   * to 0.7 (fine) and asciiCellSize to 26 (Slow Code Crawl's value, outside
+   * 4..24). textureIntensity gets its key at the playhead, asciiCellSize keeps
+   * its track exactly, and the refusal names it in words.
+   * WORDS: the review's remove case, keys 0.1 (easeOut {1/3, -1}), 0.15, 1 on
+   * textureIntensity: taking the middle one away is refused, and the words say
+   * the curve would leave 0 to 1. A key out of range says its number and the
+   * range. */
+  check("F5-EDIT", "a refused path in a multi-path edit keeps the other paths' keys and names itself", () => {
+    const E = loadTs("lib/key-edit.ts")
+    const keys = { textureIntensity: [lin(0, 0.2), lin(1000, 0.4)], asciiCellSize: [lin(0, 8), lin(1000, 12)] }
+    const prev = { ...base, textureIntensity: 0.3, asciiCellSize: 10 }
+    const next = { ...prev, textureIntensity: 0.7, asciiCellSize: 26 }
+    const r = E.keyedStyleEdit(prev, next, keys, 500)
+    const ti = r?.keys?.textureIntensity
+    const keyedTi = !!ti && ti.length === 3 && ti[1].tMs === 500 && ti[1].value === 0.7
+    const keptCell = !!r && JSON.stringify(r.keys.asciiCellSize) === JSON.stringify(keys.asciiCellSize)
+    const named = !!r && r.refused.length === 1 && r.refused[0].path === "asciiCellSize"
+    const words = named ? E.refusalWords("edit", r.refused[0].reasons) : ""
+    row("F5-EDIT", keyedTi && keptCell && named && words === "Not keyed: 26 is outside 4 to 24",
+      "a refused path in a multi-path edit keeps the other paths' keys and names itself",
+      `textureIntensity keyed 0.7 at 500 ms: ${keyedTi}; asciiCellSize track unchanged: ${keptCell}; refused: ${r ? JSON.stringify(r.refused.map((x) => x.path)) : "null"}; words: "${words}"`)
+  })
+  check("F5-WORDS", "a refused add or remove says why in words", () => {
+    const E = loadTs("lib/key-edit.ts")
+    const K2 = loadTs("lib/keyframes.ts")
+    const three = { textureIntensity: [{ tMs: 0, value: 0.1, easeOut: { x: 1 / 3, y: -1 }, easeIn: "linear" }, lin(500, 0.15), lin(1000, 1)] }
+    const accepted = K2.validateKeys(three).length === 0
+    const without = E.withoutKeyAt(three, "textureIntensity", 500)
+    const bad = K2.validateKeys(without)
+    const rm = E.refusalWords("remove", bad.map((b) => b.replace(/^textureIntensity: /, "")))
+    const add = E.withKeyAt(undefined, "asciiCellSize", 250, 26)
+    const addBad = K2.validateKeys(add).map((b) => b.replace(/^asciiCellSize: /, ""))
+    const addWords = E.refusalWords("add", addBad)
+    const okRm = accepted && bad.length > 0 && /^Not removed: without this key the curve would swing to -0\.\d+, outside 0 to 1$/.test(rm)
+    // A reason it has no words of its own for still shows, as the validator wrote it.
+    const other = "key 1 at 0 ms is not after the key before it at 0 ms: unsorted"
+    const otherWords = E.refusalWords("add", [other])
+    row("F5-WORDS", okRm && addWords === "Not keyed: 26 is outside 4 to 24" && otherWords === `Not keyed: ${other}`, "a refused add or remove says why in words",
+      `three keys accepted: ${accepted}; removing the middle: "${rm}"; adding 26 to Cell size: "${addWords}"; any other reason: "${otherWords}"`)
+  })
 }
 
 /* ---- the must-fails ----------------------------------------------------- */
@@ -173,6 +216,10 @@ const MUTANTS = [
   { name: "the GLB points a channel at an extension the file does not have", file: "lib/export/glb-material-keys.ts", find: "        const e = (exts[p.ext] ??= {})\n", text: "        const e = exts[p.ext] ?? {}\n", red: ["F1-GLB"] },
   { name: "readKeys keeps only the seven take tracks", file: "lib/doc-store.ts", find: "    if (!isKeyPath(name)) {\n", text: "    if (!(KEY_PROPERTIES as readonly string[]).includes(name)) {\n", red: ["F2-RELOAD"] },
   { name: "readKeys checks a style track without its range", file: "lib/doc-store.ts", find: "    const bad = validateTrack(track, name)\n", text: "    const bad = validateTrack(track)\n", red: ["F2-RELOAD"] },
+  { name: "a refused path drops every key in the edit (the old null)", file: "lib/key-edit.ts", find: "      refused.push({ path, reasons: bad })\n      continue\n", text: "      return null\n", red: ["F5-EDIT"] },
+  { name: "a refused path is written anyway", file: "lib/key-edit.ts", find: "    if (bad.length) {\n      if (KEY_UI_MUTANT", text: "    if (false) {\n      if (KEY_UI_MUTANT", red: ["F5-EDIT"] },
+  { name: "the refusal says no reason", file: "lib/key-edit.ts", find: "  return reasons.length ? `${verb}: ${reasons[0]}` : verb\n", text: "  return verb\n", red: ["F5-WORDS"] },
+  { name: "the refusal's range words are dropped", file: "lib/key-edit.ts", find: "    if (range) return `${verb}: ${num(range[1])} is outside ${num(range[2])} to ${num(range[3])}`\n", text: "\n", red: ["F5-EDIT", "F5-WORDS"] },
   { name: "the GLB writes a value that never changes", file: "lib/export/glb-material-keys.ts", find: "    if (!varies(t.values)) return false\n", text: "\n", red: ["F1-GLB"] },
 ]
 

@@ -20,6 +20,13 @@
 //       from the film's first frame rises with its time (rank correlation >= 0.9), and past the last
 //       key the change is at least 15 levels and within 1.5 levels of itself. must-fail: the largest
 //       change under 5 levels (the codec's own noise on a still film measured 2.87).
+//   L3  A REFUSED KEY SAYS WHY, BESIDE ITS DIAMOND (finding 5). textureIntensity and asciiCellSize keyed;
+//       one style write moves both (textureIntensity 0.7, asciiCellSize 26, Slow Code Crawl's value,
+//       outside 4..24), the way a preset does: textureIntensity takes its key at the playhead, the
+//       asciiCellSize track is unchanged, and words naming 26 and 4 to 24 show to the right of the Cell
+//       size diamond, on its line, and are gone after 6.5 s. Then, with Cell size unkeyed and the doc
+//       at 26, the diamond itself says the same when clicked. must-fails: `"dropall"` (the refused path drops the edit's other key) and
+//       `"silentrefusal"` (no words).
 //   G1  no page error.
 
 const { chromium } = await import("./lib/browser.mjs")
@@ -210,6 +217,66 @@ async function film(mutant) {
   const m = await film("memo")
   if (m.error) fired("L2", "the frame loop fed the doc's styleState", false, m.error)
   else fired("L2", "the frame loop fed the doc's styleState", m.maxDiff < 5, `largest change ${m.maxDiff.toFixed(2)} levels over the film`)
+}
+
+// ---------------------------------------------------------------- L3
+const { openStyle } = await import("./lib/dock.mjs")
+async function refusal(mutant) {
+  const ctx = await browser.newContext({ viewport: { width: 1512, height: 982 } })
+  await ctx.addInitScript(() => { try { for (const x of Object.keys(localStorage)) if (x.startsWith("fs.layout.")) localStorage.removeItem(x) } catch {} })
+  if (mutant) await ctx.addInitScript((m) => { window.__fsKeyMutant = m }, mutant)
+  const page = await ctx.newPage()
+  page.on("pageerror", (e) => { if (!mutant) errors.push(e.message) })
+  await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 240000 })
+  await page.waitForFunction(() => window.__styleHarness && window.__revealHarness && window.__fsSetKeys && window.__dockHarness?.workspace, null, { timeout: 240000 })
+  await page.evaluate((p) => window.__styleHarness.injectStrokes(p.slice(0, 5), { msPerPoint: 12, gapMs: 60 }), polys)
+  await page.waitForTimeout(1200)
+  await page.evaluate(() => window.__revealHarness.setPlaying(false))
+  await page.evaluate(() => window.__styleHarness.setStyle({ asciiEnabled: true, textureEnabled: true, textureMode: "grain", asciiCellSize: 10, textureIntensity: 0.3 }))
+  await settle(page, 300)
+  const refused = await page.evaluate((x) => window.__fsSetKeys(x), { textureIntensity: [k(0, 0.2), k(1000, 0.4)], asciiCellSize: [k(0, 8), k(1000, 12)] })
+  if (refused?.length) throw new Error(`keys refused: ${refused.join("; ")}`)
+  await page.evaluate(() => window.__revealHarness.setProgress(0.05))
+  await openStyle(page, "ascii")
+  await settle(page, 400)
+  const before = await page.evaluate(() => window.__fsKeys?.() ?? {})
+  await page.evaluate(() => window.__styleHarness.setStyle({ textureIntensity: 0.7, asciiCellSize: 26 }))
+  await settle(page, 400)
+  const after = await page.evaluate(() => window.__fsKeys?.() ?? {})
+  const words = () => page.evaluate(() => {
+    const b = document.querySelector('[data-key-button="asciiCellSize"]')
+    const w = document.querySelector('[data-key-refusal="asciiCellSize"]')
+    if (!b || !w) return { text: w?.textContent ?? null, beside: false }
+    const rb = b.getBoundingClientRect(), rw = w.getBoundingClientRect()
+    const vis = rw.width > 0 && rw.height > 0 && getComputedStyle(w).visibility !== "hidden"
+    return { text: w.textContent, beside: vis && rw.left >= rb.right - 1 && rw.left - rb.right < 16 && rw.top < rb.bottom && rw.bottom > rb.top }
+  })
+  const edit = await words()
+  // The diamond itself, with Cell size unkeyed: the edit left the doc at 26, the value on screen now.
+  await page.evaluate((ti) => window.__fsSetKeys({ textureIntensity: ti }), after.textureIntensity)
+  await page.evaluate(() => window.__revealHarness.setProgress(0.5))
+  await settle(page, 6500) // past REFUSAL_MS, so the edit's words are gone first
+  const cleared = await words()
+  await page.locator('[data-key-button="asciiCellSize"]').click()
+  await settle(page, 300)
+  const click = await words()
+  await ctx.close()
+  const ti = after.textureIntensity ?? []
+  return {
+    keyedTi: ti.length === 3 && ti.some((x) => x.value === 0.7),
+    keptCell: JSON.stringify(after.asciiCellSize) === JSON.stringify(before.asciiCellSize),
+    edit, cleared, click, ti: ti.map((x) => `${Math.round(x.tMs)}:${x.value}`).join(" "),
+  }
+}
+{
+  const want = (w) => !!w.text && /26/.test(w.text) && /4 to 24/.test(w.text) && w.beside
+  const r = await refusal(null)
+  row("L3", "a refused key keeps the edit's other key and says why beside its diamond", r.keyedTi && r.keptCell && want(r.edit) && r.cleared.text === null && want(r.click),
+    `textureIntensity keys ${r.ti} (new key: ${r.keyedTi}); asciiCellSize track unchanged: ${r.keptCell}; edit: "${r.edit.text}" beside: ${r.edit.beside}; gone after 6.5 s: ${r.cleared.text === null}; diamond click: "${r.click.text}" beside: ${r.click.beside}`)
+  const d = await refusal("dropall")
+  fired("L3", "the refused path drops the edit's other key", !d.keyedTi, `textureIntensity keys ${d.ti}`)
+  const q = await refusal("silentrefusal")
+  fired("L3", "a refused key shows no words", !want(q.edit) && !want(q.click), `edit: ${JSON.stringify(q.edit.text)}, click: ${JSON.stringify(q.click.text)}`)
 }
 
 row("G1", "the pages threw nothing", errors.length === 0, errors.length ? errors.slice(0, 3).join(" | ") : "0 pageerror events")

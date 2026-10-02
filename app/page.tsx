@@ -117,7 +117,7 @@ import {
 } from "@/lib/stroke-schedule"
 import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, takeHasPerformed, rebasePerformed, paceFromCurve, carryTimeByArc, rateScaled } from "@/lib/stroke-timing"
 import { StrokeTakeProvider } from "@/components/stroke-strip"
-import { KeyedStyle, keyedStyleEdit } from "@/components/key-button"
+import { KeyedStyle, keyedStyleEdit, reportEditRefusals } from "@/components/key-button"
 import { TakeTransportProvider } from "@/lib/take-transport"
 import { compactKeys, validateKeys, type TakeKeys } from "@/lib/keyframes"
 
@@ -1177,11 +1177,14 @@ export default function Home() {
       }
       /* K3 · EDITING A KEYED VALUE WRITES A KEY AT THE PLAYHEAD, in the same
        * step as the edit, so one drag is one undo (`keyedStyleEdit`). */
+      /* A path whose key is refused keeps its track and says why beside its
+       * diamond; every other path in the same edit (a preset) keeps its key. */
       const keyed = keyedStyleEdit(prev, next, docRef.current.keys, keyClockRef.current())
+      if (keyed?.refused.length) reportEditRefusals(keyed.refused)
       edit(
         styleChangeLabel(prev, next, changed),
         styleCoalesceKey(prev, next, changed),
-        keyed ? { styleState: next, keys: keyed } : { styleState: next },
+        keyed ? { styleState: next, keys: keyed.keys } : { styleState: next },
       )
     },
     [applyPatch, edit],

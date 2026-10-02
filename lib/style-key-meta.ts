@@ -124,7 +124,9 @@ export const UNLABELLED_KEY_PATHS: readonly string[] = KEYABLE_PATHS.map((p) => 
 
 /** The must-fail switch of scripts/verify/assert-key-buttons.mjs, read once and never in production:
  *  "dropfield" (one Field draws no key button), "alllanes" (the lanes list every keyable value, keyed or
- *  not), "noeditkey" (an edit on a keyed value writes the doc's value only). */
+ *  not), "noeditkey" (an edit on a keyed value writes the doc's value only). And of
+ *  scripts/verify/assert-keyed-playback-live.mjs: "silentrefusal" (a refused key shows no words),
+ *  "dropall" (a refused path in an edit drops every key of that edit, the old behaviour). */
 export const KEY_UI_MUTANT: string | undefined =
   typeof window !== "undefined" && process.env.NODE_ENV !== "production"
     ? (window as unknown as { __fsKeyMutant?: string }).__fsKeyMutant

@@ -39,33 +39,71 @@ import { useTakeTransport } from "@/lib/take-transport"
 import {
   KEYABLE_PATHS,
   KEY_DISABLED,
-  compactKeys,
   framedKeys,
-  makeKey,
   styleAt,
-  validateKeys,
   type StyleKeyPath,
   type TakeKeys,
   type Track,
 } from "@/lib/keyframes"
 import { KEY_UI_MUTANT, styleKeyMeta } from "@/lib/style-key-meta"
 import type { StyleState } from "@/lib/style-system"
+import { hasStyleKeys, keyAt, readPath, refusalWords, withKeyAt, withoutKeyAt, type KeyRefusal } from "@/lib/key-edit"
 
-/** How close in ms a key counts as "on this frame": half a 60 fps frame. */
-export const KEY_ON_FRAME_MS = 1000 / 120
+/* The pure key edits live in lib/key-edit.ts (a Node gate runs them); the
+ * names this file always exported stay exported from here. */
+export { KEY_ON_FRAME_MS, hasStyleKeys, keyAt, keyedStyleEdit, readPath, withKeyAt } from "@/lib/key-edit"
 
 const KEYABLE = new Set<string>(KEYABLE_PATHS.map((p) => p.path))
 export const isKeyablePath = (p: string): p is StyleKeyPath => KEYABLE.has(p)
 
-export function readPath(state: StyleState, path: string): number {
-  let o: unknown = state
-  for (const part of path.split(".")) o = (o as Record<string, unknown>)?.[part]
-  return typeof o === "number" ? o : Number.NaN
+/* ---- WHY A KEY WAS REFUSED (REVIEW 1 finding 5) ----------------------------
+ * A refused key used to do nothing and say nothing. The reason now shows in
+ * words beside the diamond of the path it belongs to, whether the refusal came
+ * from the diamond itself or from an edit on a keyed value (a preset moving
+ * several at once names each path it could not key). One line per path, in a
+ * page-wide store so the page's style setter can report into it. It clears on
+ * the next key that path takes, or after `REFUSAL_MS`. */
+export const REFUSAL_MS = 6000
+const refusals = new Map<string, { words: string; at: number }>()
+const refusalSubs = new Set<() => void>()
+const refusalTimers = new Map<string, ReturnType<typeof setTimeout>>()
+function notifyRefusals() {
+  refusalSubs.forEach((fn) => fn())
 }
-
-/** True when any style path holds a key. */
-export function hasStyleKeys(keys: TakeKeys | undefined): boolean {
-  return !!keys && KEYABLE_PATHS.some((p) => ((keys[p.path] as Track | undefined)?.length ?? 0) > 0)
+export function reportKeyRefusal(path: string, words: string | null) {
+  const t = refusalTimers.get(path)
+  if (t) clearTimeout(t)
+  refusalTimers.delete(path)
+  if (words === null) {
+    if (!refusals.delete(path)) return
+  } else {
+    refusals.set(path, { words, at: Date.now() })
+    refusalTimers.set(
+      path,
+      setTimeout(() => {
+        refusalTimers.delete(path)
+        if (refusals.delete(path)) notifyRefusals()
+      }, REFUSAL_MS),
+    )
+  }
+  notifyRefusals()
+}
+/** Every refusal in one edit, each on its own path. */
+export function reportEditRefusals(refused: readonly KeyRefusal[]) {
+  for (const r of refused) reportKeyRefusal(r.path, refusalWords("edit", r.reasons))
+}
+function useKeyRefusal(path: string): string | null {
+  const sub = useCallback((fn: () => void) => {
+    refusalSubs.add(fn)
+    return () => {
+      refusalSubs.delete(fn)
+    }
+  }, [])
+  const read = useCallback(() => refusals.get(path)?.words ?? null, [path])
+  return useSyncExternalStore(sub, read, () => null)
+}
+if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
+  ;(window as unknown as { __fsKeyRefusals?: unknown }).__fsKeyRefusals = () => Object.fromEntries([...refusals].map(([p, r]) => [p, r.words]))
 }
 
 /** The Style panel's keyed context: the style as it shows at the playhead
@@ -98,50 +136,6 @@ export function useKeyClockMs(on = true): number {
   )
   const read = useCallback(() => (on ? readKeyClock(store) : 0), [store, on])
   return useSyncExternalStore(sub, read, () => 0)
-}
-
-/** The key under the playhead on `track`, or -1. */
-export function keyAt(track: Track | undefined, clockMs: number): number {
-  if (!track) return -1
-  return track.findIndex((k) => Math.abs(k.tMs - clockMs) <= KEY_ON_FRAME_MS)
-}
-
-/** `keys` with `path` keyed to `value` at `clockMs`: the key there replaced, or a new one added in time order. */
-export function withKeyAt(keys: TakeKeys | undefined, path: StyleKeyPath, clockMs: number, value: number): TakeKeys {
-  const track = [...((keys?.[path] as Track | undefined) ?? [])]
-  const at = keyAt(track, clockMs)
-  if (at >= 0) track[at] = { ...track[at], value }
-  else {
-    track.push(makeKey(Math.round(clockMs * 1000) / 1000, value))
-    track.sort((a, b) => a.tMs - b.tMs)
-  }
-  return { ...(keys ?? {}), [path]: track }
-}
-
-/**
- * EDITING A KEYED VALUE WRITES A KEY AT THE PLAYHEAD (BUILD-PLAN.md §4, After
- * Effects' rule once the stopwatch is on). Otherwise the next frame's sample
- * overwrites the edit and the slider looks broken. `prev` and `next` are the
- * doc's style before and after an edit; the keys come back with a key at
- * `clockMs` for each keyed path the edit moved, or null when it moved none.
- * A path whose new value is the one already showing there (a whole-state
- * write that carried a sampled value along) is left alone, and so is a path
- * no key drives.
- */
-export function keyedStyleEdit(prev: StyleState, next: StyleState, keys: TakeKeys | undefined, clockMs: number): TakeKeys | null {
-  if (!hasStyleKeys(keys) || KEY_UI_MUTANT === "noeditkey") return null
-  const framed = framedKeys(keys)
-  const shown = styleAt(prev, framed, clockMs)
-  let out: TakeKeys | null = null
-  for (const { path } of KEYABLE_PATHS) {
-    if (KEY_DISABLED[path] || !((keys?.[path] as Track | undefined)?.length)) continue
-    const nv = readPath(next, path)
-    if (!Number.isFinite(nv) || nv === readPath(prev, path)) continue
-    if (Math.abs(nv - readPath(shown, path)) < 1e-9) continue
-    out = withKeyAt(out ?? keys, path, clockMs, nv)
-  }
-  if (!out) return null
-  return validateKeys(out).length ? null : compactKeys(out) ?? {}
 }
 
 /**
@@ -177,7 +171,7 @@ export function KeyedStyle({
   return <KeyStyleCtx.Provider value={ctx}>{children(shown)}</KeyStyleCtx.Provider>
 }
 
-export function KeyButton({ path, className = "" }: { path: string; className?: string }) {
+export function KeyButton({ path, className = "", room }: { path: string; className?: string; room?: number }) {
   const take = useStrokeTake()
   const store = useTakeTransport()
   const doc = useContext(KeyStyleCtx)
@@ -185,6 +179,7 @@ export function KeyButton({ path, className = "" }: { path: string; className?: 
   const keyed = (track?.length ?? 0) > 0
   // Only a keyed value's look follows the playhead; an unkeyed one reads the clock on click.
   const clockMs = useKeyClockMs(keyed)
+  const refusal = useKeyRefusal(path)
   if (!isKeyablePath(path) || !take?.setKeys || !doc) return null
   const disabled = KEY_DISABLED[path]
   const on = keyAt(track, clockMs)
@@ -198,18 +193,29 @@ export function KeyButton({ path, className = "" }: { path: string; className?: 
       : `Add a ${name} key at the playhead`
   const click = () => {
     if (disabled || !take.setKeys) return
-    if (on >= 0) {
-      const rest = track!.filter((_, i) => i !== on)
-      take.setKeys(compactKeys({ ...(take.keys ?? {}), [path]: rest }), null)
+    /* The playhead the click keys at is read now, from the frame loop's own
+     * number, not the one this render saw. */
+    const now = readKeyClock(store)
+    const at = keyAt(track, now)
+    if (at >= 0) {
+      const bad = take.setKeys(withoutKeyAt(take.keys, path, now), null)
+      reportKeyRefusal(path, bad.length ? refusalWords("remove", bad) : null)
       return
     }
     const v = readPath(doc.styleState, path)
-    if (!Number.isFinite(v)) return
-    take.setKeys(withKeyAt(take.keys, path, readKeyClock(store), v), null)
+    if (!Number.isFinite(v)) {
+      reportKeyRefusal(path, "Not keyed: this value has no number to key")
+      return
+    }
+    const bad = take.setKeys(withKeyAt(take.keys, path, now, v), null)
+    reportKeyRefusal(path, bad.length ? refusalWords("add", bad) : null)
   }
+  const refusalId = `key-refusal-${path.replace(/\./g, "-")}`
   return (
+    <>
     <button
       type="button"
+      aria-describedby={refusal ? refusalId : undefined}
       data-key-button={path}
       data-key-look={look}
       aria-label={label}
@@ -235,6 +241,19 @@ export function KeyButton({ path, className = "" }: { path: string; className?: 
         </span>
       </span>
     </button>
+    {refusal && KEY_UI_MUTANT !== "silentrefusal" && (
+      /* WHY THE KEY WAS REFUSED, in words beside the diamond (finding 5). */
+      <span
+        id={refusalId}
+        role="status"
+        data-key-refusal={path}
+        style={room !== undefined ? { maxWidth: Math.max(96, room) } : undefined}
+        className="ml-1 self-center rounded-[3px] bg-background/95 px-1.5 py-0.5 text-[11px] leading-4 text-destructive shadow-sm"
+      >
+        {refusal}
+      </span>
+    )}
+    </>
   )
 }
 
@@ -255,7 +274,7 @@ function sliderLabelOf(box: HTMLElement): HTMLElement | null {
   return null
 }
 
-function keySpot(box: HTMLElement): { left: number; top: number } | null {
+function keySpot(box: HTMLElement): { left: number; top: number; room: number } | null {
   const label = sliderLabelOf(box)
   if (!label) return null
   const range = document.createRange()
@@ -269,7 +288,9 @@ function keySpot(box: HTMLElement): { left: number; top: number } | null {
   const mid = (Math.min(...line.map((r) => r.top)) + Math.max(...line.map((r) => r.bottom))) / 2 - b.top
   // The diamond, not the hit box, starts SPOT_GAP after the text.
   const left = right + SPOT_GAP - (BUTTON - DIAMOND) / 2
-  return { left: Math.round(Math.min(left, b.width - BUTTON)), top: Math.round(mid - BUTTON / 2) }
+  const at = Math.round(Math.min(left, b.width - BUTTON))
+  // The width left after the button, for a refusal's words beside it.
+  return { left: at, top: Math.round(mid - BUTTON / 2), room: Math.round(b.width - at - BUTTON - 4) }
 }
 
 /**
@@ -284,10 +305,10 @@ export function KeySpot({ path, children }: { path: string; children: ReactNode 
   const take = useStrokeTake()
   const live = !!doc && !!take?.setKeys && isKeyablePath(path)
   const boxRef = useRef<HTMLDivElement>(null)
-  const [spot, setSpot] = useState<{ left: number; top: number } | null>(null)
+  const [spot, setSpot] = useState<{ left: number; top: number; room: number } | null>(null)
   const place = () => {
     const next = boxRef.current ? keySpot(boxRef.current) : null
-    setSpot((prev) => (prev === next || (prev && next && prev.left === next.left && prev.top === next.top) ? prev : next))
+    setSpot((prev) => (prev === next || (prev && next && prev.left === next.left && prev.top === next.top && prev.room === next.room) ? prev : next))
   }
   useLayoutEffect(() => {
     if (live) place()
@@ -305,8 +326,8 @@ export function KeySpot({ path, children }: { path: string; children: ReactNode 
     <div ref={boxRef} className="relative" data-key-spot={path}>
       {children}
       {spot && (
-        <span className="absolute z-10 flex" style={spot}>
-          <KeyButton path={path} />
+        <span className="absolute z-10 flex" style={{ left: spot.left, top: spot.top }}>
+          <KeyButton path={path} room={spot.room} />
         </span>
       )}
     </div>
