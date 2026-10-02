@@ -532,8 +532,17 @@ try {
      * mask, and a defect confined to them moves no count this row reads. Measured on a6ee983f9:
      * 25 of 873 candidate pixels on Solid (2.9%), 16 of 600 on Inflate (2.7%), 7 of 461 on Extrude
      * (1.5%). The bound is 5% of the candidates (mask plus left out); above it the row fails. Its
-     * must-fail is the same frames read with a NB_WIDE px margin, which must leave out more. */
-    const NB_CAP = 0.05
+     * must-fail is the same frames read with a NB_WIDE px margin, which must leave out more.
+     *
+     * CLOUD-FLAKES: TIGHTENED TO 3.5%. On the dockview layout (canvas 731.5x934) the 4 px must-fail
+     * left out 52 of 1170 on Extrude, 4.4%, UNDER the 5% cap: the cap could not see a 4 px margin
+     * there, so the arm held and row 1b on Extrude was red in every run. The shares come from frames
+     * with no performance in them, so they were identical in all 20 runs, before and after the
+     * driven clock: at 1 px Inflate 25 of 1549 (1.6%), Extrude 8 of 1170 (0.7%), Solid 34 of 2281
+     * (1.5%); at 4 px 7.4%, 4.4%, 8.4%. The cap is now between the worst real share measured on any
+     * layout (2.9%, Solid on a6ee983f9) and the smallest 4 px share (4.4%), so the real check still
+     * passes and the arm fires on all three engines. The bar got tighter; NB_WIDE did not move. */
+    const NB_CAP = 0.035
     const NB_WIDE = 4
     const inked = (d, bg, i) => Math.abs(d[i] - bg[i]) > INK || Math.abs(d[i + 1] - bg[i + 1]) > INK || Math.abs(d[i + 2] - bg[i + 2]) > INK
     const grab = () => page.evaluate(() => window.__captureHarness.grab())
@@ -692,9 +701,9 @@ try {
       paired(
         `1b ${eng}: the played take holds stroke D still for the dwell, within one frame`,
         seen && nMid === nMid2 && restored && Math.abs(pPlayed - dwellMs) <= FRAME && Math.abs(endL) <= FRAME && Math.abs(endR) <= FRAME && tipOk && reachOk && capOk,
-        `the same slot played without its pace (linear) stays flat across the dwell, or a ${NB_WIDE} px margin stays under the ${NB_CAP * 100}% cap`,
+        `the same slot played without its pace (linear) stays flat across the dwell, or a ${NB_WIDE} px margin stays under the ${(NB_CAP * 100).toFixed(1)}% cap`,
         lA === lB || wide.share <= NB_CAP,
-        `mask ${idx.length} px (${nbLeftOut} of ${cand} within ${NB_REACH} px of neighbour ink left out, ${(share * 100).toFixed(1)}%, cap ${NB_CAP * 100}%${capOk ? "" : ", OVER THE CAP"}; a ${NB_WIDE} px margin leaves out ${wide.nbLeftOut} of ${wide.cand}, ${(wide.share * 100).toFixed(1)}%), box ${r.box}; neighbours alone at ${auditTimes.length} read clocks ${reached.length ? `ink counted px: ${reached.map((x) => `${f1(x.t)} ms ${x.n} px at ${x.px.map((p) => `(${p})`).join(" ")}`).join("; ")}` : "ink none of it"}${slotsSame ? "" : ", NEIGHBOUR SLOTS MOVED with D held back, audit void"}; ink ${nPre} before the slot, ${nPost} after, ${nMid} (${(nMid / N).toFixed(3)}) held ${f1(pPlayed)} ms (${f1(pl)} to ${f1(pr)}), read twice ${nMid}/${nMid2}; ends ${f1(endL)} and ${f1(endR)} ms from the row's flat run (${f1(tLo)} to ${f1(tHi)}); dwell ${f1(dwellMs)} ms;${tip ? ` tip holds ${tip.holds?.length ?? "none"} (D ${dHold ? `${f1(dHold.t0Ms)} to ${f1(dHold.t1Ms)}` : "missing"}), dropped ${tip.dropped?.length ?? "unread"}, longest ${f1(dropMax)} ms against a shortest kept ${f1(keptMin)} ms;` : ""} linear inks ${lA} -> ${lB}; take restored ${restored}`,
+        `mask ${idx.length} px (${nbLeftOut} of ${cand} within ${NB_REACH} px of neighbour ink left out, ${(share * 100).toFixed(1)}%, cap ${(NB_CAP * 100).toFixed(1)}%${capOk ? "" : ", OVER THE CAP"}; a ${NB_WIDE} px margin leaves out ${wide.nbLeftOut} of ${wide.cand}, ${(wide.share * 100).toFixed(1)}%), box ${r.box}; neighbours alone at ${auditTimes.length} read clocks ${reached.length ? `ink counted px: ${reached.map((x) => `${f1(x.t)} ms ${x.n} px at ${x.px.map((p) => `(${p})`).join(" ")}`).join("; ")}` : "ink none of it"}${slotsSame ? "" : ", NEIGHBOUR SLOTS MOVED with D held back, audit void"}; ink ${nPre} before the slot, ${nPost} after, ${nMid} (${(nMid / N).toFixed(3)}) held ${f1(pPlayed)} ms (${f1(pl)} to ${f1(pr)}), read twice ${nMid}/${nMid2}; ends ${f1(endL)} and ${f1(endR)} ms from the row's flat run (${f1(tLo)} to ${f1(tHi)}); dwell ${f1(dwellMs)} ms;${tip ? ` tip holds ${tip.holds?.length ?? "none"} (D ${dHold ? `${f1(dHold.t0Ms)} to ${f1(dHold.t1Ms)}` : "missing"}), dropped ${tip.dropped?.length ?? "unread"}, longest ${f1(dropMax)} ms against a shortest kept ${f1(keptMin)} ms;` : ""} linear inks ${lA} -> ${lB}; take restored ${restored}`,
       )
       const linSet = setDiff(lSetA, lSetB)
       paired(
