@@ -130,9 +130,25 @@ export interface TimingPace {
    *  Absent means none. A slot runs to the next stroke's landing (F120), so a
    *  lift sits inside a slot, and only the pace can say where it is. */
   holds?: Float64Array
+  /** CLOUD-HANDFIX finding 5 · a digest of the table, so `TimedSchedule.sig`
+   *  changes when only the pace does (Natural to Authentic, Grow to Travel,
+   *  the hybrid blend). Every cache the viewport keys on that sig (the tip
+   *  bake and its lifts, the triangle keys) then rebuilds. */
+  sig?: string
 }
 
-const LINEAR_PACE: TimingPace = { beatToClock: (b) => b, beatToLanding: (b) => b, clockToBeat: (c) => c }
+const LINEAR_PACE: TimingPace = { beatToClock: (b) => b, beatToLanding: (b) => b, clockToBeat: (c) => c, sig: "linear" }
+
+/** FNV-1a over the bytes of the pace table. */
+function tableDigest(cs: readonly number[], bs: readonly number[]): string {
+  const words = new Uint32Array(Float64Array.from([...cs, ...bs]).buffer)
+  let h = 0x811c9dc5
+  for (let k = 0; k < words.length; k++) {
+    h ^= words[k]
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return `${cs.length}:${h.toString(16)}`
+}
 
 /**
  * A pace from any increasing clock-to-beat curve, sampled once into a table.
@@ -256,7 +272,7 @@ export function paceFromCurve(clockToBeat: (clock: number) => number, n = 1024):
     if (h && holds[h - 1] === cs[k]) holds[h - 1] = cs[k + 1]
     else holds.push(cs[k], cs[k + 1])
   }
-  return { beatToClock: b2c, beatToLanding: b2land, clockToBeat: c2b, holds: Float64Array.from(holds) }
+  return { beatToClock: b2c, beatToLanding: b2land, clockToBeat: c2b, holds: Float64Array.from(holds), sig: tableDigest(cs, bs) }
 }
 
 /* ==========================================================================
@@ -553,7 +569,7 @@ export function buildTimedSchedule(
 
   const performed = rows.map((r) => (r.performed ? Float64Array.from(r.performed) : null))
   const eases = rows.map((r, i) => (performed[i] ? null : easeFnOf(r.ease)))
-  let sig = `${base.sig}|ms${baseMs}|r${t.ripple ? 1 : 0}`
+  let sig = `${base.sig}|ms${baseMs}|r${t.ripple ? 1 : 0}|pace${pace.sig ?? "?"}`
   for (let i = 0; i < n; i++) {
     if (rows[i] === STROKE_TIMING_NEUTRAL) continue
     sig += `|${i}:${rows[i].delayMs},${rows[i].speed},${JSON.stringify(rows[i].ease)},${rows[i].holdBack ? 1 : 0}`

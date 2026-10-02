@@ -239,6 +239,51 @@ async function runRows() {
     row("F4-ZERO", cases.every((c) => c.ok), "a slot zero-length on one clock keeps its performed slot there and back, with a finite speed", cases.map((c) => c.d).join("; "))
   }
 
+  /* ---- F5 · the pace is part of the timed schedule's key ------------------ */
+  {
+    const R = loadTs("lib/pen-reveal.ts")
+    const HL = loadTs("lib/hero-letters.ts")
+    /* What the stale key costs: the Natural bake's lifts held over the new pace's
+     * ink, ms of ink inside a lift the camera turns in. */
+    const inkInside = (lifts, ts) => {
+      let ms = 0
+      for (let k = 0; k + 1 < lifts.length; k += 2) {
+        for (let t = lifts[k] + 1; t + 2 <= lifts[k + 1] - 1; t += 2) {
+          const a = T.sampleTake(ts, t).spans
+          const b = T.sampleTake(ts, t + 2).spans
+          if (a.some((v, j) => Math.abs(v - b[j]) > 1e-9)) ms += 2
+        }
+      }
+      return ms
+    }
+    const parts = []
+    for (const clock of ["hand", "recorded"]) {
+      const doc = docOf({ revealEnvelope: { ...SS.REVEAL_ENVELOPE_DEFAULTS, clock } })
+      const nib = C.clockNibOf(doc)
+      const c = C.clockStrokesFor(doc.rawStrokes, doc.processedStrokes, doc.revealEnvelope, nib, cs)
+      const strokes = c.processed
+      const baseMs = T.penMsOf(c.raw)
+      const sched = SS.scheduleFromStrokes(strokes, HL.assignLetters(strokes, nib).of, doc.drawIn)
+      const n = sched.tracks.length
+      // The viewport's `timed` memo: one +1 ms row on the last stroke.
+      const take = { strokes: { [n - 1]: { delayMs: 1, speed: 1, ease: { kind: "preset", id: "linear" }, holdBack: false } }, ripple: false }
+      const build = (mode, blend, win) => {
+        const lifts = R.liftsLandBetweenStrokes(sched, win)
+        return T.buildTimedSchedule(sched, take, { baseMs, pace: T.paceFromCurve((t) => R.revealDistanceFraction(strokes, t, mode, blend, lifts)) })
+      }
+      const nat = build("hybrid", 0.4, "grow")
+      const variants = [["Natural to Authentic", build("raw", 0.4, "grow")], ["Grow to Travel", build("hybrid", 0.4, "travel")], ["hybrid blend 0.4 to 0.7", build("hybrid", 0.7, "grow")]]
+      const natLifts = T.takeLiftsMs(nat, nat.pace, nat.baseSlots, nat.baseMs)
+      for (const [label, ts] of variants) {
+        const lifts = T.takeLiftsMs(ts, ts.pace, ts.baseSlots, ts.baseMs)
+        parts.push({ label: `${clock}, ${label}`, differs: ts.sig !== nat.sig, stale: inkInside(natLifts, ts), fresh: inkInside(lifts, ts) })
+      }
+    }
+    row("F5-PACEKEY", parts.every((p) => p.differs && p.fresh === 0) && parts.some((p) => p.stale > 0),
+      "a pace-only change under a timed take changes the schedule's key (the tip bake, its lifts and the triangle keys rebuild), and the rebuilt lifts hold no ink",
+      parts.map((p) => `${p.label}: key ${p.differs ? "changes" : "SAME"}, ink inside the rebuilt lifts ${p.fresh} ms, inside the stale Natural lifts ${p.stale} ms`).join("; "))
+  }
+
   /* ---- WIRING: what the page hands rebaseForClock ------------------------ */
   {
     const page = readSrc("app/page.tsx")
@@ -394,6 +439,7 @@ const MUTANTS = [
   { name: "the ripple carry skips strokes with no row again", file: "lib/stroke-timing.ts", find: "const r = strokes[i] ?? STROKE_TIMING_NEUTRAL", replace: "const r = strokes[i] ?? { ...STROKE_TIMING_NEUTRAL, holdBack: true }", rows: ["F3-FUZZ"] },
   { name: "withPerformed skips a zero-span slot again", file: "lib/stroke-timing.ts", find: "    if (f) {\n      /* A zero base span", replace: "    if (f && B1 > B0) {\n      /* A zero base span", rows: ["F4-ZERO"] },
   { name: "placeSlots ignores the row's own length", file: "lib/stroke-timing.ts", find: "return (span > 0 ? span : row.lengthMs ?? 0) / row.speed", replace: "return span / row.speed", rows: ["F4-ZERO"] },
+  { name: "the pace is left out of the key", file: "lib/stroke-timing.ts", find: "|r${t.ripple ? 1 : 0}|pace${pace.sig ?? \"?\"}`", replace: "|r${t.ripple ? 1 : 0}`", rows: ["F5-PACEKEY"] },
   { name: "the memo forgets its canvas", file: "app/page.tsx", find: "clockCsRef.current = clocked.cs", replace: "clockCsRef.current = settingsRef.current", rows: ["W1-CS"] },
 ]
 

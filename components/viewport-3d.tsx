@@ -2611,6 +2611,9 @@ function readTipTrailsWindow(): boolean {
  *  the longest and publishes the rest on `__heroPenTip.holdsDropped`. */
 const TIP_HOLD_MAX = 8
 /** The must-fail of `assert-hand-clock` R13: the tip's clock runs on through the lifts. */
+const paceKeyKnocked = () =>
+  process.env.NODE_ENV !== "production" && typeof window !== "undefined" &&
+  (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "timed-sig-no-pace"
 const liftHoldsKnocked = () =>
   process.env.NODE_ENV !== "production" && typeof window !== "undefined" &&
   (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "tip-no-liftholds"
@@ -9590,7 +9593,7 @@ function Scene({
       }
     }
     const lifts = liftsLandBetweenStrokes(schedule, revealWindow.mode)
-    return buildTimedSchedule(
+    const ts = buildTimedSchedule(
       schedule,
       { strokes: rows, ripple: take!.ripple },
       {
@@ -9600,6 +9603,11 @@ function Scene({
         ),
       },
     )
+    /* CLOUD-HANDFIX finding 5. The sig carries the pace, so the tip bake, its
+     * lifts and the triangle keys rebuild on a pace-only change. The knockout
+     * is the bug: the pace taken back out of the key. */
+    if (ts && paceKeyKnocked()) ts.sig = ts.sig.replace(/\|pace[^|]*/, "")
+    return ts
   }, [take, takeKnockout, schedule, revealWindow.mode, computedDuration, strokes, revealMode, hybridBlend])
 
   useEffect(() => {
