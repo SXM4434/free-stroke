@@ -2,7 +2,14 @@ MERGE-READY
 
 # CLOUD-REFIT cloud log, 2026-10-02
 
-Branch `claude/fix-camera-refit-race-fqep03`, made from `cloud/integrate-1001` (2cc9e98). This session's harness gave it that name, so it is used instead of `cloud/<name>`. Three steps, one commit each, each pushed. Nothing under `docs/thinking` or `docs/verification` is committed, and the new gate writes nothing to disk.
+Branch `claude/fix-camera-refit-race-i61c4j`, made from `cloud/integrate-1001` (2cc9e98). The harness names the branch, so it is used instead of `cloud/<name>`. Steps 1 to 3 were made by an earlier session on `claude/fix-camera-refit-race-fqep03`. `cloud/refit` did not exist on origin, so this session fast-forwarded to that branch, reran every check from scratch (step 4), and pushed. One commit per step, each pushed. Nothing under `docs/thinking` or `docs/verification` is committed, and the new gate writes nothing to disk.
+
+## Step 4 · this commit · independent rerun
+
+This was a fresh container: `pnpm install --frozen-lockfile`, Chromium 141 headless, and my own `next dev` on :3138. Every result matches steps 1 to 3 exactly.
+- tsc: 6 errors (the baseline). `assert-tsc-baseline` FS_PORT=3138: 4 rows PASS, the same six errors (handFeel.ts 1, geometry-engines.ts 5), `/` and `/desk-doodles` 200.
+- assert-no-em-dashes: 7 rows PASS, 0 across 142 files. The diff against 2cc9e98 adds 0 em dashes.
+- assert-refit-settles: exit 0, 8/8 verdicts hold, 6 PASS and 2 FAIL (the 2 FAILs are the must-fail arm, which FIRED at both sizes). The fix arm gives zoom 77.83837151863455 and hash 034024d070db3834 on all 6 loads at 834x1112, and zoom 122.44528507279061 and hash b518cb4d157de0c2 on all 6 at 1512x982, with 1 refit per load. The `fixed` arm gives 6 zooms and 6 hashes at each size (73.03 to 77.04, 118.22 to 121.74).
 
 ## Step 1 · 2b08d48 · refit once the canvas has settled
 
