@@ -113,10 +113,10 @@ import {
   REVEAL_ENVELOPE_DEFAULTS,
 } from "@/lib/stroke-schedule"
 import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf } from "@/lib/stroke-timing"
-import { clockStrokesFor, rebaseForPatch, patchMovesNib, gateKnocked, type ClockCanvas } from "@/lib/clock-rebase"
+import { clockStrokesFor, rebaseForPatch, patchMovesNib, gateKnocked, CLOCK_PACE_DEFAULTS, type ClockCanvas } from "@/lib/clock-rebase"
 import { StrokeTakeProvider } from "@/components/stroke-strip"
 import { KeyedStyle, keyedStyleEdit } from "@/components/key-button"
-import { TakeTransportProvider } from "@/lib/take-transport"
+import { TakeTransportProvider, useTakeTransport, type TakeTransport } from "@/lib/take-transport"
 import { compactKeys, validateKeys, type TakeKeys } from "@/lib/keyframes"
 
 /**
@@ -431,6 +431,10 @@ export default function Home() {
   /* The canvas the playing clock was stamped with (the clock memo writes it),
    * so a reprocess rebases from the resample that played (CLOUD-HANDFIX). */
   const clockCsRef = useRef<ClockCanvas>({ ...DEFAULT_CANVAS_SETTINGS })
+  /* The page's transport store, handed up by `TransportRef` from inside its
+   * provider: the pace override and hybrid blend the viewport and the strip
+   * run, which `rebaseForClock` must read too (CLOUD-HANDFIX finding 8). */
+  const transportRef = useRef<TakeTransport | null>(null)
 
   /* ==================================================================== */
   /*  THE UNDO STACK                                                       */
@@ -557,7 +561,9 @@ export default function Home() {
   const rebaseForClock = (patch: Partial<DocSnapshot>): StrokeTimingTake | null => {
     if (gateKnocked("clock-no-rebase")) return null
     const d = docRef.current
-    return rebaseForPatch(d.take, d, patch, clockCsRef.current, settingsRef.current)
+    const tr = transportRef.current
+    const pace = tr && !gateKnocked("clock-rebase-doc-pace") ? { modeOverride: tr.get("modeOverride"), hybridBlend: tr.get("hybridBlend") } : CLOCK_PACE_DEFAULTS
+    return rebaseForPatch(d.take, d, patch, clockCsRef.current, settingsRef.current, pace)
   }
 
   /** Record the current document, then change it. Every mutation goes through
@@ -2095,6 +2101,7 @@ export default function Home() {
     {/* L2: play, the clock, the pace and the dock's flags, one store for the
         page. The viewport reads it today; L3's dock panels read the same one. */}
     <TakeTransportProvider>
+    <TransportRef into={transportRef} />
     <div className="flex h-screen flex-col">
       {/* Top bar */}
       {/* THE HEADER WAS THE ONE THING STILL FORCING THE PAGE SIDEWAYS.
@@ -2712,4 +2719,14 @@ export default function Home() {
     </TakeTransportProvider>
     </StrokeTakeProvider>
   )
+}
+
+/** Hands the page its own transport store, from inside the provider the page
+ *  renders (CLOUD-HANDFIX finding 8). */
+function TransportRef({ into }: { into: { current: TakeTransport | null } }) {
+  const store = useTakeTransport()
+  useEffect(() => {
+    into.current = store
+  }, [into, store])
+  return null
 }

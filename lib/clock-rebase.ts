@@ -98,8 +98,10 @@ export function clockStrokesFor(
 
 /* HAND-DRAW-P2. The base slots the strip lays a take on (`components/stroke-strip.tsx`,
  * its `slots` memo with no rows) for one clock's strokes: the schedule's tracks
- * through that clock's pace, times its pen ms. The hybrid blend is the viewport's
- * default, 0.4, read only by the compare view's hybrid mode. */
+ * through that clock's pace, times its pen ms. The pace is the one the viewport
+ * and the strip run: the transport's override over the document's mode, and the
+ * transport's hybrid blend (CLOUD-HANDFIX finding 8; a fixed 0.4 and the
+ * document's mode put a performed stroke off under Debug's Smooth). */
 export function baseSlotsFor(
   strokes: ProcessedStroke[],
   penMs: number,
@@ -107,11 +109,12 @@ export function baseSlotsFor(
   windowMode: Parameters<typeof liftsLandBetweenStrokes>[1],
   revealMode: RevealPaceMode,
   nib: number,
+  hybridBlend = 0.4,
 ): Float64Array {
   const unitOf = drawIn.unit === "stroke" || strokes.length === 0 ? null : assignLetters(strokes, nib).of
   const schedule = scheduleFromStrokes(strokes, unitOf, drawIn)
   const lifts = liftsLandBetweenStrokes(schedule, windowMode)
-  const pace = paceFromCurve((c) => revealDistanceFraction(strokes, c, revealMode, 0.4, lifts))
+  const pace = paceFromCurve((c) => revealDistanceFraction(strokes, c, revealMode, hybridBlend, lifts))
   const s = new Float64Array(schedule.tracks.length * 2)
   schedule.tracks.forEach((t, i) => {
     s[i * 2] = pace.beatToLanding(t.start) * penMs
@@ -125,11 +128,19 @@ export function clockNibOf(doc: Pick<ClockDoc, "solidParams">): number {
   return computeSolidEffectiveThicknessPx(doc.solidParams.thickness)
 }
 
+/** The transport's pace inputs (`lib/take-transport.ts`): the diagnostic's
+ *  override and the hybrid blend. Persisted nowhere, read live. */
+export interface ClockPace {
+  modeOverride: RevealPaceMode | null
+  hybridBlend: number
+}
+export const CLOCK_PACE_DEFAULTS: ClockPace = { modeOverride: null, hybridBlend: 0.4 }
+
 /** Every stroke's base slot, ms, for one document on the clock it plays. */
-export function clockSlotsOf(doc: ClockDoc, cs: ClockCanvas): Float64Array {
+export function clockSlotsOf(doc: ClockDoc, cs: ClockCanvas, pace: ClockPace = CLOCK_PACE_DEFAULTS): Float64Array {
   const nib = clockNibOf(doc)
   const c = clockStrokesFor(doc.rawStrokes, doc.processedStrokes, doc.revealEnvelope, nib, cs)
-  return baseSlotsFor(c.processed, penMsOf(c.raw), doc.drawIn, doc.revealWindow.mode, doc.revealEnvelope.mode, nib)
+  return baseSlotsFor(c.processed, penMsOf(c.raw), doc.drawIn, doc.revealWindow.mode, pace.modeOverride ?? doc.revealEnvelope.mode, nib, pace.hybridBlend)
 }
 
 /**
@@ -137,7 +148,8 @@ export function clockSlotsOf(doc: ClockDoc, cs: ClockCanvas): Float64Array {
  * stroke would move. `csBefore` is the canvas the playing clock was stamped
  * with (the page's memo keeps it), `csAfter` the one the next stamp reads, so
  * a spacing change rebases from the resample that played to the one that will.
- * A patch that adds or drops a stroke is not a re-stamp and returns null.
+ * `pace` is the transport's, the same on both sides. A patch that adds or drops
+ * a stroke is not a re-stamp and returns null.
  */
 export function rebaseForPatch(
   take: StrokeTimingTake | null | undefined,
@@ -145,12 +157,13 @@ export function rebaseForPatch(
   patch: Partial<ClockDoc>,
   csBefore: ClockCanvas,
   csAfter: ClockCanvas = csBefore,
+  pace: ClockPace = CLOCK_PACE_DEFAULTS,
 ): StrokeTimingTake | null {
   if (!take || !takeHasPerformed(take)) return null
   const next: ClockDoc = { ...doc, ...patch }
   if (next.processedStrokes.length !== doc.processedStrokes.length || next.rawStrokes.length !== doc.rawStrokes.length) return null
-  const a = clockSlotsOf(doc, csBefore)
-  const b = clockSlotsOf(next, csAfter)
+  const a = clockSlotsOf(doc, csBefore, pace)
+  const b = clockSlotsOf(next, csAfter, pace)
   if (a.length !== b.length || a.every((v, i) => v === b[i])) return null
   return rebasePerformed(take, a, b)
 }

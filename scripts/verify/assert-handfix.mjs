@@ -326,6 +326,44 @@ async function runRows() {
       "read the tip uniforms block")
   }
 
+  /* ---- F8 · the rebase reads the pace the viewport and the strip run ------ */
+  {
+    const parts = []
+    for (const [label, pace] of [["Debug Smooth", { modeOverride: "smooth", hybridBlend: 0.4 }], ["hybrid blend 0.8", { modeOverride: null, hybridBlend: 0.8 }]]) {
+      const doc = docOf({ revealEnvelope: { ...SS.REVEAL_ENVELOPE_DEFAULTS } })
+      const patch = { revealEnvelope: { ...doc.revealEnvelope, clock: "hand" } }
+      // Performed on the strip's slots, which run the transport's pace.
+      const A = C.clockSlotsOf(doc, cs, pace)
+      const B = C.clockSlotsOf({ ...doc, ...patch }, cs, pace)
+      // Every stroke performed in turn: each must keep its slot; the document's pace alone must move at least one.
+      let exact = 0
+      let worstOff = 0
+      let worstAt = -1
+      const nS = A.length / 2
+      for (let i = 0; i < nS; i++) {
+        const t0 = A[i * 2] + 211
+        const take = T.withPerformed({ strokes: {}, ripple: false }, A, new Map([[i, { t0, t1: t0 + (A[i * 2 + 1] - A[i * 2]) * 1.4, performed: [0, 0.3, 0.3, 0.7, 1] }]]))
+        const before = onScreen(take, A, i)
+        const rb = C.rebaseForPatch(take, doc, patch, cs, cs, pace)
+        const after = rb ? onScreen(rb, B, i) : null
+        if (after && near(after[0], before[0]) && near(after[1], before[1])) exact++
+        // The same swap through the document's pace alone, which is what the bug did.
+        const rbDoc = C.rebaseForPatch(take, doc, patch, cs, cs)
+        const off = rbDoc ? onScreen(rbDoc, B, i) : onScreen(take, B, i)
+        const m = Math.max(Math.abs(off[0] - before[0]), Math.abs(off[1] - before[1]))
+        if (m > worstOff) (worstOff = m), (worstAt = i)
+      }
+      const ok = exact === nS && worstOff > 1
+      parts.push({ ok, d: `${label}, Recorded to Hand: ${exact} of ${nS} performed strokes keep their slot; through the document's pace alone stroke ${worstAt} lands ${worstOff.toFixed(1)} ms off` })
+    }
+    row("F8-PACE", parts.every((p) => p.ok), "a clock swap under the transport's pace override or blend keeps a performed stroke's on-screen slot", parts.map((p) => p.d).join("; "))
+    const page = readSrc("app/page.tsx")
+    const rf = bodyOf(page, "const rebaseForClock = (")
+    row("W8-PACE", /modeOverride: tr\.get\("modeOverride"\), hybridBlend: tr\.get\("hybridBlend"\)/.test(rf) && /rebaseForPatch\(d\.take, d, patch, clockCsRef\.current, settingsRef\.current, pace\)/.test(rf) && /<TransportRef into=\{transportRef\} \/>/.test(page),
+      "page: rebaseForClock hands rebaseForPatch the page transport's modeOverride and hybridBlend",
+      rf ? "read the body of rebaseForClock" : "no rebaseForClock in app/page.tsx")
+  }
+
   /* ---- WIRING: what the page hands rebaseForClock ------------------------ */
   {
     const page = readSrc("app/page.tsx")
@@ -484,6 +522,8 @@ const MUTANTS = [
   { name: "the pace is left out of the key", file: "lib/stroke-timing.ts", find: "|r${t.ripple ? 1 : 0}|pace${pace.sig ?? \"?\"}`", replace: "|r${t.ripple ? 1 : 0}`", rows: ["F5-PACEKEY"] },
   { name: "heldAtLift holds nothing", file: "lib/stroke-timing.ts", find: "if (x >= lifts[k] && x < lifts[k + 1]) return lifts[k]", replace: "if (x >= lifts[k] && x < lifts[k + 1]) return x", rows: ["F6-TRAIL"] },
   { name: "the trailing edge is not held", file: "components/viewport-3d.tsx", find: "if (liftHold && !trailLiftHoldsKnocked()) tu.w0.value = heldAtLift(tf.lifts, tu.w0.value)", replace: "", rows: ["W6-TRAIL"] },
+  { name: "the slots read the document's pace again", file: "lib/clock-rebase.ts", find: "pace.modeOverride ?? doc.revealEnvelope.mode, nib, pace.hybridBlend)", replace: "doc.revealEnvelope.mode, nib, 0.4)", rows: ["F8-PACE"] },
+  { name: "rebaseForClock drops the transport", file: "app/page.tsx", find: "clockCsRef.current, settingsRef.current, pace)", replace: "clockCsRef.current, settingsRef.current)", rows: ["W8-PACE"] },
   { name: "the memo forgets its canvas", file: "app/page.tsx", find: "clockCsRef.current = clocked.cs", replace: "clockCsRef.current = settingsRef.current", rows: ["W1-CS"] },
 ]
 
