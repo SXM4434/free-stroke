@@ -339,7 +339,7 @@ say("shipped-clean", SHIPPED_CLEAN(shipped, polylines),
   say("kb-shipped-clean", red,
     "KNOWN-BAD `regressed`, the parked 22-piece trace shipped again, turns `shipped-clean` RED",
     `${regressed.census.droppedIdx.length} under the nib · ${parked.length} → ${regressed.strokes} strokes` +
-      (red ? "" : " — NOT RED, this row cannot say no"))
+      (red ? "" : ", NOT RED, this row cannot say no"))
 }
 
 /* THE GUARD. An unset or NaN dial must not be able to delete the drawing. */
