@@ -18,8 +18,9 @@
 // `performed` row. This gate drives it with real pointer events (CDP `Input.dispatchMouseEvent`
 // through `page.mouse`) on the stage's own paths, read off its `d` attributes.
 //
-// WHERE THE EXPECTATIONS COME FROM. Pointer times come from the page's own clock (`e.timeStamp` of
-// every stage pointer event, logged by an init script), never from this script's timers. What a
+// WHERE THE EXPECTATIONS COME FROM. Pointer times come from the page's own clock (`performance.now()`
+// at every stage pointer event, logged by an init script), never from this script's timers. During a
+// performance that clock is DRIVEN (CLOUD-FLAKES, see `perform`): it moves only by the plan's steps. What a
 // performance wrote is read from `__fsTake.get()`. What the played take drew is Rod's per-stroke
 // drawRange, `get().live.meshes[i].count`, after `__revealHarness.setProgress`. On Inflate, Extrude
 // and Solid (row 1b, F121) no mesh count names one stroke, so it is the inked share of stroke D's
@@ -120,9 +121,18 @@ const counters = () => {
     if (this === w && t === "keydown") c.kdRem++
     return rem.call(this, t, ...a)
   }
+  /* CLOUD-FLAKES: each event is logged at `performance.now()`, the read the stage's own handler
+   * makes, not at `e.timeStamp`. Under SwiftShader a handler runs tens of ms after its event was
+   * stamped, so the two clocks disagreed by the handler's lateness. `__ptrN` counts every logged
+   * event so `perform` can wait for each one to land before it moves the driven clock. */
   w.__ptrLog = []
+  w.__ptrN = 0
   for (const type of ["pointerdown", "pointermove", "pointerup"])
-    add.call(w, type, (e) => e.target?.closest?.("[data-perform-stage]") && w.__ptrLog.push({ type, t: e.timeStamp }), true)
+    add.call(w, type, (e) => {
+      if (!e.target?.closest?.("[data-perform-stage]")) return
+      w.__ptrN++
+      w.__ptrLog.push({ type, t: performance.now() })
+    }, true)
 }
 let context = null
 let page = null
@@ -188,36 +198,85 @@ const at = (pts, arc, f) => {
  * Perform stroke i. `plan` is a list of `{ to, steps, ms }` moves along the arc and `{ dwell }`
  * holds. `onMove` runs after every move. Leaves the pointer up; returns the page's pointer log.
  */
+/* THE PERFORMANCE RUNS ON A DRIVEN CLOCK. CLOUD-FLAKES.
+ *
+ * The stage times a performance with `performance.now()`, read in each pointer handler and once a
+ * frame (components/perform-take.tsx `step`). Before this, the gate paced the pen with wall-clock
+ * sleeps, so what the stage recorded was whatever the page's frames let through: a 300 ms
+ * SwiftShader frame during row 2's drag recorded a 300 ms pause the plan never made (bar 200 ms),
+ * and a pointer handler running late moved a dwell's ends off the `e.timeStamp` the gate measured
+ * them by, which rows 1b (bar one frame) read as the hold starting or ending late.
+ *
+ * So inside a performance `performance.now` reads a value this script sets. Each pointer event is
+ * dispatched, the script waits until the page has logged it (`__ptrN`), and only then moves the
+ * clock by the plan's `ms`, or by the dwell. The stage therefore records exactly the plan's
+ * timing, and the logger, reading the same clock, records the same times. A slow frame makes the
+ * run slower, never different. The real sleeps stay, so the real clock is always ahead of the
+ * driven one and `performance.now` is put back without ever running backwards.
+ *
+ * Nothing about the stage is replaced: its handlers, its frame loop and its fit run as shipped,
+ * on the clock they always read. A stage that times with anything else (Date.now, e.timeStamp,
+ * a wall-clock timer) would see the real pacing and fail rows 1a, 1b, 2 and 5 against the plan. */
+const driveClock = () =>
+  page.evaluate(() => {
+    const perf = window.performance
+    const real = Performance.prototype.now.bind(perf)
+    window.__drv = { v: real(), real }
+    perf.now = () => window.__drv.v
+  })
+const stepClock = (ms) => page.evaluate((d) => { window.__drv.v += d }, ms)
+const releaseClock = () =>
+  page.evaluate(async () => {
+    const d = window.__drv
+    while (d.real() < d.v) await new Promise((r) => setTimeout(r, 5))
+    delete window.performance.now
+    delete window.__drv
+  })
+/** Dispatch one pointer action and wait until the page has handled it. */
+const landed = async (act) => {
+  const n0 = await page.evaluate(() => window.__ptrN)
+  await act()
+  await page.waitForFunction((n) => window.__ptrN > n, n0, { timeout: 10000 })
+}
 const perform = async (i, plan, onMove) => {
   const { pts } = (await stage())[i]
   const arc = arcOf(pts)
   let f = 0
   const [x0, y0] = at(pts, arc, 0)
   await page.mouse.move(x0, y0)
-  await page.mouse.down()
-  for (const s of plan) {
-    if (s.dwell) {
-      await page.waitForTimeout(s.dwell)
-      continue
+  await driveClock()
+  try {
+    await landed(() => page.mouse.down())
+    for (const s of plan) {
+      if (s.dwell) {
+        await stepClock(s.dwell)
+        await page.waitForTimeout(s.dwell)
+        continue
+      }
+      if (s.xy) {
+        await landed(() => page.mouse.move(s.xy[0], s.xy[1]))
+        if (onMove) await onMove(s)
+        continue
+      }
+      const from = f
+      for (let k = 1; k <= s.steps; k++) {
+        const g = from + ((s.to - from) * k) / s.steps
+        const [x, y] = at(pts, arc, Math.min(g, 1))
+        await landed(() => page.mouse.move(x, y))
+        if (onMove) await onMove({ f: g, x, y })
+        const ms = typeof s.ms === "function" ? s.ms(k) : s.ms ?? 16
+        if (ms) {
+          await stepClock(ms)
+          await page.waitForTimeout(ms)
+        }
+      }
+      f = s.to
     }
-    if (s.xy) {
-      await page.mouse.move(s.xy[0], s.xy[1])
-      if (onMove) await onMove(s)
-      continue
-    }
-    const from = f
-    for (let k = 1; k <= s.steps; k++) {
-      const g = from + ((s.to - from) * k) / s.steps
-      const [x, y] = at(pts, arc, Math.min(g, 1))
-      await page.mouse.move(x, y)
-      if (onMove) await onMove({ f: g, x, y })
-      const ms = typeof s.ms === "function" ? s.ms(k) : s.ms ?? 16
-      if (ms) await page.waitForTimeout(ms)
-    }
-    f = s.to
+    await landed(() => page.mouse.up())
+    await settle(120)
+  } finally {
+    await releaseClock()
   }
-  await page.mouse.up()
-  await settle(120)
   return ptr()
 }
 const keep = async () => {
