@@ -84,6 +84,14 @@ export interface StrokeTiming {
    * still place the slot. Absent on every row the strip writes.
    */
   performed?: number[]
+  /**
+   * Coverage row 31, "reverse this one stroke". The pen runs the stroke from
+   * its far end back to where it began, inside the same slot and on the same
+   * pace: arc `a` arrives when its mirror `from + to - a` would have. On top
+   * of the schedule's Direction, so a stroke Direction already reversed runs
+   * forward again. Absent (the default) is today, byte for byte.
+   */
+  reverse?: boolean
 }
 
 export const STROKE_TIMING_NEUTRAL: StrokeTiming = {
@@ -411,6 +419,8 @@ export interface TimedSchedule {
   eases: EaseFn[]
   /** Per stroke, the validated performed pace, or null. */
   performed: (Float64Array | null)[]
+  /** Per stroke, 1 where its row reverses it (`StrokeTiming.reverse`). */
+  flip: Uint8Array
   pace: TimingPace
   ripple: boolean
   /**
@@ -508,6 +518,7 @@ export function buildTimedSchedule(
     const delayMs = Number.isFinite(r.delayMs) ? r.delayMs : 0
     if (delayMs !== r.delayMs) rejected.push(`stroke ${i}: delay ${r.delayMs} read as 0`)
     rows[i] = { delayMs, speed, ease: r.ease, holdBack: !!r.holdBack }
+    if (r.reverse === true) rows[i].reverse = true
     if (r.performed !== undefined) {
       const why = performedFault(r.performed)
       if (why) rejected.push(`stroke ${i}: performed pace ${why}, played at its own pace`)
@@ -529,17 +540,19 @@ export function buildTimedSchedule(
 
   const performed = rows.map((r) => (r.performed ? Float64Array.from(r.performed) : null))
   const eases = rows.map((r, i) => (performed[i] ? null : easeFnOf(r.ease)))
+  const flip = Uint8Array.from(rows, (r) => (r.reverse ? 1 : 0))
   let sig = `${base.sig}|ms${baseMs}|r${t.ripple ? 1 : 0}`
   for (let i = 0; i < n; i++) {
     if (rows[i] === STROKE_TIMING_NEUTRAL) continue
     sig += `|${i}:${rows[i].delayMs},${rows[i].speed},${JSON.stringify(rows[i].ease)},${rows[i].holdBack ? 1 : 0}`
     if (rows[i].performed) sig += `,p${rows[i].performed!.join(" ")}`
+    if (flip[i]) sig += ",rv"
   }
   let identity = takeMs === baseMs
   for (let i = 0; identity && i < n; i++) {
-    if (eases[i] || performed[i] || slots[i * 2] !== baseSlots[i * 2] || slots[i * 2 + 1] !== baseSlots[i * 2 + 1]) identity = false
+    if (eases[i] || performed[i] || flip[i] || slots[i * 2] !== baseSlots[i * 2] || slots[i * 2 + 1] !== baseSlots[i * 2 + 1]) identity = false
   }
-  return { base, baseMs, takeMs, baseSlots, slots, eases, performed, pace, ripple: t.ripple, rejected, sig, identity }
+  return { base, baseMs, takeMs, baseSlots, slots, eases, performed, flip, pace, ripple: t.ripple, rejected, sig, identity }
 }
 
 /* ==========================================================================
@@ -568,7 +581,7 @@ export function strokeOfArc(sched: StrokeSchedule, a: number): number {
  * pass through unchanged, as `scheduleArc` does.
  */
 export function timedArcMsIn(ts: TimedSchedule, i: number, a: number): number {
-  const S = scheduleArc(ts.base, a)
+  const S = scheduleArc(ts.base, ts.flip[i] ? mirrorIn(ts.base.tracks[i], a) : a)
   const pf = ts.performed[i]
   if (pf) {
     const tr = ts.base.tracks[i]
@@ -586,6 +599,21 @@ export function timedArcMsIn(ts: TimedSchedule, i: number, a: number): number {
   const e = ts.eases[i]
   const u = e ? easeInverse(e, w) : w
   return t0 + (t1 - t0) * u
+}
+
+/** Arc `a` mirrored inside its track, `from + to - a`, written from the near
+ *  end and clamped, so a float step never carries it into the next stroke.
+ *  Values above 1, the tip field's sentinel, pass through. */
+function mirrorIn(tr: { from: number; to: number }, a: number): number {
+  if (a > 1) return a
+  const m = tr.to - (a - tr.from)
+  return m < tr.from ? tr.from : m > tr.to ? tr.to : m
+}
+
+/** Which way stroke `i` runs on the take: the schedule's Direction, turned
+ *  round again by the row's own reverse. */
+function runsBack(ts: TimedSchedule, i: number): boolean {
+  return ts.base.tracks[i].reverse !== (ts.flip[i] === 1)
 }
 
 /** `timedArcMsIn` as a fraction of `takeMs`: the key a triangle is sorted by. */
@@ -771,20 +799,21 @@ export function timedFront(ts: TimedSchedule, tMs: number, marginArc: number): n
   const order = Array.from({ length: n }, (_, i) => i).sort((x, y) => ts.baseSlots[x * 2] - ts.baseSlots[y * 2])
   const nextOf = new Int32Array(n).fill(-1)
   for (let k = 0; k + 1 < n; k++) nextOf[order[k]] = order[k + 1]
-  const entry = (j: number) => (tr[j].reverse ? tr[j].to : tr[j].from)
+  const entry = (j: number) => (runsBack(ts, j) ? tr[j].to : tr[j].from)
   for (let i = 0; i < n; i++) {
     if (tMs < ts.slots[i * 2]) continue
     const t = tr[i]
     const r = reachedAt(ts, i, tMs)
     const span = t.to - t.from
-    let at = t.reverse ? t.to - r * span : t.from + r * span
+    let at = runsBack(ts, i) ? t.to - r * span : t.from + r * span
     let left = marginArc
     let j = i
     for (let guard = 0; guard <= n; guard++) {
       const tj = tr[j]
-      const room = tj.reverse ? at - tj.from : tj.to - at
+      const back = runsBack(ts, j)
+      const room = back ? at - tj.from : tj.to - at
       const step = left < room ? left : room > 0 ? room : 0
-      at = tj.reverse ? at - step : at + step
+      at = back ? at - step : at + step
       left -= step
       const f = timedArcMsIn(ts, j, at) / ts.takeMs
       if (f > front) front = f
@@ -823,7 +852,7 @@ export function sampleTake(
   for (let i = 0; i < n; i++) {
     const rLo = win && win.lo > 0 ? reachedAt(ts, i, loMs) : 0
     const rHi = reachedAt(ts, i, hiMs)
-    if (ts.base.tracks[i].reverse) {
+    if (runsBack(ts, i)) {
       spans[i * 2] = 1 - rHi
       spans[i * 2 + 1] = 1 - rLo
     } else {
@@ -1166,7 +1195,7 @@ export function performedHolds(ts: TimedSchedule): PerformedHold[] {
           stroke: i,
           t0: s0 + (len * k) / m,
           t1: s0 + (len * (j - 1)) / m,
-          arc: tr.reverse ? tr.to - r * span : tr.from + r * span,
+          arc: runsBack(ts, i) ? tr.to - r * span : tr.from + r * span,
         })
       }
       k = j
@@ -1202,6 +1231,8 @@ export function withPerformed(
         ease: { kind: "preset", id: "linear" },
         holdBack: false,
         performed: f.performed,
+        // The direction he performed it in, so a re-take keeps the stroke reversed.
+        ...(take.strokes[i]?.reverse ? { reverse: true } : {}),
       }
     }
     if (!take.ripple) continue

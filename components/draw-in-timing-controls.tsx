@@ -775,8 +775,8 @@ export function DrawInTimingControls({
 }
 
 /* ═══ THE SELECTED STROKE (ANIM-1B) ═══════════════════════════════════
- * The numbers behind the bar you picked in the strip: delay, speed, ease and
- * Hold back. Both doors render this through `DrawInTimingControls`, and both
+ * The numbers behind the bar you picked in the strip: delay, speed, ease,
+ * Hold back and Reverse. Both doors render this through `DrawInTimingControls`, and both
  * read the page's take through `useStrokeTake()`, so a drag in the strip and a
  * number typed here are the same write. No provider (a host with no take)
  * means no block, never a block whose inputs move nothing.
@@ -914,6 +914,20 @@ function SelectedStrokeBlock() {
           }`}
         >
           Hold back
+        </button>
+        <button
+          type="button"
+          data-stroke-field="reverse"
+          aria-pressed={!!row.reverse}
+          onClick={() => put({ reverse: !row.reverse }, null)}
+          title="Draw this stroke from its far end back to where the pen began, in the same slot"
+          className={`fs-press flex-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors ${
+            row.reverse
+              ? "border-foreground/20 bg-foreground text-background"
+              : "border-border text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Reverse
         </button>
         <button
           type="button"

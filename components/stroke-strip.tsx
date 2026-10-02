@@ -523,7 +523,7 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
                 onPointerCancel={onBarUp}
                 title={`Stroke ${i + 1}: ${(t0 / 1000).toFixed(2)}s to ${(t1 / 1000).toFixed(2)}s${
                   row?.holdBack ? ", lands last" : ""
-                }`}
+                }${row?.reverse ? ", reversed" : ""}`}
                 className={`group pointer-events-auto absolute touch-none select-none overflow-hidden rounded-[3px] transition-colors duration-100 ${
                   isSel ? "bg-foreground/20 ring-1 ring-inset ring-foreground" : "bg-foreground/15 group-hover/row:bg-foreground/25"
                 } ${isSel && dragKind === "body" ? "cursor-grabbing" : "cursor-grab"}`}
@@ -648,7 +648,7 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
           <span className="shrink-0 text-[10px] font-medium text-foreground">When each stroke draws</span>
           <span className="truncate text-[10px] tabular-nums text-muted-foreground">
             {sel !== null && selRow
-              ? `Stroke ${sel + 1}, ${selRow.delayMs === 0 ? "on time" : `${selRow.delayMs > 0 ? "+" : ""}${selRow.delayMs} ms`}, ${selRow.speed}x${selRow.holdBack ? ", lands last" : ""}`
+              ? `Stroke ${sel + 1}, ${selRow.delayMs === 0 ? "on time" : `${selRow.delayMs > 0 ? "+" : ""}${selRow.delayMs} ms`}, ${selRow.speed}x${selRow.holdBack ? ", lands last" : ""}${selRow.reverse ? ", reversed" : ""}`
               : "Drag a bar to move it, an end to change its speed"}
           </span>
         </div>
@@ -669,6 +669,22 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
               Hold back
             </button>
           )}
+          {sel !== null && selRow && (
+            <button
+              type="button"
+              data-strip-reverse
+              aria-pressed={!!selRow.reverse}
+              onClick={() => writeRow(sel, { reverse: !selRow.reverse }, null)}
+              title="Draw this stroke from its far end back to where the pen began, in the same slot"
+              className={`fs-press rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                selRow.reverse
+                  ? "border-foreground/20 bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Reverse
+            </button>
+          )}
           <button
             type="button"
             data-strip-perform
@@ -684,7 +700,7 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
               strokes={strokes}
               baseSlots={baseSlots}
               slots={slots}
-              reverse={schedule.tracks.map((t) => !!t.reverse)}
+              reverse={schedule.tracks.map((t, i) => !!t.reverse !== !!rowOf(take, i).reverse)}
               take={take}
               commit={commit}
               initial={selected}

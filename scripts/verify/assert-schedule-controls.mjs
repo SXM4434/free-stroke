@@ -236,6 +236,128 @@ async function runRows() {
     row("STAGGER-PRESET", !!p && p.implemented === true && gap >= 40 && gap <= 60 && gap === T.STAGGER_GAP_MS && St.resolveMotionPreset("stagger")?.stagger?.gapMs === gap, "Geometry Animation has a Stagger preset that resolves to a 40 to 60 ms stagger, the same number as STAGGER_GAP_MS", p ? `"${p.label}", implemented ${p.implemented}, gap ${gap} ms, STAGGER_GAP_MS ${T.STAGGER_GAP_MS}` : "no preset with id stagger")
   }
 
+  /* ── REVERSE ONE STROKE (coverage row 31) ──────────────────────────────── */
+  const K = 5
+  const owner = new Int32Array(hero.keys.length)
+  for (let t = 0; t < hero.keys.length; t++) owner[t] = hero.keys[t] > 1 ? -1 : T.strokeOfArc(sched, hero.keys[t])
+  const keysMs = (sc, ts) => Float64Array.from(T.timedRevealKeys(hero.keys, sc, ts), (k) => k * ts.takeMs)
+  const TOL = 0.05 // ms; float32 keys near 4 s carry about 2e-4 ms
+  {
+    const tsN = build({ strokes: { [K]: { ...T.STROKE_TIMING_NEUTRAL } }, ripple: false })
+    const tsR = build({ strokes: { [K]: { ...T.STROKE_TIMING_NEUTRAL, reverse: true } }, ripple: false })
+    const kN = keysMs(sched, tsN)
+    const kR = keysMs(sched, tsR)
+    const tr = sched.tracks[K]
+    let mine = 0, bad = 0, others = 0, othersBad = 0, moved = 0
+    for (let t = 0; t < kR.length; t++) {
+      if (owner[t] < 0) continue
+      if (owner[t] !== K) {
+        others++
+        if (kR[t] !== kN[t]) othersBad++
+        continue
+      }
+      mine++
+      const want = T.timedArcMsIn(tsN, K, tr.to - (hero.keys[t] - tr.from))
+      if (!(Math.abs(kR[t] - want) <= TOL)) bad++
+      if (Math.abs(kR[t] - kN[t]) > 100) moved++
+    }
+    const slotSame = tsR.slots[K * 2] === tsN.slots[K * 2] && tsR.slots[K * 2 + 1] === tsN.slots[K * 2 + 1]
+    row("REV-KEYS", mine > 0 && bad === 0 && othersBad === 0 && slotSame && moved > mine / 4, `reverse on stroke ${K}: arc a arrives when its mirror did, in the same slot; no other stroke moves`, `${mine - bad} of ${mine} of its triangles on the mirror within ${TOL} ms, ${moved} moved by over 100 ms; ${othersBad} of ${others} others changed; slot kept ${slotSame}`)
+  }
+  {
+    /* Under Direction "all" every track already runs back; the row turns stroke K round again. */
+    const all = S.scheduleFromStrokes(hero.strokes, null, { ...S.DRAW_IN_DEFAULTS, reverse: "all" })
+    const tsA = T.buildTimedSchedule(all, { strokes: { [K]: { ...T.STROKE_TIMING_NEUTRAL, reverse: true } }, ripple: false }, { baseMs: BASE_MS, pace })
+    const tsF = build({ strokes: { [K]: { ...T.STROKE_TIMING_NEUTRAL } }, ripple: false })
+    const kA = keysMs(all, tsA)
+    const kF = keysMs(sched, tsF)
+    let mine = 0, bad = 0
+    for (let t = 0; t < kA.length; t++) {
+      if (owner[t] !== K) continue
+      mine++
+      if (!(Math.abs(kA[t] - kF[t]) <= TOL)) bad++
+    }
+    const sp = T.sampleTake(tsA, (tsA.slots[K * 2] + tsA.slots[K * 2 + 1]) / 2).spans
+    const fwd = sp[K * 2] === 0 && sp[K * 2 + 1] > 0 && sp[K * 2 + 1] < 1
+    row("REV-DIRECTION", mine > 0 && bad === 0 && fwd, `reverse on top of Direction "all" runs stroke ${K} forward again, keys and spans`, `${mine - bad} of ${mine} keys equal the forward take's within ${TOL} ms; mid-slot span [${sp[K * 2].toFixed(3)}, ${sp[K * 2 + 1].toFixed(3)}] starts at its first point ${fwd}`)
+  }
+  const revTakes = (sc) => [
+    ["direction off", sc, { strokes: { [K]: { delayMs: 300, speed: 1.4, ease: { kind: "preset", id: "inOut" }, holdBack: false, reverse: true }, 8: { ...T.STROKE_TIMING_NEUTRAL, reverse: true, performed: [0, 0.3, 0.3, 1] }, 2: { ...T.STROKE_TIMING_NEUTRAL, holdBack: true, reverse: true } }, ripple: true }],
+  ]
+  const alt = S.scheduleFromStrokes(hero.strokes, null, { ...S.DRAW_IN_DEFAULTS, reverse: "alternate" })
+  const revCases = [...revTakes(sched), ["direction alternate", alt, revTakes(alt)[0][2]]]
+  {
+    let checked = 0, mismatch = 0, ties = 0
+    for (const [, sc, tk] of revCases) {
+      const ts = T.buildTimedSchedule(sc, tk, { baseMs: BASE_MS, pace })
+      const kt = T.timedRevealKeys(hero.keys, sc, ts)
+      for (const mode of ["grow", "travel"]) {
+        for (let j = 0; j < 60; j++) {
+          const c = (j + 0.37) / 60
+          const win = mode === "grow" ? { lo: 0, hi: c } : S.windowAt({ mode: "travel", length: 0.3 }, c)
+          const sp = T.sampleTake(ts, c * ts.takeMs, mode === "grow" ? undefined : win).spans
+          for (let t = 0; t < kt.length; t++) {
+            if (owner[t] < 0) continue
+            checked++
+            const tr = sc.tracks[owner[t]]
+            const q = tr.to > tr.from ? (hero.keys[t] - tr.from) / (tr.to - tr.from) : 1
+            const live = kt[t] <= win.hi && (win.lo <= 0 || kt[t] > win.lo)
+            const f0 = sp[owner[t] * 2]
+            const f1 = sp[owner[t] * 2 + 1]
+            const exp = q <= f1 && q >= f0 && f1 > f0
+            if (live !== exp) {
+              if (Math.min(Math.abs(kt[t] - win.hi), Math.abs(kt[t] - win.lo)) * ts.takeMs < 0.05) ties++
+              else mismatch++
+            }
+          }
+        }
+      }
+    }
+    row("REV-CLOCK", checked > 0 && mismatch === 0, "with reversed rows, export's sampleTake draws the live keys' set (grow and travel, 60 clocks, Direction off and alternate)", `${checked} triangle x clock checks: ${mismatch} disagree, ${ties} ties within 0.05 ms of an edge`)
+  }
+  {
+    /* Stroke K held back and reversed, so it draws alone at the end and the
+     * front is its own walk, not the max over every stroke still drawing. */
+    const margin = 0.02
+    const alone = { strokes: { [K]: { ...T.STROKE_TIMING_NEUTRAL, holdBack: true, reverse: true }, 8: { ...T.STROKE_TIMING_NEUTRAL, reverse: true } }, ripple: false }
+    let checked = 0, bad = 0, worst = 0
+    for (const [, sc, tk] of [["direction off", sched, alone], ["direction alternate", alt, alone]]) {
+      const ts = T.buildTimedSchedule(sc, tk, { baseMs: BASE_MS, pace })
+      const kt = T.timedRevealKeys(hero.keys, sc, ts)
+      const back = (i) => sc.tracks[i].reverse !== !!tk.strokes[i]?.reverse
+      for (let j = 1; j < 60; j++) {
+        const c = j / 60
+        const front = T.timedFront(ts, c * ts.takeMs, margin)
+        for (const i of [K, 8]) {
+          const tr = sc.tracks[i]
+          const len = tr.to - tr.from
+          const along = (a) => (back(i) ? tr.to - a : a - tr.from)
+          let reached = -1
+          for (let t = 0; t < kt.length; t++) if (owner[t] === i && kt[t] <= c) reached = Math.max(reached, along(hero.keys[t]))
+          if (reached < 0 || reached >= len) continue
+          for (let t = 0; t < kt.length; t++) {
+            if (owner[t] !== i) continue
+            const d = along(hero.keys[t]) - reached
+            if (d <= 0 || d > margin * 0.9) continue
+            checked++
+            if (kt[t] > front + 1e-7) (bad++, (worst = Math.max(worst, (kt[t] - front) * ts.takeMs)))
+          }
+        }
+      }
+    }
+    row("REV-FRONT", checked > 0 && bad === 0, `the cull's front walks a reversed stroke from its far end: every triangle within the margin ahead of the pen is submitted`, `${checked} triangle x clock checks on strokes ${K} and 8: ${bad} left out${bad ? `, worst ${worst.toFixed(1)} ms late` : ""}`)
+  }
+
+  /* ── SAVED: every new field survives the session reader, and junk is named ── */
+  {
+    const D = loadTs("lib/doc-store.ts")
+    const row0 = { delayMs: 5, speed: 1, ease: { kind: "preset", id: "linear" }, holdBack: false }
+    const got = D.validateSession({ take: { strokes: { 1: { ...row0, reverse: true }, 2: { ...row0, reverse: "yes" }, 3: { ...row0 } }, ripple: false } })
+    const tk = got.session.take
+    const ok = tk.strokes[1].reverse === true && !("reverse" in tk.strokes[2]) && !("reverse" in tk.strokes[3]) && got.repairs.some((r) => r.includes("strokes.2.reverse"))
+    row("DOC-REVERSE", ok, "a reversed row survives save and load; a reverse that is not a boolean is read as off and named", `rows ${JSON.stringify(Object.fromEntries(Object.entries(tk.strokes).map(([k, v]) => [k, v.reverse ?? null])))}; repairs: ${got.repairs.join(" | ") || "none"}`)
+  }
+
   rmSync(base.dir, { recursive: true, force: true })
 }
 
@@ -245,6 +367,10 @@ const MUTANTS = [
   { name: "stagger gap ignored", file: "lib/stroke-timing.ts", find: "const at = first + starts[k]", text: "const at = first", red: ["STAGGER", "STAGGER-RIPPLE"] },
   { name: "stagger forgets the ripple carry", file: "lib/stroke-timing.ts", find: "const want = at - B0 - (take.ripple ? carry : 0)", text: "const want = at - B0", red: ["STAGGER-RIPPLE"] },
   { name: "stagger writes neutral rows", file: "lib/stroke-timing.ts", find: "strokes[i] = { ...rowOf(take, i), delayMs }", text: "strokes[i] = { ...STROKE_TIMING_NEUTRAL, delayMs }", red: ["STAGGER-KEEP"] },
+  { name: "reverse row ignored by the keys", file: "lib/stroke-timing.ts", find: "scheduleArc(ts.base, ts.flip[i] ? mirrorIn(ts.base.tracks[i], a) : a)", text: "scheduleArc(ts.base, a)", red: ["REV-KEYS", "REV-DIRECTION", "REV-CLOCK"] },
+  { name: "reverse row ignored by spans and front", file: "lib/stroke-timing.ts", find: "return ts.base.tracks[i].reverse !== (ts.flip[i] === 1)", text: "return ts.base.tracks[i].reverse", red: ["REV-DIRECTION", "REV-CLOCK", "REV-FRONT"] },
+  { name: "reverse row dropped when the rows are read", file: "lib/stroke-timing.ts", find: "if (r.reverse === true) rows[i].reverse = true", text: "", red: ["REV-KEYS", "REV-DIRECTION"] },
+  { name: "the session reader drops reverse", file: "lib/doc-store.ts", find: "if (r.reverse === true) strokes[i].reverse = true", text: "if (false) strokes[i].reverse = true", red: ["DOC-REVERSE"] },
   { name: "stagger preset at 500 ms", file: "lib/style-system.ts", find: "stagger: { gapMs: 50 }", text: "stagger: { gapMs: 500 }", red: ["STAGGER-PRESET"] },
 ]
 

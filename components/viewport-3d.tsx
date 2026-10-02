@@ -6575,7 +6575,10 @@ function AnimatedStrokesInner({
      * frame by construction. A travelling window or a reordered schedule keeps
      * the `sampleTake` spans, as before. */
     let timedRodMs: Float64Array | null = null
-    if (timedNow && winNow.identity && (!schedNow || schedNow.identity)) {
+    /* A row that reverses its stroke (coverage row 31) runs the stroke from its
+     * far end, which Rod's own forward pen time cannot say, so a take with one
+     * keeps the `sampleTake` spans below, as a reordered schedule does. */
+    if (timedNow && winNow.identity && (!schedNow || schedNow.identity) && timedNow.flip.indexOf(1) < 0) {
       const n = timedNow.slots.length >> 1
       timedRodMs = new Float64Array(n)
       const T = winNow.hi * timedNow.takeMs

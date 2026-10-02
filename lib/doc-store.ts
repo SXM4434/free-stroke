@@ -1025,6 +1025,10 @@ function readTake(raw: unknown, repairs: string[]): StrokeTimingTake {
       delayMs = 0
     }
     strokes[i] = { delayMs, speed, ease, holdBack: r.holdBack }
+    if (r.reverse === true) strokes[i].reverse = true
+    else if (r.reverse !== undefined && r.reverse !== false) {
+      repairs.push(`take.strokes.${key}.reverse: ${JSON.stringify(r.reverse)} read as off`)
+    }
   }
   return { strokes, ripple }
 }
