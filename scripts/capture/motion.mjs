@@ -150,7 +150,7 @@ export const SHADOW_SEC = 0.1667
 
 // The round trip. See HeroReturn in lib/hero-motion.ts for why the change is
 // an occlusion and never a shading.
-export const RETURN = { mode: "changed", breakK: 0.35 }
+export const RETURN = { mode: "identical", breakK: 0.35 }
 
 // The wind-up. `releaseSec` is the half of it that was missing: the tense
 // unwinds INSIDE the turn's silent leading frames rather than snapping back on
