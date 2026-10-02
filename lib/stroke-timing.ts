@@ -48,6 +48,7 @@
  * The ends stay put, because every ease maps 0 to 0 and 1 to 1.
  * ========================================================================== */
 
+import { pressureTimed } from "@/lib/pressure-reveal"
 import {
   scheduleArc,
   windowParts,
@@ -962,6 +963,30 @@ export function rateScaled<S extends { points: { t: number }[] }>(strokes: S[], 
   let lo = Infinity
   for (const s of strokes) for (const p of s.points) if (p.t < lo) lo = p.t
   return strokes.map((s) => ({ ...s, points: s.points.map((p) => ({ ...p, t: lo + (p.t - lo) / rate })) }))
+}
+
+/** DRAWIN-EXTRAS · the clock's tail, after the clock (recorded or hand) is
+ *  chosen: the pressure reveal inside each stroke that carries pressure, then
+ *  the rate. At pressure 0 this is the two lines `/` always ran, the same
+ *  arrays in and out at rate 1. A pressured clock lives on the processed
+ *  points, so `raw` follows them, as it does under the hand. */
+export function clockTail<P extends { points: { t: number; pressure?: number }[] }, R extends { points: { t: number }[] }>(
+  processed: P[],
+  raw: R[],
+  wantHand: boolean,
+  rate: number,
+  pressure: number,
+): { processed: P[]; raw: R[]; pressured: boolean } {
+  let pressured = false
+  if (pressure > 0) {
+    const pt = pressureTimed(processed, pressure)
+    if (pt !== processed) {
+      processed = pt
+      pressured = true
+    }
+  }
+  const p = rateScaled(processed, rate)
+  return { processed: p, raw: wantHand || pressured ? (p as unknown as R[]) : rateScaled(raw, rate), pressured }
 }
 
 export function penMsOf(strokes: { points: { t: number }[] }[]): number {

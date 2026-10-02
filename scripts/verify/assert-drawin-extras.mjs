@@ -297,6 +297,105 @@ sections.push(["tip", async () => {
   await page.context().close()
 }])
 
+/* ═══ 2 · PRESSURE-AWARE REVEAL ═══════════════════════════════════════════ */
+/* The hero word with pressure that varies: each stroke light for its first half
+ * of points (0.25), hard for the rest (0.95). The plain word is injected at a
+ * constant 0.6, which is what a stroke with no pressure looks like to the reveal. */
+const pressured = polys.map((poly) => poly.map((p, j) => ({ ...p, pressure: j < poly.length / 2 ? 0.25 : 0.95 })))
+/* Per stroke: the share of the stroke's time spent reaching half its arc. */
+async function halfShares(page) {
+  const strokes = await page.evaluate(() => window.__fsClock.get().clocked)
+  return strokes.map((pts) => {
+    if (pts.length < 8) return null
+    const cum = [0]
+    for (let j = 1; j < pts.length; j++) cum.push(cum[j - 1] + Math.hypot(pts[j].x - pts[j - 1].x, pts[j].y - pts[j - 1].y))
+    const half = cum[cum.length - 1] / 2
+    let j = 1
+    while (j < pts.length - 1 && cum[j] < half) j++
+    const f = cum[j] > cum[j - 1] ? (half - cum[j - 1]) / (cum[j] - cum[j - 1]) : 0
+    const tHalf = pts[j - 1].t + f * (pts[j].t - pts[j - 1].t)
+    const t0 = pts[0].t
+    const t1 = pts[pts.length - 1].t
+    return { share: (tHalf - t0) / (t1 - t0), t0, t1 }
+  })
+}
+sections.push(["pressure", async () => {
+  const page = await openPage()
+  await pinCamera(page)
+  const off = await offEqualsMain(page)
+  row(off.ok, "PRESSURE 1 OFF: pressureReveal 0 renders every frame and clock as main", off.detail)
+  /* FALLBACK: at full strength, a word with no varying pressure is still main. */
+  await page.evaluate(() => window.__styleHarness.setEnvelope({ pressureReveal: 1 }))
+  const fb = await offEqualsMain(page)
+  const same = await page.evaluate(() => window.__fsClock.get().sameRef)
+  row(fb.ok && same, "PRESSURE 2 FALLBACK: at 1, a word with constant pressure renders and times as main, same arrays", `${fb.detail}; sameRef ${same}`)
+  await page.evaluate(() => { window.__FS_GATE_MUTATE = "pressure-no-fallback" })
+  await page.evaluate(() => window.__styleHarness.setEnvelope({ pressureReveal: 0.95 }))
+  await page.evaluate(() => window.__styleHarness.setEnvelope({ pressureReveal: 1 }))
+  const fbK = await offEqualsMain(page)
+  const sameK = await page.evaluate(() => window.__fsClock.get().sameRef)
+  await page.evaluate(() => { window.__FS_GATE_MUTATE = undefined })
+  mustFail("PRESSURE 2 FALLBACK with the no-pressure early return knocked out (pressure-no-fallback)", fbK.ok && sameK, `${fbK.detail}; sameRef ${sameK}`)
+  await page.context().close()
+
+  /* ON: over a word that carries pressure, the light first half of each stroke
+   * goes quicker, every stroke keeps its own start and end, and the frames move. */
+  const pp = await openPage(pressured)
+  await pinCamera(pp)
+  const grade = async (knock) => {
+    await pp.evaluate((k) => { window.__FS_GATE_MUTATE = k }, knock)
+    await pp.evaluate(() => window.__styleHarness.setEnvelope({ pressureReveal: 0 }))
+    await settle(pp, 600)
+    const a = await halfShares(pp)
+    const fa = [await frame(pp, 0.45), await frame(pp, 0.7), await frame(pp, 1)].map(sha)
+    await pp.evaluate(() => window.__styleHarness.setEnvelope({ pressureReveal: 1 }))
+    await settle(pp, 600)
+    const b = await halfShares(pp)
+    const fb2 = [await frame(pp, 0.45), await frame(pp, 0.7), await frame(pp, 1)].map(sha)
+    await pp.evaluate(() => { window.__FS_GATE_MUTATE = undefined })
+    await pp.evaluate(() => window.__styleHarness.setEnvelope({ pressureReveal: 0 }))
+    let quicker = 0
+    let graded = 0
+    let endsKept = true
+    let worst = -Infinity
+    for (let i = 0; i < a.length; i++) {
+      if (!a[i] || !b[i]) continue
+      graded++
+      const drop = a[i].share - b[i].share
+      if (drop >= 0.1) quicker++
+      worst = Math.max(worst, b[i].share - a[i].share)
+      if (Math.abs(a[i].t0 - b[i].t0) > 1e-6 || Math.abs(a[i].t1 - b[i].t1) > 1e-6) endsKept = false
+    }
+    const moved = fa[0] !== fb2[0] || fa[1] !== fb2[1]
+    const ok = graded > 0 && quicker === graded && endsKept && moved && fa[2] === fb2[2]
+    const mean = (xs) => xs.filter(Boolean).reduce((s, x) => s + x.share, 0) / xs.filter(Boolean).length
+    return { ok, detail: `${quicker} of ${graded} strokes reach half their arc at least 0.1 of their time sooner (mean share ${mean(a).toFixed(3)} off, ${mean(b).toFixed(3)} on); ends kept ${endsKept}; frames at 0.45/0.7 moved ${moved}; finished frame same ${fa[2] === fb2[2]}` }
+  }
+  const on = await grade(undefined)
+  row(on.ok, "PRESSURE 3 ON: the light half of every stroke draws quicker, each stroke keeps its start and end, the frames move", on.detail)
+  const inv = await grade("pressure-inverted")
+  mustFail("PRESSURE 3 ON with the pressure read backwards (pressure-inverted)", inv.ok, inv.detail)
+
+  /* The control. */
+  await pp.locator("button[aria-expanded]", { hasText: /^Preset/ }).first().click()
+  await settle(pp, 600)
+  await pp.locator("select").filter({ has: pp.locator('option[value="geometryAnimation"]') }).first().selectOption("geometryAnimation")
+  await settle(pp, 500)
+  await pp.locator('button[data-preset-id="authenticDraw"]').first().click()
+  await settle(pp, 600)
+  const slider = pp.locator('[data-preset-customize] [data-field-keys="envelope.pressureReveal"] input[type=range]')
+  const listed = await slider.count()
+  let after = null
+  if (listed) {
+    await slider.focus()
+    await pp.keyboard.press("ArrowRight")
+    await settle(pp)
+    after = await pp.evaluate(() => window.__styleHarness.envelope().pressureReveal)
+  }
+  row(listed === 1 && after > 0, "PRESSURE 4 CONTROL: Customize under Authentic Draw lists Pen pressure, and one step writes it", `listed ${listed}, pressureReveal after ArrowRight ${after}`)
+  await pp.context().close()
+}])
+
 for (const [name, run] of sections) if (want(name)) await run()
 
 row(errors.length === 0, "no page errors", errors.slice(0, 3).join(" | "))

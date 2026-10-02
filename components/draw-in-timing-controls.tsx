@@ -735,6 +735,32 @@ export function DrawInTimingControls({
       </span>
     </div>
     </>)}
+    {/* PEN PRESSURE (DRAWIN-EXTRAS). The pace inside each stroke follows how
+        hard he pressed. It re-times the clock, so under a take with performed
+        strokes / re-stores them as it does for a new clock (rebaseForClock). */}
+    {W(["envelope.pressureReveal"], <>
+    <label className="mb-2 flex flex-col gap-1" data-pressure-row>
+      <span className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span>Pen pressure</span>
+        <span className="tabular-nums text-foreground">
+          {envelope.pressureReveal === 0 ? "off" : `${Math.round(envelope.pressureReveal * 100)}%`}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        aria-label="Pen pressure"
+        value={envelope.pressureReveal}
+        onChange={(e) => patchEnvelope({ pressureReveal: Number(e.target.value) })}
+        className="h-1 w-full cursor-pointer appearance-none rounded-full bg-border accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
+      />
+      <span className="text-[10px] leading-snug text-muted-foreground" data-pressure-note>
+        Where you pressed harder the pen slows, where you eased off it speeds up. Each stroke keeps its length. A stroke drawn with a mouse has no pressure and plays as drawn.
+      </span>
+    </label>
+    </>)}
     {/* TIP HIGHLIGHT (DRAWIN-EXTRAS). A light on the pen's moving end while it
         draws. 0 is off, and off mounts nothing, so the take is main's. */}
     {W(["envelope.tipHighlight"], <>

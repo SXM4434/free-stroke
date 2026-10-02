@@ -4784,6 +4784,7 @@ export const HAND_DRAW_RATE = 3.333
  * fully determines the take. Off is main: nothing mounts and no clock moves. */
 export const DRAW_IN_EXTRAS_OFF = {
   tipHighlight: 0,
+  pressureReveal: 0,
 } as const satisfies Partial<RevealEnvelopeParams>
 
 export const GEOMETRY_ANIMATION_PRESET_DEFS: StylePreset[] = [

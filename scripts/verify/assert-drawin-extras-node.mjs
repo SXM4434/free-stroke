@@ -41,6 +41,7 @@ const BASE_REV = process.env.EXTRAS_BASE || "2cc9e98"
 /* Every extra, its off value, and whether a preset may ship it on. */
 const EXTRAS = {
   tipHighlight: 0,
+  pressureReveal: 0,
 }
 const EXTRA_KEYS = Object.keys(EXTRAS)
 
@@ -106,6 +107,7 @@ async function runRows() {
   const D = loadTs("lib/doc-store.ts")
   const TH = loadTs("lib/tip-highlight.ts")
   const PR = loadTs("lib/pen-reveal.ts")
+  const PRS = loadTs("lib/pressure-reveal.ts")
   const HW = await import("./_hero-word.mjs")
   const base = await loadBase()
   const hero = HW.processedHeroStrokes()
@@ -191,24 +193,28 @@ async function runRows() {
       `${presets.length} draw-in presets x ${EXTRA_KEYS.length} extras${missing.length ? `; presetFields misses ${missing.slice(0, 4)}` : ""}${unlisted.length ? `; MOTION_FIELD_KEYS misses ${unlisted}` : ""}${unwrapped.length ? `; no wrapped control for ${unwrapped}` : ""}`)
   }
 
-  /* ══ 1 · TIP HIGHLIGHT ═══════════════════════════════════════════════════ */
-  {
+  /* One persistence row per 0..1 extra: a value reads back, out of range is
+   * clamped and said, a wrong type reads off. */
+  const persistRow = (id, key, label) => {
     const bad = []
     const read = (v) => {
       const doc = JSON.parse(J(D.defaultSession()))
-      doc.revealEnvelope = { ...doc.revealEnvelope, tipHighlight: v }
+      doc.revealEnvelope = { ...doc.revealEnvelope, [key]: v }
       return D.validateSession(doc)
     }
     const r1 = read(0.4)
-    if (r1.session.revealEnvelope.tipHighlight !== 0.4 || r1.repairs.length) bad.push(`0.4 read as ${r1.session.revealEnvelope.tipHighlight} ${J(r1.repairs)}`)
+    if (r1.session.revealEnvelope[key] !== 0.4 || r1.repairs.length) bad.push(`0.4 read as ${r1.session.revealEnvelope[key]} ${J(r1.repairs)}`)
     const r2 = read(5)
-    if (r2.session.revealEnvelope.tipHighlight !== 1 || !r2.repairs.some((x) => x.includes("tipHighlight"))) bad.push(`5 read as ${r2.session.revealEnvelope.tipHighlight} ${J(r2.repairs)}`)
+    if (r2.session.revealEnvelope[key] !== 1 || !r2.repairs.some((x) => x.includes(key))) bad.push(`5 read as ${r2.session.revealEnvelope[key]} ${J(r2.repairs)}`)
     const r3 = read(-1)
-    if (r3.session.revealEnvelope.tipHighlight !== 0 || !r3.repairs.some((x) => x.includes("tipHighlight"))) bad.push(`-1 read as ${r3.session.revealEnvelope.tipHighlight}`)
+    if (r3.session.revealEnvelope[key] !== 0 || !r3.repairs.some((x) => x.includes(key))) bad.push(`-1 read as ${r3.session.revealEnvelope[key]}`)
     const r4 = read("x")
-    if (r4.session.revealEnvelope.tipHighlight !== 0) bad.push(`"x" read as ${J(r4.session.revealEnvelope.tipHighlight)}`)
-    row("TIP-PERSIST", bad.length === 0, "tip highlight persists: 0.4 reads back 0.4, out of range is clamped and said, a wrong type reads off", bad.join("; ") || "4 documents")
+    if (r4.session.revealEnvelope[key] !== 0) bad.push(`"x" read as ${J(r4.session.revealEnvelope[key])}`)
+    row(id, bad.length === 0, `${label} persists: 0.4 reads back 0.4, out of range is clamped and said, a wrong type reads off`, bad.join("; ") || "4 documents")
   }
+
+  /* ══ 1 · TIP HIGHLIGHT ═══════════════════════════════════════════════════ */
+  persistRow("TIP-PERSIST", "tipHighlight", "tip highlight")
   /* The reference for where the moving end is, written here from the strokes'
    * own geometry: at window edge `hi` on an identity schedule the reveal has
    * drawn `hi` of the word's total arc, in stroke order. */
@@ -322,16 +328,116 @@ async function runRows() {
     row("TIP-TIMED", ts !== null && bad.length === 0, "under a timed take the heads come from the take's spans, and a neutral take lights what the schedule lights", bad.slice(0, 4).join(", ") || "49 playheads")
   }
 
+  /* ══ 2 · PRESSURE-AWARE REVEAL ═══════════════════════════════════════════ */
+  persistRow("PRESS-PERSIST", "pressureReveal", "pen pressure")
+  const withP = (strokes, f) => strokes.map((s) => ({ ...s, points: s.points.map((p, j) => ({ ...p, pressure: f(j, s.points.length) })) }))
+  const noP = hero.map((s) => ({ ...s, points: s.points.map(({ pressure, ...p }) => p) }))
+  const flatP = withP(hero, () => 0.6)
+  const pts = (a) => a.map((s) => s.points)
+  {
+    /* Off: the clock tail at pressure 0 is the two lines / always ran, on a
+     * drawing that carries varying pressure. */
+    const varied = withP(hero, (j, n) => (j < n / 2 ? 0.25 : 0.95))
+    const bad = []
+    for (const hand of [false, true]) for (const r of [1, 2, 3.333]) {
+      const t = T.clockTail(varied, varied, hand, r, 0)
+      const bp = base.T.rateScaled(varied, r)
+      const br = hand ? bp : base.T.rateScaled(varied, r)
+      if (!same(pts(t.processed), pts(bp)) || !same(pts(t.raw), pts(br)) || t.pressured) bad.push(`hand ${hand} rate ${r}`)
+      if (r === 1 && !(t.processed === varied && t.raw === varied)) bad.push(`rate 1 hand ${hand}: not the same arrays`)
+    }
+    row("PRESS-OFF", bad.length === 0, "pressure at 0 is the base clock exactly: same arrays at rate 1, the base's rate scaling otherwise, on either clock", bad.join("; ") || "2 clocks x 3 rates, varying pressure on every stroke")
+  }
+  {
+    /* Falls back cleanly: no pressure, or pressure that never varies (a mouse),
+     * hands back the same objects, so the clock is main's. */
+    const bad = []
+    for (const [name, st] of [["no pressure", noP], ["constant 0.6", flatP]]) {
+      for (const amt of [0.5, 1]) {
+        if (PRS.pressureTimed(st, amt) !== st) bad.push(`${name} @${amt}: a new array`)
+        const t = T.clockTail(st, st, false, 1, amt)
+        if (t.processed !== st || t.raw !== st || t.pressured) bad.push(`${name} @${amt}: clockTail moved it`)
+        const t2 = T.clockTail(st, st, false, 2, amt)
+        if (!same(pts(t2.processed), pts(base.T.rateScaled(st, 2)))) bad.push(`${name} @${amt} rate 2: not the base's`)
+      }
+    }
+    /* Mixed: one stroke pressed, the rest not. Only that stroke moves. */
+    const mixed = hero.map((s, i) => (i === 3 ? withP([s], (j, n) => (j < n / 2 ? 0.25 : 0.95))[0] : noP[i]))
+    const m = PRS.pressureTimed(mixed, 1)
+    const moved = m.map((s, i) => s !== mixed[i]).reduce((a, b, i) => (b ? [...a, i] : a), [])
+    if (J(moved) !== J([3])) bad.push(`mixed: strokes ${J(moved)} moved, want [3]`)
+    row("PRESS-FALLBACK", bad.length === 0, "a stroke with no pressure, or a mouse's constant pressure, plays exactly as recorded at any amount; in a mixed drawing only the pressed stroke moves", bad.join("; ") || "2 inputs x 2 amounts, plus a mixed drawing")
+  }
+  {
+    /* On: pressed lightly in each stroke's first half and hard in the second,
+     * the light half goes quicker, so every stroke reaches half its arc in
+     * less than its share of time, through clockTail as / calls it. Start and
+     * end of every stroke, and so every gap between strokes, stay put. */
+    const varied = withP(hero, (j, n) => (j < n / 2 ? 0.25 : 0.95))
+    const halfShare = (s) => {
+      const c = TH.cumulativeArc(s.points)
+      const L = c[c.length - 1]
+      const t0 = s.points[0].t
+      const t1 = s.points[s.points.length - 1].t
+      let j = 0
+      while (c[j] < L / 2) j++
+      return (s.points[j].t - t0) / (t1 - t0)
+    }
+    const off = varied.map(halfShare)
+    const bad = []
+    const shares = {}
+    for (const amt of [0.5, 1]) {
+      const t = T.clockTail(varied, varied, false, 1, amt)
+      if (!t.pressured || t.raw !== t.processed) bad.push(`@${amt}: pressured ${t.pressured}, raw follows ${t.raw === t.processed}`)
+      const on = t.processed.map(halfShare)
+      shares[amt] = on.reduce((a, b) => a + b, 0) / on.length
+      on.forEach((v, i) => { if (!(v < off[i] - 0.02)) bad.push(`@${amt} stroke ${i}: half-arc share ${v.toFixed(3)} vs off ${off[i].toFixed(3)}`) })
+      t.processed.forEach((s, i) => {
+        const a = varied[i].points
+        if (Math.abs(s.points[0].t - a[0].t) > 1e-9 || Math.abs(s.points[s.points.length - 1].t - a[a.length - 1].t) > 1e-9) bad.push(`@${amt} stroke ${i}: start or end moved`)
+        for (let j = 1; j < s.points.length; j++) if (!(s.points[j].t >= s.points[j - 1].t)) { bad.push(`@${amt} stroke ${i}: time runs back`); break }
+      })
+    }
+    /* A feather-light touch for most of each stroke and a hard press at the
+     * end: the slowest-step floor kicks in, so the stroke only keeps its end
+     * because it is scaled back to its recorded length. */
+    {
+      const skew = withP(hero, (j, n) => (j < n * 0.8 ? 0.01 : 1))
+      const t = T.clockTail(skew, skew, false, 1, 1)
+      t.processed.forEach((s, i) => {
+        const a = skew[i].points
+        if (Math.abs(s.points[0].t - a[0].t) > 1e-9 || Math.abs(s.points[s.points.length - 1].t - a[a.length - 1].t) > 1e-9) bad.push(`skewed stroke ${i}: start or end moved`)
+        for (let j = 1; j < s.points.length; j++) if (!(s.points[j].t >= s.points[j - 1].t)) { bad.push(`skewed stroke ${i}: time runs back at point ${j}`); break }
+      })
+    }
+    const offMean = off.reduce((a, b) => a + b, 0) / off.length
+    if (!(shares[1] < shares[0.5] && shares[0.5] < offMean)) bad.push(`amount does not scale: off ${offMean.toFixed(3)}, 0.5 ${shares[0.5]?.toFixed(3)}, 1 ${shares[1]?.toFixed(3)}`)
+    row("PRESS-ON", bad.length === 0, "harder press, slower pen: every stroke reaches half its arc sooner when its first half is light, keeps its start and end, and the amount scales it",
+      `mean half-arc share off ${offMean.toFixed(3)}, 0.5 ${shares[0.5]?.toFixed(3)}, 1 ${shares[1]?.toFixed(3)}${bad.length ? `; ${bad.slice(0, 3).join("; ")}` : ""}`)
+  }
+  {
+    /* Wired on /: the clock function reads it before its early return and
+     * runs the tail, and the memo re-runs on it. */
+    const page = readSrc("app/page.tsx")
+    const fn = page.slice(page.indexOf("function clockStrokesFor("), page.indexOf("function baseSlotsFor("))
+    const bad = []
+    if (!fn.includes("if ((!wantHand && rate === 1 && !(pressure > 0)) || processedStrokes.length === 0)")) bad.push("early return ignores pressure")
+    if (!fn.includes("clockTail(processed, raw, wantHand, rate, pressure)")) bad.push("tail does not get pressure")
+    if (!fn.includes("const pressure = env.pressureReveal ?? 0")) bad.push("pressure not read from the envelope")
+    if (!/revealEnvelope\.rate, revealEnvelope\.pressureReveal[^\]]*\],/.test(page)) bad.push("memo does not re-run on pressure")
+    row("PRESS-WIRED", bad.length === 0, "/ reads pen pressure in its clock function, and the clock memo re-runs on it (source text; the browser rows are not run)", bad.join("; ") || "4 checks")
+  }
+
   rmSync(base.dir, { recursive: true, force: true })
 }
 
 /* ---- the must-fails ----------------------------------------------------- */
 const MUTANTS = [
   /* OFF */
-  { name: "an extra defaults on", file: "lib/stroke-schedule.ts", find: "  tipHighlight: 0,\n}", text: "  tipHighlight: 0.3,\n}", red: ["OFF-DEFAULTS", "OFF-DOC"] },
-  { name: "a preset ships an extra on", file: "lib/style-system.ts", find: "  tipHighlight: 0,\n}", text: "  tipHighlight: 0.5,\n}", red: ["OFF-PRESETS"] },
+  { name: "an extra defaults on", file: "lib/stroke-schedule.ts", find: "  tipHighlight: 0,\n", text: "  tipHighlight: 0.3,\n", red: ["OFF-DEFAULTS", "OFF-DOC"] },
+  { name: "a preset ships an extra on", file: "lib/style-system.ts", find: "  tipHighlight: 0,\n", text: "  tipHighlight: 0.5,\n", red: ["OFF-PRESETS"] },
   { name: "window min length moved", file: "lib/stroke-schedule.ts", find: "export const WINDOW_MIN_LENGTH = 0.02", text: "export const WINDOW_MIN_LENGTH = 0.03", red: ["OFF-MATH"] },
-  { name: "Customize key list drops the tip", file: "components/style-panel-scaffold.tsx", find: `  "envelope.tipHighlight",`, text: "", red: ["LISTED"] },
+  { name: "Customize key list drops the tip", file: "components/style-panel-scaffold.tsx", find: `"envelope.tipHighlight",`, text: "", red: ["LISTED"] },
   { name: "tip control not wrapped for Customize", file: "components/draw-in-timing-controls.tsx", find: `W(["envelope.tipHighlight"]`, text: `W(["envelope.tipHighlightX"]`, red: ["LISTED"] },
   /* 1 · tip */
   { name: "tip clamp removed", file: "lib/doc-store.ts", find: "if (!(revealEnvelope.tipHighlight >= 0 && revealEnvelope.tipHighlight <= 1)) {", text: "if (false) {", red: ["TIP-PERSIST"] },
@@ -340,6 +446,16 @@ const MUTANTS = [
   { name: "tip lit on a whole frame", file: "lib/tip-highlight.ts", find: "if (win.whole || win.empty) return []", text: "if (false) return []", red: ["TIP-OUT"] },
   { name: "tip ignores a reversed track", file: "lib/tip-highlight.ts", find: "out.push({ stroke: i, frac: t.reverse ? 1 - reach : reach })", text: "out.push({ stroke: i, frac: reach })", red: ["TIP-OVERLAP"] },
   { name: "timed heads read a strict 0 (float noise lights waiting strokes)", file: "lib/tip-highlight.ts", find: "if (reach > TIP_REACH_EPS && reach < 1 - TIP_REACH_EPS) out.push({ stroke: i, frac: rev", text: "if (reach > 0 && reach < 1) out.push({ stroke: i, frac: rev", red: ["TIP-TIMED"] },
+  /* 2 · pressure */
+  { name: "pressure clamp removed", file: "lib/doc-store.ts", find: "if (!(revealEnvelope.pressureReveal >= 0 && revealEnvelope.pressureReveal <= 1)) {", text: "if (false) {", red: ["PRESS-PERSIST"] },
+  { name: "pressure fallback removed", file: "lib/pressure-reveal.ts", find: `if (knock !== "pressure-no-fallback" && !strokeHasPressure(points)) return points`, text: "if (false) return points", red: ["PRESS-FALLBACK"] },
+  { name: "pressure inverted (harder is quicker)", file: "lib/pressure-reveal.ts", find: "(inverted ? 2 - rel : rel)", text: "(2 - rel)", red: ["PRESS-ON"] },
+  { name: "stroke not scaled back to its length", file: "lib/pressure-reveal.ts", find: "const k = before / after", text: "const k = 1", red: ["PRESS-ON"] },
+  { name: "clockTail ignores pressure", file: "lib/stroke-timing.ts", find: "  if (pressure > 0) {\n    const pt = pressureTimed(processed, pressure)", text: "  if (false) {\n    const pt = pressureTimed(processed, pressure)", red: ["PRESS-ON"] },
+  { name: "clockTail runs pressure at 0", file: "lib/stroke-timing.ts", find: "  if (pressure > 0) {\n    const pt = pressureTimed(processed, pressure)", text: "  if (true) {\n    const pt = pressureTimed(processed, pressure || 1)", red: ["PRESS-OFF"] },
+  { name: "raw does not follow a pressured clock", file: "lib/stroke-timing.ts", find: "raw: wantHand || pressured ?", text: "raw: wantHand ?", red: ["PRESS-ON"] },
+  { name: "/ early return ignores pressure", file: "app/page.tsx", find: "if ((!wantHand && rate === 1 && !(pressure > 0)) || processedStrokes.length === 0)", text: "if ((!wantHand && rate === 1) || processedStrokes.length === 0)", red: ["PRESS-WIRED"] },
+  { name: "/ memo does not re-run on pressure", file: "app/page.tsx", find: "revealEnvelope.rate, revealEnvelope.pressureReveal, clockNib]", text: "revealEnvelope.rate, clockNib]", red: ["PRESS-WIRED"] },
   { name: "tip ignores the timed take", file: "lib/tip-highlight.ts", find: "if (timed) return headsFromSpans(timed.spans, timed.reversed)", text: "if (timed) return []", red: ["TIP-TIMED"] },
 ]
 

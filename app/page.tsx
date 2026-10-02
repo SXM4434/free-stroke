@@ -115,7 +115,7 @@ import {
   REVEAL_WINDOW_DEFAULTS,
   REVEAL_ENVELOPE_DEFAULTS,
 } from "@/lib/stroke-schedule"
-import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, takeHasPerformed, rebasePerformed, paceFromCurve, carryTimeByArc, rateScaled } from "@/lib/stroke-timing"
+import { type StrokeTimingTake, STROKE_TIMING_TAKE_DEFAULTS, penMsOf, takeHasPerformed, rebasePerformed, paceFromCurve, carryTimeByArc, clockTail } from "@/lib/stroke-timing"
 import { StrokeTakeProvider } from "@/components/stroke-strip"
 import { KeyedStyle, keyedStyleEdit } from "@/components/key-button"
 import { TakeTransportProvider } from "@/lib/take-transport"
@@ -789,7 +789,7 @@ export default function Home() {
   const clocked = useMemo(
     () => clockStrokesFor(rawStrokes, processedStrokes, revealEnvelope, clockNib, settingsRef.current),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, clockNib],
+    [rawStrokes, processedStrokes, revealEnvelope.clock, revealEnvelope.rate, revealEnvelope.pressureReveal, clockNib],
   )
   clockMsRef.current = clocked.ms
   /* What a clock change re-reads (`rebaseForClock`): the recording and the nib. */
@@ -2646,14 +2646,18 @@ export default function Home() {
 function clockStrokesFor(
   rawStrokes: Stroke[],
   processedStrokes: ProcessedStroke[],
-  env: { clock: string; rate: number },
+  env: { clock: string; rate: number; pressureReveal?: number },
   clockNib: number,
   cs: Pick<ExportSettings, "spacing" | "smoothing" | "preserveCorners">,
 ) {
   const mutate = typeof window !== "undefined" ? (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE : undefined
   const wantHand = env.clock === "hand" || mutate === "clock-always-hand"
   const rate = mutate === "clock-rate-off" ? 1 : mutate === "clock-rate-leak" ? HAND_DRAW_RATE : env.rate
-  if ((!wantHand && rate === 1) || processedStrokes.length === 0)
+  /* DRAWIN-EXTRAS · the pressure reveal re-times inside each stroke that
+   * carries pressure, on whichever clock is on, before the rate (`clockTail`).
+   * At 0, or on a drawing with no pressure, the arrays are main's. */
+  const pressure = env.pressureReveal ?? 0
+  if ((!wantHand && rate === 1 && !(pressure > 0)) || processedStrokes.length === 0)
     return { raw: rawStrokes, processed: processedStrokes, hand: false, stamped: null as Stroke[] | null, drift: 0, ms: 0 }
   const t0 = performance.now()
   let processed: ProcessedStroke[] = processedStrokes
@@ -2680,8 +2684,9 @@ function clockStrokesFor(
     })
     raw = processed as Stroke[]
   }
-  processed = rateScaled(processed, rate)
-  raw = wantHand ? (processed as Stroke[]) : rateScaled(raw, rate)
+  const tail = clockTail(processed, raw, wantHand, rate, pressure)
+  processed = tail.processed
+  raw = tail.raw
   return { raw, processed, hand: wantHand, stamped, drift, ms: performance.now() - t0 }
 }
 
