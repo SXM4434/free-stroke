@@ -1,74 +1,52 @@
-# HAND-DRAW-P3 cloud log, 2026-09-30
+MERGE-READY
 
-Branch `cloud/hand-p3` (the snapshot of main at 4bba17b). Two steps, one commit each, both pushed. Nothing under `docs/thinking` or `docs/verification` is committed; the gates wrote there and it is left untracked.
+# CLOUD-HANDFIX log, 2026-10-02
 
-## Step 1 · 4d76046 · phase 2 back on today's main
+Branch `cloud/handfix`, cut from the `integrate/cloud-1001` snapshot (0ad6d79). REVIEW.md, "Review 2: Hand Draw phase 3 and carve", findings 1 to 6 and 8. Finding 7 (CARVE-AA) left alone: the carve shader is untouched. One commit per step, each pushed. Nothing under `docs/thinking` or `docs/verification` is committed. Edits stay in the clock and lift code: `lib/clock-rebase.ts` (new), `lib/stroke-timing.ts`, the clock handlers and clock memo in `app/page.tsx`, and in `components/viewport-3d.tsx` only the `timed` memo, the knockouts beside `liftHoldsKnocked`, and the tip lift hold. No keyed-style code was touched. This file replaces the HAND-DRAW-P3 log that was here.
 
-`git merge-file <path> base/<path> lane/<path>` on the four files. `lib/stroke-timing.ts` and `scripts/verify/assert-hand-clock.mjs` merged clean. Two conflicts, both kept:
-- `components/draw-in-timing-controls.tsx`, the import line: main's `curveOfEase, curveProblem` (Custom curve ease) with phase 2 dropping `takeHasPerformed` (the held clock controls are gone).
-- `app/page.tsx`, `handleRevealEnvelopeChange`: phase 2's `rebaseForClock`, so a clock or rate change and the rebase of performed rows are one `edit()`, one undo step, with main's `gesture ?? null` key. `clockUnderTake` and its toast are gone: Hand no longer yields to a performed take. Main's flip wiring (`flip`, `patchFlip`) is untouched.
-- Checked: base to main and lane to merged give the same diff on every file.
-- `docs/cloud-inbox` removed with `git rm -r`.
+## Steps
 
-## Step 2 · 802ccdb · R11, Inflate's holds, the export row
-
-(a) R11, "Turn in the lifts". Under Hand a slot runs to the next stroke's landing (F120), so the logo's slots touch end to end ([0,520] [520,950] ...) and each lift sits in a slot's tail; only one gap existed (67 ms). The word space is 1792.8 to 1967.2 ms, 174.4 ms.
-- `paceFromCurve` returns its flats as `TimingPace.holds`. `takeLiftsMs(ts, pace, baseSlots, baseMs)` turns them into take-time lifts: each stroke inks over its slot less the holds in its base slot, carried through the row (delay, speed, ease inverse); a performed stroke inks its whole slot; lifts are the gaps in the union. Under rows it reads `ts.baseSlots`.
-- The strip publishes them on `ctx.liftsRef`; the picker passes them as `CameraTake.lifts`; `orbit-lifts` reads them when given and the slot gaps otherwise.
-- Live, logo under Hand: the move is offered and turns at 1792.8 to 1967.2 ms, 0.000 ms off the stamped lift.
-
-(b) Inflate's shader holds. Measured with `scripts/verify/measure-hand-tip-creep.mjs` (Inflate, Hand, the 10 lifts of 50 ms or more, 5 frames per lift, control = the same span inside the stroke before):
-- No rows: 0 px change in all 10 lifts. The tip reads the beat, which the pace holds flat.
-- A timed take (+1 ms on the last stroke): 5, 28, 28, 27, 5, 26, 19, 52, 61, 18 px. It creeps: the tip reads the take's clock, which runs on through a lift, and the stroke end's nose fills in.
-- Fed as point holds at the pen-up and pen-down points (uFsTipHold): worst 13 px, single pixels where strokes cross (the LINEAR filter blends two arrivals).
-- A lift has no ink anywhere (that is how `takeLiftsMs` finds it), so the frame loop now holds the whole tip at the lift's start under a timed take (`entry.lifts`, published on `__heroPenTip.lifts`). Result: 0 px in all 10, controls 57 to 317 px. uFsTipHold still carries performed stops only; this is the hold with no radius, not the uniform. Say if you want it moved into the uniform instead.
-
-(c) The export row, R12 in `assert-hand-clock`: `exportAnimation` over `getTotalDuration()` (what the page's own export passes) against live at 8 plan clocks. No rows: 8/8, film 4666.7 ms = take. Last stroke at 0.5x: 8/8, film 5024.9 ms = take (pen 4666.7).
-
-Also in this commit: `assert-stroke-timing`'s two ripple mutants looked for `(t.ripple ? carry : 0)`, which phase 2 moved into `placeSlots` as `(ripple ? carry : 0)`; the mutants now find it (same sabotage, same rows).
+1. **207df9b, finding 1.** The page's clock functions (`clockStrokesFor`, `baseSlotsFor`) move to `lib/clock-rebase.ts`, unchanged, with one entry point, `rebaseForPatch(take, doc, patch, csBefore, csAfter, pace)`, so the handlers run in Node. `edit` rebases every patch that moves the nib (both Thickness sliders, the geometry presets, the dev dials). `handleReprocessed` rebases with the strokes it writes, in the same patch. The clock memo keeps the canvas it stamped with (`clockCsRef`), so a spacing or smoothing reprocess rebases from the resample that played to the one that will.
+2. **6d711df, finding 2.** `handleDrawInChange` and `handleRevealWindowChange` call `rebaseForClock` with the next draw-in and the next window and write the take in the same edit, as the preset path does.
+3. **e2daf85, finding 3.** `rebasePerformed`'s held-back fix solves the delay from where the walk starts the row before its delay and the clamp (`placeSlots(..., heldFrom)`), so a row clamped at 0 no longer reads as in place. The fuzz found the same clamp on a second walk the review did not report: `withPerformed`'s ripple carry skipped strokes with no row, whose start can clamp too, so a NON-held performed stroke moved (79 cases). It now walks every stroke `placeSlots` walks.
+4. **515e80a, finding 4.** A row may carry `lengthMs`, read only where the clock gives the stroke a zero base span. `withPerformed` writes it (speed 1) instead of skipping the row; `placeSlots`, the build, the held-back fix, the ripple carry and the viewport's row copy read it. Back on a clock with a span the row gets a finite speed and drops `lengthMs`. `assert-stroke-timing`'s "speed read as 1" mutant moved with the line it sabotages (same sabotage, same rows).
+5. **840bce7, finding 5.** `paceFromCurve` digests its table into `TimingPace.sig`; `buildTimedSchedule` puts it in `TimedSchedule.sig`, the key of the tip bake, its lifts and the triangle keys, so a pace-only change rebuilds all three.
+6. **39e152e, finding 6.** The frame loop holds both edges through `heldAtLift`: the leading edge (`tu.d`) as before and now the trailing edge (`tu.w0`), the one Vanish moves.
+7. **0730166, finding 8.** `clockSlotsOf` and `rebaseForPatch` take the transport's pace; the page reads its own store (`TransportRef` inside `TakeTransportProvider`) and hands `rebaseForClock` `modeOverride` and `hybridBlend`.
+8. **This commit.** LOG.md, and one comment in `edit` corrected ("four places", not five).
 
 ## Checks
 
-tsc: 6 errors, the baseline (snapshot 6, after step 1 6, after step 2 6).
-
-Node gates, lane against the snapshot's own run:
-
-| gate | lane | snapshot |
+| Check | Before (0ad6d79) | After |
 |---|---|---|
-| assert-keyframes | 16/16 rows, 21/21 mutants | 16/16, 21/21 |
-| assert-key-paths | 6/7, 8/8 (EXISTING red) | 6/7, 8/8 (EXISTING red) |
-| assert-camera-moves | 11/11, 20/20 (new IN-LIFTS, 3 new mutants) | 10/10, 17/17 |
-| assert-stroke-timing, `STROKE_TIMING_BASE=4bba17b` | 16/16, 12/12 | 16/16, 12/12 |
+| `tsc --noEmit` | 6 errors | 6 errors (same six) |
+| `assert-handfix.mjs` (new, Node) | n/a | 18 of 18 rows, 17 of 17 must-fails caught |
+| `assert-handfix-browser.mjs` (new) | n/a | 2 of 2 rows, 2 of 2 must-fails fired, 0 page errors |
+| `assert-stroke-timing.mjs` (Node) | 16 of 16, 12 of 12 | 16 of 16, 12 of 12 |
+| `assert-hand-clock.mjs` (browser) | 9 of 13 green, 11 of 13 must-fails | 9 of 13 green, 11 of 13 must-fails (same rows) |
+| `assert-handfeel.mjs` (browser) | 8 pass, 0 fail | 8 pass, 0 fail |
+| `assert-stroke-timing-browser.mjs` | 7 pass, 1 fail, then crash | 7 pass, 1 fail, then crash (same) |
+| `assert-perform.mjs` | REFUSED | REFUSED (same) |
 
-Browser gates, headless, one browser at a time, lane on :3138 and the snapshot on :3140 from a worktree of 4bba17b:
+Gate rows, one or more per finding, each with a must-fail shown firing:
+- F1: `F1-THICK` (Thickness +14 under Hand: stroke 3's base moves 236.5 ms, its slot stays [4845.847, 6051.738], un-rebased it would land at [4627.059, 5808.202]); `F1-REPROCESS` (spacing 4 to 6 on Hand and Recorded, smoothing off on Hand); wiring `W1-EDIT`, `W1-REPROCESS`, `W1-CS`.
+- F2: `F2-DRAWIN` (overlap 0 to 0.3, Natural and Hand), `F2-WINDOW` (Grow to Travel, Natural and Hand); wiring `W2-DRAWIN`, `W2-WINDOW`.
+- F3: `F3-REVIEW` (the review's input stays at [1100, 1700]); `F3-FUZZ` (14,582 seeded takes, 21,055 performed strokes checked, 0 moved); `F3-BEFORE`, the must-fail on the real code: the same takes on 0ad6d79's `rebasePerformed` move 229 performed strokes (150 held back, 79 not), every one on a take where `placeSlots` clamps a start at 0. Mutants: the old held-back formula (red F3-REVIEW, F3-FUZZ), the old ripple carry (red F3-FUZZ).
+- F4: `F4-ZERO` (the review's [0,1000,1000,2000] to [0,500,900,900] and back, in sequence and held back: the slot stays [1000, 2000] on both clocks, speed 1 both ways; performed straight onto the zero span builds with 0 rejections).
+- F5: `F5-PACEKEY` (six pace-only changes on two clocks change the key; the rebuilt lifts hold 0 ms of ink, the stale Grow lifts 2860 ms under Travel); browser `B5` (Authentic, blend and Travel rekey the live take; after Grow to Travel the bake's lifts equal a fresh page's; must-fail `timed-sig-no-pace` keeps the Grow lifts).
+- F6: `F6-TRAIL` (88 of 88 in-lift edges held under Vanish, ink between lifts untouched), `W6-TRAIL`; browser `B6` (Inflate, Hand, Vanish, one +1 ms row: 0 px change in all 10 lifts of 50 ms or more, controls 134 to 699 px; must-fail `tip-no-trail-liftholds` creeps 33 to 122 px).
+- F8: `F8-PACE` (Debug Smooth and blend 0.8, Recorded to Hand: 12 of 12 performed strokes keep their slot; through the document's pace alone one lands 1304.4 ms and 128.6 ms off), `W8-PACE`.
 
-| gate | lane | snapshot |
-|---|---|---|
-| assert-hand-clock | 13/13 rows, 13/13 must-fails fired, 0 page errors | 10/10, 10/10 |
-| assert-perform, run 1 / run 2 | 11/15, then 10/15 | 13/14 + 1 SELF, then 10/14 + 1 SELF |
-| assert-key-lanes (row 11 base re-pinned, see below) | 15/15 graded, row 11 BLIND | 15/15 graded, row 11 SELF |
-| assert-stroke-strip | 17/18 | 17/18 |
-| assert-take-timeline | 20/21 | 20/21 |
+## What I could not run, or ran differently
 
-hand-clock must-fails: R11 has two (`lifts-slot-gaps`, `clock-uniform`), counted fired only when both turn it red; both refused the move. R12 `exportpen`: 1/8 clocks, film 4666.7 against take 5024.9. R13 `tip-no-liftholds`: 8 to 40 px per lift. Phase 2's R11 compared `__fsTake.get().slots` (empty with no rows) and called the move itself; it now reads what the picker writes, through the real Camera button. R11 also clears the move's keys after, since R12 and R13 read frames in the lifts it turns in.
+- **Real Chrome.** `scripts/verify/lib/browser.mjs` pins `channel: "chrome"`; downloading Chrome is blocked by this environment's network policy (dl.google.com, 403). Every browser number above ran on Playwright's bundled Chromium 141, headless (`FS_HEADED=0`), placed at Chrome's path with a symlink, against my own `next dev` servers (:3107 for the before runs, :3108 for the after runs). Not the real GPU the repo's DISPATCH asks for.
+- **`jiti` and `sharp`** are imported by `assert-hand-clock` but are not in the lockfile; installed locally, untracked, not committed.
+- **`assert-stroke-timing.mjs` IDENTITY base.** Its default base rev b0da66626 is not in this clone (the snapshot is one squashed commit, and no remote branch carries it); run with `STROKE_TIMING_BASE=0ad6d79`, so IDENTITY means "unchanged from this branch's start".
+- **The review's fuzz** was not in the repo, so F3's fuzz is mine: same take count (14,582), seeded, wider ranges. It finds 229 failures before the fix where the review found 11; all are the clamp.
+- **`assert-hand-clock` R9, R11, R12, R13** fail or crash identically before and after: R9 plays 20 ms short (headless frame pacing), R11 finds no camera move, and R12 crashes because the gate routes only six export modules and this branch's `lib/export/index.ts` imports more (GIF, GLB), which also stops R13 from running. So R13 (the Grow tip hold, whose loop step 6 replaced with `heldAtLift`) was not re-measured; B6 measures the same frame-loop block under Vanish, and the Grow branch is the same loop moved into a function.
+- **`assert-stroke-timing-browser`** row 6a needs `docs/verification/stroke-timing/base-1051bc8e1.json`, which is not in the repo, and its export arm crashes on the same export route. **`assert-perform`** refuses without `docs/verification/perform/base-main.json`. Neither was recorded.
 
-Reds read as follows:
-- key-paths EXISTING and stroke-timing's own base need 747af8fa0 and b0da66626, which the squashed snapshot does not have. stroke-timing ran with its own `STROKE_TIMING_BASE` knob pointed at the snapshot.
-- perform: 1b inflate, extrude, solid and row 2 are red on the snapshot's second run too, so they swing run to run on this machine (4 cores, SwiftShader). Rod 1b passed 2 of 2 on the snapshot and 1 of 2 on the lane (held 1338.2 ms for a 1377.7 ms dwell). Nothing in this change touches Rod's playback, but I could not prove it here; worth one run on the Mac.
-- key-lanes row 11: my recorded base came from a docked canvas (755x533) and the full run is undocked (755x890), so the row is BLIND. Its intent holds: the lane's five no-key frame hashes equal the snapshot's, 5 of 5.
-- stroke-strip row 0: same cause, the base recorded with `--phase=base` is docked; 18/18 differ on both trees.
-- take-timeline E2: 36.0 rAF ticks/s on the lane and 35.9 and 27.4 on the snapshot, against a bar of 50. Headless on a loaded box.
+## Seen, not fixed (outside this task)
 
-## What I could not run, and how the environment was bent
-
-- `pnpm install --frozen-lockfile` refuses: `pnpm-lock.yaml` lacks `dialkit` and `motion`, which `package.json` lists. Installed with `--no-frozen-lockfile --config.node-linker=hoisted` (the gates import `jiti` directly, which pnpm's default layout does not hoist), then restored the lockfile. Not committed.
-- `npx playwright install` was not needed: Chromium 141 is preinstalled. `scripts/verify/lib/browser.mjs` pins channel `chrome`, so `/opt/google/chrome/chrome` was symlinked to it. Outside the repo.
-- `lsof` in this container cannot map sockets or cwd to pids, so `serverCommit` saw no server. A PATH-only shim answered its two queries from /proc; dev servers were bound to 127.0.0.1. Outside the repo.
-- Bases the snapshot does not carry were recorded from the snapshot server itself, into both trees' `docs/verification` (uncommitted): perform `base-main.json` (`--phase=base --base=4bba17b`), stroke-strip `base-3a211a36d.json` (`--phase=base`), key-lanes `nokeys-base.json` through an uncommitted copy of the gate with `KEYS_BASE` set to 4bba17b (the real one refuses any commit but ea31c5b38). So those rows compare to today's main, not to their named commits.
-- Not run: the rest of the plan's PEN rows beyond what these gates carry, `assert-stroke-timing-browser`, `assert-motion-customize`, `assert-custom-presets`, and any look at the result by eye. No Mac numbers were compared.
-
-## Next
-
-- Watch Hand Draw on your own drawing with one row set on the strip, on Inflate: the lifts should now hold as still as with no rows.
-- One perform run on the Mac to clear Rod 1b.
-- RUN-QUEUE row for HAND-DRAW-P3 is not written; this log is the record.
+- `readTake` in `lib/doc-store.ts` keeps only delay, speed, ease and hold back, so a reload drops `performed` (and now `lengthMs`): a performed stroke does not survive a reload. Before and after this branch.
+- A change to the transport's pace override or blend by itself does not rebase performed rows (finding 8 asked only that the rebase read them).

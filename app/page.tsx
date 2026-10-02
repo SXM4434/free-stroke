@@ -573,7 +573,7 @@ export default function Home() {
     (label: string, key: string | null, patch: Partial<DocSnapshot>) => {
       undo.commit(docRef.current, { label: labelOverrideRef.current ?? label, key })
       /* CLOUD-HANDFIX, finding 1. The nib stamps the hand clock, and Thickness is
-       * written from five places (both sliders, the geometry presets, the dev
+       * written from four places (both sliders, the geometry presets, the dev
        * dials), so the rebase sits here rather than at each. A patch that names
        * the take already decided it. */
       const nibTake = !("take" in patch) && patchMovesNib(docRef.current, patch) && !gateKnocked("clock-no-rebase-nib") ? rebaseForClock(patch) : null
