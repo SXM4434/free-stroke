@@ -29,6 +29,11 @@
 // EVERY ROW HAS AN ARM THAT MUST FAIL: the same predicate applied to a state where it cannot hold.
 // A control that throws fails the row (paired).
 //
+// MUST-FAIL KNOCKOUT (CLOUD-FLAKES): `FS_GATE_MUTATE=tip-no-pausestill` sets the page's
+// `window.__FS_GATE_MUTATE` before load, so the tip's clock runs on through a performed pause
+// (components/viewport-3d.tsx `stills`). Rows 1b and 1c on Inflate must go red under it:
+//   FS_PORT=3138 FS_HEADED=0 FS_GATE_MUTATE=tip-no-pausestill node scripts/verify/assert-perform.mjs --dwell-engines=inflate
+//
 // CORPUS. The hero word (`scripts/capture/logo-strokes.json`, 12 strokes) at 12 ms a point, ease
 // linear, 1512x982 at DPR 1, Rod for pictures (Inflate too in row 8; Inflate, Extrude and Solid
 // in row 1b). Stroke 5 is the D, stroke 6
@@ -49,6 +54,9 @@ const { createCanvas, loadImage } = createRequire(import.meta.url)("@napi-rs/can
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, "..", "..")
 const OUT = join(ROOT, "docs", "verification", "perform")
+const MUTATE = process.env.FS_GATE_MUTATE ?? ""
+if (MUTATE && MUTATE !== "tip-no-pausestill") throw new Error(`FS_GATE_MUTATE=${MUTATE} is not an arm of this gate. Use tip-no-pausestill.`)
+if (MUTATE) console.log(`MUST-FAIL RUN: FS_GATE_MUTATE=${MUTATE}. Rows 1b and 1c on Inflate have to go red.`)
 const PHASE = (process.argv.find((a) => a.startsWith("--phase=")) ?? "--phase=lane").split("=")[1]
 const SHOT = process.argv.includes("--shot")
 /* Row 1b's engines past Rod. `--dwell-engines=inflate` runs one; each one left out prints NOT RUN
@@ -330,6 +338,7 @@ const openPage = async ({ undocked }) => {
   if (context) await context.close()
   context = await browser.newContext({ viewport: { width: 1512, height: 982 }, deviceScaleFactor: 1 })
   await context.addInitScript(counters)
+  if (MUTATE) await context.addInitScript((m) => { window.__FS_GATE_MUTATE = m }, MUTATE)
   page = await context.newPage()
   page.on("pageerror", (e) => pageErrors.push(String(e)))
   await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 180000 })
@@ -593,18 +602,39 @@ try {
       const gr = await fsGet()
       const restored = J(gr.take) === J(g1.take) && J(gr.slots) === J(g1.slots)
       const readTimes = []
+      /* `lastSet` is the inked mask pixels of the last read, for row 1c. */
+      let lastSet = []
       const inkAt = async (t) => {
         readTimes.push(t)
         const d = (await pixels(await frameAt(t))).d
-        let n = 0
-        for (const i of idx) if (inked(d, bg, i)) n++
-        return n
+        lastSet = idx.filter((i) => inked(d, bg, i))
+        return lastSet.length
       }
       const N = Math.max(idx.length, 1)
       const nPre = await inkAt(g1.slots[D * 2] - 30)
       const nPost = await inkAt(g1.slots[D * 2 + 1] + 100)
       const nMid = await inkAt(mid)
+      const setMid = lastSet
       const nMid2 = await inkAt(mid)
+      /* 1c, CLOUD-FLAKES. "Held still" read as an equal COUNT is blind to a swap: on Inflate the
+       * hold disc's rim traded pixels two for two from 20 ms into the dwell (the ramp read the
+       * jump between the held and the running clock as gradient), and the count only moved when
+       * the trade went unbalanced, 740 ms in. So the dwell is also read every 40 ms from 5 ms
+       * after its start to 5 ms before its end, and each read must ink exactly the pixels the
+       * middle inks. */
+      const SET_STEP = 40
+      const setDiff = (a, b) => {
+        const A = new Set(a), B = new Set(b)
+        return { add: b.filter((i) => !A.has(i)), lost: a.filter((i) => !B.has(i)) }
+      }
+      const setMoves = []
+      let setReads = 0
+      for (let t = tLo + 5; t <= tHi - 5; t += SET_STEP) {
+        await inkAt(t)
+        setReads++
+        const { add, lost } = setDiff(setMid, lastSet)
+        if (add.length || lost.length) setMoves.push({ t, add: add.length, lost: lost.length, px: [...add, ...lost].slice(0, 4).map((i) => [(i >> 2) % W, Math.floor((i >> 2) / W)]) })
+      }
       const pEdge = async (a, b) => {
         while (Math.abs(b - a) > 1) {
           const m = (a + b) / 2
@@ -634,7 +664,9 @@ try {
       const tipOk = eng !== "inflate" || (!!dHold && Array.isArray(tip.dropped) && dropMax <= keptMin + 0.11)
       await setRows({ ...g1.take.strokes, [D]: plain })
       const lA = await inkAt(tLo + 100)
+      const lSetA = lastSet
       const lB = await inkAt(tHi - 100)
+      const lSetB = lastSet
       /* F125 reach audit. D alone held back 20 s, so the frame holds only the neighbours, at the
        * slots the kept take gave them (checked: a moved neighbour would audit the wrong state). */
       await setRows({ ...g1.take.strokes, [D]: { ...NEUTRAL, holdBack: true, delayMs: 20000 } })
@@ -654,6 +686,7 @@ try {
       const endL = pl - tLo
       const endR = pr - tHi
       const r = { mask: idx.length, nbLeftOut, nbReach: NB_REACH, cand, share, cap: NB_CAP, wide: { reach: NB_WIDE, nbLeftOut: wide.nbLeftOut, share: wide.share }, box: [x0, y0, x1, y1], pre: nPre, post: nPost, mid: nMid, mid2: nMid2, left: pl, right: pr, played: pPlayed, endL, endR, linear: [lA, lB], restored, audit: { times: auditTimes.length, slotsSame, reached }, ...(tip ? { tip } : {}) }
+      r.set = { reads: setReads, step: SET_STEP, moves: setMoves }
       f121.engines[eng] = r
       if (idx.length) await writeStrip(join(OUT, `f121-dwell-${eng}.png`), strip, r.box)
       paired(
@@ -662,6 +695,14 @@ try {
         `the same slot played without its pace (linear) stays flat across the dwell, or a ${NB_WIDE} px margin stays under the ${NB_CAP * 100}% cap`,
         lA === lB || wide.share <= NB_CAP,
         `mask ${idx.length} px (${nbLeftOut} of ${cand} within ${NB_REACH} px of neighbour ink left out, ${(share * 100).toFixed(1)}%, cap ${NB_CAP * 100}%${capOk ? "" : ", OVER THE CAP"}; a ${NB_WIDE} px margin leaves out ${wide.nbLeftOut} of ${wide.cand}, ${(wide.share * 100).toFixed(1)}%), box ${r.box}; neighbours alone at ${auditTimes.length} read clocks ${reached.length ? `ink counted px: ${reached.map((x) => `${f1(x.t)} ms ${x.n} px at ${x.px.map((p) => `(${p})`).join(" ")}`).join("; ")}` : "ink none of it"}${slotsSame ? "" : ", NEIGHBOUR SLOTS MOVED with D held back, audit void"}; ink ${nPre} before the slot, ${nPost} after, ${nMid} (${(nMid / N).toFixed(3)}) held ${f1(pPlayed)} ms (${f1(pl)} to ${f1(pr)}), read twice ${nMid}/${nMid2}; ends ${f1(endL)} and ${f1(endR)} ms from the row's flat run (${f1(tLo)} to ${f1(tHi)}); dwell ${f1(dwellMs)} ms;${tip ? ` tip holds ${tip.holds?.length ?? "none"} (D ${dHold ? `${f1(dHold.t0Ms)} to ${f1(dHold.t1Ms)}` : "missing"}), dropped ${tip.dropped?.length ?? "unread"}, longest ${f1(dropMax)} ms against a shortest kept ${f1(keptMin)} ms;` : ""} linear inks ${lA} -> ${lB}; take restored ${restored}`,
+      )
+      const linSet = setDiff(lSetA, lSetB)
+      paired(
+        `1c ${eng}: across the dwell the same pixels of stroke D are inked, not only as many`,
+        seen && setReads >= 10 && setMoves.length === 0,
+        "the same pixel-set test on the slot played without its pace (linear), across the dwell",
+        linSet.add.length === 0 && linSet.lost.length === 0,
+        `${setReads} reads every ${SET_STEP} ms from ${f1(tLo + 5)} to ${f1(tHi - 5)} against the ${setMid.length} px the middle inks: ${setMoves.length ? `${setMoves.length} differ, first at ${f1(setMoves[0].t)} ms (+${setMoves[0].add} -${setMoves[0].lost} at ${setMoves[0].px.map((p) => `(${p})`).join(" ")})` : "none differ"}; linear across the dwell +${linSet.add.length} -${linSet.lost.length}`,
       )
     }
     await setEngine("rod")

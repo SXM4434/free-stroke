@@ -2620,6 +2620,10 @@ const TIP_HOLD_MAX = 8
 const liftHoldsKnocked = () =>
   process.env.NODE_ENV !== "production" && typeof window !== "undefined" &&
   (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "tip-no-liftholds"
+/** The must-fail of `assert-perform` 1c: the tip's clock runs on through a performed pause. */
+const pauseStillsKnocked = () =>
+  process.env.NODE_ENV !== "production" && typeof window !== "undefined" &&
+  (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "tip-no-pausestill"
 
 /**
  * THE REVEAL'S MOVING END, AS A FRAGMENT TEST.
@@ -2800,15 +2804,34 @@ function applyPenTip(mat: THREE.MeshPhysicalMaterial, onUniforms: (u: PenTipUnif
           // (the Metal hang in docs/README.md needs a discard inside a
           // dynamically bounded loop), and `uFsTipHoldN` is a uniform, so at 0
           // `fsTipD` is `uFsTipD` and the line below is the shipped one.
+          //
+          // CLOUD-FLAKES · THE RAMP IS TAKEN ON ONE SIDE OF THE DISC. A hold
+          // makes `fsTipD` differ between fragments, so `fsTsd` JUMPS at the
+          // disc's edge by `(uFsTipD - t0)`, which grows all through the
+          // pause. `fwidth(fsTsd)` over a 2x2 quad that straddles the edge
+          // read that jump as gradient, so the edge's coverage ramp widened as
+          // the clock ran on (and past 32 units fell back to PEN-8's 4) and
+          // pixels on the disc's rim changed while the pen stood still:
+          // measured on the hero D under Inflate, a 1016 ms dwell swapped 4 rim
+          // pixels from 20 ms in and gained one at 740 ms. So each ramp is the
+          // screen gradient of a distance that is CONTINUOUS across the quad:
+          // the running one outside the disc, the hold's own (`t0`, a uniform)
+          // inside it, both taken in uniform control flow and chosen per
+          // fragment after. With no hold `fsTfwHeld` is never chosen and the
+          // ramp is `fwidth(fsTsd)` of the shipped line, so the default render
+          // is unchanged.
           "  float fsTipD = uFsTipD;",
+          "  float fsTfwHeld = 0.0;",
           "  if (uFsTipHoldN > 0.5) {",
           `    for (int fsHk = 0; fsHk < ${TIP_HOLD_MAX}; fsHk++) {`,
           "      vec4 fsH = uFsTipHold[fsHk];",
+          "      float fsHfw = fwidth((fsWhen - fsH.z) * uFsTipArcToLocal / max(fsTsl, 1e-6));",
           "      if (float(fsHk) < uFsTipHoldN && uFsTipD >= fsH.z && uFsTipD < fsH.w",
-          "          && distance(fsTq, fsH.xy) <= uFsTipHoldR) fsTipD = min(fsTipD, fsH.z);",
+          "          && distance(fsTq, fsH.xy) <= uFsTipHoldR && fsH.z < fsTipD) { fsTipD = fsH.z; fsTfwHeld = fsHfw; }",
           "    }",
           "  }",
           "  float fsTsd = (fsWhen - fsTipD) * uFsTipArcToLocal / max(fsTsl, 1e-6);",
+          "  float fsTsdRun = (fsWhen - uFsTipD) * uFsTipArcToLocal / max(fsTsl, 1e-6);",
           // THE COVERAGE RAMP. `fwidth(fsTsd)` is the tested scalar's OWN
           // screen-space gradient, which is the only divisor that is right for
           // every shape — see `PEN_TIP_AA_FWIDTH` for the arithmetic and for
@@ -2823,7 +2846,8 @@ function applyPenTip(mat: THREE.MeshPhysicalMaterial, onUniforms: (u: PenTipUnif
           // kept as is. PEN-7 capped every fragment at 4 units, which clipped
           // the ramp on ordinary tapered edges and stair-stepped them.
           "  float fsTunit = max(length(dFdx(fsTq)), length(dFdy(fsTq)));",
-          "  float fsTfw = fwidth(fsTsd);",
+          "  float fsTfwRun = fwidth(fsTsdRun);",
+          "  float fsTfw = fsTipD < uFsTipD ? fsTfwHeld : fsTfwRun;",
           "  float fsTpx = uFsTipAA > 0.5",
           "      ? (fsTfw < 32.0 * fsTunit ? fsTfw : 4.0 * fsTunit)",
           "      : fsTunit;",
@@ -2888,11 +2912,11 @@ function applyPenTip(mat: THREE.MeshPhysicalMaterial, onUniforms: (u: PenTipUnif
 
     onUniforms(u)
   }
-  /* v7: F121's holds, the dwell's value near a stopped pen. v6: F118's wrap, the two edges joined by max. v3: the window's trailing edge. v2 was the `fwidth(fsTsd)` ramp and the
+  /* v8: the ramp taken on one side of a hold's disc (CLOUD-FLAKES). v7: F121's holds, the dwell's value near a stopped pen. v6: F118's wrap, the two edges joined by max. v3: the window's trailing edge. v2 was the `fwidth(fsTsd)` ramp and the
    * fetch leaving non-uniform control flow. The key MUST move with the source —
    * a stale key is how a material gets handed another build's compiled
    * program. */
-  mat.customProgramCacheKey = () => (prevKey ? prevKey.call(mat) + "|" : "") + "fs-pentip-v7"
+  mat.customProgramCacheKey = () => (prevKey ? prevKey.call(mat) + "|" : "") + "fs-pentip-v8"
 }
 
 /**
@@ -4208,6 +4232,10 @@ function AnimatedStrokesInner({
     /** HAND-DRAW-P3 · the take's pen lifts, `[a, b]` pairs as take fractions,
      *  under a timed take; null otherwise. The tip's clock holds at `a` in each. */
     lifts: Float64Array | null
+    /** CLOUD-FLAKES · the performed pauses no other stroke's slot overlaps,
+     *  `[t0, t1]` pairs as take fractions; null when there are none. The tip's
+     *  clock holds at `t0` in each, as it does in a lift. */
+    stills: Float64Array | null
     /** The lengths the hold radius is built from, in local units: one nib
      *  half-width, the word's longest segment, one field texel. */
     radiusLocal: number
@@ -5324,6 +5352,7 @@ function AnimatedStrokesInner({
         holds: Array.from({ length: TIP_HOLD_MAX }, () => new THREE.Vector4()),
         holdN: 0,
         lifts: null as Float64Array | null,
+        stills: null as Float64Array | null,
         radiusLocal: 0,
         segMaxLocal: 0,
         texelLocal: 0,
@@ -5480,6 +5509,31 @@ function AnimatedStrokesInner({
      * (`takeLiftsMs`). So the frame loop holds the whole tip at the lift's
      * start until the landing, the same stillness the beat gives. */
     entry.lifts = timedBake ? takeLiftsMs(timedBake, timedBake.pace, timedBake.baseSlots, timedBake.baseMs).map((v) => v / takeMs) : null
+    /* CLOUD-FLAKES · A PERFORMED PAUSE THAT NOTHING ELSE INKS THROUGH IS STILL
+     * EVERYWHERE, so it is held like a lift. The holds above freeze only a disc
+     * round the pen point; the tip's clock runs on through the pause, and
+     * everything outside the disc that reads it can move. Measured on the hero D
+     * under Inflate, a 1016 ms dwell: two skirt pixels inked 140 and 180 ms in,
+     * and one was still outside the disc at 1.2x the hold radius. A lift is not
+     * this (`takeLiftsMs` counts a performed stroke as inking its whole slot, on
+     * purpose: for the camera a stop is the pen on the page), so the pauses are
+     * their own list. A pause another stroke's slot overlaps keeps the disc
+     * alone, since that stroke's ink has to keep moving. */
+    const stillMs: number[] = []
+    if (timedBake) {
+      const sl = timedBake.slots
+      for (const h of holdAll) {
+        let alone = true
+        for (let i = 0; i * 2 + 1 < sl.length; i++) {
+          if (i !== h.stroke && sl[i * 2] < h.t1 && sl[i * 2 + 1] > h.t0) {
+            alone = false
+            break
+          }
+        }
+        if (alone) stillMs.push(h.t0, h.t1)
+      }
+    }
+    entry.stills = stillMs.length ? Float64Array.from(stillMs, (v) => v / takeMs) : null
     entry.radiusLocal = field.radius * scale
     entry.segMaxLocal = segMax * scale
     entry.texelLocal = field.unitsPerTexel * scale
@@ -5521,6 +5575,8 @@ function AnimatedStrokesInner({
         })),
         /* HAND-DRAW-P3. The lifts the tip holds through, ms on the take's clock. */
         lifts: entry.lifts ? Array.from(entry.lifts, (v) => Number((v * takeMs).toFixed(1))) : null,
+        /* CLOUD-FLAKES. The performed pauses the whole tip holds through, ms. */
+        stills: entry.stills ? Array.from(entry.stills, (v) => Number((v * takeMs).toFixed(1))) : null,
         holdsDropped: holdDropped.map((h) => ({
           stroke: h.stroke,
           t0Ms: Number(h.t0.toFixed(1)),
@@ -7137,6 +7193,17 @@ function AnimatedStrokesInner({
             for (let k = 0; k + 1 < tf.lifts.length; k += 2) {
               if (d >= tf.lifts[k] && d < tf.lifts[k + 1]) {
                 tu.d.value = tf.lifts[k]
+                break
+              }
+            }
+          }
+          /* CLOUD-FLAKES · a performed pause no other stroke inks through holds
+           * the whole tip at its start too (the bake's `stills`). */
+          if (timedTip && tf.stills && !pauseStillsKnocked()) {
+            const d = tu.d.value
+            for (let k = 0; k + 1 < tf.stills.length; k += 2) {
+              if (d >= tf.stills[k] && d < tf.stills[k + 1]) {
+                tu.d.value = tf.stills[k]
                 break
               }
             }
