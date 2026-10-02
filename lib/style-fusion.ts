@@ -1966,6 +1966,239 @@ export function evaluateFusion(
   signals: FusionSignals,
   sinceArmed: number,
 ): FusionFrame | null {
+  const f = evaluateFusionCore(state, clock, signals, sinceArmed)
+  if (!f) return f
+  /* ROW 82 AND PHASE 23, AFTER THE RELATIONSHIP. Both read zero on every state
+   * written before they existed (`?? 0`), and at zero neither runs a line: the
+   * frame the core returned is the frame the caller gets, the same object. */
+  /* Chaos is a drift in style time, so with style time stopped (Motion Off,
+   * or reduced motion folded in by the caller) there is nothing to drift. */
+  const chaos = state.motionMode === "off" ? 0 : clamp01(state.fusionChaos ?? 0)
+  const drifted =
+    chaos > 0 && clamp01(state.fusionIntensity) > 0
+      ? driftFusionFrame(f, chaos, (lag) =>
+          evaluateFusionCore(state, lagClock(clock, lag), signals, Math.max(0, sinceArmed - lag)),
+        )
+      : f
+  const tip = clamp01(state.fusionTipShimmer ?? 0)
+  return tip > 0 ? withTipShimmer(drifted, clock.reveal, tip) : drifted
+}
+
+/* ==========================================================================
+ * ROW 82 AND THE PHASE 23 SYNC LIST (coverage item 12, 2026-10-02)
+ * ==========================================================================
+ *
+ * PRD §4 lists the animated-fusion controls as "preset, speed, intensity,
+ * sync, chaos/readability, reveal influence, completion behavior, relationship
+ * strength". Preset, speed, intensity (Link) and strength (Swing) shipped;
+ * these are the other three, plus the plan's Phase 23 list ("A user can
+ * choreograph the object and its surface together"): shimmer riding the tip,
+ * dither freezing on pause, a fusion bloom at completion. Every one of them is
+ * a pure function of numbers here, gated in Node by
+ * scripts/verify/assert-fusion-chaos.mjs, and every one is the identity at its
+ * default, so a state that never touches them renders what it rendered before.
+ */
+
+/**
+ * How far behind each fused system runs at chaos 1, in seconds of style time.
+ * Texture is the reference and does not lag; the others are spread so no two
+ * share a phase on any of the drive rates (omega 1.1 to 1.4 rad/s, a 4.5 to
+ * 5.7 s breath): at chaos 1 the surface runs about half a breath behind.
+ */
+export const FUSION_CHAOS_LAG = { texture: 0, dither: 0.9, ascii: 1.7, material: 2.6 } as const
+
+type ChaosSystem = keyof typeof FUSION_CHAOS_LAG
+
+/** Which system each field of a FusionFrame belongs to. `sweep` is the surface's. */
+const FRAME_SYSTEM: Readonly<Record<keyof FusionFrame, ChaosSystem>> = {
+  textureIntensityMul: "texture",
+  textureScaleMul: "texture",
+  textureTimeAdd: "texture",
+  textureContrastAdd: "texture",
+  ditherIntensityMul: "dither",
+  ditherThresholdAdd: "dither",
+  ditherScaleMul: "dither",
+  ditherTimeAdd: "dither",
+  ditherContrastAdd: "dither",
+  asciiDensityAdd: "ascii",
+  asciiTimeAdd: "ascii",
+  asciiCellMul: "ascii",
+  asciiContrastAdd: "ascii",
+  clearcoatAdd: "material",
+  roughnessAdd: "material",
+  envMapAdd: "material",
+  sheenAdd: "material",
+  metalnessAdd: "material",
+  emissiveAdd: "material",
+  iridescenceAdd: "material",
+  emissiveColor: "material",
+  colorScale: "material",
+  sweep: "material",
+}
+
+/** The shared clock, `lag` seconds of style time ago. Reveal and completion
+ *  are geometry's, not style time's, so they are left where they are. */
+function lagClock(clock: StyleClock, lag: number): StyleClock {
+  return lag === 0 ? clock : { ...clock, elapsed: clock.elapsed - lag }
+}
+
+/**
+ * CHAOS: the fused systems drift apart. Each system takes its fields from the
+ * same relationship evaluated `chaos * FUSION_CHAOS_LAG[system]` seconds behind
+ * (`at(lag)`), so at chaos 0 they are the one frame, and as chaos rises they
+ * breathe, arrive and fire out of step. It is the same relationship, never a
+ * new random signal, which is the PRD's line between chaos and noise. A keyed
+ * chaos moves each lag smoothly, so the lagged clocks never jump.
+ */
+export function driftFusionFrame(
+  base: FusionFrame,
+  chaos: number,
+  at: (lag: number) => FusionFrame | null,
+): FusionFrame {
+  const c = clamp01(chaos)
+  if (c <= 0) return base
+  const out: FusionFrame = { ...base }
+  const write = out as unknown as Record<string, unknown>
+  for (const sys of Object.keys(FUSION_CHAOS_LAG) as ChaosSystem[]) {
+    const lag = c * FUSION_CHAOS_LAG[sys]
+    if (lag === 0) continue
+    const lagged = at(lag) ?? base
+    for (const [field, owner] of Object.entries(FRAME_SYSTEM)) {
+      if (owner === sys) write[field] = (lagged as unknown as Record<string, unknown>)[field]
+    }
+  }
+  return out
+}
+
+/**
+ * REVEAL INFLUENCE: how much the draw gates the relationship. At 1 (and on a
+ * state with no field) this is the smoothstep the gate has always been, the
+ * same arithmetic, so the frame is unchanged; at 0 the gate is open from the
+ * first frame and the draw no longer reaches the coupling.
+ */
+export function revealGate(reveal: number, influence: number | undefined): number {
+  const rv = clamp01(reveal)
+  const smooth = rv * rv * (3 - 2 * rv)
+  const inf = influence === undefined ? 1 : clamp01(influence)
+  if (inf >= 1) return smooth
+  return 1 - inf * (1 - smooth)
+}
+
+/** Bloom's rise and settle, seconds. The rise is a smoothstep so the swell
+ *  starts gently; the settle is three times the pulse's half-life. */
+export const FUSION_BLOOM_RISE = 0.35
+export const FUSION_BLOOM_SETTLE = 1.4
+
+/**
+ * COMPLETION: what the shared kick looks like after the draw completes (or the
+ * fusion is armed on a finished stroke, `completionTrigger`). `pulse` is the
+ * envelope every relationship has always used, the same expression; `bloom`
+ * rises over FUSION_BLOOM_RISE and settles over FUSION_BLOOM_SETTLE to the
+ * same peak, so every preset's clamps still hold; `off` is no accent.
+ */
+export function completionEnvelope(mode: string | undefined, trigger: number): number {
+  if (trigger === Infinity) return 0
+  if (mode === "off") return 0
+  if (mode === "bloom") {
+    if (trigger < 0) return 0
+    if (trigger < FUSION_BLOOM_RISE) {
+      const x = trigger / FUSION_BLOOM_RISE
+      return x * x * (3 - 2 * x)
+    }
+    return Math.exp(-(trigger - FUSION_BLOOM_RISE) / FUSION_BLOOM_SETTLE)
+  }
+  return Math.exp(-trigger / 0.5)
+}
+
+/** The tip band's width and how far it travels (the shine band's own units:
+ *  the drawing's bounds radius is 1, and ±0.95 keeps it on the mark, the
+ *  bound `shineBand` measured). Fade in and out over the first and last 4% of
+ *  the take so the band never pops on or off. */
+const TIP_BAND_WIDTH = 0.28
+const TIP_BAND_REACH = 0.95
+const TIP_BAND_FADE = 0.04
+
+/**
+ * SHIMMER RIDES THE TIP. While the take plays, a shine band sits at the draw
+ * front: its centre goes from one end of the mark to the other as the reveal
+ * goes 0 to 1, along the drawing's x axis, the way a line of writing is laid
+ * down. It is the draw's front, not the pen point itself: a stroke that runs
+ * right to left still has its band travel left to right. Riding the exact
+ * pen point needs the tip's position in the frame loop, which nothing
+ * publishes there yet.
+ *
+ * A band the relationship already has (ASCII Rubber, a shineBand link) keeps
+ * its place wherever it is the brighter of the two, so the tip never dims what
+ * a fusion was already doing. Before and after the take there is no tip band.
+ */
+export function withTipShimmer(f: FusionFrame, reveal: number, amount: number): FusionFrame {
+  const a = clamp01(amount)
+  const rv = reveal
+  if (a <= 0 || !(rv > 0 && rv < 1)) return f
+  const env = Math.min(1, rv / TIP_BAND_FADE, (1 - rv) / TIP_BAND_FADE)
+  const amt = a * 0.8 * env
+  if (f.sweep && f.sweep.amt >= amt) return f
+  return {
+    ...f,
+    sweep: { pos: -TIP_BAND_REACH + 2 * TIP_BAND_REACH * rv, amt, width: TIP_BAND_WIDTH, dirX: 1, dirY: 0 },
+  }
+}
+
+/**
+ * DITHER FREEZES ON PAUSE. The frame loop has no "paused" flag of its own, so
+ * it reads the playhead: a take is paused when the playhead sits strictly
+ * inside 0..1 and has not moved for PAUSE_SETTLE seconds of frames. The settle
+ * keeps one frame where the playhead happens not to advance (two writers in
+ * the same frame, a tiny delta) from reading as a pause; the end (1) and the
+ * start (0) are rest, not pause, and never hold.
+ */
+export const PAUSE_SETTLE = 0.12
+
+export interface PauseWatch {
+  last: number
+  still: number
+}
+
+export function createPauseWatch(): PauseWatch {
+  return { last: NaN, still: 0 }
+}
+
+/** Advance the watch by one frame; true while the take is paused. */
+export function watchPause(w: PauseWatch, playhead: number, delta: number): boolean {
+  const inside = playhead > 0 && playhead < 1
+  if (inside && playhead === w.last) w.still += Math.max(0, delta)
+  else w.still = 0
+  w.last = playhead
+  return inside && w.still >= PAUSE_SETTLE
+}
+
+/** Which layers a pause holds, for a `fusionPauseHold` value. */
+export function pauseHoldLayers(mode: string | undefined): { dither: boolean; texture: boolean; ascii: boolean; fusion: boolean } {
+  const surface = mode === "surface"
+  const dither = surface || mode === "dither"
+  return { dither, texture: surface, ascii: surface, fusion: surface }
+}
+
+/**
+ * Hold a value while `held`: the first held frame captures the live value and
+ * every held frame after it returns the capture; the first free frame lets go.
+ * One slot per layer, the same latch as the stack's freezeOnComplete.
+ */
+export function holdValue(slot: { v: number | null }, held: boolean, live: number): number {
+  if (!held) {
+    slot.v = null
+    return live
+  }
+  if (slot.v === null) slot.v = live
+  return slot.v
+}
+
+function evaluateFusionCore(
+  state: StyleState,
+  clock: StyleClock,
+  signals: FusionSignals,
+  sinceArmed: number,
+): FusionFrame | null {
   const preset = state.fusionPreset
   if (preset === "none") return null
 
@@ -2004,7 +2237,7 @@ export function evaluateFusion(
   // REVEAL GATE — "reveal progress controls all the relationships at once".
   // Smoothstep so the linkage eases in over the draw instead of snapping.
   const rv = clamp01(clock.reveal)
-  const revGate = rv * rv * (3 - 2 * rv)
+  const revGate = revealGate(rv, state.fusionRevealInfluence)
 
   /* COMPLETION PULSE — one shared decaying kick for every preset. Fast decay
    * (~0.5s to half) so it reads as an EVENT, not a lingering state.
@@ -2029,7 +2262,7 @@ export function evaluateFusion(
    * recently, and keep the Infinity sentinel so mid-draw stays silent. */
   const since = clock.sinceCompletion
   const trigger = completionTrigger(since, sinceArmed)
-  const pulse = trigger === Infinity ? 0 : Math.exp(-trigger / 0.5)
+  const pulse = completionEnvelope(state.fusionCompletion, trigger)
 
   // Effective relationship strength this frame.
   const k = depth * revGate
