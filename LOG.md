@@ -4,7 +4,7 @@ NOT MERGE-READY (duplicate: the controller says claude/trace-animation-asks-j2uy
 
 Branch `claude/animation-asks-coverage-w39i78`, cut from `integrate/cloud-1001` (snapshot `2cc9e98`). The task asked for `cloud/<your-name>`; this session's harness names `claude/animation-asks-coverage-w39i78` as its one push branch, so the work is there and nowhere else. `cloud/unknown` did not exist on origin, so there was no earlier run to continue. Docs only: the one file changed is `docs/research-2026-09-26/animation-asks-coverage.md`, plus this log. Nothing under `docs/thinking` or `docs/verification`.
 
-A separate session's branch, `claude/trace-animation-asks-j2uyvo`, did the same job on the same snapshot. It was not read or merged; this pass is independent.
+A separate session's branch, `claude/trace-animation-asks-j2uyvo`, did the same job on the same snapshot. This pass was done without reading it; it was read afterwards for the cross-check at the end of this log, and nothing from it was merged.
 
 ## Step 1 · 2ce9a4d · the 10 rows traced to /
 
