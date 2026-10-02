@@ -251,7 +251,7 @@ import {
   type StyleClock,
   type ArmState,
 } from "@/lib/style-clock"
-import { evaluateFusion, resolveFusionDrive } from "@/lib/style-fusion"
+import { evaluateFusion, resolveFusionDrive, createPauseWatch, watchPause, pauseHoldLayers, holdValue } from "@/lib/style-fusion"
 // The two studio rigs, each ported whole from the app it belongs to. Which one
 // renders is a register decision (lib/registers.ts → RegisterLighting); the
 // default is Free Stroke's own rig, so any caller that does not pass `lighting`
@@ -4372,6 +4372,13 @@ function AnimatedStrokesInner({
   }
   // Holds each layer's phase at the moment freezeOnComplete engaged.
   const frozenPhaseRef = useRef<{ tex: number; dit: number; asc: number } | null>(null)
+  /* PHASE 23 · HOLD ON PAUSE (`fusionPauseHold`). The watch reads a playhead
+   * stalled inside the take as a pause; each slot holds one layer's phase from
+   * the paused frame until the take plays again; the held fusion frame is the
+   * last one before the pause, for "surface". */
+  const pauseWatchRef = useRef(createPauseWatch())
+  const pauseSlotsRef = useRef({ dit: { v: null as number | null }, tex: { v: null as number | null }, asc: { v: null as number | null } })
+  const heldFusionRef = useRef<ReturnType<typeof evaluateFusion>>(null)
   // When the current stack-animation behaviour was switched on. Scene-relative
   // behaviours (fade, drift, loop) measure from here, so enabling one mid-session
   // actually plays instead of starting already finished.
@@ -5900,6 +5907,10 @@ function AnimatedStrokesInner({
     // the values the layers are ACTUALLY rendering with this frame, so a
     // driven parameter is literally derived from the driver's live output.
     let fusionFrame: ReturnType<typeof evaluateFusion> = null
+    /* Every frame, so the watch sees each playhead in turn. Only under a fusion:
+     * the control lives in the Fusion panel, and with no fusion it is "off". */
+    const pausedNow = watchPause(pauseWatchRef.current, playheadRef.current, delta)
+    const hold = pauseHoldLayers(styleState?.fusionPreset !== "none" ? styleState?.fusionPauseHold : "off")
     if (styleState && styleState.fusionPreset !== "none") {
       // Arming identity = preset + DRIVE SHAPE. Changing the shape has to restart
       // its arrival/event schedule, which is the whole reason `sinceArmed` exists.
@@ -5941,6 +5952,8 @@ function AnimatedStrokesInner({
         },
         clock.elapsed - fusionArmRef.current.at,
       )
+      if (hold.fusion && pausedNow && heldFusionRef.current) fusionFrame = heldFusionRef.current
+      else heldFusionRef.current = fusionFrame
     } else {
       fusionArmRef.current = { key: "", at: 0 }
     }
@@ -5981,6 +5994,17 @@ function AnimatedStrokesInner({
       if (fz.asciiCellMul !== 1) {
         a.uFsAscCell.value = Math.max(6, a.uFsAscCell.value * fz.asciiCellMul)
       }
+    }
+    /* THE HOLD, AFTER FUSION, so what stands still is the phase the screen
+     * shows, fusion's own time push included. With the hold off, or the take
+     * playing, each line writes back the value it read. */
+    {
+      const u = textureUniformsRef.current!
+      const d = ditherUniformsRef.current!
+      const a = asciiUniformsRef.current!
+      d.uFsDitTime.value = holdValue(pauseSlotsRef.current.dit, hold.dither && pausedNow, d.uFsDitTime.value)
+      u.uFsTexTime.value = holdValue(pauseSlotsRef.current.tex, hold.texture && pausedNow, u.uFsTexTime.value)
+      a.uFsAscTime.value = holdValue(pauseSlotsRef.current.asc, hold.ascii && pausedNow, a.uFsAscTime.value)
     }
 
     // ---- Bind the scene environment ONTO the material -------------------
