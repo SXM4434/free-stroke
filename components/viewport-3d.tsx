@@ -248,8 +248,12 @@ import {
   resolveSyncMode,
   createArmState,
   armedFor,
+  runningLayerTime,
+  runningSum,
+  createRunningPhase,
   type StyleClock,
   type ArmState,
+  type RunningPhase,
 } from "@/lib/style-clock"
 import { evaluateFusion, resolveFusionDrive } from "@/lib/style-fusion"
 // The two studio rigs, each ported whole from the app it belongs to. Which one
@@ -267,7 +271,7 @@ import { FREE_STROKE, type RegisterLighting } from "@/lib/registers"
 import { exportAnimation, planFrames, describePlan, revealEndsFor, EXPORT_PAPER, type ExportTimebase } from "@/lib/export"
 import { buildAnimatedGlb } from "@/lib/export/drawin-glb-three"
 import { useStrokeTake, type KeyLiveValues } from "@/components/stroke-strip"
-import { KEY_PROPERTIES, sampleKeys, revealClockMs, keysEndMs, validateKeys, type TakeKeys, type KeySample } from "@/lib/keyframes"
+import { KEY_PROPERTIES, sampleKeys, revealClockMs, keysEndMs, validateKeys, styleAt, KEYABLE_PATHS, framedKeys, type TakeKeys, type KeySample } from "@/lib/keyframes"
 import { flipPoseAt, type FlipDirection, type FlipOpts } from "@/lib/flip-pose"
 import { DEFAULT_HERO_MOTION } from "@/lib/hero-motion"
 import { previewParamsAtWidth, rodNormalOffset, widenAlongNormals, widthAt, widthForFrame } from "@/lib/width-keys"
@@ -290,6 +294,32 @@ export const GEOM_BUILD_DEBUG = { buildCount: 0 }
  * pattern SOLID_ANIM_DEBUG uses, and avoids threading a ref through props for
  * a Debug-only readout.
  */
+/* K2 · THE KEYED STYLE, AS A GATE READS IT (scripts/verify/assert-keyed-style.mjs).
+ * `record` on, the frame loop appends one row per frame: the style clock, the
+ * key clock, the texture layer's phase and the keyed values it drew with.
+ * `__fsKeyMutant`, read once, is that gate's must-fail switch: "memo" makes
+ * the frame read the doc's values instead of the keyed ones, "speedxtime" makes
+ * a keyed speed multiply time instead of running as a sum, "nodisable" samples
+ * the paths `KEY_DISABLED` leaves out. */
+export const KEYED_STYLE_DEBUG: {
+  record: boolean
+  rows: {
+    elapsed: number
+    clockMs: number
+    texTime: number
+    texSpeed: number
+    texIntensity: number
+    keyed: number
+    /** The material loop's phase and speed, when it runs this frame. */
+    matTime?: number
+    matSpeed?: number
+  }[]
+} = { record: false, rows: [] }
+const KEY_MUTANT: string | undefined =
+  typeof window !== "undefined" && process.env.NODE_ENV !== "production"
+    ? (window as unknown as { __fsKeyMutant?: string }).__fsKeyMutant
+    : undefined
+
 export const STYLE_CLOCK_DEBUG = {
   elapsed: 0,
   reveal: 0,
@@ -4381,6 +4411,23 @@ function AnimatedStrokesInner({
   // completion-driven layer mode measures from the moment its behaviour was
   // selected rather than from scene start. Keys deliberately exclude speeds and
   // intensities so dragging a dial does not restart the phase.
+  /* K2 · KEYED STYLE. The keys the frame samples are the doc's, less the paths
+   * no key drives (`KEY_DISABLED`, lib/keyframes.ts, each with its reason), and
+   * the style values they key (any numeric leaf of StyleState, KEYABLE_PATHS)
+   * are found once per set of keys. With none, the frame reads `styleState`
+   * itself, exactly as before K2. */
+  const frameStyleKeys = useMemo(() => (KEY_MUTANT === "nodisable" ? keyReader?.keys : framedKeys(keyReader?.keys)), [keyReader])
+  const keyedStylePaths = useMemo(() => {
+    const out = new Set<string>()
+    if (frameStyleKeys) for (const kp of KEYABLE_PATHS) if ((frameStyleKeys[kp.path]?.length ?? 0) > 0) out.add(kp.path)
+    return out
+  }, [frameStyleKeys])
+  /* The running sums of the three shader layers' keyed speeds (see
+   * `runningLayerTime`): a keyed speed bends the loop, never jumps it. */
+  const texRunRef = useRef<RunningPhase>(createRunningPhase())
+  const ditRunRef = useRef<RunningPhase>(createRunningPhase())
+  const ascRunRef = useRef<RunningPhase>(createRunningPhase())
+  const matRunRef = useRef<RunningPhase>(createRunningPhase())
   const texArmRef = useRef<ArmState>(createArmState())
   const ditArmRef = useRef<ArmState>(createArmState())
   const ascArmRef = useRef<ArmState>(createArmState())
@@ -5551,7 +5598,26 @@ function AnimatedStrokesInner({
     matAnimArmRef.current = createArmState()
   }
 
+  const styleStateBase = styleState
   useFrame((state, delta) => {
+    /* K2 · THE FRAME READS THE KEYED STYLE. Every `styleState.` read below is
+     * this frame's: each keyed value replaced by its sample on the key reader's
+     * clock (the transport's playhead times the keyed length, the clock export
+     * drives too), every other value the doc's own. `styleAt` returns the doc's
+     * object itself when nothing style is keyed, so an unkeyed page renders
+     * what it rendered before K2. The must-fail arm `__fsKeyMutant = "memo"`
+     * reads the doc's values, the way a memo would. */
+    const styleState =
+      styleStateBase && keyReader && keyedStylePaths.size > 0 && KEY_MUTANT !== "memo"
+        ? styleAt(styleStateBase, frameStyleKeys, keyReader.clockMs())
+        : styleStateBase
+    /* The material's base, read per frame when a custom material value is
+     * keyed (the memo'd `baseParams` is the doc's values, built when the
+     * material is). Otherwise the memo's own object, as before K2. */
+    const frameBase =
+      styleState && styleState !== styleStateBase && keyedStylePaths.size > 0 && [...keyedStylePaths].some((k) => k.startsWith("customMaterial."))
+        ? resolveMaterialParams(styleState.materialPreset, styleState.customMaterial)
+        : baseParams
     /* FIRST, BEFORE ANYTHING READS THE GEOMETRY. An implicit rebuild that went
      * to the worker may have refilled these buffers between frames, which
      * React cannot see — see `ensureLetterStamp`. Doing it here rather than
@@ -5718,7 +5784,7 @@ function AnimatedStrokesInner({
       // longer each roll their own.
       const texSync = resolveSyncMode(motionMode, styleState.textureSyncMode)
       const texAnimated = texOn && styleState.textureAnimated && texSync.animated
-      const texT = evaluateLayerTime(clock, {
+      const texCfg = {
         animated: texAnimated,
         syncMode: texSync.syncMode,
         sinceArmed: armedFor(
@@ -5735,7 +5801,12 @@ function AnimatedStrokesInner({
         delay: styleState.textureDelay,
         loopSeconds: styleState.styleLoopSeconds,
         revealScale: 4,
-      })
+      }
+      // A keyed speed runs as a sum (K2); `speedxtime` is the must-fail arm.
+      const texT =
+        keyedStylePaths.has("textureSpeed") && KEY_MUTANT !== "speedxtime"
+          ? runningLayerTime(clock, texCfg, texRunRef.current)
+          : evaluateLayerTime(clock, texCfg)
       // `time` is meaningful in every branch now (a resting layer reports its
       // own phase), so there is no separate not-active fallback to keep in
       // sync — that fallback differed between the three layers and was where
@@ -5763,6 +5834,18 @@ function AnimatedStrokesInner({
       // completionPulse decay and then SNAP back to full at its cutoff.
       const texBase = stack ? stack.textureAmount : styleState.textureIntensity
       u.uFsTexIntensity.value = texBase * texT.amount * gAmt
+      if (KEYED_STYLE_DEBUG.record) {
+        const rows = KEYED_STYLE_DEBUG.rows
+        rows.push({
+          elapsed: clock.elapsed,
+          clockMs: keyReader ? keyReader.clockMs() : -1,
+          texTime: u.uFsTexTime.value,
+          texSpeed: styleState.textureSpeed,
+          texIntensity: styleState.textureIntensity,
+          keyed: keyedStylePaths.size,
+        })
+        if (rows.length > 4000) rows.splice(0, rows.length - 4000)
+      }
     }
 
     // ---- Dither v1 (uniform writes only) --------------------------------
@@ -5798,7 +5881,7 @@ function AnimatedStrokesInner({
 
       const ditSync = resolveSyncMode(motionMode, styleState.ditherSyncMode)
       const ditAnimated = ditOn && styleState.ditherAnimated && ditSync.animated
-      const ditT = evaluateLayerTime(clock, {
+      const ditCfg = {
         animated: ditAnimated,
         syncMode: ditSync.syncMode,
         sinceArmed: armedFor(
@@ -5810,7 +5893,11 @@ function AnimatedStrokesInner({
         delay: styleState.ditherDelay,
         loopSeconds: styleState.styleLoopSeconds,
         revealScale: 6,
-      })
+      }
+      const ditT =
+        keyedStylePaths.has("ditherSpeed") && KEY_MUTANT !== "speedxtime"
+          ? runningLayerTime(clock, ditCfg, ditRunRef.current)
+          : evaluateLayerTime(clock, ditCfg)
       // MATRIX motion: shift which threshold cell each pixel samples.
       d.uFsDitTime.value = frozen ? frozen.dit : ditT.time + gOff
       d.uFsDitIntensity.value *= ditT.amount * gAmt
@@ -5853,7 +5940,7 @@ function AnimatedStrokesInner({
         styleState.asciiAnimated &&
         styleState.asciiAnimationType !== "none" &&
         ascSync.animated
-      const ascT = evaluateLayerTime(clock, {
+      const ascCfg = {
         animated: ascAnimated,
         syncMode: ascSync.syncMode,
         sinceArmed: armedFor(
@@ -5865,7 +5952,11 @@ function AnimatedStrokesInner({
         delay: styleState.asciiDelay,
         loopSeconds: styleState.styleLoopSeconds,
         revealScale: 8,
-      })
+      }
+      const ascT =
+        keyedStylePaths.has("asciiScrollSpeed") && KEY_MUTANT !== "speedxtime"
+          ? runningLayerTime(clock, ascCfg, ascRunRef.current)
+          : evaluateLayerTime(clock, ascCfg)
       // A non-animated ASCII layer ignores uFsAscTime entirely (the shader
       // only reads it inside the animation branches), which silently discarded
       // the group drift/loop offset — the glyph grid sat still while the rest
@@ -6053,6 +6144,21 @@ function AnimatedStrokesInner({
       /* Hoisted because the fusion block below has to know whether the band is
        * already spoken for — see `releaseFusionSweep`. */
       const materialSweepOn = animOn && styleState.materialAnimationType === "shineSweep"
+      /* K2: a KEYED material speed runs as a sum (`runningSum`), shared by the
+       * sweep and the animation below, which read the same time. Unkeyed, or
+       * with the must-fail arm "speedxtime", it stays time times speed. */
+      const matBase = motionMode === "syncToDraw" ? playheadRef.current * 6 : clock.elapsed
+      let matTravel: number | undefined
+      if (animOn && keyedStylePaths.has("materialAnimationSpeed") && KEY_MUTANT !== "speedxtime") {
+        matTravel = runningSum(matRunRef.current, matBase, styleState.materialAnimationSpeed)
+      } else matRunRef.current.base = Number.NaN
+      if (KEYED_STYLE_DEBUG.record && animOn) {
+        const last = KEYED_STYLE_DEBUG.rows[KEYED_STYLE_DEBUG.rows.length - 1]
+        if (last && last.elapsed === clock.elapsed) {
+          last.matTime = matTravel ?? matBase * styleState.materialAnimationSpeed
+          last.matSpeed = styleState.materialAnimationSpeed
+        }
+      }
       const sweepLaw = readSweepLaw()
       if (materialSweepOn) {
         const completion = playheadRef.current
@@ -6065,7 +6171,7 @@ function AnimatedStrokesInner({
             : clock.elapsed
         const k = Math.min(1, Math.max(0, styleState.materialAnimationIntensity))
         const cyc =
-          ((((swTime * styleState.materialAnimationSpeed) / 2.6) % 1) + 1) % 1
+          ((((matTravel ?? swTime * styleState.materialAnimationSpeed) / 2.6) % 1) + 1) % 1
         const tf = Math.min(1, cyc / 0.88)
         // Position is in NORMALIZED stroke units (bounds radius = 1); ±1.12
         // just clears the drawing on both sides with the wider band, and a
@@ -6105,10 +6211,11 @@ function AnimatedStrokesInner({
             ? completion * 6 // map 0..1 progress into a usable phase range
             : clock.elapsed // shared style clock, see swTime above
         const next = evaluateMaterialAnimation({
-          base: baseParams,
+          base: frameBase,
           type: styleState.materialAnimationType,
           time,
           speed: styleState.materialAnimationSpeed,
+          travel: matTravel,
           intensity: styleState.materialAnimationIntensity,
           completion,
           // Real post-completion clock so one-shot accents (completionFlash)
@@ -6140,19 +6247,19 @@ function AnimatedStrokesInner({
         // stuck at their last animated values). Color is pinned too:
         // roughnessPulse darkens it (wet look) and fusion scales it, so
         // without the pin either would leak into later frames.
-        liveMaterial.color.set(baseParams.color)
-        liveMaterial.roughness = baseParams.roughness
-        liveMaterial.metalness = baseParams.metalness
-        liveMaterial.clearcoat = baseParams.clearcoat
-        liveMaterial.clearcoatRoughness = baseParams.clearcoatRoughness
-        liveMaterial.reflectivity = baseParams.reflectivity
-        liveMaterial.sheen = baseParams.sheen
-        liveMaterial.sheenRoughness = baseParams.sheenRoughness
-        liveMaterial.sheenColor.set(baseParams.sheenColor)
-        liveMaterial.emissive.set(baseParams.emissive)
-        liveMaterial.emissiveIntensity = baseParams.emissiveIntensity
-        liveMaterial.envMapIntensity = baseParams.envMapIntensity
-        liveMaterial.iridescence = baseParams.iridescence ?? 0
+        liveMaterial.color.set(frameBase.color)
+        liveMaterial.roughness = frameBase.roughness
+        liveMaterial.metalness = frameBase.metalness
+        liveMaterial.clearcoat = frameBase.clearcoat
+        liveMaterial.clearcoatRoughness = frameBase.clearcoatRoughness
+        liveMaterial.reflectivity = frameBase.reflectivity
+        liveMaterial.sheen = frameBase.sheen
+        liveMaterial.sheenRoughness = frameBase.sheenRoughness
+        liveMaterial.sheenColor.set(frameBase.sheenColor)
+        liveMaterial.emissive.set(frameBase.emissive)
+        liveMaterial.emissiveIntensity = frameBase.emissiveIntensity
+        liveMaterial.envMapIntensity = frameBase.envMapIntensity
+        liveMaterial.iridescence = frameBase.iridescence ?? 0
       }
 
       // ---- Fusion: material half of the relationships -------------------
@@ -6196,7 +6303,7 @@ function AnimatedStrokesInner({
         if (fz.sheenAdd !== 0 || latch.sheen) {
           liveMaterial.sheen = noRecompile(liveMaterial.sheen + fz.sheenAdd, fz.sheenAdd !== 0, latch.sheen)
           liveMaterial.sheenRoughness = c01(
-            baseParams.sheenRoughness * (1 - Math.min(0.75, fz.sheenAdd)),
+            frameBase.sheenRoughness * (1 - Math.min(0.75, fz.sheenAdd)),
           )
         }
         liveMaterial.metalness = c01(liveMaterial.metalness + fz.metalnessAdd)
@@ -7888,8 +7995,11 @@ interface KeyReader {
   readonly flip?: FlipOpts
 }
 
+/** Any track with a key, the style tracks included (K2): a doc keyed only on
+ *  style values still needs the key reader, since its clock is the one the
+ *  frame samples them on. */
 function hasAnyKey(keys: TakeKeys | undefined): keys is TakeKeys {
-  return !!keys && KEY_PROPERTIES.some((p) => (keys[p]?.length ?? 0) > 0)
+  return !!keys && Object.values(keys).some((t) => (t?.length ?? 0) > 0)
 }
 
 function makeKeyReader(
@@ -12801,6 +12911,14 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
       // accessible path from a broken layer, so the flag itself has to be
       // readable — see scripts/verify/assert-layer-flicker.mjs --reduced.
       styleClock: () => ({ ...STYLE_CLOCK_DEBUG }),
+      // K2: the keyed style, frame by frame (see KEYED_STYLE_DEBUG).
+      keyedStyle: {
+        record: (on: boolean) => {
+          KEYED_STYLE_DEBUG.record = on
+          if (on) KEYED_STYLE_DEBUG.rows = []
+        },
+        rows: () => KEYED_STYLE_DEBUG.rows.slice(),
+      },
       // The shine band's live state and WHICH block last wrote it. Reading the
       // number is the only way to tell "fusion released the band" from "the
       // picture happens to look the same" — see SWEEP_DEBUG and
