@@ -231,12 +231,6 @@ const DEAD_ALLOW = {
     "was never the shorter path. OWNERSHIP: deleting it edits two other lanes' " +
     "assumptions about a global. RETIRED by either wiring those two through it or " +
     "removing it, per DISPATCH §2.7.",
-  "__revealHarness.schedule":
-    "DEAD SURFACE — OWNERSHIP, NOT JUDGEMENT. Sixteen of `__revealHarness`'s " +
-    "seventeen members are driven from `scripts/`; `schedule` is the one nothing " +
-    "has ever called. Not this lane's surface to remove, and §2.7's answer is " +
-    "\"wire it or remove it\" rather than \"leave it\". RETIRED by a sweep " +
-    "reading it, or by its removal.",
   "__engineHarness.setEngine":
     "AN ENTIRE API NOTHING DRIVES — OWNERSHIP, NOT JUDGEMENT. " +
     "`app/desk-doodles/page.tsx` publishes `__engineHarness = { setEngine, get }` " +
