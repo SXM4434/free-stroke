@@ -119,6 +119,7 @@ import {
   performedPenMs,
   performedHolds,
   takeLiftsMs,
+  heldAtLift,
 } from "@/lib/stroke-timing"
 import {
   scheduleFromStrokes,
@@ -2614,6 +2615,9 @@ const TIP_HOLD_MAX = 8
 const paceKeyKnocked = () =>
   process.env.NODE_ENV !== "production" && typeof window !== "undefined" &&
   (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "timed-sig-no-pace"
+const trailLiftHoldsKnocked = () =>
+  process.env.NODE_ENV !== "production" && typeof window !== "undefined" &&
+  (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "tip-no-trail-liftholds"
 const liftHoldsKnocked = () =>
   process.env.NODE_ENV !== "production" && typeof window !== "undefined" &&
   (window as unknown as { __FS_GATE_MUTATE?: string }).__FS_GATE_MUTATE === "tip-no-liftholds"
@@ -7128,16 +7132,11 @@ function AnimatedStrokesInner({
            * word-wide scale, so the scale is 1 and the shader reads the slope. */
           const timedTip = timedRef.current !== null
           /* HAND-DRAW-P3 · a pen lift holds the whole tip at the lift's start,
-           * the stillness the beat gives with no rows (the bake's `lifts`). */
-          if (timedTip && tf.lifts && !liftHoldsKnocked()) {
-            const d = tu.d.value
-            for (let k = 0; k + 1 < tf.lifts.length; k += 2) {
-              if (d >= tf.lifts[k] && d < tf.lifts[k + 1]) {
-                tu.d.value = tf.lifts[k]
-                break
-              }
-            }
-          }
+           * the stillness the beat gives with no rows (the bake's `lifts`).
+           * CLOUD-HANDFIX finding 6: the trailing edge below is held the same
+           * way, since under Vanish and Travel it is the edge that moves. */
+          const liftHold = timedTip && !!tf.lifts && !liftHoldsKnocked()
+          if (liftHold) tu.d.value = heldAtLift(tf.lifts, tu.d.value)
           const tScale = timedTip ? 1 : ts && !ts.identity ? ts.scale : 1
           const slopeOn = timedTip && !!tf.slopeTex && takeKnockoutRef.current !== "slope"
           tu.slope.value = slopeOn ? tf.slopeTex : tf.texture
@@ -7154,6 +7153,7 @@ function AnimatedStrokesInner({
            * uniform-control-flow dead and the default render unchanged. */
           const wrapped = winNow.wrapLo < 1
           tu.w0.value = wrapped ? winNow.wrapLo : winNow.lo
+          if (liftHold && !trailLiftHoldsKnocked()) tu.w0.value = heldAtLift(tf.lifts, tu.w0.value)
           tu.trailOn.value = (wrapped || !winNow.openBack) && readTipTrailsWindow() ? 1 : 0
           tu.wrapOn.value = wrapped ? 1 : 0
           /* F121 · THE HOLDS, under a timed take only, where `d` and the

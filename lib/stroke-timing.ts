@@ -696,6 +696,19 @@ export function takeLiftsMs(
   return Float64Array.from(out)
 }
 
+/**
+ * A window edge held through a pen lift: `x` (a take fraction) at the start of
+ * the lift it falls in, else `x`. `lifts` are `[a, b)` pairs in the same units
+ * (`takeLiftsMs` over `takeMs`). The frame loop holds BOTH edges with it: the
+ * leading edge (`hi`, Grow's only moving edge) and the trailing one (`lo`,
+ * Vanish's and Travel's), so the tip stands still in a lift whichever edge is
+ * moving (CLOUD-HANDFIX, REVIEW.md Review 2 finding 6).
+ */
+export function heldAtLift(lifts: ArrayLike<number> | null | undefined, x: number): number {
+  if (lifts) for (let k = 0; k + 1 < lifts.length; k += 2) if (x >= lifts[k] && x < lifts[k + 1]) return lifts[k]
+  return x
+}
+
 /** One stretch of ink: stroke `i` lays ink over `[s, e]`, ms on the take's clock. */
 interface InkPiece {
   s: number

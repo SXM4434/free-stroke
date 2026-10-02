@@ -284,6 +284,48 @@ async function runRows() {
       parts.map((p) => `${p.label}: key ${p.differs ? "changes" : "SAME"}, ink inside the rebuilt lifts ${p.fresh} ms, inside the stale Natural lifts ${p.stale} ms`).join("; "))
   }
 
+  /* ---- F6 · the lift hold covers Vanish's trailing edge ------------------ */
+  {
+    const R = loadTs("lib/pen-reveal.ts")
+    const HL = loadTs("lib/hero-letters.ts")
+    const doc = docOf()
+    const nib = C.clockNibOf(doc)
+    const c = C.clockStrokesFor(doc.rawStrokes, doc.processedStrokes, doc.revealEnvelope, nib, cs)
+    const sched = SS.scheduleFromStrokes(c.processed, HL.assignLetters(c.processed, nib).of, doc.drawIn)
+    const n = sched.tracks.length
+    const take = { strokes: { [n - 1]: { delayMs: 1, speed: 1, ease: { kind: "preset", id: "linear" }, holdBack: false } }, ripple: false }
+    const win = { ...SS.REVEAL_WINDOW_DEFAULTS, mode: "vanish" }
+    const lifts0 = R.liftsLandBetweenStrokes(sched, win.mode)
+    const ts = T.buildTimedSchedule(sched, take, { baseMs: T.penMsOf(c.raw), pace: T.paceFromCurve((t) => R.revealDistanceFraction(c.processed, t, "hybrid", 0.4, lifts0)) })
+    const lifts = Array.from(T.takeLiftsMs(ts, ts.pace, ts.baseSlots, ts.baseMs), (v) => v / ts.takeMs)
+    // Inside every lift both of Vanish's edges, as the frame loop hands them to the tip, stand at the lift's start.
+    let inside = 0
+    let held = 0
+    let outsideKept = 0
+    let outside = 0
+    for (let k = 0; k + 1 < lifts.length; k += 2) {
+      for (let j = 0; j < 8; j++) {
+        const d = lifts[k] + ((lifts[k + 1] - lifts[k]) * j) / 8
+        const w = SS.windowAt(win, d, true)
+        inside++
+        if (T.heldAtLift(lifts, w.lo) === lifts[k] && T.heldAtLift(lifts, w.hi) === (w.hi < 1 ? lifts[k] : 1)) held++
+      }
+      const mid = k + 2 < lifts.length ? (lifts[k + 1] + lifts[k + 2]) / 2 : null
+      if (mid !== null && !(mid >= lifts[k + 2])) {
+        outside++
+        const w = SS.windowAt(win, mid, true)
+        if (T.heldAtLift(lifts, w.lo) === w.lo) outsideKept++
+      }
+    }
+    row("F6-TRAIL", lifts.length >= 2 && inside > 0 && held === inside && outsideKept === outside,
+      "under Vanish with a timed take, both window edges are held at a lift's start everywhere inside it, and left alone in the ink between lifts",
+      `${lifts.length / 2} lifts, ${held} of ${inside} in-lift edges held, ${outsideKept} of ${outside} in-ink edges untouched`)
+    const vp = readSrc("components/viewport-3d.tsx")
+    row("W6-TRAIL", /if \(liftHold\) tu\.d\.value = heldAtLift\(tf\.lifts, tu\.d\.value\)/.test(vp) && /tu\.w0\.value = wrapped \? winNow\.wrapLo : winNow\.lo\n\s*if \(liftHold && !trailLiftHoldsKnocked\(\)\) tu\.w0\.value = heldAtLift\(tf\.lifts, tu\.w0\.value\)/.test(vp),
+      "viewport: the frame loop holds the leading edge (tu.d) and the trailing edge (tu.w0) through heldAtLift",
+      "read the tip uniforms block")
+  }
+
   /* ---- WIRING: what the page hands rebaseForClock ------------------------ */
   {
     const page = readSrc("app/page.tsx")
@@ -440,6 +482,8 @@ const MUTANTS = [
   { name: "withPerformed skips a zero-span slot again", file: "lib/stroke-timing.ts", find: "    if (f) {\n      /* A zero base span", replace: "    if (f && B1 > B0) {\n      /* A zero base span", rows: ["F4-ZERO"] },
   { name: "placeSlots ignores the row's own length", file: "lib/stroke-timing.ts", find: "return (span > 0 ? span : row.lengthMs ?? 0) / row.speed", replace: "return span / row.speed", rows: ["F4-ZERO"] },
   { name: "the pace is left out of the key", file: "lib/stroke-timing.ts", find: "|r${t.ripple ? 1 : 0}|pace${pace.sig ?? \"?\"}`", replace: "|r${t.ripple ? 1 : 0}`", rows: ["F5-PACEKEY"] },
+  { name: "heldAtLift holds nothing", file: "lib/stroke-timing.ts", find: "if (x >= lifts[k] && x < lifts[k + 1]) return lifts[k]", replace: "if (x >= lifts[k] && x < lifts[k + 1]) return x", rows: ["F6-TRAIL"] },
+  { name: "the trailing edge is not held", file: "components/viewport-3d.tsx", find: "if (liftHold && !trailLiftHoldsKnocked()) tu.w0.value = heldAtLift(tf.lifts, tu.w0.value)", replace: "", rows: ["W6-TRAIL"] },
   { name: "the memo forgets its canvas", file: "app/page.tsx", find: "clockCsRef.current = clocked.cs", replace: "clockCsRef.current = settingsRef.current", rows: ["W1-CS"] },
 ]
 
