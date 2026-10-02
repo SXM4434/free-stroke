@@ -400,7 +400,7 @@ async function runRows() {
 /* ---- the must-fails ----------------------------------------------------- */
 const MUTANTS = [
   { name: "delay dropped", file: "lib/stroke-timing.ts", find: "+ row.delayMs)\n    const t1", text: "+ 0)\n    const t1", red: ["DELAY", "RIPPLE-ON"] },
-  { name: "speed read as 1", file: "lib/stroke-timing.ts", find: "const t1 = t0 + (B1 - B0) / row.speed", text: "const t1 = t0 + (B1 - B0) / 1", red: ["SPEED", "SLOPE"] },
+  { name: "speed read as 1", file: "lib/stroke-timing.ts", find: "return (span > 0 ? span : row.lengthMs ?? 0) / row.speed", text: "return (span > 0 ? span : row.lengthMs ?? 0) / 1", red: ["SPEED", "SLOPE"] },
   { name: "holdBack ignored", file: "lib/stroke-timing.ts", find: "    if (row.holdBack) continue", text: "    if (false) continue", also: { find: "    if (!row.holdBack) continue", text: "    continue" }, red: ["HOLD"] },
   { name: "ease replaced by linear", file: "lib/stroke-timing.ts", find: "const u = e ? easeInverse(e, w) : w", text: "const u = w", red: ["EASE"] },
   { name: "ripple ignored", file: "lib/stroke-timing.ts", find: "(ripple ? carry : 0)", text: "(0)", red: ["RIPPLE-ON", "RIPPLE-SPEED"] },

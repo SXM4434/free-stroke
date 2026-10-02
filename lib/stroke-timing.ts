@@ -84,6 +84,15 @@ export interface StrokeTiming {
    * still place the slot. Absent on every row the strip writes.
    */
   performed?: number[]
+  /**
+   * The slot's length before `speed`, ms, used only where the clock gives the
+   * stroke no base slot of its own (`B1 = B0`: every point one timestamp), where
+   * `speed` has nothing to scale. A performed stroke rebased onto such a clock
+   * keeps the length he performed through it, and comes back with a finite
+   * speed (CLOUD-HANDFIX, REVIEW.md Review 2 finding 4). Absent on every row
+   * the strip writes.
+   */
+  lengthMs?: number
 }
 
 export const STROKE_TIMING_NEUTRAL: StrokeTiming = {
@@ -444,6 +453,13 @@ export function isTimedTake(take: StrokeTimingTake | null | undefined): boolean 
  * Build the timed schedule, or null when the take has no rows. Null is the
  * shipped path: the caller keeps `remapRevealKeys` and `scheduleArcCoeffs`.
  */
+/** A slot's on-screen length, ms: its base span over its speed, or, on a zero
+ *  base span, the row's own `lengthMs` over its speed. */
+export function slotLengthMs(row: StrokeTiming, B0: number, B1: number): number {
+  const span = B1 - B0
+  return (span > 0 ? span : row.lengthMs ?? 0) / row.speed
+}
+
 /** Every stroke's on-screen `[t0, t1]`, ms, from its row and its base slot: the
  *  walk `buildTimedSchedule` places slots with, and `rebasePerformed` reads the
  *  old clock with, so the two can never disagree. Rows are already read clean.
@@ -464,7 +480,7 @@ export function placeSlots(rows: readonly StrokeTiming[], baseSlots: ArrayLike<n
     const B0 = baseSlots[i * 2]
     const B1 = baseSlots[i * 2 + 1]
     const t0 = Math.max(0, B0 + (ripple ? carry : 0) + row.delayMs)
-    const t1 = t0 + (B1 - B0) / row.speed
+    const t1 = t0 + slotLengthMs(row, B0, B1)
     slots[i * 2] = t0
     slots[i * 2 + 1] = t1
     if (ripple) carry = t1 - B1
@@ -473,7 +489,7 @@ export function placeSlots(rows: readonly StrokeTiming[], baseSlots: ArrayLike<n
   for (const i of order) {
     const row = rows[i]
     if (!row.holdBack) continue
-    const dur = (baseSlots[i * 2 + 1] - baseSlots[i * 2]) / row.speed
+    const dur = slotLengthMs(row, baseSlots[i * 2], baseSlots[i * 2 + 1])
     if (heldFrom) heldFrom[i] = lastEnd
     const t0 = Math.max(0, lastEnd + row.delayMs)
     slots[i * 2] = t0
@@ -512,6 +528,10 @@ export function buildTimedSchedule(
     const delayMs = Number.isFinite(r.delayMs) ? r.delayMs : 0
     if (delayMs !== r.delayMs) rejected.push(`stroke ${i}: delay ${r.delayMs} read as 0`)
     rows[i] = { delayMs, speed, ease: r.ease, holdBack: !!r.holdBack }
+    if (r.lengthMs !== undefined) {
+      if (Number.isFinite(r.lengthMs) && r.lengthMs > 0) rows[i].lengthMs = r.lengthMs
+      else rejected.push(`stroke ${i}: length ${r.lengthMs} is not a positive number, ignored`)
+    }
     if (r.performed !== undefined) {
       const why = performedFault(r.performed)
       if (why) rejected.push(`stroke ${i}: performed pace ${why}, played at its own pace`)
@@ -538,6 +558,7 @@ export function buildTimedSchedule(
     if (rows[i] === STROKE_TIMING_NEUTRAL) continue
     sig += `|${i}:${rows[i].delayMs},${rows[i].speed},${JSON.stringify(rows[i].ease)},${rows[i].holdBack ? 1 : 0}`
     if (rows[i].performed) sig += `,p${rows[i].performed!.join(" ")}`
+    if (rows[i].lengthMs !== undefined) sig += `,l${rows[i].lengthMs}`
   }
   let identity = takeMs === baseMs
   for (let i = 0; identity && i < n; i++) {
@@ -903,6 +924,7 @@ export function rebasePerformed(
       if (!Number.isInteger(i) || i < 0 || i >= n || !r) continue
       const speed = Number.isFinite(r.speed) && r.speed > 0 ? r.speed : 1
       rows[i] = { delayMs: Number.isFinite(r.delayMs) ? r.delayMs : 0, speed, ease: r.ease, holdBack: !!r.holdBack }
+      if (Number.isFinite(r.lengthMs) && r.lengthMs! > 0) rows[i].lengthMs = r.lengthMs
     }
     return rows
   }
@@ -929,12 +951,16 @@ export function rebasePerformed(
   const from = new Float64Array(n)
   for (const i of heldBack) {
     placeSlots(clean(out), newBaseSlots, out.ripple, from)
-    const r = out.strokes[i]
+    const r = { ...out.strokes[i] }
+    delete r.lengthMs
     const len = old[i * 2 + 1] - old[i * 2]
+    const span = newBaseSlots[i * 2 + 1] - newBaseSlots[i * 2]
+    // A zero span keeps the length on the row itself (finding 4); `withPerformed` does the same.
     out.strokes[i] = {
       ...r,
       delayMs: old[i * 2] - from[i],
-      speed: len > 0 ? (newBaseSlots[i * 2 + 1] - newBaseSlots[i * 2]) / len : r.speed,
+      speed: span > 0 && len > 0 ? span / len : span > 0 ? r.speed : 1,
+      ...(span > 0 || !(len > 0) ? {} : { lengthMs: len }),
     }
   }
   return out
@@ -1203,13 +1229,21 @@ export function withPerformed(
     const B0 = baseSlots[i * 2]
     const B1 = baseSlots[i * 2 + 1]
     const f = fits.get(i)
-    if (f && B1 > B0) {
+    if (f) {
+      /* A zero base span (every point one timestamp on this clock) has no
+       * length for a speed to scale, so the row carries the length he
+       * performed (`lengthMs`) at speed 1. Skipping the row instead left it
+       * stored against the old clock: the stroke moved and collapsed, and the
+       * swap back divided by 0 for speed Infinity (finding 4). */
+      const len = f.t1 - f.t0
+      const span = B1 - B0
       strokes[i] = {
         delayMs: f.t0 - B0 - (take.ripple ? carry : 0),
-        speed: (B1 - B0) / (f.t1 - f.t0),
+        speed: span > 0 && len > 0 ? span / len : 1,
         ease: { kind: "preset", id: "linear" },
         holdBack: false,
         performed: f.performed,
+        ...(span > 0 || !(len > 0) ? {} : { lengthMs: len }),
       }
     }
     if (!take.ripple) continue
@@ -1219,7 +1253,7 @@ export function withPerformed(
     if (r.holdBack) continue
     const speed = Number.isFinite(r.speed) && r.speed > 0 ? r.speed : 1
     const t0 = Math.max(0, B0 + carry + (Number.isFinite(r.delayMs) ? r.delayMs : 0))
-    carry = t0 + (B1 - B0) / speed - B1
+    carry = t0 + slotLengthMs({ ...r, speed }, B0, B1) - B1
   }
   return { ...take, strokes }
 }

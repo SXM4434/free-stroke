@@ -9585,6 +9585,8 @@ function Scene({
          * itself, drew the pace (measured: `performed` null on all 12 strokes
          * inside a kept dwell). */
         ...(r.performed !== undefined ? { performed: r.performed } : {}),
+        /* CLOUD-HANDFIX finding 4: a zero-span slot's own length rides through too. */
+        ...(r.lengthMs !== undefined ? { lengthMs: r.lengthMs } : {}),
       }
     }
     const lifts = liftsLandBetweenStrokes(schedule, revealWindow.mode)

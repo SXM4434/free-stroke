@@ -206,6 +206,39 @@ async function runRows() {
     }
   }
 
+  /* ---- F4 · a slot that is zero-length on one clock ---------------------- */
+  {
+    const A = [0, 1000, 1000, 2000]
+    const B = [0, 500, 900, 900]
+    const perf = [0, 0.25, 0.25, 1]
+    const cases = []
+    for (const held of [false, true]) {
+      let take = T.withPerformed({ strokes: {}, ripple: false }, A, new Map([[1, { t0: 1000, t1: 2000, performed: perf }]]))
+      if (held) {
+        // Held back at 0 lands after stroke 0 ends at 1000: the same [1000, 2000].
+        take = { ...take, strokes: { ...take.strokes, 1: { ...take.strokes[1], holdBack: true, delayMs: 0 } } }
+      }
+      const s0 = onScreen(take, A, 1)
+      const toB = T.rebasePerformed(take, A, B)
+      const sB = onScreen(toB, B, 1)
+      const back = T.rebasePerformed(toB, B, A)
+      const sA = onScreen(back, A, 1)
+      const r1 = back.strokes[1]
+      const ok = near(s0[0], 1000) && near(s0[1], 2000) && near(sB[0], 1000) && near(sB[1], 2000) && near(sA[0], 1000) && near(sA[1], 2000) &&
+        Number.isFinite(toB.strokes[1].speed) && Number.isFinite(r1.speed) && near(r1.speed, 1) && near(r1.delayMs, 0) && r1.lengthMs === undefined
+      cases.push({ ok, d: `${held ? "held back" : "in sequence"}: [${s0.map(fmt)}] -> zero-span clock [${sB.map(fmt)}] (speed ${fmt(toB.strokes[1].speed)}, length ${toB.strokes[1].lengthMs}) -> back [${sA.map(fmt)}] (delay ${fmt(r1.delayMs)}, speed ${fmt(r1.speed)})` })
+    }
+    // Performed straight onto the zero-span clock, and the build reads the row.
+    const direct = T.withPerformed({ strokes: {}, ripple: false }, B, new Map([[1, { t0: 1200, t1: 1500, performed: perf }]]))
+    const sD = onScreen(direct, B, 1)
+    const sched = { tracks: [{ from: 0, to: 0.5, start: 0, end: 0.5, reverse: false }, { from: 0.5, to: 1, start: 0.9, end: 0.9, reverse: false }], sig: "f4" }
+    const pace = { beatToClock: (b) => b, beatToLanding: (b) => b, clockToBeat: (c) => c }
+    const ts = T.buildTimedSchedule(sched, direct, { baseMs: 1000, pace })
+    const okD = near(sD[0], 1200) && near(sD[1], 1500) && Number.isFinite(direct.strokes[1].speed) && ts && ts.rejected.length === 0 && near(ts.slots[2], 1200) && near(ts.slots[3], 1500)
+    cases.push({ ok: okD, d: `performed on the zero-span clock: [${sD.map(fmt)}], build slot [${ts ? [ts.slots[2], ts.slots[3]].map(fmt) : "none"}], rejected ${ts ? ts.rejected.length : "n/a"}` })
+    row("F4-ZERO", cases.every((c) => c.ok), "a slot zero-length on one clock keeps its performed slot there and back, with a finite speed", cases.map((c) => c.d).join("; "))
+  }
+
   /* ---- WIRING: what the page hands rebaseForClock ------------------------ */
   {
     const page = readSrc("app/page.tsx")
@@ -359,6 +392,8 @@ const MUTANTS = [
   { name: "the next doc keeps the old draw-in and window", file: "lib/clock-rebase.ts", find: "const next: ClockDoc = { ...doc, ...patch }", replace: "const next: ClockDoc = { ...doc, ...patch, drawIn: doc.drawIn, revealWindow: doc.revealWindow }", rows: ["F2-DRAWIN", "F2-WINDOW"] },
   { name: "the held-back delay is solved from the clamped start again", file: "lib/stroke-timing.ts", find: "delayMs: old[i * 2] - from[i],", replace: "delayMs: r.delayMs + old[i * 2] - placeSlots(clean(out), newBaseSlots, out.ripple)[i * 2],", rows: ["F3-REVIEW", "F3-FUZZ"] },
   { name: "the ripple carry skips strokes with no row again", file: "lib/stroke-timing.ts", find: "const r = strokes[i] ?? STROKE_TIMING_NEUTRAL", replace: "const r = strokes[i] ?? { ...STROKE_TIMING_NEUTRAL, holdBack: true }", rows: ["F3-FUZZ"] },
+  { name: "withPerformed skips a zero-span slot again", file: "lib/stroke-timing.ts", find: "    if (f) {\n      /* A zero base span", replace: "    if (f && B1 > B0) {\n      /* A zero base span", rows: ["F4-ZERO"] },
+  { name: "placeSlots ignores the row's own length", file: "lib/stroke-timing.ts", find: "return (span > 0 ? span : row.lengthMs ?? 0) / row.speed", replace: "return span / row.speed", rows: ["F4-ZERO"] },
   { name: "the memo forgets its canvas", file: "app/page.tsx", find: "clockCsRef.current = clocked.cs", replace: "clockCsRef.current = settingsRef.current", rows: ["W1-CS"] },
 ]
 
