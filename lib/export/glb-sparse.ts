@@ -45,7 +45,7 @@ interface GltfBufferView {
   target?: number
 }
 
-interface GltfJson {
+export interface GltfJson {
   accessors?: GltfAccessor[]
   bufferViews?: GltfBufferView[]
   buffers?: { byteLength: number; uri?: string }[]
@@ -62,7 +62,7 @@ export interface SparseReport {
 
 const pad4 = (n: number) => (n + 3) & ~3
 
-function readGlb(buf: ArrayBuffer): { json: GltfJson; bin: Uint8Array } {
+export function readGlb(buf: ArrayBuffer): { json: GltfJson; bin: Uint8Array } {
   const dv = new DataView(buf)
   if (dv.getUint32(0, true) !== 0x46546c67) throw new Error("glb-sparse: not a GLB")
   let p = 12
@@ -80,7 +80,7 @@ function readGlb(buf: ArrayBuffer): { json: GltfJson; bin: Uint8Array } {
   return { json, bin }
 }
 
-function writeGlb(json: GltfJson, bin: Uint8Array): ArrayBuffer {
+export function writeGlb(json: GltfJson, bin: Uint8Array): ArrayBuffer {
   let jsonBytes = new TextEncoder().encode(JSON.stringify(json))
   const jsonLen = pad4(jsonBytes.length)
   const binLen = pad4(bin.length)

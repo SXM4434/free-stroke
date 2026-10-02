@@ -211,7 +211,7 @@ import {
   buildPenFieldForSlot,
   PEN_FIELD_DEFER_DEBUG,
 } from "@/lib/pen-field-defer"
-import type { StyleState } from "@/lib/style-system"
+import type { CustomMaterial, StyleState } from "@/lib/style-system"
 import {
   findPreset,
   resolveMaterialParams,
@@ -271,7 +271,7 @@ import { FREE_STROKE, type RegisterLighting } from "@/lib/registers"
 import { exportAnimation, planFrames, describePlan, revealEndsFor, EXPORT_PAPER, type ExportTimebase } from "@/lib/export"
 import { buildAnimatedGlb } from "@/lib/export/drawin-glb-three"
 import { useStrokeTake, type KeyLiveValues } from "@/components/stroke-strip"
-import { KEY_PROPERTIES, sampleKeys, revealClockMs, keysEndMs, validateKeys, styleAt, KEYABLE_PATHS, framedKeys, type TakeKeys, type KeySample } from "@/lib/keyframes"
+import { sampleKeys, revealClockMs, keysEndMs, validateKeys, styleAt, KEYABLE_PATHS, framedKeys, acceptKeys, loopSpeedOver, type StyleKeyPath, type TakeKeys, type KeySample } from "@/lib/keyframes"
 import { flipPoseAt, type FlipDirection, type FlipOpts } from "@/lib/flip-pose"
 import { DEFAULT_HERO_MOTION } from "@/lib/hero-motion"
 import { previewParamsAtWidth, rodNormalOffset, widenAlongNormals, widthAt, widthForFrame } from "@/lib/width-keys"
@@ -299,8 +299,9 @@ export const GEOM_BUILD_DEBUG = { buildCount: 0 }
  * key clock, the texture layer's phase and the keyed values it drew with.
  * `__fsKeyMutant`, read once, is that gate's must-fail switch: "memo" makes
  * the frame read the doc's values instead of the keyed ones, "speedxtime" makes
- * a keyed speed multiply time instead of running as a sum, "nodisable" samples
- * the paths `KEY_DISABLED` leaves out. */
+ * a keyed speed multiply time instead of running as a sum, "endspeed" runs the
+ * sum on the speed at each frame's end instead of the mean over its step
+ * (`loopSpeedOver`), "nodisable" samples the paths `KEY_DISABLED` leaves out. */
 export const KEYED_STYLE_DEBUG: {
   record: boolean
   rows: {
@@ -4416,7 +4417,15 @@ function AnimatedStrokesInner({
    * the style values they key (any numeric leaf of StyleState, KEYABLE_PATHS)
    * are found once per set of keys. With none, the frame reads `styleState`
    * itself, exactly as before K2. */
-  const frameStyleKeys = useMemo(() => (KEY_MUTANT === "nodisable" ? keyReader?.keys : framedKeys(keyReader?.keys)), [keyReader])
+  /* Accepted once per set of keys (validated and frozen, `acceptKeys`), so the
+   * per-frame samplers below skip the check. The reader's keys already passed
+   * `validateKeys`, so this never refuses. */
+  const frameStyleKeys = useMemo(
+    () => acceptKeys(KEY_MUTANT === "nodisable" ? keyReader?.keys : framedKeys(keyReader?.keys)),
+    [keyReader],
+  )
+  /* The key clock on the last frame, for `loopSpeedOver`. */
+  const loopClockRef = useRef(Number.NaN)
   const keyedStylePaths = useMemo(() => {
     const out = new Set<string>()
     if (frameStyleKeys) for (const kp of KEYABLE_PATHS) if ((frameStyleKeys[kp.path]?.length ?? 0) > 0) out.add(kp.path)
@@ -5618,6 +5627,20 @@ function AnimatedStrokesInner({
       styleState && styleState !== styleStateBase && keyedStylePaths.size > 0 && [...keyedStylePaths].some((k) => k.startsWith("customMaterial."))
         ? resolveMaterialParams(styleState.materialPreset, styleState.customMaterial)
         : baseParams
+    /* A KEYED LOOP SPEED, READ THROUGH `loopPhaseAt` (`loopSpeedOver`,
+     * lib/keyframes.ts): over this frame the loop runs at the mean of its keyed
+     * speed across the key clock's step, so its phase travels the area under
+     * the speed curve and a speed key bends the loop, never jumps it. The key
+     * clock is the one `styleAt` read above; `loopClockRef` holds last frame's. */
+    const keyNow = keyReader ? keyReader.clockMs() : 0
+    const keyPrev = loopClockRef.current
+    loopClockRef.current = keyNow
+    /* `__fsKeyMutant = "endspeed"` is the must-fail arm: the speed at the
+     * frame's end for the whole frame, so a step inside a frame overshoots. */
+    const loopSpeed = (path: StyleKeyPath) =>
+      styleStateBase
+        ? loopSpeedOver(styleStateBase, frameStyleKeys, path, KEY_MUTANT === "endspeed" ? keyNow : keyPrev, keyNow)
+        : 0
     /* FIRST, BEFORE ANYTHING READS THE GEOMETRY. An implicit rebuild that went
      * to the worker may have refilled these buffers between frames, which
      * React cannot see — see `ensureLetterStamp`. Doing it here rather than
@@ -5805,7 +5828,7 @@ function AnimatedStrokesInner({
       // A keyed speed runs as a sum (K2); `speedxtime` is the must-fail arm.
       const texT =
         keyedStylePaths.has("textureSpeed") && KEY_MUTANT !== "speedxtime"
-          ? runningLayerTime(clock, texCfg, texRunRef.current)
+          ? runningLayerTime(clock, { ...texCfg, speed: loopSpeed("textureSpeed") * 1.2 }, texRunRef.current)
           : evaluateLayerTime(clock, texCfg)
       // `time` is meaningful in every branch now (a resting layer reports its
       // own phase), so there is no separate not-active fallback to keep in
@@ -5896,7 +5919,7 @@ function AnimatedStrokesInner({
       }
       const ditT =
         keyedStylePaths.has("ditherSpeed") && KEY_MUTANT !== "speedxtime"
-          ? runningLayerTime(clock, ditCfg, ditRunRef.current)
+          ? runningLayerTime(clock, { ...ditCfg, speed: loopSpeed("ditherSpeed") * 6 }, ditRunRef.current)
           : evaluateLayerTime(clock, ditCfg)
       // MATRIX motion: shift which threshold cell each pixel samples.
       d.uFsDitTime.value = frozen ? frozen.dit : ditT.time + gOff
@@ -5955,7 +5978,7 @@ function AnimatedStrokesInner({
       }
       const ascT =
         keyedStylePaths.has("asciiScrollSpeed") && KEY_MUTANT !== "speedxtime"
-          ? runningLayerTime(clock, ascCfg, ascRunRef.current)
+          ? runningLayerTime(clock, { ...ascCfg, speed: loopSpeed("asciiScrollSpeed") * 1.6 }, ascRunRef.current)
           : evaluateLayerTime(clock, ascCfg)
       // A non-animated ASCII layer ignores uFsAscTime entirely (the shader
       // only reads it inside the animation branches), which silently discarded
@@ -6150,7 +6173,7 @@ function AnimatedStrokesInner({
       const matBase = motionMode === "syncToDraw" ? playheadRef.current * 6 : clock.elapsed
       let matTravel: number | undefined
       if (animOn && keyedStylePaths.has("materialAnimationSpeed") && KEY_MUTANT !== "speedxtime") {
-        matTravel = runningSum(matRunRef.current, matBase, styleState.materialAnimationSpeed)
+        matTravel = runningSum(matRunRef.current, matBase, loopSpeed("materialAnimationSpeed"))
       } else matRunRef.current.base = Number.NaN
       if (KEYED_STYLE_DEBUG.record && animOn) {
         const last = KEYED_STYLE_DEBUG.rows[KEYED_STYLE_DEBUG.rows.length - 1]
@@ -11592,6 +11615,18 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
       keys || flipOpts ? makeKeyReader(playheadRef, keys ?? NO_KEYS, totalDuration, takeLen, flipOpts) : undefined,
     [keys, flipOpts, totalDuration, takeLen],
   )
+  /* THE STYLE AT A KEY CLOCK, the one reading the frame loop, the Style panel
+   * and every export share (REVIEW 1 finding 1): each keyed value sampled by
+   * `styleAt`, less the paths no key drives (`framedKeys`). The doc's own
+   * object when nothing style is keyed. */
+  const frameKeys = useMemo(() => framedKeys(keys), [keys])
+  const keyedStyleAtMs = useCallback(
+    (clockMs: number) => (styleState && frameKeys ? styleAt(styleState, frameKeys, clockMs) : styleState),
+    [styleState, frameKeys],
+  )
+  /* THE FILM'S PLAYHEAD AT A PLAN CLOCK, one function for the video, the GIF
+   * and the animated GLB: the plan's linear clock through the app's ease. */
+  const exportPlayhead = useCallback((c: number) => easeReveal(c, revealEaseRef.current), [])
 
   // Sync progress from the frame loop at ~15fps to avoid React re-render storms
   const progressUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -12736,7 +12771,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
    * build their geometry through this single call, so the animated file's
    * last frame is the static file's mark by construction, not by a second
    * copy of the parameters. */
-  const buildExportResult = useCallback(() => {
+  const buildExportResult = useCallback((customMaterial: CustomMaterial | undefined = styleState?.customMaterial) => {
     if (processedStrokes.length === 0) return null
     const engine = getEngineFor(geometryMode, engineFamily)
     const settings = settingsRef?.current
@@ -12756,7 +12791,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
       inflateParams,
       material: {
         preset: exportMaterialPreset,
-        params: resolveMaterialParams(exportMaterialPreset, styleState?.customMaterial),
+        params: resolveMaterialParams(exportMaterialPreset, customMaterial),
       },
       settings: {
         spacing: settings?.spacing ?? null,
@@ -12783,7 +12818,9 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
   ])
 
   const buildGLBBuffer = useCallback(async (): Promise<ArrayBuffer | null> => {
-    const exportResult = buildExportResult()
+    /* The static GLB is the mark as the view shows it, so a keyed Custom
+     * material value is read at the key clock the frame loop reads. */
+    const exportResult = buildExportResult(keyedStyleAtMs(keyReader ? keyReader.clockMs() : 0)?.customMaterial)
     if (!exportResult || exportResult.objectCount === 0) return null
 
     const exportScene = new THREE.Scene()
@@ -12819,7 +12856,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
       }
     })
     return buffer
-  }, [buildExportResult])
+  }, [buildExportResult, keyedStyleAtMs, keyReader])
 
   /* THE FILM'S PLAN INPUT, ONCE. The Video panel's sentence and the animated
    * GLB's keyframes are both cut from it, so the GLB plays on the film's clock.
@@ -12861,7 +12898,18 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
       if (!spansAt || DRAWIN_EXPORT.strokes?.length !== processedStrokes.length) {
         throw new Error("the 3D scene has not published its reveal yet. Try again in a moment")
       }
-      const exportResult = buildExportResult()
+      /* KEYED MATERIAL VALUES, ONE PER FRAME (REVIEW 1 finding 1). Each frame's
+       * style is `styleAt` at the key clock the film's frame draws with: its
+       * playhead (`exportPlayhead`, the same function the film seeks through)
+       * times the keyed length, the clock `makeKeyReader` reads. The file's own
+       * material is the last frame's, the finished mark a viewer without
+       * animation shows. */
+      const frameStyles = plan.frames.map((f) => keyedStyleAtMs(exportPlayhead(f.clock) * totalDuration))
+      const frameParams = frameStyles.map((st) => resolveMaterialParams(st?.materialPreset ?? "ink", st?.customMaterial))
+      const materialTracks = (["roughness", "metalness", "clearcoat", "emissiveIntensity", "sheen", "envMapIntensity"] as const).map(
+        (field) => ({ field, values: frameParams.map((m) => m[field]) }),
+      )
+      const exportResult = buildExportResult(frameStyles[frameStyles.length - 1]?.customMaterial)
       if (!exportResult || exportResult.objectCount === 0) return null
       const opening = !revealReverse
       /* THE PARKED KNOWN-BAD: `off` hands the builder the whole mark on every
@@ -12871,7 +12919,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
       const whole = () => [Float64Array.from({ length: processedStrokes.length * 2 }, (_, i) => (i % 2 ? 1 : 0))]
       const frames = plan.frames.map((f) => ({
         timeMs: f.timeMs,
-        spans: revealLaw === "off" ? whole() : spansAt(easeReveal(f.clock, revealEaseRef.current), opening),
+        spans: revealLaw === "off" ? whole() : spansAt(exportPlayhead(f.clock), opening),
       }))
       try {
         return await buildAnimatedGlb({
@@ -12880,6 +12928,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
           canvasWidth,
           canvasHeight,
           frames,
+          materialTracks,
         })
       } finally {
         for (const g of exportResult.disposables) g.dispose()
@@ -12891,7 +12940,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         })
       }
     },
-    [buildExportResult, processedStrokes, revealReverse, canvasWidth, canvasHeight],
+    [buildExportResult, processedStrokes, revealReverse, canvasWidth, canvasHeight, keyedStyleAtMs, exportPlayhead, totalDuration],
   )
 
   // DEV-ONLY verification hook: lets scripts/verify/verify-gates.mjs assert the
@@ -13568,7 +13617,9 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
           `${geometryMode} geometry with the draw-in as a glTF animation ("draw-in"): ` +
           `${plan.frames.length} keyframes, the Video panel's clock (${describePlan(plan)}), ` +
           `${targets} morph targets on ${out.animatedMeshes} of ${out.animation.meshes.length} meshes · ${formatBytes(blob.size)}. ` +
-          "A viewer that plays glTF animation plays it; one that does not shows the finished mark.",
+          "A viewer that plays glTF animation plays it; one that does not shows the finished mark." +
+          (out.material?.carried.length ? ` Keyed material values ride the same clip: ${out.material.carried.join(", ")}.` : "") +
+          (out.material?.dropped.length ? ` Not in the file: ${out.material.dropped.map((d) => `${d.field} (${d.reason})`).join("; ")}.` : ""),
       })
     } catch (err) {
       console.error("[FreeStroke Export] animated GLB export failed:", err)
@@ -13913,7 +13964,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
             playheadRef.current = p
             setProgress(p)
           },
-          easePlayhead: (c) => easeReveal(c, revealEaseRef.current),
+          easePlayhead: exportPlayhead,
           ...(clockLaw === "drive"
             ? { setSceneTimeMs: (ms: number) => { STYLE_CLOCK_DRIVE.exactMs = ms } }
             : {}),

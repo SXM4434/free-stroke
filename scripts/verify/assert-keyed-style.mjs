@@ -12,9 +12,11 @@
 //
 // Rows, each with its must-fail:
 //   K1  PHASE CONTINUOUS. Texture animated, free-running; textureSpeed keyed 1, held, then 3 from 2 s.
-//       Played through the step: every frame's phase change is this frame's speed times its clock
-//       change (within 2%), before, at and after the step. must-fail: `__fsKeyMutant = "speedxtime"`,
-//       the keyed speed multiplying time: the step frame jumps.
+//       Played through the step: every frame's phase change is the mean keyed speed over its key-clock
+//       step (the area under the speed, `loopSpeedOver` through `loopPhaseAt`) times its style-clock
+//       change (within 2%), before, at and after the step. must-fails: `__fsKeyMutant = "speedxtime"`,
+//       the keyed speed multiplying time: the step frame jumps; `"endspeed"`, the speed at the frame's
+//       end for the whole frame: the frame that holds the step overshoots.
 //   K1m THE SAME FOR THE MATERIAL LOOP. roughnessPulse animated; materialAnimationSpeed keyed 1, held,
 //       then 3 from 2 s: each frame's material phase change is its speed times its clock change. Same
 //       must-fail.
@@ -108,9 +110,14 @@ async function phase(mutant, loop = LOOPS.texture) {
     const a = r[i - 1], b = r[i]
     const dt = b.elapsed - a.elapsed
     if (!(dt > 0) || b.keyed === 0 || typeof b[loop.t] !== "number" || typeof a[loop.t] !== "number") continue
-    // The speed the frame ran at is the keyed value this frame drew with, times the loop's base rate
-    // (the texture layer's 1.2; the material's 1).
-    const expect = b[loop.v] * loop.rate * dt
+    // The speed the frame ran at is the mean of the keyed speed (1 held, then 3 from 2000 ms) over the
+    // key clock's step from the last frame to this one, computed here from the keys and not read from
+    // the page, times the loop's base rate (the texture layer's 1.2; the material's 1). A step that is
+    // not forward, or longer than a frame can be (250 ms), reads the speed at its end.
+    const speedAt = (c) => (c < 2000 ? 1 : 3)
+    const c0 = a.clockMs, c1 = b.clockMs
+    const mean = c1 > c0 && c1 - c0 <= 250 ? (Math.max(0, Math.min(c1, 2000) - c0) * 1 + Math.max(0, c1 - Math.max(c0, 2000)) * 3) / (c1 - c0) : speedAt(c1)
+    const expect = mean * loop.rate * dt
     const got = b[loop.t] - a[loop.t]
     const err = Math.abs(got - expect) / Math.max(1e-6, 3 * loop.rate * dt)
     if (err > worst) { worst = err; worstAt = { clockMs: Math.round(b.clockMs), got: +got.toFixed(4), expect: +expect.toFixed(4) } }
@@ -124,10 +131,14 @@ async function phase(mutant, loop = LOOPS.texture) {
   row("K1", "a keyed speed step 1 to 3 at 2 s: each frame's phase change is speed times its clock change", r.crossed && r.steps > 20 && r.worst <= 0.02, `${r.steps} frames over ${Math.round(r.spanMs[0])} to ${Math.round(r.spanMs[1])} ms, worst error ${(r.worst * 100).toFixed(2)}% of a speed-3 frame ${JSON.stringify(r.worstAt)}`)
   const m = await phase("speedxtime")
   fired("K1", "phase as speed times time", m.worst > 0.02, `worst error ${(m.worst * 100).toFixed(0)}% of a speed-3 frame ${JSON.stringify(m.worstAt)}`)
+  const me = await phase("endspeed")
+  fired("K1", "the speed at the frame's end for the whole frame", me.worst > 0.02, `worst error ${(me.worst * 100).toFixed(1)}% of a speed-3 frame ${JSON.stringify(me.worstAt)}`)
   const rm = await phase(null, LOOPS.material)
   row("K1m", "a keyed material speed step 1 to 3 at 2 s: each frame's phase change is speed times its clock change", rm.crossed && rm.steps > 20 && rm.worst <= 0.02, `${rm.steps} frames over ${Math.round(rm.spanMs[0])} to ${Math.round(rm.spanMs[1])} ms, worst error ${(rm.worst * 100).toFixed(2)}% of a speed-3 frame ${JSON.stringify(rm.worstAt)}`)
   const mm = await phase("speedxtime", LOOPS.material)
   fired("K1m", "material phase as speed times time", mm.worst > 0.02, `worst error ${(mm.worst * 100).toFixed(0)}% of a speed-3 frame ${JSON.stringify(mm.worstAt)}`)
+  const mme = await phase("endspeed", LOOPS.material)
+  fired("K1m", "the material speed at the frame's end for the whole frame", mme.worst > 0.02, `worst error ${(mme.worst * 100).toFixed(1)}% of a speed-3 frame ${JSON.stringify(mme.worstAt)}`)
 }
 
 // ---------------------------------------------------------------- K2

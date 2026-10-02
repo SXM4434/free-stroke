@@ -537,6 +537,39 @@ export function loopPhaseAt(state: StyleState, keys: TakeKeys | undefined, speed
   return (F(clockMs) - F(0)) / 1000
 }
 
+/**
+ * The longest step of the key clock, in ms, that a frame's loop speed is read
+ * as the mean over: a quarter second covers a slow frame at 4x. A longer step
+ * is a scrub or a seek, not a frame, and reads the speed at its end.
+ */
+export const LOOP_STEP_MAX_MS = 250
+
+/**
+ * THE SPEED A LOOP RUNS AT OVER ONE FRAME, READ THROUGH `loopPhaseAt`. The key
+ * clock moved from `fromMs` to `toMs` this frame; the loop advances by this
+ * speed times its own clock's step. It is the mean of the keyed speed over the
+ * key clock's step, `(loopPhaseAt(to) - loopPhaseAt(from)) / step`, so the loop
+ * travels exactly the area under its speed curve however the frames fall: a
+ * held speed that steps from 1 to 3 inside a frame moves the loop by 1 for the
+ * part before the step and 3 for the part after, never by 3 for the whole
+ * frame. Paused, scrubbed back, wrapped or seeked (a step that is not forward
+ * or longer than `LOOP_STEP_MAX_MS`), it is the speed at `toMs`. Unkeyed it is
+ * the doc's speed, exactly.
+ */
+export function loopSpeedOver(
+  state: StyleState,
+  keys: TakeKeys | undefined,
+  speedPath: StyleKeyPath,
+  fromMs: number,
+  toMs: number,
+): number {
+  const track = keys?.[speedPath]
+  if (!track || track.length === 0) return readLeaf(state, speedPath)
+  const step = toMs - fromMs
+  if (!(step > 0) || step > LOOP_STEP_MAX_MS || !finite(fromMs)) return valueAt(track, toMs)!
+  return ((loopPhaseAt(state, keys, speedPath, toMs) - loopPhaseAt(state, keys, speedPath, fromMs)) * 1000) / step
+}
+
 /* ---- how drawProgress meets the stroke timing ---------------------------- */
 
 /**

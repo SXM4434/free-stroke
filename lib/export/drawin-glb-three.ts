@@ -18,6 +18,7 @@ import * as THREE from "three"
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js"
 import { buildDrawinAnimation, meshStrokeShares, type DrawinFrame, type DrawinPoint, type DrawinResult } from "./drawin-glb"
 import { sparsifyMorphTargets, type SparseReport } from "./glb-sparse"
+import { addMaterialTracks, type GlbMaterialResult, type GlbMaterialTrack } from "./glb-material-keys"
 
 export const DRAWIN_CLIP_NAME = "draw-in"
 
@@ -34,6 +35,9 @@ export interface AnimatedGlbInput {
   fusedMaxEdge?: number
   /** Rewrite the morph targets as sparse accessors (`./glb-sparse`). Default true. */
   sparse?: boolean
+  /** Keyed material values, one per frame of `frames`, written as
+   *  `KHR_animation_pointer` channels on the same clip (`./glb-material-keys`). */
+  materialTracks?: readonly GlbMaterialTrack[]
 }
 
 export interface AnimatedGlb {
@@ -43,6 +47,8 @@ export interface AnimatedGlb {
   animatedMeshes: number
   /** What the sparse rewrite did, or null when it was not asked for. */
   sparse: SparseReport | null
+  /** Which keyed material values the file carries, and which glTF cannot hold. */
+  material: Omit<GlbMaterialResult, "glb"> | null
 }
 
 /**
@@ -252,9 +258,13 @@ export async function buildAnimatedGlb(input: AnimatedGlbInput): Promise<Animate
         animations: [clip],
       })
     })
-    if (input.sparse === false) return { buffer, animation, animatedMeshes: tracks.length, sparse: null }
-    const packed = sparsifyMorphTargets(buffer)
-    return { buffer: packed.glb, animation, animatedMeshes: tracks.length, sparse: packed.report }
+    const packed = input.sparse === false ? null : sparsifyMorphTargets(buffer)
+    const keyed = input.materialTracks?.length
+      ? addMaterialTracks(packed ? packed.glb : buffer, animation.times, input.materialTracks, DRAWIN_CLIP_NAME)
+      : null
+    const out = keyed ? keyed.glb : packed ? packed.glb : buffer
+    const material = keyed ? { carried: keyed.carried, dropped: keyed.dropped, channels: keyed.channels } : null
+    return { buffer: out, animation, animatedMeshes: tracks.length, sparse: packed ? packed.report : null, material }
   } finally {
     exportScene.remove(group)
     if (parent) parent.add(group)
