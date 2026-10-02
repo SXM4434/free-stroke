@@ -230,10 +230,75 @@ These rows were not regraded, because this pass was asked to change only the ten
 
 - Rows 8, 36 and 39 say `stampPenClock` and `humanLiftsMs` are lab only. On this snapshot `/` calls `stampPenClock` under Clock: Hand (dtc:583-610 to `app/page.tsx:2659`), and `humanLiftsMs` runs inside it.
 - Rows 6 and 56 say the flat-to-solid flip and 3D first are lab only. The Form block now has a Flip row, Off, Flat to solid or 3D first (dtc:447-480), timed onto the take at vp:7939-7951.
-- Row 4 says the tools have no animation workspace. The dockview layout adds workspaces on a left rail (`components/workspace/workspaces.ts`, `components/workspace/rail.tsx`); whether one of them is an animation workspace was not checked.
+- Rows 4 and 5 say there is no animation workspace and the keys live only in the dock. The dockview layout adds an Animate workspace on the left rail, key 3 (`components/workspace/workspaces.ts:36`), which opens the dock with its Timeline, Draw-in and Export panels (`components/workspace/workspaces.ts:101` and :133). Whether the 55% height cap row 4 names still applies was not checked.
 
 ### Limits of the third pass
 
 - PRESENT is still source level. No browser was opened for these rows, so 105 and 106 rest on the reveal not reading `flatten`, not on a look at the screen.
 - Row 108's MISSING rests on a grep by name for a key-pose table.
 - Row 22 is graded on what the code does at the end of a pass. The plan file it cites is not in the repo, so his plan's own words for restart behaviour are still unread.
+
+## Build list
+
+One line for every MISSING or PARTIAL row, in table order: what building it takes, the files, and the branch it overlaps. **TAKEN** means one of the five branches being built elsewhere covers it (codex/export, codex/drawin, codex/schedule, codex/perstroke, codex/fusion). None of the five is on origin, so the match is by branch name and the area of the work, not by reading their diffs. **Open** means none of the five covers it. Two other branches on origin touch the same ground: `claude/drawin-extras-animation-asks-yj9zyt` has commits for a whole-draw duration, Presentation and an authored-or-recorded switch (rows 19, 15, 47), and `claude/export-formats-implementation-rs226x` works in `lib/export/`. File paths are on this snapshot.
+
+- **4** (PARTIAL) Lift the dock's 55% height cap in the Animate workspace, or give the strip and the key lanes their own dockview panel there. `components/workspace/workspaces.ts`, `components/workspace/dock-hosts.tsx`, `components/dock-shell.tsx`. Open.
+- **5** (PARTIAL) Render the key lanes in the drawer's Animation tab as well as the dock, and check the dock shows before the first stroke. `components/style-panel-scaffold.tsx`, `components/key-lanes.tsx`, `components/stroke-strip.tsx`. Open.
+- **6** (MISSING) A sequence pick on `/` (2D then 3D, 3D first, letter flip after the draw) that feeds `solidFirst` and `letterByLetter` from `lib/hero-motion.ts` into the `flatten` path; the Flip row (dtc:447-480) is the start. `components/draw-in-timing-controls.tsx`, `components/viewport-3d.tsx`, `app/page.tsx`. Overlaps codex/drawin at the control; the film wiring is open.
+- **8** (PARTIAL) Write down what else comes over from the lab beyond `stampPenClock`, which `/` now calls under Clock: Hand, and wire each piece. `app/desk-doodles/page.tsx`, `app/page.tsx`, `lib/pen-reveal.ts`. Open.
+- **12** (PARTIAL) A writer for the `bezier` ease on the whole draw and on each stroke, reusing `CurveEditor`, overshoot allowed. `components/draw-in-timing-controls.tsx`, `components/key-lanes.tsx`, `lib/stroke-timing.ts`. **TAKEN: codex/drawin** (the per-stroke half also touches codex/perstroke).
+- **14** (MISSING) A stagger curve over stroke index that offsets each slot's start. `lib/stroke-schedule.ts`, a control in `components/draw-in-timing-controls.tsx`. **TAKEN: codex/schedule**.
+- **15** (PARTIAL) A Presentation reveal preset beside the five. `lib/style-system.ts` (the draw-in presets). **TAKEN: codex/drawin**.
+- **19** (PARTIAL) A field that sets the take's length in seconds and scales the clock to it. `components/draw-in-timing-controls.tsx`, `app/page.tsx` (`revealEnvelope`). **TAKEN: codex/drawin**.
+- **31** (MISSING) A `reverse` field on `StrokeTiming` and a toggle in the stroke block. `lib/stroke-timing.ts`, `components/draw-in-timing-controls.tsx`, `lib/stroke-schedule.ts`. **TAKEN: codex/perstroke**.
+- **32** (MISSING) A max-gap clamp on the pauses between strokes. `lib/stroke-schedule.ts`, `lib/pen-reveal.ts` (the lift holds), a control in dtc. **TAKEN: codex/schedule**.
+- **33** (MISSING) An order by distance from a tapped point, a sixth `StrokeOrder` plus a tap on the canvas. `lib/stroke-schedule.ts`, `components/draw-in-timing-controls.tsx`, `components/viewport-3d.tsx`. **TAKEN: codex/schedule**.
+- **34** (MISSING) Depth per stroke, so each stroke goes solid at its own pen-up. A stroke index on the depth track in `lib/keyframes.ts`, read per stroke in `components/viewport-3d.tsx`. **TAKEN: codex/perstroke**.
+- **35** (MISSING) Fix the letter turn and its overlap in `lib/hero-motion.ts`, then bring it to `/` with the letter map row 121 needs. `lib/hero-motion.ts`, `app/page.tsx`, `components/viewport-3d.tsx`. Open.
+- **36** (PARTIAL) Check Clock: Hand against his eye and decide whether it becomes the default for new drawings. `lib/doc-store.ts` (the default envelope), `app/page.tsx`. Overlaps codex/drawin at the default; otherwise open.
+- **37** (PARTIAL) Bring the font's authored pen order to `/`, or an order that reorders a stroke set by where a hand starts each letter. `scripts/capture/letters.mjs`, `lib/stroke-schedule.ts`. **TAKEN: codex/schedule** for the order; the font on `/` goes with row 118.
+- **39** (PARTIAL) `humanLiftsMs` already runs on `/` under Clock: Hand. Left: a gate that the lifts land in 90 to 600 ms on `/`. `scripts/verify/`, `lib/pen-reveal.ts`. Open.
+- **40** (MISSING) A 100 ms floor on any stroke's time on screen. `lib/stroke-schedule.ts` or `lib/stroke-timing.ts` (`placeSlots`). **TAKEN: codex/schedule**.
+- **41** (MISSING) A reader for the recorded pressure in the reveal's pace or width. `lib/pen-reveal.ts`, `components/viewport-3d.tsx`. Open.
+- **42** (PARTIAL) A tip highlight control and its uniform on the pen tip. `components/draw-in-timing-controls.tsx`, `components/viewport-3d.tsx` (`applyPenTip`). **TAKEN: codex/drawin**.
+- **43** (PARTIAL) A tip-shape pick on `/` over `PEN_TIP_SHAPES`, and the tip on the engines past Inflate. `components/draw-in-timing-controls.tsx`, `app/page.tsx` (`penTip` is already doc state), `components/viewport-3d.tsx`. **TAKEN: codex/drawin** for the pick; the other engines are open.
+- **47** (PARTIAL) One switch for the take: authored rows or the recording. `components/draw-in-timing-controls.tsx`, `lib/stroke-timing.ts`. **TAKEN: codex/drawin**.
+- **52** (PARTIAL) A stroke index on the width track and per-stroke width in the geometry. `lib/keyframes.ts`, `lib/width-keys.ts`, `components/key-lanes.tsx`. **TAKEN: codex/perstroke**.
+- **53** (PARTIAL) Draw-progress keys per stroke, one lane per stroke. `lib/keyframes.ts`, `components/key-lanes.tsx`, `lib/stroke-timing.ts`. **TAKEN: codex/perstroke**.
+- **54** (PARTIAL) A transform per stroke after it lands (settle, wobble), which the prefix reveal can't carry today. `components/viewport-3d.tsx`, `lib/style-system.ts` (:4656-4663). **TAKEN: codex/perstroke**.
+- **55** (MISSING) A completion pulse on the mark, then flip `implemented` on its preset. `components/viewport-3d.tsx`, `lib/style-system.ts` (:4730-4736). **TAKEN: codex/perstroke** for the transform; open for the preset.
+- **56** (PARTIAL) The Flip now reaches `/` (dtc:447-480). Left: pushing the flat-to-solid change further, with his eye on it. `components/viewport-3d.tsx` (`flipOptsFor`), `lib/hero-motion.ts`. Overlaps codex/drawin at the control; open otherwise.
+- **58** (PARTIAL) The sixth preset, Completion Pulse, once row 55 exists. `lib/style-system.ts`. **TAKEN: codex/drawin** (depends on codex/perstroke for row 55).
+- **59** (PARTIAL) `presetFields` reads `motion` as well as `applies`, so `PresetCustomize` opens the draw-in controls under Geometry Animation and View presets. `lib/style-system.ts` (:5150), `components/style-panel-scaffold.tsx`. Open.
+- **60** (MISSING) Save as mine for a draw-in preset that stores the envelope, the take and the keys. `lib/style-system.ts` (`saveMinePreset`), `components/style-panel-scaffold.tsx`, `lib/doc-store.ts`. Open.
+- **61** (MISSING) Custom Geometry Animation, which is rows 59 and 60 together. Same files. Open.
+- **71** (PARTIAL) A browser across all fifteen families reading `PRESET_REGISTRY`. `components/style-panel-scaffold.tsx`, `lib/style-system.ts`. Open.
+- **82** (PARTIAL) A chaos or readability dial, and trace reveal influence and completion behaviour. `components/style-panel-scaffold.tsx` (`FusionControl`), `lib/style-fusion.ts`. **TAKEN: codex/fusion**.
+- **83** (PARTIAL) The Phase 23 list: shimmer riding the tip, dither freezing on pause, a fusion bloom at completion. `lib/style-clock.ts`, `lib/style-fusion.ts`, `components/viewport-3d.tsx`. **TAKEN: codex/fusion** for the bloom; the tip shimmer and the pause freeze are open.
+- **85** (MISSING) A travel axis per texture pattern, beside `ditherTravelDirection`. `lib/style-fusion.ts`, `components/viewport-3d.tsx`. Open.
+- **87** (PARTIAL) A motion-type menu for Texture Animation and the shader switch behind it. `components/style-panel-scaffold.tsx` (`TextureControl`), `lib/texture-shader.ts`. Open.
+- **88** (PARTIAL) A full reorder of the stack, texture and material included. `lib/style-stack.ts`, the layer shaders, `components/style-panel-scaffold.tsx`. Open.
+- **89** (PARTIAL) A dither flash on loop restart. A loop-restart event in `lib/style-clock.ts`, the flash in `lib/dither-shader.ts`. Open (the fusion bloom half sits with row 83).
+- **92** (MISSING) An animated GLB with `AnimationClip`s for the reveal and the keys. `lib/export/`, a GLB writer. **TAKEN: codex/export**.
+- **94** (MISSING) A GIF encoder. `lib/export/encoders.ts`, `lib/export/index.ts`. **TAKEN: codex/export**.
+- **95** (MISSING) A scroll-driven embed output. `lib/export/`. **TAKEN: codex/export**.
+- **96** (MISSING) Transparent video, an alpha WebM path beside APNG. `lib/export/webm.ts`, `lib/export/recorder.ts`. **TAKEN: codex/export**.
+- **99** (MISSING) A toggle that passes `holdOnEmpty`. `components/workspace/export-panel.tsx`, `lib/export/index.ts`. **TAKEN: codex/export**.
+- **104** (PARTIAL) Polish of the grouped panels to the plan's Layer H, with row 71's browser. `components/style-panel-scaffold.tsx`, `components/dock-shell.tsx`. Open.
+- **107** (PARTIAL) The hero choreography on `/` as a film pick, the same wiring as row 6. `lib/hero-motion.ts`, `components/viewport-3d.tsx`. Open.
+- **108** (MISSING) A key-pose table for the hero beat that replaces the in-between phases. `lib/hero-motion.ts`. Open.
+- **109** (MISSING) The land shadow after the turn, computed and drawn. `lib/hero-motion.ts`, `components/viewport-3d.tsx`. Open.
+- **111** (PARTIAL) A rotation about the baseline in the film's flat state instead of a camera channel. `lib/hero-motion.ts` (`FlatState.pitch`), `lib/flat-ink.ts`. Open.
+- **113** (PARTIAL) A gate comparing `toMotionMjsSource()` with the block in `scripts/capture/motion.mjs`. `scripts/verify/`. Open.
+- **114** (MISSING) A gate that the change to 3D never morphs at a beat boundary. `scripts/verify/`, `lib/hero-motion.ts`. Open.
+- **115** (MISSING) He names the pages first; then a route transition. `app/`. Open.
+- **116** (MISSING) A new film where the drawing's lines become code. `lib/hero-motion.ts`. Open.
+- **117** (PARTIAL) `ddFlipEase` on the `/` Flip, which today takes only `DEFAULT_HERO_MOTION`'s beat numbers. `components/viewport-3d.tsx` (`flipOptsFor`), `lib/hero-motion.ts`. Open.
+- **118** (PARTIAL) His call first. Then a text input on `/` that lays the word out with `layoutWord` as strokes. `app/page.tsx`, `scripts/capture/letters.mjs`. Open.
+- **119** (MISSING) One temperature dial that moves legibility against liveliness across the draw-in. `components/draw-in-timing-controls.tsx`, `lib/stroke-schedule.ts`. Open; it would sit on codex/drawin's controls.
+- **120** (MISSING) The 0.92-to-1 landing spring (a transform per stroke) and a 40 to 60 ms stagger. `components/viewport-3d.tsx`, `lib/stroke-schedule.ts`. **TAKEN: codex/perstroke** (spring) and **codex/schedule** (stagger).
+- **121** (PARTIAL) Pass a letter map from `/` (`assignLetters` is already imported in `app/page.tsx`) so the per-letter pass runs there. `app/page.tsx`, `components/viewport-3d.tsx`. Open.
+- **122** (MISSING) A pen shadow one nib ahead of the ink. `lib/pen-reveal.ts`, `components/viewport-3d.tsx`. Open.
+- **123** (PARTIAL) An opacity fade at the moving end beside the taper, with a dial. `components/viewport-3d.tsx` (`applyPenTip`), `lib/pen-reveal.ts`. **TAKEN: codex/drawin** if it carries the tip controls (rows 42, 43); open otherwise.
+
+Of the 58: 27 TAKEN in full or in part, 31 open. Three of the open ones (6, 36, 56) touch codex/drawin only at a control.
