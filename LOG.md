@@ -1,74 +1,116 @@
-# HAND-DRAW-P3 cloud log, 2026-09-30
+MERGE-READY
 
-Branch `cloud/hand-p3` (the snapshot of main at 4bba17b). Two steps, one commit each, both pushed. Nothing under `docs/thinking` or `docs/verification` is committed; the gates wrote there and it is left untracked.
+# CLOUD-SCHEDULE log, 2026-10-02
 
-## Step 1 · 4d76046 · phase 2 back on today's main
+Branch `cloud/schedule`, cut from the integration snapshot `2cc9e98` (main plus the dockview layout, keyframe anything, Hand Draw phase 3, the carve fix). Coverage item 13 (rows 14, 31, 32, 33) and plan 3b (Stagger), in `lib/stroke-schedule.ts` and `lib/stroke-timing.ts`. Five steps plus one review fix, one commit each, each pushed. Nothing under `docs/thinking` or `docs/verification` is touched. The harness that ran this lane also names `claude/stroke-schedule-controls-wrxpad` as its working branch; the same commits are mirrored there, nothing else.
 
-`git merge-file <path> base/<path> lane/<path>` on the four files. `lib/stroke-timing.ts` and `scripts/verify/assert-hand-clock.mjs` merged clean. Two conflicts, both kept:
-- `components/draw-in-timing-controls.tsx`, the import line: main's `curveOfEase, curveProblem` (Custom curve ease) with phase 2 dropping `takeHasPerformed` (the held clock controls are gone).
-- `app/page.tsx`, `handleRevealEnvelopeChange`: phase 2's `rebaseForClock`, so a clock or rate change and the rebase of performed rows are one `edit()`, one undo step, with main's `gesture ?? null` key. `clockUnderTake` and its toast are gone: Hand no longer yields to a performed take. Main's flip wiring (`flip`, `patchFlip`) is untouched.
-- Checked: base to main and lane to merged give the same diff on every file.
-- `docs/cloud-inbox` removed with `git rm -r`.
+Every control is off by default, and off is byte for byte today: row IDENTITY in the new gate compares schedules, keys, slots, lifts, `sampleTake` spans, the cull's front, performed holds and the tip field against `2cc9e98` itself (56 schedule and take cases on the hero and every engine-node shape).
 
-## Step 2 · 802ccdb · R11, Inflate's holds, the export row
+## Steps
 
-(a) R11, "Turn in the lifts". Under Hand a slot runs to the next stroke's landing (F120), so the logo's slots touch end to end ([0,520] [520,950] ...) and each lift sits in a slot's tail; only one gap existed (67 ms). The word space is 1792.8 to 1967.2 ms, 174.4 ms.
-- `paceFromCurve` returns its flats as `TimingPace.holds`. `takeLiftsMs(ts, pace, baseSlots, baseMs)` turns them into take-time lifts: each stroke inks over its slot less the holds in its base slot, carried through the row (delay, speed, ease inverse); a performed stroke inks its whole slot; lifts are the gaps in the union. Under rows it reads `ts.baseSlots`.
-- The strip publishes them on `ctx.liftsRef`; the picker passes them as `CameraTake.lifts`; `orbit-lifts` reads them when given and the slot gaps otherwise.
-- Live, logo under Hand: the move is offered and turns at 1792.8 to 1967.2 ms, 0.000 ms off the stamped lift.
+### 1 · 724f952 · Stagger preset (plan 3b)
+- `withStagger(take, baseSlots, { gapMs })` writes each stroke's `delayMs` so starts fall `gapMs` apart in base order. The first stroke keeps its start. Speed, ease and a performed pace are kept. A held-back stroke is left alone and still lands last. Under Ripple the carry is taken out, so the starts land where asked either way. Delays are whole ms.
+- **Stagger** in Geometry Animation (`lib/style-system.ts`), `stagger: { gapMs: 50 }`, applied by `applyMotionPresetById` against the base slots of the clock the preset sets, inside the same `edit()`: one undo step.
+- A **Stagger** button in the strip's row, through `commit`.
 
-(b) Inflate's shader holds. Measured with `scripts/verify/measure-hand-tip-creep.mjs` (Inflate, Hand, the 10 lifts of 50 ms or more, 5 frames per lift, control = the same span inside the stroke before):
-- No rows: 0 px change in all 10 lifts. The tip reads the beat, which the pace holds flat.
-- A timed take (+1 ms on the last stroke): 5, 28, 28, 27, 5, 26, 19, 52, 61, 18 px. It creeps: the tip reads the take's clock, which runs on through a lift, and the stroke end's nose fills in.
-- Fed as point holds at the pen-up and pen-down points (uFsTipHold): worst 13 px, single pixels where strokes cross (the LINEAR filter blends two arrivals).
-- A lift has no ink anywhere (that is how `takeLiftsMs` finds it), so the frame loop now holds the whole tip at the lift's start under a timed take (`entry.lifts`, published on `__heroPenTip.lifts`). Result: 0 px in all 10, controls 57 to 317 px. uFsTipHold still carries performed stops only; this is the hold with no radius, not the uniform. Say if you want it moved into the uniform instead.
+### 2 · dcc7b92 · Per-stroke reverse (row 31)
+- `StrokeTiming.reverse`. A reversed stroke runs from its far end in the same slot on the same pace: arc `a` arrives when its mirror `from + to - a` did. It flips the schedule's Direction again, so on top of Direction "All" the stroke runs forward.
+- The keys, `sampleTake`, `timedFront`, `performedHolds` and the tip field all read it. Perform is handed the effective direction, and a re-take keeps the flag.
+- **Reverse** in the stroke block (next to Hold back) and in the strip's row for the selected bar. The session reader keeps the field and names junk.
 
-(c) The export row, R12 in `assert-hand-clock`: `exportAnimation` over `getTotalDuration()` (what the page's own export passes) against live at 8 plan clocks. No rows: 8/8, film 4666.7 ms = take. Last stroke at 0.5x: 8/8, film 5024.9 ms = take (pen 4666.7).
+### 3 · c4f6dc3 · Stagger curve (row 14)
+- `staggerStarts(m, gapMs, ease)`. Even is `k * gapMs`. With an ease, the same total spread is laid out along it, so the first and last starts stay where Even puts them. An overshooting curve is clamped and never runs a start backwards.
+- In the strip: the gap in ms and a curve picker (Even, Ease in, Ease out, Ease in-out) beside Stagger. The row now wraps instead of pushing the strip sideways.
 
-Also in this commit: `assert-stroke-timing`'s two ripple mutants looked for `(t.ripple ? carry : 0)`, which phase 2 moved into `placeSlots` as `(ripple ? carry : 0)`; the mutants now find it (same sabotage, same rows).
+### 4 · b5a3c3b · Max gap (row 32)
+- `StrokeTimingTake.maxGapMs`. The pauses are the gaps in the ink, found the way `takeLiftsMs` finds them. That covers a lift inside a slot (the Hand clock) and a gap a row opens (a delayed held-back stroke) as well as gaps between slots.
+- Each pause longer than the cap plays in the cap. This is a time warp on the take's clock that is the identity across ink, so no stroke draws faster.
+- `rawSlots` keeps the uncut clock that the per-stroke maps read; `slots` and `takeMs` are cut. A max gap with no rows still times the take.
+- **Max gap** toggle and its ms in the strip (150 ms when first turned on). The session reader keeps it and names junk.
+
+### 5 · 18c0466 · Tap order (row 33)
+- Order **Tap order** (`"tapped"`) with `DrawInParams.taps`. Tapped strokes draw in tap order, a group where its first-tapped member was tapped, and untapped ones follow as drawn.
+- Taps are cleaned against the stroke count and read only under Tap order, so every other order gives today's object. They are carried in the schedule's `sig`.
+- In the Order block: one chip per stroke. A tap puts it next and shows its place, a second tap takes it out, Clear empties the list, and each tap selects the bar in the strip. The session reader keeps the taps and names junk.
+
+### Review fix · 2699c17 · the viewport's copy of the take
+`components/viewport-3d.tsx` rebuilds the take field by field before building the timed schedule. It named neither `reverse` nor `maxGapMs`, so steps 2 and 4 moved the strip and the export sampler but not the stage, which is how ANIM-2C once lost `performed`. Both now ride through, with knockouts `reverse` and `maxGap` for browser must-fails. `__fsTake.set` takes `{ maxGapMs }`. New source row STAGE-FIELDS reads the field names off the interfaces with the TypeScript parser and requires the copy to read each one.
+
+Rod: while a row is reversed or a max gap cuts something, Rod takes the `sampleTake` spans, as a reordered schedule does, because its own pen time through `[t0, t1]` cannot express either.
 
 ## Checks
 
-tsc: 6 errors, the baseline (snapshot 6, after step 1 6, after step 2 6).
+Every Node check below was run on a worktree of each commit, and again on `2cc9e98` unchanged. The lane's numbers match the snapshot's on every check except the new gate.
 
-Node gates, lane against the snapshot's own run:
-
-| gate | lane | snapshot |
+| check | `2cc9e98` (unchanged) | lane head `2699c17` |
 |---|---|---|
+| tsc | 6 errors (5 geometry-engines, 1 handFeel) | 6, same 6 |
 | assert-keyframes | 16/16 rows, 21/21 mutants | 16/16, 21/21 |
-| assert-key-paths | 6/7, 8/8 (EXISTING red) | 6/7, 8/8 (EXISTING red) |
-| assert-camera-moves | 11/11, 20/20 (new IN-LIFTS, 3 new mutants) | 10/10, 17/17 |
-| assert-stroke-timing, `STROKE_TIMING_BASE=4bba17b` | 16/16, 12/12 | 16/16, 12/12 |
+| assert-key-paths | 6/7, 8/8 (EXISTING red) | 6/7, 8/8, same red row |
+| assert-width-keys | 12/12, 9/9 | 12/12, 9/9 |
+| assert-camera-moves | 11/11, 20/20 | 11/11, 20/20 |
+| assert-flip-pose | 8/8, 10/10 | 8/8, 10/10 |
+| assert-stroke-timing | 16/16, 12/12 (with `STROKE_TIMING_BASE=2cc9e98`, see below) | 16/16, 12/12 |
+| **assert-schedule-controls** (new) | n/a | **23/23 rows, 25/25 mutants** |
+| assert-style-contracts | 5 FAILED of 44 (EXISTING) | 5 FAILED of 44, the same 5 |
+| assert-preset-registry | 61/61 | 61/61 |
+| assert-param-guards | ALL PASS | ALL PASS |
+| assert-drawin-monotone | 16 rows ALL PASS | 16 rows ALL PASS |
+| assert-export-window --model | 12 PASS, 0 FAIL | 12 PASS, 0 FAIL |
 
-Browser gates, headless, one browser at a time, lane on :3138 and the snapshot on :3140 from a worktree of 4bba17b:
+Per step, the same set ran on each commit: 724f952, dcc7b92, c4f6dc3, b5a3c3b and 18c0466 all match the snapshot on every check. The new gate stood at 5/5 rows and 5/5 mutants after step 1, 10/9 after step 2, 12/11 after step 3, 17/17 after step 4 and 22/23 after step 5.
 
-| gate | lane | snapshot |
+**assert-stroke-timing and its base.** The gate pins its IDENTITY base to `b0da66626`, which is not in this snapshot (one commit) or in `origin/main`. Run as written, it fails at RUN on the unchanged snapshot (0/1 rows, 0/12 mutants). It has an override for exactly this, `STROKE_TIMING_BASE=<rev>`. With `2cc9e98` it is 16/16 and 12/12 on the snapshot and on every lane commit, which makes its IDENTITY row "no rows is byte for byte the lane's starting point". No bar moved.
+
+### assert-schedule-controls (new), every row with a must-fail shown firing
+
+`node scripts/verify/assert-schedule-controls.mjs`. Node only, through `_ts-load.mjs`, on the hero's real keys and its real pace (`paceFromCurve` over `revealDistanceFraction`, built the way the strip builds it).
+
+| row | what it holds | must-fail(s), all CAUGHT |
 |---|---|---|
-| assert-hand-clock | 13/13 rows, 13/13 must-fails fired, 0 page errors | 10/10, 10/10 |
-| assert-perform, run 1 / run 2 | 11/15, then 10/15 | 13/14 + 1 SELF, then 10/14 + 1 SELF |
-| assert-key-lanes (row 11 base re-pinned, see below) | 15/15 graded, row 11 BLIND | 15/15 graded, row 11 SELF |
-| assert-stroke-strip | 17/18 | 17/18 |
-| assert-take-timeline | 20/21 | 20/21 |
+| IDENTITY | every control off: 56 cases byte-identical to `2cc9e98` | an empty take builds a timed schedule |
+| STAGGER | k-th start = first + 50k ms (whole-ms delays, 0.446 ms worst), lengths kept | stagger gap ignored |
+| STAGGER-RIPPLE | same under Ripple | stagger forgets the ripple carry |
+| STAGGER-KEEP | speed and ease kept, held-back stroke still last | stagger writes neutral rows |
+| STAGGER-PRESET | the preset exists, 40 to 60 ms, equals `STAGGER_GAP_MS` | preset at 500 ms |
+| CURVE | in, out, in-out starts on the ease (0.497 ms worst), up to 211 ms from Even | curve ignored |
+| CURVE-ENDS | ends kept, starts in order, overshoot and Ripple included | curve read without its clamp |
+| REV-KEYS | arc arrives at its mirror's time; other strokes and the slot unchanged | keys ignore reverse; reverse dropped when rows are read |
+| REV-DIRECTION | reverse on top of Direction "All" runs forward again | both of the above, and spans/front ignore reverse |
+| REV-CLOCK | `sampleTake` = live keys, grow and travel, 60 clocks, Direction off and alternate | keys ignore reverse; spans ignore reverse |
+| REV-FRONT | the cull's front walks a reversed stroke from its far end (24604 checks, 0 left out) | spans and front ignore reverse |
+| GAP-CAP | 11 lifts on the hero (37 to 149 ms), cap 75 cuts 3, the others are exact, take loses exactly the cut; a cap above every lift is today exactly | max gap ignored; lifts read before the cut; cut to 0 |
+| GAP-INK | every key moves up by the cuts before it, nothing else (94472 triangles, 0.0002 ms worst) | ignored; left out of the keys |
+| GAP-ROWS | a pause a row opens is capped (held-back +2000 ms lands 80 ms after) | ignored; cut to 0 |
+| GAP-CLOCK | `sampleTake` = live keys through the warp, with rows, Ripple and a reversed stroke (11.3M checks, 0 disagree) | ignored; not undone in the sampler; left out of the keys |
+| TAP-ORDER | taps 3, 0, 7 draw first, the rest as drawn | taps ignored |
+| TAP-GROUP | a group goes where its first-tapped member was tapped | taps ignored; placed by its last tap |
+| TAP-CLEAN | junk taps dropped, repeats once, taps under other orders change nothing | taps read raw; taps read under every order |
+| TAP-SIG | the cache key follows the taps | taps left out of the key |
+| STAGE-FIELDS | the viewport's take copy reads every row and take field (source check) | copy drops reverse; copy drops max gap |
+| DOC-GAP | max gap survives save and load, junk named | reader drops max gap |
+| DOC-TAPS | taps survive, junk dropped and named | reader drops taps |
+| DOC-REVERSE | reverse survives, junk named | reader drops reverse |
 
-hand-clock must-fails: R11 has two (`lifts-slot-gaps`, `clock-uniform`), counted fired only when both turn it red; both refused the move. R12 `exportpen`: 1/8 clocks, film 4666.7 against take 5024.9. R13 `tip-no-liftholds`: 8 to 40 px per lift. Phase 2's R11 compared `__fsTake.get().slots` (empty with no rows) and called the move itself; it now reads what the picker writes, through the real Camera button. R11 also clears the move's keys after, since R12 and R13 read frames in the lifts it turns in.
+## What I could not run
 
-Reds read as follows:
-- key-paths EXISTING and stroke-timing's own base need 747af8fa0 and b0da66626, which the squashed snapshot does not have. stroke-timing ran with its own `STROKE_TIMING_BASE` knob pointed at the snapshot.
-- perform: 1b inflate, extrude, solid and row 2 are red on the snapshot's second run too, so they swing run to run on this machine (4 cores, SwiftShader). Rod 1b passed 2 of 2 on the snapshot and 1 of 2 on the lane (held 1338.2 ms for a 1377.7 ms dwell). Nothing in this change touches Rod's playback, but I could not prove it here; worth one run on the Mac.
-- key-lanes row 11: my recorded base came from a docked canvas (755x533) and the full run is undocked (755x890), so the row is BLIND. Its intent holds: the lane's five no-key frame hashes equal the snapshot's, 5 of 5.
-- stroke-strip row 0: same cause, the base recorded with `--phase=base` is docked; 18/18 differ on both trees.
-- take-timeline E2: 36.0 rAF ticks/s on the lane and 35.9 and 27.4 on the snapshot, against a bar of 50. Headless on a loaded box.
+- **No browser** in this lane, as asked. None of the controls has been clicked or seen. Not run: assert-stroke-timing-browser, assert-stroke-strip, assert-stroke-schedule, assert-take-persists, assert-motion-customize, assert-preset-pixels, assert-hand-clock, assert-data-safety, assert-custom-presets, assert-hit-targets and the browser half of assert-export-window. Chromium is not installed here, and `assert-stroke-schedule` stops at launch on the snapshot itself.
+- Unproven without a page:
+  - Stagger as one undo step.
+  - The strip row's wrap at narrow widths, and whether the hit-target gate still likes it.
+  - The stroke chips in the Order block.
+  - That the stage draws a reversed stroke and a capped gap the way the Node rows say (the knockouts `reverse` and `maxGap` exist for that browser row).
+- assert-preset-pixels and assert-motion-customize count the Geometry Animation pills; Stagger is a new pill. Whatever they expect will have to be read on a browser run.
 
-## What I could not run, and how the environment was bent
+## Known limits, stated
 
-- `pnpm install --frozen-lockfile` refuses: `pnpm-lock.yaml` lacks `dialkit` and `motion`, which `package.json` lists. Installed with `--no-frozen-lockfile --config.node-linker=hoisted` (the gates import `jiti` directly, which pnpm's default layout does not hoist), then restored the lockfile. Not committed.
-- `npx playwright install` was not needed: Chromium 141 is preinstalled. `scripts/verify/lib/browser.mjs` pins channel `chrome`, so `/opt/google/chrome/chrome` was symlinked to it. Outside the repo.
-- `lsof` in this container cannot map sockets or cwd to pids, so `serverCommit` saw no server. A PATH-only shim answered its two queries from /proc; dev servers were bound to 127.0.0.1. Outside the repo.
-- Bases the snapshot does not carry were recorded from the snapshot server itself, into both trees' `docs/verification` (uncommitted): perform `base-main.json` (`--phase=base --base=4bba17b`), stroke-strip `base-3a211a36d.json` (`--phase=base`), key-lanes `nokeys-base.json` through an uncommitted copy of the gate with `KEYS_BASE` set to 4bba17b (the real one refuses any commit but ea31c5b38). So those rows compare to today's main, not to their named commits.
-- Not run: the rest of the plan's PEN rows beyond what these gates carry, `assert-stroke-timing-browser`, `assert-motion-customize`, `assert-custom-presets`, and any look at the result by eye. No Mac numbers were compared.
+- The pen tip's nose on a reversed stroke is baked through the timed map, the same path the schedule's Direction "All" already takes. So it matches Direction's look, whatever that is. Not looked at.
+- Under a max gap that cuts a lift inside a slot (Hand clock), dragging that bar's end in the strip reads the cut length as the stroke's length, so the speed it writes is a little off. Between-slot gaps (Recorded clock) are exact.
+- Perform while Max gap is on records on the cut clock and stores against the uncut base slots, so a performed stroke after a cut pause lands early by the cut. Turn Max gap off to perform, or this needs a follow-up.
 
-## Next
+## Questions for the owner
 
-- Watch Hand Draw on your own drawing with one row set on the strip, on Inflate: the lifts should now hold as still as with no rows.
-- One perform run on the Mac to clear Rod 1b.
-- RUN-QUEUE row for HAND-DRAW-P3 is not written; this log is the record.
+1. Tap order: is a row of numbered chips in the Order block enough, or do you want to tap the strokes on the canvas itself? That is viewport work and needs a browser lane.
+2. Stagger writes delays once, so moving the gap or the curve afterwards means pressing Stagger again. Do you want the stagger to stay live instead, as a setting on the take?
+3. Max gap's first value is 150 ms (the hero's longest lift on the Natural pace is 149 ms; Hand's word space is 174 ms). Is that the right default?
+4. Reverse runs a stroke backwards on its own timing profile laid over the mirrored path, which is Cavalry's Reverse Path. The other reading plays the stroke's film backwards in time, so its hesitations come in reverse order and an ease-out becomes an ease-in. Which one is "reverse this one stroke"?
