@@ -10961,6 +10961,9 @@ export interface ViewportApi {
   effectiveSpin: () => number
   /** Data URL (PNG with alpha) of the current frame. */
   grab: () => string | null
+  /** The 3D canvas element, null before it mounts. Read-only: the page watches
+   *  its size so a refit waits for the canvas to settle (CLOUD-REFIT). */
+  canvas: () => HTMLCanvasElement | null
   /** Write the GLB. Same function the Export button calls. */
   exportGLB: () => Promise<void>
   /** Write the still. Same function the PNG button calls. */
@@ -13795,6 +13798,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         setSpinDegPerSecond(Number.isFinite(degPerSecond) ? Math.max(0, degPerSecond) : 0),
       effectiveSpin: () => effectiveSpin,
       grab: apiGrab,
+      canvas: () => glCanvasRef.current,
       exportGLB: handleExportGLB,
       exportPNG: handleExportPNG,
       exportVideo: handleExportVideo,

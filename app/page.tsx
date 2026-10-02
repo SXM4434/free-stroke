@@ -1437,17 +1437,54 @@ export default function Home() {
    * last framed and the refit is skipped unless the mark has outgrown it by
    * more than 2 percent. Draw inside what is already framed and the camera
    * holds still; orbit to an angle you like and it stays there until your
-   * drawing no longer fits. */
+   * drawing no longer fits.
+   *
+   * ONCE THE CANVAS HAS SETTLED (CLOUD-REFIT). An orthographic camera's zoom is
+   * the canvas's half-height over the framed half-height (`applyFraming`), read
+   * at the moment of the refit, and it is kept through every later resize (F123
+   * in components/viewport-3d.tsx says why the frame is not re-read per resize).
+   * A refit on a fixed 450 ms timer read whatever height the canvas had then:
+   * at 834x1112 the stacked canvas was still growing 188 to 217.72 px, and the
+   * at-load zoom read 34.78, 34.68, 33.92, 33.92 over four loads. So after the
+   * wait for the geometry, a ResizeObserver on the 3D canvas has to report no
+   * change for REFIT_SETTLE_FRAMES animation frames in a row, and the refit
+   * then runs ONCE. It is never re-run per resize: the observer and the frame
+   * loop are torn down with the refit. `window.__fsRefitTimer = "fixed"`
+   * (dev only, set before navigation) parks the fixed timer for the must-fail
+   * arm of assert-refit-settles. */
   const framedRadiusRef = useRef(0)
   useEffect(() => {
     if (rawStrokes.length === 0) {
       framedRadiusRef.current = 0
       return
     }
-    /* The geometry has to be BUILT before it has bounds, and the build is
-     * debounced behind the stroke commit. This waits rather than reading a
-     * null radius and giving up. */
-    const t = setTimeout(() => {
+    /* 6 frames in a row at one size; and a ceiling, so a canvas that never
+     * holds still (a resize dragged for seconds) is still framed once. */
+    const REFIT_SETTLE_FRAMES = 6
+    const REFIT_MAX_FRAMES = 600
+    const fixedTimer =
+      process.env.NODE_ENV !== "production" &&
+      typeof window !== "undefined" &&
+      (window as unknown as { __fsRefitTimer?: string }).__fsRefitTimer === "fixed"
+    let raf = 0
+    let ro: ResizeObserver | null = null
+    let stable = 0
+    let frames = 0
+    let last = ""
+    /* The canvas's box and buffer, and the box of the div R3F measures. R3F
+     * sizes the canvas from that div a render or more later, so a canvas that
+     * has not caught up with its container is not settled either. */
+    const sizeKey = (c: HTMLCanvasElement) => {
+      const r = c.getBoundingClientRect()
+      const p = c.parentElement?.getBoundingClientRect() ?? r
+      return `${r.width}x${r.height}:${c.width}x${c.height}:${p.width}x${p.height}`
+    }
+    const caughtUp = (c: HTMLCanvasElement) => {
+      const r = c.getBoundingClientRect()
+      const p = c.parentElement?.getBoundingClientRect() ?? r
+      return Math.abs(r.width - p.width) < 1 && Math.abs(r.height - p.height) < 1
+    }
+    const refit = () => {
       const api = viewportApiRef.current
       const b = api?.bounds()
       if (!api || !b || !(b.radius > 0)) return
@@ -1464,8 +1501,45 @@ export default function Home() {
        * quarter of it, so it always sits low and the extra distance is what
        * buys the margin back. */
       if (api.orbitView(45, 35.264, 1.7)) framedRadiusRef.current = b.radius
+    }
+    /* The geometry has to be BUILT before it has bounds, and the build is
+     * debounced behind the stroke commit. This waits rather than reading a
+     * null radius and giving up. Then the canvas has to hold one size: its
+     * box and its drawing buffer, which R3F writes in the same resize as the
+     * camera's half-height. */
+    const t = setTimeout(() => {
+      const canvas = viewportApiRef.current?.canvas() ?? null
+      if (fixedTimer || !canvas) {
+        refit()
+        return
+      }
+      last = sizeKey(canvas)
+      ro = new ResizeObserver(() => {
+        stable = 0
+      })
+      ro.observe(canvas)
+      if (canvas.parentElement) ro.observe(canvas.parentElement)
+      const tick = () => {
+        const k = sizeKey(canvas)
+        if (k !== last || !caughtUp(canvas)) {
+          last = k
+          stable = 0
+        } else stable++
+        if (stable >= REFIT_SETTLE_FRAMES || ++frames >= REFIT_MAX_FRAMES) {
+          ro?.disconnect()
+          ro = null
+          refit()
+          return
+        }
+        raf = requestAnimationFrame(tick)
+      }
+      raf = requestAnimationFrame(tick)
     }, 450)
-    return () => clearTimeout(t)
+    return () => {
+      clearTimeout(t)
+      cancelAnimationFrame(raf)
+      ro?.disconnect()
+    }
   }, [rawStrokes])
 
   const applySpin = (degPerSecond: number) => {
