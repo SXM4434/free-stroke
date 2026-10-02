@@ -464,6 +464,42 @@ async function runRows() {
     row("GAP-CLOCK", cks > 0 && mismatch === 0 && tsX.warp !== null, "under a max gap, export's sampleTake draws the live keys' set (grow and travel, 60 clocks, with rows, Ripple and a reversed stroke)", `${cks} triangle x clock checks: ${mismatch} disagree, ${ties} ties within 0.05 ms of an edge; cuts ${tsX.warp ? tsX.warp.length / 3 : 0}`)
   }
 
+  /* ── TAP ORDER (coverage row 33) ───────────────────────────────────────── */
+  const byStart = (sc) => sc.tracks.map((t, i) => [t.start, i]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map((x) => x[1])
+  {
+    const P = { ...S.DRAW_IN_DEFAULTS, unit: "stroke", order: "tapped", taps: [3, 0, 7] }
+    const sc = S.scheduleFromStrokes(hero.strokes, null, P)
+    const got = byStart(sc)
+    const want = [3, 0, 7, 1, 2, 4, 5, 6, 8, 9, 10, 11]
+    row("TAP-ORDER", JSON.stringify(got) === JSON.stringify(want), "tap order: tapped strokes draw in the order tapped, the rest follow as drawn", `taps 3, 0, 7 (0-based); strokes by start ${got.join(", ")}`)
+  }
+  {
+    const unitOf = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5]
+    // Strokes 8 and 9 share a unit; 9 is read second and tapped last, so the unit has two taps.
+    const P = { ...S.DRAW_IN_DEFAULTS, unit: "group", order: "tapped", taps: [8, 4, 1, 9] }
+    const sc = S.scheduleFromStrokes(hero.strokes, unitOf, P)
+    const units = []
+    for (const i of byStart(sc)) if (!units.includes(unitOf[i])) units.push(unitOf[i])
+    const want = [4, 2, 0, 1, 3, 5]
+    row("TAP-GROUP", JSON.stringify(units) === JSON.stringify(want), "under groups a unit draws where its first-tapped member was tapped", `units of six pairs, taps 8, 4, 1, 9; units by start ${units.join(", ")}`)
+  }
+  {
+    const P = { ...S.DRAW_IN_DEFAULTS, unit: "stroke", order: "tapped" }
+    const junk = S.scheduleFromStrokes(hero.strokes, null, { ...P, taps: [99, -1, 2.5, 3, "4", 3, 6] })
+    const clean = S.scheduleFromStrokes(hero.strokes, null, { ...P, taps: [3, 6] })
+    const same = JSON.stringify(junk) === JSON.stringify(clean)
+    const off = S.scheduleFromStrokes(hero.strokes, null, { ...S.DRAW_IN_DEFAULTS, taps: [5, 2] })
+    const offSame = JSON.stringify(off) === JSON.stringify(S.scheduleFromStrokes(hero.strokes, null, S.DRAW_IN_DEFAULTS))
+    row("TAP-CLEAN", same && JSON.stringify(junk.params.taps) === "[3,6]" && offSame, "taps that name no stroke are dropped, a repeat counts once, and taps under any other order change nothing", `junk taps read as ${JSON.stringify(junk.params.taps)}, same schedule as [3,6] ${same}; taps under As drawn leave today's schedule ${offSame}`)
+  }
+  {
+    const P = { ...S.DRAW_IN_DEFAULTS, unit: "stroke", order: "tapped" }
+    const a = S.scheduleFromStrokes(hero.strokes, null, { ...P, taps: [3, 0] }).sig
+    const b = S.scheduleFromStrokes(hero.strokes, null, { ...P, taps: [0, 3] }).sig
+    const c = S.scheduleFromStrokes(hero.strokes, null, { ...P, taps: [3, 0] }).sig
+    row("TAP-SIG", a !== b && a === c, "the schedule's cache key follows the taps, so a new tap rebuilds what reads it", `[3,0] vs [0,3] differ ${a !== b}; the same taps agree ${a === c}`)
+  }
+
   /* ── SAVED: every new field survives the session reader, and junk is named ── */
   {
     const D = loadTs("lib/doc-store.ts")
@@ -476,6 +512,11 @@ async function runRows() {
     const g3 = D.validateSession({ take: { strokes: {}, ripple: false } })
     const gapOk = g1.session.take.maxGapMs === 120 && !("maxGapMs" in g2.session.take) && g2.repairs.some((r) => r.includes("maxGapMs")) && !("maxGapMs" in g3.session.take)
     row("DOC-GAP", gapOk, "a max gap survives save and load; a negative one is read as off and named; none stays none", `120 -> ${g1.session.take.maxGapMs}; -5 -> ${g2.session.take.maxGapMs ?? "off"} (${g2.repairs.join(" | ") || "no repair"}); absent -> ${"maxGapMs" in g3.session.take ? "present" : "absent"}`)
+    const t1 = D.validateSession({ drawIn: { ...S.DRAW_IN_DEFAULTS, order: "tapped", taps: [4, 1, 4, -2, 0.5, 7] } })
+    const t2 = D.validateSession({ drawIn: { ...S.DRAW_IN_DEFAULTS, order: "tapped", taps: "3,1" } })
+    const t3 = D.validateSession({ drawIn: { ...S.DRAW_IN_DEFAULTS } })
+    const tapsOk = t1.session.drawIn.order === "tapped" && JSON.stringify(t1.session.drawIn.taps) === "[4,1,7]" && t1.repairs.some((r) => r.includes("drawIn.taps")) && !("taps" in t2.session.drawIn) && t2.repairs.some((r) => r.includes("drawIn.taps")) && !("taps" in t3.session.drawIn) && t3.repairs.length === 0
+    row("DOC-TAPS", tapsOk, "Tap order and its taps survive save and load; junk taps are dropped and named; none stays none", `order ${t1.session.drawIn.order}, taps ${JSON.stringify(t1.session.drawIn.taps)} (${t1.repairs.join(" | ")}); "3,1" -> ${JSON.stringify(t2.session.drawIn.taps ?? null)}; absent -> ${"taps" in t3.session.drawIn ? "present" : "absent"}`)
     row("DOC-REVERSE", ok, "a reversed row survives save and load; a reverse that is not a boolean is read as off and named", `rows ${JSON.stringify(Object.fromEntries(Object.entries(tk.strokes).map(([k, v]) => [k, v.reverse ?? null])))}; repairs: ${got.repairs.join(" | ") || "none"}`)
   }
 
@@ -500,6 +541,12 @@ const MUTANTS = [
   { name: "lifts read before the cut", file: "lib/stroke-timing.ts", find: "out.push(warpMs(w, g.a), warpMs(w, g.b))", text: "out.push(g.a, g.b)", red: ["GAP-CAP"] },
   { name: "max gap cuts every pause to 0", file: "lib/stroke-timing.ts", find: "cuts.push(g.a, g.b, cap)", text: "cuts.push(g.a, g.b, 0)", red: ["GAP-CAP", "GAP-ROWS"] },
   { name: "the session reader drops max gap", file: "lib/doc-store.ts", find: "return maxGapOk ? { strokes, ripple, maxGapMs: o.maxGapMs as number } : { strokes, ripple }", text: "return { strokes, ripple }", red: ["DOC-GAP"] },
+  { name: "taps ignored", file: "lib/stroke-schedule.ts", find: "for (const i of members[u]) first = Math.min(first, at.get(i) ?? Number.POSITIVE_INFINITY)", text: "void members", red: ["TAP-ORDER", "TAP-GROUP"] },
+  { name: "a unit placed by its last tap", file: "lib/stroke-schedule.ts", find: "first = Math.min(first, at.get(i) ?? Number.POSITIVE_INFINITY)", text: "first = at.has(i) ? at.get(i) : first", red: ["TAP-GROUP"] },
+  { name: "taps read raw", file: "lib/stroke-schedule.ts", find: "if (p.order === \"tapped\") p.taps = cleanTaps(params.taps, n)", text: "if (p.order === \"tapped\") p.taps = params.taps", red: ["TAP-CLEAN"] },
+  { name: "taps read under every order", file: "lib/stroke-schedule.ts", find: "if (p.order === \"tapped\") p.taps = cleanTaps(params.taps, n)", text: "if (params.taps) p.taps = cleanTaps(params.taps, n)", red: ["TAP-CLEAN"] },
+  { name: "taps left out of the cache key", file: "lib/stroke-schedule.ts", find: "const taps = p.order === \"tapped\" ? `|t${(p.taps ?? []).join(\",\")}` : \"\"", text: "const taps = \"\"", red: ["TAP-SIG"] },
+  { name: "the session reader drops taps", file: "lib/doc-store.ts", find: "if (taps.length) drawIn.taps = taps", text: "void taps", red: ["DOC-TAPS"] },
   { name: "stagger preset at 500 ms", file: "lib/style-system.ts", find: "stagger: { gapMs: 50 }", text: "stagger: { gapMs: 500 }", red: ["STAGGER-PRESET"] },
 ]
 

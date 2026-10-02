@@ -191,6 +191,9 @@ export function DrawInTimingControls({
       <span className="mb-2 block text-[10px] leading-snug text-muted-foreground">
         {ORDER_NOTES[drawIn.order]}
       </span>
+      {drawIn.order === "tapped" && strokeCount > 0 && (
+        <TapOrderField taps={drawIn.taps ?? []} strokeCount={strokeCount} onTaps={(taps) => patchDrawIn({ taps })} />
+      )}
       </>)}
       {/* OVERLAP */}
       {W(["drawIn.overlap"], <>
@@ -771,6 +774,58 @@ export function DrawInTimingControls({
     </div>)}
     </div>
     </>
+  )
+}
+
+/* ═══ TAP ORDER (coverage row 33) ════════════════════════════════════
+ * One chip per stroke, numbered as drawn. A tap puts the stroke next in line
+ * and shows its place on the chip; tapping a placed stroke takes it out, and
+ * the ones after it move up. Each tap also selects the stroke, so its bar
+ * lights in the strip and you can see which one you placed. */
+function TapOrderField({ taps, strokeCount, onTaps }: { taps: number[]; strokeCount: number; onTaps: (taps: number[]) => void }) {
+  const ctx = useStrokeTake()
+  const placed = taps.filter((t) => t < strokeCount)
+  return (
+    <div data-tap-order className="mb-2 flex flex-col gap-1">
+      <span className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span>Tap the strokes in order</span>
+        <button
+          type="button"
+          data-tap-clear
+          disabled={placed.length === 0}
+          onClick={() => onTaps([])}
+          className="normal-case text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline disabled:opacity-40"
+        >
+          Clear
+        </button>
+      </span>
+      <div className="flex flex-wrap gap-1">
+        {Array.from({ length: strokeCount }, (_, i) => {
+          const at = placed.indexOf(i)
+          return (
+            <button
+              key={i}
+              type="button"
+              data-tap-stroke={i}
+              aria-pressed={at >= 0}
+              onClick={() => {
+                onTaps(at >= 0 ? placed.filter((t) => t !== i) : [...placed, i])
+                ctx?.select(i)
+              }}
+              title={at >= 0 ? `Stroke ${i + 1} draws ${at + 1}${at === 0 ? "st" : at === 1 ? "nd" : at === 2 ? "rd" : "th"}. Tap to take it out.` : `Stroke ${i + 1}: tap to draw it next`}
+              className={`fs-press min-w-[28px] rounded-full border px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors ${
+                at >= 0
+                  ? "border-foreground/20 bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {i + 1}
+              {at >= 0 && <span className="ml-1 opacity-70">#{at + 1}</span>}
+            </button>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 

@@ -890,6 +890,17 @@ export function validateSession(input: unknown): { session: SessionDoc; repairs:
   const unit01 = (n: number) => (n < 0 ? 0 : n > 1 ? 1 : n)
   const drawInRead = coerceAgainst(DRAW_IN_DEFAULTS, src.drawIn, new Set(), DRAW_IN_UNIONS, repairs)
   const drawIn: DrawInParams = { ...drawInRead, overlap: unit01(drawInRead.overlap) }
+  /* Coverage row 33 · the strokes in the order he tapped them. An array, so the
+   * coerce above leaves it out and it is read here: whole indices, each once.
+   * The stroke count is not known yet, so range is the schedule's to check. */
+  const tapsRaw = src.drawIn && typeof src.drawIn === "object" ? (src.drawIn as Record<string, unknown>).taps : undefined
+  if (Array.isArray(tapsRaw)) {
+    const taps = tapsRaw.filter((t, k) => Number.isInteger(t) && (t as number) >= 0 && tapsRaw.indexOf(t) === k) as number[]
+    if (taps.length !== tapsRaw.length) repairs.push(`drawIn.taps: ${tapsRaw.length - taps.length} tap(s) that name no stroke, dropped`)
+    if (taps.length) drawIn.taps = taps
+  } else if (tapsRaw !== undefined) {
+    repairs.push(`drawIn.taps: ${JSON.stringify(tapsRaw)} is not a list of taps, read as none`)
+  }
   const windowRead = coerceAgainst(
     REVEAL_WINDOW_DEFAULTS,
     src.revealWindow,

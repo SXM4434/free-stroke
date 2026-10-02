@@ -137,8 +137,12 @@ import { strokeArcSpans, type StrokeArcSpan } from "@/lib/pen-reveal"
  * to define the order in which strokes appear"* — with the object fixed at the
  * mark's left edge, because a tappable anchor is a step-3 control and a dial
  * whose anchor cannot be moved should not pretend it can.
+ *
+ * `tapped` (coverage row 33) is the order he taps the strokes in: `taps` lists
+ * stroke indices, first tap first. A unit goes where its first-tapped member
+ * was tapped; units he has not tapped follow, in the order they were drawn.
  */
-export type StrokeOrder = "asDrawn" | "reversed" | "byLength" | "byPosition" | "random"
+export type StrokeOrder = "asDrawn" | "reversed" | "byLength" | "byPosition" | "random" | "tapped"
 
 /**
  * Blender's **Time Alignment**, verbatim: *"Align Start — All strokes start at
@@ -200,6 +204,9 @@ export interface DrawInParams {
   seed: number
   /** See `ReverseMode`. `off` is the recording and is the shipped default. */
   reverse: ReverseMode
+  /** Only read by `order: "tapped"`: stroke indices in the order he tapped
+   *  them. Absent everywhere else, and absent by default. */
+  taps?: number[]
 }
 
 /**
@@ -701,6 +708,18 @@ export interface ScheduleInput {
 
 const EPS = 1e-9
 
+/**
+ * The taps a schedule of `n` strokes can play: whole stroke indices in range,
+ * each at its first tap. A tap that names no stroke on the page plays nothing,
+ * so it is dropped rather than kept as a promise.
+ */
+export function cleanTaps(taps: readonly unknown[] | null | undefined, n: number): number[] {
+  const out: number[] = []
+  if (!Array.isArray(taps)) return out
+  for (const t of taps) if (Number.isInteger(t) && (t as number) >= 0 && (t as number) < n && !out.includes(t as number)) out.push(t as number)
+  return out
+}
+
 export function buildStrokeSchedule(input: ScheduleInput, params: DrawInParams): StrokeSchedule {
   const spans = input.spans
   const n = spans.length
@@ -712,6 +731,8 @@ export function buildStrokeSchedule(input: ScheduleInput, params: DrawInParams):
     seed: params.seed | 0,
     reverse: params.reverse ?? "off",
   }
+  // Taps are read only under `tapped`, so every other order is today's object.
+  if (p.order === "tapped") p.taps = cleanTaps(params.taps, n)
 
   if (n === 0) {
     return {
@@ -913,7 +934,8 @@ export function buildStrokeSchedule(input: ScheduleInput, params: DrawInParams):
 }
 
 function sigOf(p: DrawInParams): string {
-  return `${p.order}|${p.overlap.toFixed(4)}|${p.align}|${p.unit}|${p.seed}|r${p.reverse ?? "off"}`
+  const taps = p.order === "tapped" ? `|t${(p.taps ?? []).join(",")}` : ""
+  return `${p.order}|${p.overlap.toFixed(4)}|${p.align}|${p.unit}|${p.seed}|r${p.reverse ?? "off"}${taps}`
 }
 
 function orderUnits(
@@ -950,6 +972,19 @@ function orderUnits(
       }
       const k = idx.map(key)
       return idx.sort((a, b) => k[a] - k[b] || a - b)
+    }
+    case "tapped": {
+      // A unit sits where its first-tapped member was tapped; the rest follow as drawn.
+      const at = new Map<number, number>()
+      ;(p.taps ?? []).forEach((s, k) => {
+        if (!at.has(s)) at.set(s, k)
+      })
+      const key = idx.map((u) => {
+        let first = Number.POSITIVE_INFINITY
+        for (const i of members[u]) first = Math.min(first, at.get(i) ?? Number.POSITIVE_INFINITY)
+        return first
+      })
+      return idx.sort((a, b) => key[a] - key[b] || a - b)
     }
     case "random": {
       // Fisher–Yates on the seeded generator, so the same seed is the same word.
@@ -1531,6 +1566,7 @@ export const ORDER_LABELS: Record<StrokeOrder, string> = {
   byLength: "Short first",
   byPosition: "Left to right",
   random: "Random",
+  tapped: "Tap order",
 }
 
 export const ORDER_NOTES: Record<StrokeOrder, string> = {
@@ -1539,4 +1575,5 @@ export const ORDER_NOTES: Record<StrokeOrder, string> = {
   byLength: "Shortest unit first, longest last. The word grows into its big move.",
   byPosition: "Left edge to right edge, whatever order your hand used.",
   random: "Shuffled from a seed. The same seed is the same word every time.",
+  tapped: "The order you tap the strokes in. Strokes you have not tapped follow, as drawn.",
 }
