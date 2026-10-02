@@ -1,0 +1,32 @@
+PROVENANCE WARNING — read before quoting anything in this directory.
+Written 2026-08-28 by lane R1 after auditing what the gatherer lanes saved.
+
+THE `duc-*.txt`, `tp-*.txt` AND `pen-*.txt` FILES ARE NOT THE PAGES THEY NAME.
+Every one is about 2 KB. A CSS-Tricks article, a PMC paper and the Procreate
+handbook are not 2 KB. Opening them shows why: they are the gathering agent's
+own SUMMARY of the page, in the agent's own headings and prose, under a header
+that says SOURCE_URL and HTTP_OK: yes. The fetch may well have succeeded; the
+file is still a paraphrase, and at least one of them (tp-jake-archibald-*)
+ends with a section of the agent's own opinion set under the source's name.
+
+Treat every one of them as a POINTER to a URL, never as evidence of what that
+URL says. Re-fetch before you quote.
+
+WHAT IS ACTUALLY THE ARTEFACT:
+  VERIFIED-pmc9853007-handwriting-pauses.txt   full extracted page text, fetched
+                                               by R1 itself, 80,986 chars
+  pen-perfect-freehand-source.ts               the real source file, 13 KB
+  pen-hobby-rasterizing-curves.pdf             the real PDF, 232 KB
+  pen-kilgard-polar-stroking.pdf               the real PDF, 9.2 MB
+  uci-character-trajectories.zip + uci-ct/     UCI Character Trajectories, the
+                                               real dataset (2858 samples)
+  qd-face-raw.ndjson                           Quick, Draw! raw, 6 MB slice
+  vid-fountain-pen-writing.mpg + frames-fountain/
+                                               Wikimedia Commons, CC BY-SA 4.0,
+                                               1886x964, 25 fps, 15.68 s
+  ndollar.zip / mmg.zip                        Wobbrock $N gesture data, unopened
+                                               by R1 — nothing in write-on-timing.md
+                                               rests on them
+
+docs/research/write-on-timing.md cites ONLY the artefacts in the second list,
+plus numbers R1 measured itself. Nothing in it is sourced to a 2 KB summary.

@@ -1,0 +1,57 @@
+SOURCE_URL: https://global.oup.com/education/content/primary/series/nelson-primary/nelson-handwriting-3ed/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Nelson Handwriting method (UK) with progressive stroke teaching from unjoined to precursive to cursive, with letter formation and join sequences.
+
+# Nelson Handwriting Method
+
+The Nelson Handwriting is the predominant UK handwriting curriculum system for teaching progressive modern cursive writing.
+
+## Teaching Progression by Age
+
+### Preschool to Second Grade (4–7 years)
+Students are taught the **unjoined style** with individual letter formation.
+
+### Third and Fourth Grade (7–9 years)
+1. First learn **precursive letters with lead-out strokes** (entry/exit formations)
+2. Then learn the **semi-joined style**, where:
+   - Most lowercase letters are connected
+   - Uppercase letters are NOT joined
+
+## Letter Formation Techniques
+
+Nelson teaching methods cover:
+- Language of letter formation
+- Joins and linking handwriting with phonics and spelling
+- Teaching methods and organization
+- Teacher modeling of Nelson font to children
+- Explicit teaching of letter formation and joins in each session
+
+## The Four Joins (Semi-Cursive)
+
+1. **Joins to letters without ascenders**
+2. **Joins to letters with ascenders**
+3. **Horizontal joins**
+4. **Horizontal joins to letters with ascenders**
+
+## Break Letters (Non-Joining)
+
+Letters that are **not joined from**:
+- b, g, j, p, q, x, y, z, s
+
+These break the continuous flow and require pen lifts or connection breaks.
+
+## Stroke Sequences
+
+The system teaches explicit stroke order and direction for each letter, with emphasis on:
+- Proper letter formation before joining
+- Natural letter formation to enable cursive connection
+- Lift points and join entry/exit strokes
+
+## Implementation in Schools
+
+Nelson Handwriting provides:
+- Clear, practical framework for whole-school handwriting practice
+- Age-appropriate progression of skills
+- Alignment with National Curriculum Objectives
+- Structured units mapping to curriculum

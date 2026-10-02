@@ -1,0 +1,63 @@
+SOURCE_URL: https://wicg.github.io/ink-enhancement/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: W3C Ink API specification for delegated ink trails - DelegatedInkTrailPresenter renders predicted ink ahead of application processing to reduce web inking latency
+
+## Ink API Overview
+
+The Ink API is a W3C Draft Community Group Report (published September 16, 2024) that enables "progressive enhancement of web inking latency" by leveraging system compositor capabilities.
+
+## Core Architecture
+
+**Primary Interface: `Ink`**
+The main entry point accessed via `navigator.ink.requestPresenter()`, which returns a Promise resolving to a `DelegatedInkTrailPresenter` instance.
+
+**Key Component: `DelegatedInkTrailPresenter`**
+This interface manages low-latency ink rendering through:
+- `presentationArea`: Optional DOM element constraining ink rendering to its border box
+- `updateInkTrailStartPoint(event, style)`: Signals the last rendered point to the system compositor
+
+## Low-Latency Rendering Mechanism
+
+The specification addresses fundamental latency in web inking: "Operating system compositors typically introduce a frame of latency in order to compose all of the windows together."
+
+### Solution Flow
+
+1. **Application renders** ink strokes up to current PointerEvent
+2. **System compositor** overlays predicted ink segments for unprocessed pointer events
+3. **Application updates** presenter with `updateInkTrailStartPoint()` to sync last rendered point
+4. **Seamless replacement** occurs when application processes new events
+
+This achieves "superwet" inking experience comparable to native applications by drawing predicted ink ahead of the main event processing pipeline.
+
+## Configuration: InkTrailStyle Dictionary
+
+Developers specify presentation properties:
+- **color**: Valid CSS color code
+- **diameter**: Stroke width (must be > 0)
+
+## Usage Pattern
+
+```javascript
+const presenter = await navigator.ink.requestPresenter()
+canvas.addEventListener('pointermove', (event) => {
+  // Render coalesced points to canvas
+  for (const point of event.getCoalescedEvents()) {
+    // Draw to canvas/WebGL
+  }
+  // Update presenter with last rendered point
+  presenter.updateInkTrailStartPoint(event, {
+    color: '#000000',
+    diameter: 4
+  })
+})
+```
+
+## Browser Support
+
+Delegated ink trails reduce latency on supported browsers by having pointer input prediction bypass the web rendering pipeline.
+
+## Reference
+
+Full specification: https://wicg.github.io/ink-enhancement/
+GitHub repository: https://github.com/WICG/ink-enhancement
