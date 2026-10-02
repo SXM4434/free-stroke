@@ -186,6 +186,9 @@ async function runRows() {
   const baseSlots = slotsOf(sched, pace, BASE_MS)
   const build = (take) => T.buildTimedSchedule(sched, take, { baseMs: BASE_MS, pace })
   const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => baseSlots[a * 2] - baseSlots[b * 2] || a - b)
+  /* Delays are whole ms, so a start may sit half a ms off; the 1e-6 is float
+   * noise on that half, not room. */
+  const HALF_MS = 0.5 + 1e-6
 
   /* ── STAGGER (plan 3b) ─────────────────────────────────────────────────── */
   {
@@ -199,7 +202,7 @@ async function runRows() {
       const d0 = baseSlots[i * 2 + 1] - baseSlots[i * 2]
       if (Math.abs(ts.slots[i * 2 + 1] - ts.slots[i * 2] - d0) > 1e-6) durBad++
     })
-    row("STAGGER", worst <= 0.5 && durBad === 0 && Object.keys(tk.strokes).length === n, "Stagger 50 ms: the k-th stroke in base order starts 50k ms after the first, each keeps its length", `${n} rows written; worst start off by ${worst.toFixed(3)} ms (0.5 allowed, delays are whole ms); ${durBad} lengths changed`)
+    row("STAGGER", worst <= HALF_MS && durBad === 0 && Object.keys(tk.strokes).length === n, "Stagger 50 ms: the k-th stroke in base order starts 50k ms after the first, each keeps its length", `${n} rows written; worst start off by ${worst.toFixed(3)} ms (0.5 allowed, delays are whole ms); ${durBad} lengths changed`)
   }
   {
     const tk = T.withStagger({ strokes: {}, ripple: true }, baseSlots, { gapMs: 50 })
@@ -207,7 +210,7 @@ async function runRows() {
     const first = baseSlots[order[0] * 2]
     let worst = 0
     order.forEach((i, k) => (worst = Math.max(worst, Math.abs(ts.slots[i * 2] - (first + 50 * k)))))
-    row("STAGGER-RIPPLE", worst <= 0.5, "Stagger under Ripple: the carry is taken out, so the starts still fall 50 ms apart", `worst start off by ${worst.toFixed(3)} ms`)
+    row("STAGGER-RIPPLE", worst <= HALF_MS, "Stagger under Ripple: the carry is taken out, so the starts still fall 50 ms apart", `worst start off by ${worst.toFixed(3)} ms`)
   }
   {
     const K = 5
@@ -227,13 +230,53 @@ async function runRows() {
     let worst = 0
     rest.forEach((i, k) => (worst = Math.max(worst, Math.abs(ts.slots[i * 2] - (first + 50 * k)))))
     const endsLast = Math.abs(ts.slots[H * 2 + 1] - ts.takeMs) < 1e-9
-    row("STAGGER-KEEP", kept && worst <= 0.5 && endsLast, "Stagger writes delays only: a row's speed and ease stay, a held-back stroke stays held and out of the count", `speed and ease kept ${kept}; ${rest.length} strokes staggered, worst ${worst.toFixed(3)} ms; held stroke still lands last ${endsLast}`)
+    row("STAGGER-KEEP", kept && worst <= HALF_MS && endsLast, "Stagger writes delays only: a row's speed and ease stay, a held-back stroke stays held and out of the count", `speed and ease kept ${kept}; ${rest.length} strokes staggered, worst ${worst.toFixed(3)} ms; held stroke still lands last ${endsLast}`)
   }
   {
     const St = loadTs("lib/style-system.ts")
     const p = St.PRESET_REGISTRY.geometryAnimation.find((x) => x.id === "stagger")
     const gap = p?.motion?.stagger?.gapMs
     row("STAGGER-PRESET", !!p && p.implemented === true && gap >= 40 && gap <= 60 && gap === T.STAGGER_GAP_MS && St.resolveMotionPreset("stagger")?.stagger?.gapMs === gap, "Geometry Animation has a Stagger preset that resolves to a 40 to 60 ms stagger, the same number as STAGGER_GAP_MS", p ? `"${p.label}", implemented ${p.implemented}, gap ${gap} ms, STAGGER_GAP_MS ${T.STAGGER_GAP_MS}` : "no preset with id stagger")
+  }
+
+  /* ── THE STAGGER CURVE (coverage row 14) ───────────────────────────────── */
+  {
+    const m = order.length
+    const span = (m - 1) * 50
+    const first = baseSlots[order[0] * 2]
+    const want = {
+      in: (u) => u * u * u,
+      out: (u) => 1 - Math.pow(1 - u, 3),
+      inOut: (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2),
+    }
+    let worst = 0
+    let spread = 0
+    const notes = []
+    for (const id of ["in", "out", "inOut"]) {
+      const ts = build(T.withStagger({ strokes: {}, ripple: false }, baseSlots, { gapMs: 50, ease: { kind: "preset", id } }))
+      let w = 0
+      order.forEach((i, k) => {
+        const u = k / (m - 1)
+        w = Math.max(w, Math.abs(ts.slots[i * 2] - (first + span * want[id](u))))
+        spread = Math.max(spread, Math.abs(ts.slots[i * 2] - (first + 50 * k)))
+      })
+      worst = Math.max(worst, w)
+      notes.push(`${id} worst ${w.toFixed(3)} ms`)
+    }
+    row("CURVE", worst <= HALF_MS && spread > 50, "a stagger curve lays the starts along the ease over stroke index (in, out, in-out), not evenly", `${notes.join(", ")} (0.5 allowed); furthest from Even ${spread.toFixed(1)} ms`)
+  }
+  {
+    const first = baseSlots[order[0] * 2]
+    const last = first + 50 * (order.length - 1)
+    let bad = []
+    for (const ease of [{ kind: "preset", id: "in" }, { kind: "preset", id: "inOut" }, { kind: "bezier", x1: 0.3, y1: -0.6, x2: 0.7, y2: 1.6 }]) {
+      const ts = build(T.withStagger({ strokes: {}, ripple: true }, baseSlots, { gapMs: 50, ease }))
+      const st = order.map((i) => ts.slots[i * 2])
+      const what = ease.kind === "preset" ? ease.id : "overshoot curve"
+      if (Math.abs(st[0] - first) > HALF_MS || Math.abs(st[st.length - 1] - last) > HALF_MS) bad.push(`${what}: ends ${st[0].toFixed(1)}, ${st[st.length - 1].toFixed(1)}`)
+      for (let k = 1; k < st.length; k++) if (st[k] < st[k - 1] - 1) (bad.push(`${what}: start ${k} runs back`), (k = st.length))
+    }
+    row("CURVE-ENDS", bad.length === 0, "every curve keeps Even's first and last start and never runs a start backwards, overshoot and Ripple included", bad.length ? bad.join("; ") : `first ${first.toFixed(1)} ms, last ${last.toFixed(1)} ms, all starts in order`)
   }
 
   /* ── REVERSE ONE STROKE (coverage row 31) ──────────────────────────────── */
@@ -371,6 +414,8 @@ const MUTANTS = [
   { name: "reverse row ignored by spans and front", file: "lib/stroke-timing.ts", find: "return ts.base.tracks[i].reverse !== (ts.flip[i] === 1)", text: "return ts.base.tracks[i].reverse", red: ["REV-DIRECTION", "REV-CLOCK", "REV-FRONT"] },
   { name: "reverse row dropped when the rows are read", file: "lib/stroke-timing.ts", find: "if (r.reverse === true) rows[i].reverse = true", text: "", red: ["REV-KEYS", "REV-DIRECTION"] },
   { name: "the session reader drops reverse", file: "lib/doc-store.ts", find: "if (r.reverse === true) strokes[i].reverse = true", text: "if (false) strokes[i].reverse = true", red: ["DOC-REVERSE"] },
+  { name: "stagger curve ignored", file: "lib/stroke-timing.ts", find: "const f = easeFnOf(ease)", text: "const f = easeFnOf(undefined)", red: ["CURVE"] },
+  { name: "stagger curve read without its clamp", file: "lib/stroke-timing.ts", find: "(m - 1) * gapMs * f(k / (m - 1))", text: "(m - 1) * gapMs * bz(-0.6, 1.6, k / (m - 1))", red: ["CURVE-ENDS"] },
   { name: "stagger preset at 500 ms", file: "lib/style-system.ts", find: "stagger: { gapMs: 50 }", text: "stagger: { gapMs: 500 }", red: ["STAGGER-PRESET"] },
 ]
 

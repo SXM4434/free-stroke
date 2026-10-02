@@ -1261,6 +1261,14 @@ export function withPerformed(
  * earlier strokes leave is taken out of each delay, the walk `withPerformed`
  * does, so the starts fall where they were asked for either way. Delays are
  * whole ms, like every delay the strip writes.
+ *
+ * THE CURVE (coverage row 14, "stagger as a curve over stroke index"). Even is
+ * `k * gapMs`. With an ease the same total spread, `(m - 1) * gapMs`, is laid
+ * out along the ease instead: the k-th start sits at `ease(k / (m - 1))` of
+ * it, so Ease in bunches the first strokes and spreads the last, Ease out the
+ * other way. The first and last starts are where Even puts them, because every
+ * ease maps 0 to 0 and 1 to 1, and an overshooting curve is held to 0..1 by
+ * `revealCurveAt`, so the starts never run backwards.
  * ======================================================================== */
 
 /** The stagger Desk Doodles uses, inside its 40 to 60 ms band. The Stagger
@@ -1269,14 +1277,17 @@ export function withPerformed(
 export const STAGGER_GAP_MS = 50
 
 export interface StaggerOpts {
-  /** Between one start and the next, ms. */
+  /** Between one start and the next, ms; with a curve, the average. */
   gapMs: number
+  /** How the starts spread across the strokes. Absent or linear is Even. */
+  ease?: StrokeEase
 }
 
 /** Where the k-th of `m` staggered strokes starts, ms after the first. */
-export function staggerStarts(m: number, gapMs: number): Float64Array {
+export function staggerStarts(m: number, gapMs: number, ease?: StrokeEase): Float64Array {
   const out = new Float64Array(Math.max(0, m))
-  for (let k = 0; k < m; k++) out[k] = k * gapMs
+  const f = easeFnOf(ease)
+  for (let k = 0; k < m; k++) out[k] = f && m > 1 ? (m - 1) * gapMs * f(k / (m - 1)) : k * gapMs
   return out
 }
 
@@ -1287,7 +1298,7 @@ export function withStagger(take: StrokeTimingTake, baseSlots: ArrayLike<number>
   const order = Array.from({ length: n }, (_, i) => i).sort((x, y) => baseSlots[x * 2] - baseSlots[y * 2] || x - y)
   const lead = order.filter((i) => !rowOf(take, i).holdBack)
   if (lead.length === 0) return take
-  const starts = staggerStarts(lead.length, gap)
+  const starts = staggerStarts(lead.length, gap, opts.ease)
   const first = baseSlots[lead[0] * 2]
   const strokes = { ...take.strokes }
   let carry = 0

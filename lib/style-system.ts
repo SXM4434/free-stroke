@@ -28,6 +28,7 @@ import type {
   DrawInParams,
   RevealWindowParams,
   RevealEnvelopeParams,
+  RevealEasePreset,
 } from "./stroke-schedule"
 
 /* ----------------------------- enums / unions ---------------------------- */
@@ -1587,7 +1588,7 @@ export interface MotionPresetPatch {
   /** Plan 3b. Present, the preset also writes each stroke's delay so starts
    *  fall `gapMs` apart (`withStagger` in `lib/stroke-timing.ts`), in the same
    *  edit as the rest of the patch. Absent on every other preset. */
-  stagger?: { gapMs: number }
+  stagger?: { gapMs: number; ease?: { kind: "preset"; id: RevealEasePreset } }
 }
 
 /* ====================================================================== */

@@ -52,6 +52,7 @@ import {
   windowParts,
   type DrawInParams,
   type RevealEase,
+  type RevealEasePreset,
   type RevealWindowParams,
 } from "@/lib/stroke-schedule"
 import { revealDistanceFraction, liftsLandBetweenStrokes, type RevealMode } from "@/lib/pen-reveal"
@@ -296,6 +297,11 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
   /* Perform (ANIM-2). Base slots from the same pace, so a performed row's
    * delay and speed are measured from where the schedule puts the stroke. */
   const [performing, setPerforming] = useState(false)
+  /* Plan 3b and coverage row 14 · what the Stagger button writes: the gap
+   * between starts and the curve they spread along. Only the delays it writes
+   * are kept, in the take; these two are the button's settings. */
+  const [staggerGap, setStaggerGap] = useState(STAGGER_GAP_MS)
+  const [staggerEase, setStaggerEase] = useState<RevealEasePreset>("linear")
   const baseSlots = useMemo(() => {
     const s = new Float64Array(n * 2)
     schedule.tracks.forEach((t, i) => {
@@ -652,7 +658,9 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
               : "Drag a bar to move it, an end to change its speed"}
           </span>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        {/* Wraps rather than pushing the strip sideways now that the row holds
+            Stagger and its two settings beside Perform and Ripple. */}
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
           {sel !== null && selRow && (
             <button
               type="button"
@@ -707,17 +715,57 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
               onClose={() => setPerforming(false)}
             />
           )}
-          {/* Plan 3b · Stagger: every stroke sets off STAGGER_GAP_MS after the
-              one before, written as delays into this take, one undo step. */}
-          <button
-            type="button"
-            data-strip-stagger
-            onClick={() => commit(withStagger(take, baseSlots, { gapMs: STAGGER_GAP_MS }), null)}
-            title={`Every stroke sets off ${STAGGER_GAP_MS} ms after the one before, at its own pace. Writes each stroke's delay; held-back strokes stay last.`}
-            className="fs-press rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-          >
-            Stagger
-          </button>
+          {/* Plan 3b · Stagger: every stroke sets off the gap after the one
+              before, written as delays into this take, one undo step. The
+              curve (coverage row 14) spreads the same total along an ease. */}
+          <span className="flex items-center gap-0.5">
+            <button
+              type="button"
+              data-strip-stagger
+              onClick={() =>
+                commit(
+                  withStagger(take, baseSlots, {
+                    gapMs: staggerGap,
+                    ...(staggerEase === "linear" ? {} : { ease: { kind: "preset", id: staggerEase } }),
+                  }),
+                  null,
+                )
+              }
+              title={`Every stroke sets off ${staggerGap} ms after the one before${
+                staggerEase === "linear" ? "" : " on average, spread along the curve"
+              }, at its own pace. Writes each stroke's delay; held-back strokes stay last.`}
+              className="fs-press rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Stagger
+            </button>
+            <input
+              type="number"
+              data-strip-stagger-gap
+              aria-label="Stagger gap, ms"
+              title="Between one stroke's start and the next, ms"
+              min={0}
+              step={10}
+              value={staggerGap}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                if (Number.isFinite(v) && v >= 0) setStaggerGap(Math.round(v))
+              }}
+              className="h-[18px] w-11 rounded-md border border-border bg-transparent px-1 text-[10px] tabular-nums text-foreground"
+            />
+            <select
+              data-strip-stagger-curve
+              aria-label="Stagger curve"
+              title="How the starts spread across the strokes: even, or bunched at the start or the end"
+              value={staggerEase}
+              onChange={(e) => setStaggerEase(e.target.value as RevealEasePreset)}
+              className="h-[18px] rounded-md border border-border bg-transparent px-0.5 text-[10px] text-muted-foreground"
+            >
+              <option value="linear">Even</option>
+              <option value="in">Ease in</option>
+              <option value="out">Ease out</option>
+              <option value="inOut">Ease in-out</option>
+            </select>
+          </span>
           <button
             type="button"
             data-strip-ripple
