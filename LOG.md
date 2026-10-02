@@ -1,74 +1,60 @@
-# HAND-DRAW-P3 cloud log, 2026-09-30
+MERGE-READY
 
-Branch `cloud/hand-p3` (the snapshot of main at 4bba17b). Two steps, one commit each, both pushed. Nothing under `docs/thinking` or `docs/verification` is committed; the gates wrote there and it is left untracked.
+# CLOUD-REFIT cloud log, 2026-10-02
 
-## Step 1 · 4d76046 · phase 2 back on today's main
+Branch `claude/fix-camera-refit-race-fqep03`, made from `cloud/integrate-1001` (2cc9e98). This session's harness gave it that name, so it is used instead of `cloud/<name>`. Three steps, one commit each, each pushed. Nothing under `docs/thinking` or `docs/verification` is committed, and the new gate writes nothing to disk.
 
-`git merge-file <path> base/<path> lane/<path>` on the four files. `lib/stroke-timing.ts` and `scripts/verify/assert-hand-clock.mjs` merged clean. Two conflicts, both kept:
-- `components/draw-in-timing-controls.tsx`, the import line: main's `curveOfEase, curveProblem` (Custom curve ease) with phase 2 dropping `takeHasPerformed` (the held clock controls are gone).
-- `app/page.tsx`, `handleRevealEnvelopeChange`: phase 2's `rebaseForClock`, so a clock or rate change and the rebase of performed rows are one `edit()`, one undo step, with main's `gesture ?? null` key. `clockUnderTake` and its toast are gone: Hand no longer yields to a performed take. Main's flip wiring (`flip`, `patchFlip`) is untouched.
-- Checked: base to main and lane to merged give the same diff on every file.
-- `docs/cloud-inbox` removed with `git rm -r`.
+## Step 1 · 2b08d48 · refit once the canvas has settled
 
-## Step 2 · 802ccdb · R11, Inflate's holds, the export row
+`app/page.tsx`, the "FRAME THE DRAWING" effect. The camera is orthographic, so the refit's zoom is the canvas half-height over the framed half-height (`applyFraming`), read when the refit runs and kept through later resizes (F123). Before this change the refit ran on a fixed 450 ms timer after the last stroke. Now:
+- The 450 ms wait for the geometry stays.
+- Then a ResizeObserver watches the 3D canvas and the div R3F measures. A rAF loop counts frames where the canvas box, its drawing buffer and the container box are all unchanged and the canvas has caught up with its container. After 6 such frames in a row, the refit runs once. The observer and the loop are then torn down, so it never re-runs per resize.
+- There is a ceiling of 600 frames, so a canvas that never holds still is still framed once.
+- If there is no canvas yet, it falls back to the old immediate read, which then gives up as before because there are no bounds.
+- `ViewportApi.canvas()` is new in `components/viewport-3d.tsx` and returns `glCanvasRef.current`. It is read-only.
+- Must-fail hook: `window.__fsRefitTimer = "fixed"`, dev builds only, read when the effect runs. It brings back the fixed timer.
 
-(a) R11, "Turn in the lifts". Under Hand a slot runs to the next stroke's landing (F120), so the logo's slots touch end to end ([0,520] [520,950] ...) and each lift sits in a slot's tail; only one gap existed (67 ms). The word space is 1792.8 to 1967.2 ms, 174.4 ms.
-- `paceFromCurve` returns its flats as `TimingPace.holds`. `takeLiftsMs(ts, pace, baseSlots, baseMs)` turns them into take-time lifts: each stroke inks over its slot less the holds in its base slot, carried through the row (delay, speed, ease inverse); a performed stroke inks its whole slot; lifts are the gaps in the union. Under rows it reads `ts.baseSlots`.
-- The strip publishes them on `ctx.liftsRef`; the picker passes them as `CameraTake.lifts`; `orbit-lifts` reads them when given and the slot gaps otherwise.
-- Live, logo under Hand: the move is offered and turns at 1792.8 to 1967.2 ms, 0.000 ms off the stamped lift.
+## Step 2 · fc84100 · `scripts/verify/assert-refit-settles.mjs`
 
-(b) Inflate's shader holds. Measured with `scripts/verify/measure-hand-tip-creep.mjs` (Inflate, Hand, the 10 lifts of 50 ms or more, 5 frames per lift, control = the same span inside the stroke before):
-- No rows: 0 px change in all 10 lifts. The tip reads the beat, which the pace holds flat.
-- A timed take (+1 ms on the last stroke): 5, 28, 28, 27, 5, 26, 19, 52, 61, 18 px. It creeps: the tip reads the take's clock, which runs on through a lift, and the stroke end's nose fills in.
-- Fed as point holds at the pen-up and pen-down points (uFsTipHold): worst 13 px, single pixels where strokes cross (the LINEAR filter blends two arrivals).
-- A lift has no ink anywhere (that is how `takeLiftsMs` finds it), so the frame loop now holds the whole tip at the lift's start under a timed take (`entry.lifts`, published on `__heroPenTip.lifts`). Result: 0 px in all 10, controls 57 to 317 px. uFsTipHold still carries performed stops only; this is the hold with no radius, not the uniform. Say if you want it moved into the uniform instead.
+REFIT row, 6 fresh loads of the logo (`injectStrokes`, `logo-strokes.json`) at 834x1112 (stacked) and at 1512x982 (docked). It passes only if all four hold:
+- every load ends on the identical camera zoom;
+- every load ends on the identical 3D frame hash (still style, reveal 1, `__captureHarness.grab()`);
+- each load refits exactly once (zoom writes through `apiOrbitView`);
+- on the fix arm, every refit comes after the growth ended.
 
-(c) The export row, R12 in `assert-hand-clock`: `exportAnimation` over `getTotalDuration()` (what the page's own export passes) against live at 8 plan clocks. No rows: 8/8, film 4666.7 ms = take. Last stroke at 0.5x: 8/8, film 5024.9 ms = take (pen 4666.7).
+Controls on the first load of each size: the grab sees the scene (reveal 0.5 hashes differently from reveal 1), and the canvas really grew 30 px. Any load that saw no refit or no growth is BLIND, and a blind must-fail is never counted as fired.
 
-Also in this commit: `assert-stroke-timing`'s two ripple mutants looked for `(t.ripple ? carry : 0)`, which phase 2 moved into `placeSlots` as `(ripple ? carry : 0)`; the mutants now find it (same sabotage, same rows).
+**The growth is driven, so be aware of it.** On this tree, headless, the race does not happen by itself. I measured it with a probe:
+- the 3D canvas is sized 210 to 230 ms after the strokes land;
+- then the first build blocks the main thread for about 1.9 s;
+- when the block ends, the overdue timer and the first framing run together, on a canvas that has already settled.
+
+In that setup both arms read the same three plain loads (zoom 77.838 at 834x1112), so the must-fail could not fire. So the gate does what main's stacked canvas does:
+- a stylesheet mounts R3F's wrapper short by 30, 25, 20, 15, 10 or 5 px, a different amount on each load;
+- it opens back to full height over 700 ms, starting when the WebGL context is made.
+
+With the fix, the gate's frames are the same as a plain load with no growth: hash 034024d070db3834 at 834x1112.
 
 ## Checks
 
-tsc: 6 errors, the baseline (snapshot 6, after step 1 6, after step 2 6).
+- tsc: 6 errors, the baseline, after both steps. `assert-tsc-baseline` with `FS_PORT=3138`: all PASS, the same six errors in the same two files, both routes 200.
+- assert-no-em-dashes: 7 rows PASS, 0 across 142 files. `git diff` adds no em dash.
+- assert-refit-settles, headless, against my own `next dev` on :3138 (Chromium 141), exit 0, **8/8 verdicts hold, 6 PASS, 2 FAIL (the 2 FAILs are the must-fail arm, as intended)**:
 
-Node gates, lane against the snapshot's own run:
-
-| gate | lane | snapshot |
+| row | fix arm | must-fail `fixed` |
 |---|---|---|
-| assert-keyframes | 16/16 rows, 21/21 mutants | 16/16, 21/21 |
-| assert-key-paths | 6/7, 8/8 (EXISTING red) | 6/7, 8/8 (EXISTING red) |
-| assert-camera-moves | 11/11, 20/20 (new IN-LIFTS, 3 new mutants) | 10/10, 17/17 |
-| assert-stroke-timing, `STROKE_TIMING_BASE=4bba17b` | 16/16, 12/12 | 16/16, 12/12 |
+| REFIT 834x1112 | PASS: 1 zoom (77.83837151863455), 1 hash (034024d070db3834), 1 refit per load, all after the growth | FIRED: 6 zooms (73.03 to 77.04), 6 hashes |
+| REFIT 1512x982 | PASS: 1 zoom (122.44528507279061), 1 hash (b518cb4d157de0c2), 1 refit per load, all after the growth | FIRED: 6 zooms (118.22 to 121.74), 6 hashes |
+| CONTROL grab sees scene | PASS at both sizes | |
+| CONTROL canvas grew | PASS: 456 to 486, 840 to 870 | |
 
-Browser gates, headless, one browser at a time, lane on :3138 and the snapshot on :3140 from a worktree of 4bba17b:
+## What I could not run
 
-| gate | lane | snapshot |
-|---|---|---|
-| assert-hand-clock | 13/13 rows, 13/13 must-fails fired, 0 page errors | 10/10, 10/10 |
-| assert-perform, run 1 / run 2 | 11/15, then 10/15 | 13/14 + 1 SELF, then 10/14 + 1 SELF |
-| assert-key-lanes (row 11 base re-pinned, see below) | 15/15 graded, row 11 BLIND | 15/15 graded, row 11 SELF |
-| assert-stroke-strip | 17/18 | 17/18 |
-| assert-take-timeline | 20/21 | 20/21 |
-
-hand-clock must-fails: R11 has two (`lifts-slot-gaps`, `clock-uniform`), counted fired only when both turn it red; both refused the move. R12 `exportpen`: 1/8 clocks, film 4666.7 against take 5024.9. R13 `tip-no-liftholds`: 8 to 40 px per lift. Phase 2's R11 compared `__fsTake.get().slots` (empty with no rows) and called the move itself; it now reads what the picker writes, through the real Camera button. R11 also clears the move's keys after, since R12 and R13 read frames in the lifts it turns in.
-
-Reds read as follows:
-- key-paths EXISTING and stroke-timing's own base need 747af8fa0 and b0da66626, which the squashed snapshot does not have. stroke-timing ran with its own `STROKE_TIMING_BASE` knob pointed at the snapshot.
-- perform: 1b inflate, extrude, solid and row 2 are red on the snapshot's second run too, so they swing run to run on this machine (4 cores, SwiftShader). Rod 1b passed 2 of 2 on the snapshot and 1 of 2 on the lane (held 1338.2 ms for a 1377.7 ms dwell). Nothing in this change touches Rod's playback, but I could not prove it here; worth one run on the Mac.
-- key-lanes row 11: my recorded base came from a docked canvas (755x533) and the full run is undocked (755x890), so the row is BLIND. Its intent holds: the lane's five no-key frame hashes equal the snapshot's, 5 of 5.
-- stroke-strip row 0: same cause, the base recorded with `--phase=base` is docked; 18/18 differ on both trees.
-- take-timeline E2: 36.0 rAF ticks/s on the lane and 35.9 and 27.4 on the snapshot, against a bar of 50. Headless on a loaded box.
-
-## What I could not run, and how the environment was bent
-
-- `pnpm install --frozen-lockfile` refuses: `pnpm-lock.yaml` lacks `dialkit` and `motion`, which `package.json` lists. Installed with `--no-frozen-lockfile --config.node-linker=hoisted` (the gates import `jiti` directly, which pnpm's default layout does not hoist), then restored the lockfile. Not committed.
-- `npx playwright install` was not needed: Chromium 141 is preinstalled. `scripts/verify/lib/browser.mjs` pins channel `chrome`, so `/opt/google/chrome/chrome` was symlinked to it. Outside the repo.
-- `lsof` in this container cannot map sockets or cwd to pids, so `serverCommit` saw no server. A PATH-only shim answered its two queries from /proc; dev servers were bound to 127.0.0.1. Outside the repo.
-- Bases the snapshot does not carry were recorded from the snapshot server itself, into both trees' `docs/verification` (uncommitted): perform `base-main.json` (`--phase=base --base=4bba17b`), stroke-strip `base-3a211a36d.json` (`--phase=base`), key-lanes `nokeys-base.json` through an uncommitted copy of the gate with `KEYS_BASE` set to 4bba17b (the real one refuses any commit but ea31c5b38). So those rows compare to today's main, not to their named commits.
-- Not run: the rest of the plan's PEN rows beyond what these gates carry, `assert-stroke-timing-browser`, `assert-motion-customize`, `assert-custom-presets`, and any look at the result by eye. No Mac numbers were compared.
-
-## Next
-
-- Watch Hand Draw on your own drawing with one row set on the strip, on Inflate: the lifts should now hold as still as with no rows.
-- One perform run on the Mac to clear Rod 1b.
-- RUN-QUEUE row for HAND-DRAW-P3 is not written; this log is the record.
+- **The natural race as you measured it.** The 188 to 217.72 px growth and zooms 34.78, 34.68, 33.92, 33.92 came from main's layout. On this tree in this container the 3D canvas is 786x486 at 834x1112 and does not grow during load. The gate therefore drives the growth, and I could not reproduce your numbers. One run on the Mac, at 834x1112, would confirm it there.
+- **assert-camera-frames-the-drawing.** It imports `sharp`, which is not installed in this tree (ERR_MODULE_NOT_FOUND).
+- **assert-dock-shell and assert-resize-settles.** Both need things that are absent here: a reference server of main, and a base file under `docs/verification`. The dock-shell AT LOAD row is print-only anyway. With this fix it should now read the settled half-height on the lane.
+- **Browser setup.** `lib/browser.mjs` pins `channel: "chrome"` and there is no Google Chrome here. I symlinked `/opt/google/chrome/chrome` to the preinstalled Playwright Chromium (outside the repo). The run uses SwiftShader with no GPU, at about 8 fps after the first build.
+- **The gate is not in `scripts/verify/lib/control-manifest.json`.** Neither are the recent assert-resize-settles, assert-dock-shell or assert-hand-clock. assert-gate-integrity was not run.
+- **Known limits of the fix.**
+  - A growth that pauses for more than 6 frames will be refit at the pause.
+  - The refit waits for animation frames, so a background tab refits when it is shown.
