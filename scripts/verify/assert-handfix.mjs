@@ -26,7 +26,7 @@
  * completion AND every row it names went red.
  * ========================================================================== */
 import { spawnSync, execFileSync } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -175,6 +175,37 @@ async function runRows() {
     row("F2-WINDOW", c.ok && d.ok, "a Window change (Grow to Travel moves the lifts and the pace) keeps a performed stroke's on-screen slot", `${c.detail}; ${d.detail}`)
   }
 
+  /* ---- F3 · the held-back fix and placeSlots' clamp ---------------------- */
+  {
+    const lin = { kind: "preset", id: "linear" }
+    const take = { strokes: { 1: { delayMs: -3500, speed: 1, ease: lin, holdBack: true, performed: [0, 0.5, 1] } }, ripple: false }
+    const A = [0, 4600, 4000, 4600]
+    const B = [0, 2300, 2000, 2300]
+    const before = onScreen(take, A, 1)
+    const rb = T.rebasePerformed(take, A, B)
+    const after = onScreen(rb, B, 1)
+    row("F3-REVIEW", near(after[0], before[0]) && near(after[1], before[1]) && near(before[0], 1100) && near(before[1], 1700),
+      "the review's input: stroke 1 held back at delay -3500, swapped to rate 2x, stays at [1100, 1700]",
+      `[${before.map(fmt)}] -> [${after.map(fmt)}], row delay ${fmt(rb.strokes[1].delayMs)} speed ${fmt(rb.strokes[1].speed)}`)
+
+    const fz = fuzz(T, cleanRows)
+    row("F3-FUZZ", fz.checked > 0 && fz.fail.length === 0,
+      `rebasePerformed over ${FUZZ_TAKES.toLocaleString("en-US")} random takes: every performed stroke keeps its on-screen slot`,
+      `${fz.takes} takes, ${fz.checked} performed strokes checked (${fz.held} held back, ${fz.clampCases} of those with an old delay that starts them below 0 on the new clock), ${fz.fail.length} moved${fz.fail.length ? ": " + fz.fail.slice(0, 3).map((f) => f.what).join("; ") : ""}`)
+
+    /* THE SAME FUZZ ON THE CODE BEFORE THE FIX, so the instrument is shown to see
+     * the defect: `lib/stroke-timing.ts` at the snapshot this branch starts from. */
+    const Tb = loadBaseTiming()
+    if (!Tb) row("F3-BEFORE", false, "the fuzz fails on the snapshot's rebasePerformed", `no ${BASE_REV}:lib/stroke-timing.ts in this clone`)
+    else {
+      const fb = fuzz(Tb, cleanRows)
+      const allClamp = fb.fail.every((f) => f.clamp)
+      row("F3-BEFORE", fb.fail.length > 0 && allClamp,
+        `the same ${FUZZ_TAKES.toLocaleString("en-US")} takes on ${BASE_REV}'s rebasePerformed fail, every failure the clamp (the must-fail on the real code)`,
+        `${fb.fail.length} moved (${fb.fail.filter((f) => f.held).length} held back, ${fb.fail.filter((f) => !f.held).length} not), ${fb.fail.filter((f) => f.clamp).length} of them on a take where placeSlots clamps a start at 0${fb.fail.length ? "; first: " + fb.fail[0].what : ""}`)
+    }
+  }
+
   /* ---- WIRING: what the page hands rebaseForClock ------------------------ */
   {
     const page = readSrc("app/page.tsx")
@@ -201,6 +232,122 @@ async function runRows() {
   }
 }
 
+/* ---- F3's fuzz ---------------------------------------------------------------- */
+const FUZZ_TAKES = 14582
+const FUZZ_SEED = 20261002
+const BASE_REV = process.env.HANDFIX_BASE || "0ad6d79"
+function mulberry32(a) {
+  return () => {
+    a |= 0
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+/** `rebasePerformed` of `T` on random takes: 2 to 6 strokes, base slots on an
+ *  old clock and a new one (a rate and a jitter apart, as a clock or rate swap
+ *  moves them), rows with any delay in +-4 s, speeds 0.25 to 4, hold back,
+ *  ripple, and a performed pace on some. Every performed stroke's on-screen
+ *  slot on the new clock must be its slot on the old one. */
+function fuzz(T, cleanRows) {
+  const rnd = mulberry32(FUZZ_SEED)
+  const pick = (a) => a[Math.floor(rnd() * a.length)]
+  const lin = { kind: "preset", id: "linear" }
+  const out = { takes: 0, checked: 0, held: 0, clampCases: 0, fail: [] }
+  for (let k = 0; k < FUZZ_TAKES; k++) {
+    const n = 2 + Math.floor(rnd() * 5)
+    const A = new Float64Array(n * 2)
+    const B = new Float64Array(n * 2)
+    const f = pick([0.3, 0.5, 0.75, 1.3, 2, 3.333])
+    for (let i = 0; i < n; i++) {
+      const s = Math.round(rnd() * 6000)
+      const d = 50 + Math.round(rnd() * 3000)
+      A[i * 2] = s
+      A[i * 2 + 1] = s + d
+      const s2 = Math.max(0, Math.round(s * f + (rnd() * 2 - 1) * 200))
+      B[i * 2] = s2
+      B[i * 2 + 1] = s2 + Math.max(1, Math.round(d * f * (0.7 + rnd() * 0.6)))
+    }
+    const take = { strokes: {}, ripple: rnd() < 0.3 }
+    for (let i = 0; i < n; i++) {
+      if (rnd() >= 0.6) continue
+      const r = { delayMs: Math.round((rnd() * 2 - 1) * 4000), speed: pick([0.25, 0.5, 1, 1.5, 2, 4]), ease: lin, holdBack: rnd() < 0.3 }
+      if (rnd() < 0.6) r.performed = [0, 0.4, 1]
+      take.strokes[i] = r
+    }
+    out.takes++
+    const rb = T.rebasePerformed(take, A, B)
+    const was = T.placeSlots(cleanRows(take, n), A, take.ripple)
+    const now = T.placeSlots(cleanRows(rb, n), B, take.ripple)
+    // Where the old fix would have started each held row before the clamp.
+    const from = new Float64Array(n)
+    T.placeSlots(cleanRows(rb, n), B, take.ripple, from)
+    for (let i = 0; i < n; i++) {
+      const r = take.strokes[i]
+      if (!r || !r.performed) continue
+      out.checked++
+      if (r.holdBack) out.held++
+      const dt = Math.max(Math.abs(now[i * 2] - was[i * 2]), Math.abs(now[i * 2 + 1] - was[i * 2 + 1]))
+      // Touched by the clamp: some start was below 0 before `max(0, ...)` on the old clock,
+      // on the new clock with the old rows (what a rebase first reads), or with the new rows.
+      const clamp = clampTouched(cleanRows(take, n), A, take.ripple) || clampTouched(cleanRows(take, n), B, take.ripple) || clampTouched(cleanRows(rb, n), B, take.ripple)
+      if (r.holdBack && from[i] + r.delayMs < 0) out.clampCases++
+      if (!(dt <= 1e-6 * Math.max(1, Math.abs(was[i * 2 + 1])))) {
+        out.fail.push({ held: r.holdBack, clamp, what: `take ${k} stroke ${i}${r.holdBack ? " held" : ""}: [${was[i * 2].toFixed(1)}, ${was[i * 2 + 1].toFixed(1)}] -> [${now[i * 2].toFixed(1)}, ${now[i * 2 + 1].toFixed(1)}]` })
+      }
+    }
+  }
+  return out
+}
+/** True when `placeSlots`' walk clamps any start at 0 for these rows. A copy of
+ *  the walk, used only to say which failures the clamp touched. */
+function clampTouched(rows, base, ripple) {
+  const n = base.length / 2
+  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => base[a * 2] - base[b * 2] || a - b)
+  let carry = 0
+  let lastEnd = 0
+  let hit = false
+  for (const i of order) {
+    const r = rows[i]
+    if (r.holdBack) continue
+    const raw = base[i * 2] + (ripple ? carry : 0) + r.delayMs
+    if (raw < 0) hit = true
+    const t0 = Math.max(0, raw)
+    const t1 = t0 + (base[i * 2 + 1] - base[i * 2]) / r.speed
+    if (ripple) carry = t1 - base[i * 2 + 1]
+    if (t1 > lastEnd) lastEnd = t1
+  }
+  for (const i of order) {
+    const r = rows[i]
+    if (!r.holdBack) continue
+    const raw = lastEnd + r.delayMs
+    if (raw < 0) hit = true
+    const t0 = Math.max(0, raw)
+    lastEnd = Math.max(lastEnd, t0 + (base[i * 2 + 1] - base[i * 2]) / r.speed)
+  }
+  return hit
+}
+
+/** `lib/stroke-timing.ts` at BASE_REV, loaded beside today's modules (its `@/`
+ *  imports resolve to this tree, where they are unchanged). */
+function loadBaseTiming() {
+  let src
+  try {
+    src = execFileSync("git", ["-C", ROOT, "show", `${BASE_REV}:lib/stroke-timing.ts`], { encoding: "utf8", maxBuffer: 1 << 26, stdio: ["ignore", "pipe", "ignore"] })
+  } catch {
+    return null
+  }
+  const dir = mkdtempSync(join(tmpdir(), "fs-handfix-base-"))
+  const f = join(dir, "stroke-timing.ts")
+  writeFileSync(f, src)
+  try {
+    return loadTs(f)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 /* ---- the must-fails ----------------------------------------------------------- */
 const MUTANTS = [
   { name: "the nib test never fires", file: "lib/clock-rebase.ts", find: "return !!patch.solidParams && clockNibOf", replace: "return false && clockNibOf", rows: ["F1-THICK"] },
@@ -210,6 +357,8 @@ const MUTANTS = [
   { name: "handleDrawInChange rebases on the old draw-in", file: "app/page.tsx", find: "rebaseForClock({ drawIn: next })", replace: "rebaseForClock({})", rows: ["W2-DRAWIN"] },
   { name: "handleRevealWindowChange never rebases", file: "app/page.tsx", find: "rebaseForClock({ revealWindow: next })", replace: "null", rows: ["W2-WINDOW"] },
   { name: "the next doc keeps the old draw-in and window", file: "lib/clock-rebase.ts", find: "const next: ClockDoc = { ...doc, ...patch }", replace: "const next: ClockDoc = { ...doc, ...patch, drawIn: doc.drawIn, revealWindow: doc.revealWindow }", rows: ["F2-DRAWIN", "F2-WINDOW"] },
+  { name: "the held-back delay is solved from the clamped start again", file: "lib/stroke-timing.ts", find: "delayMs: old[i * 2] - from[i],", replace: "delayMs: r.delayMs + old[i * 2] - placeSlots(clean(out), newBaseSlots, out.ripple)[i * 2],", rows: ["F3-REVIEW", "F3-FUZZ"] },
+  { name: "the ripple carry skips strokes with no row again", file: "lib/stroke-timing.ts", find: "const r = strokes[i] ?? STROKE_TIMING_NEUTRAL", replace: "const r = strokes[i] ?? { ...STROKE_TIMING_NEUTRAL, holdBack: true }", rows: ["F3-FUZZ"] },
   { name: "the memo forgets its canvas", file: "app/page.tsx", find: "clockCsRef.current = clocked.cs", replace: "clockCsRef.current = settingsRef.current", rows: ["W1-CS"] },
 ]
 

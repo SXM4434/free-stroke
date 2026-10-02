@@ -446,8 +446,11 @@ export function isTimedTake(take: StrokeTimingTake | null | undefined): boolean 
  */
 /** Every stroke's on-screen `[t0, t1]`, ms, from its row and its base slot: the
  *  walk `buildTimedSchedule` places slots with, and `rebasePerformed` reads the
- *  old clock with, so the two can never disagree. Rows are already read clean. */
-export function placeSlots(rows: readonly StrokeTiming[], baseSlots: ArrayLike<number>, ripple: boolean): Float64Array {
+ *  old clock with, so the two can never disagree. Rows are already read clean.
+ *  `heldFrom`, when given, gets each held-back stroke's start before its delay
+ *  and the clamp at 0 (the end of everything before it), so a caller can solve
+ *  for a delay that lands it where it wants (CLOUD-HANDFIX, finding 3). */
+export function placeSlots(rows: readonly StrokeTiming[], baseSlots: ArrayLike<number>, ripple: boolean, heldFrom?: Float64Array): Float64Array {
   const n = baseSlots.length / 2
   const order = Array.from({ length: n }, (_, i) => i).sort(
     (a, b) => baseSlots[a * 2] - baseSlots[b * 2] || a - b,
@@ -471,6 +474,7 @@ export function placeSlots(rows: readonly StrokeTiming[], baseSlots: ArrayLike<n
     const row = rows[i]
     if (!row.holdBack) continue
     const dur = (baseSlots[i * 2 + 1] - baseSlots[i * 2]) / row.speed
+    if (heldFrom) heldFrom[i] = lastEnd
     const t0 = Math.max(0, lastEnd + row.delayMs)
     slots[i * 2] = t0
     slots[i * 2 + 1] = t0 + dur
@@ -917,15 +921,19 @@ export function rebasePerformed(
   const out = fits.size ? withPerformed(take, newBaseSlots, fits) : { ...take, strokes: { ...take.strokes } }
   for (const i of fits.keys()) out.strokes[i] = { ...out.strokes[i], ease: take.strokes[i].ease }
   // Held-back rows land in base order after the last stroke, each after the one before it,
-  // so fixing them in that order never moves one already fixed.
+  // so fixing them in that order never moves one already fixed. The delay is solved from
+  // where the new walk starts the row before its delay (`from`), not from where it lands:
+  // `placeSlots` clamps a start below 0 to 0, and a row that lands clamped would read as
+  // already in place (REVIEW.md Review 2, finding 3). The old start is never below 0.
   heldBack.sort((a, b) => newBaseSlots[a * 2] - newBaseSlots[b * 2] || a - b)
+  const from = new Float64Array(n)
   for (const i of heldBack) {
-    const now = placeSlots(clean(out), newBaseSlots, out.ripple)
+    placeSlots(clean(out), newBaseSlots, out.ripple, from)
     const r = out.strokes[i]
     const len = old[i * 2 + 1] - old[i * 2]
     out.strokes[i] = {
       ...r,
-      delayMs: r.delayMs + old[i * 2] - now[i * 2],
+      delayMs: old[i * 2] - from[i],
       speed: len > 0 ? (newBaseSlots[i * 2 + 1] - newBaseSlots[i * 2]) / len : r.speed,
     }
   }
@@ -1205,10 +1213,13 @@ export function withPerformed(
       }
     }
     if (!take.ripple) continue
-    const r = strokes[i]
-    if (!r || r.holdBack) continue
-    const t0 = Math.max(0, B0 + carry + r.delayMs)
-    carry = t0 + (B1 - B0) / r.speed - B1
+    // The carry walks every stroke `placeSlots` walks, a stroke with no row too: its start
+    // can clamp at 0 as well, and then the carry it hands on changes (CLOUD-HANDFIX, finding 3).
+    const r = strokes[i] ?? STROKE_TIMING_NEUTRAL
+    if (r.holdBack) continue
+    const speed = Number.isFinite(r.speed) && r.speed > 0 ? r.speed : 1
+    const t0 = Math.max(0, B0 + carry + (Number.isFinite(r.delayMs) ? r.delayMs : 0))
+    carry = t0 + (B1 - B0) / speed - B1
   }
   return { ...take, strokes }
 }
