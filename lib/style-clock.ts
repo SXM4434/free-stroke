@@ -198,7 +198,7 @@ const SILENT: LayerTime = { time: 0, amount: 0, active: false }
  * deliberately: this is decorative canvas motion on the artwork itself, the
  * framework's "can be longer" tier, not UI feedback the user is waiting on.
  */
-const PULSE_ATTACK_SECONDS = 0.09
+export const PULSE_ATTACK_SECONDS = 0.09
 const PULSE_DECAY_SECONDS = 0.55
 export const PULSE_CUTOFF = 0.04
 /** When the envelope is spent. Phase freezes here so nothing jumps at expiry. */
