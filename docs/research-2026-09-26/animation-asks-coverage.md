@@ -1,4 +1,4 @@
-**124 asks: 54 PRESENT, 27 PARTIAL, 25 MISSING, 0 CUT BY HIM, 18 UNKNOWN.**
+**124 asks: 58 PRESENT, 32 PARTIAL, 26 MISSING, 0 CUT BY HIM, 8 UNKNOWN.**
 
 # What he asked for in animation, and what the code has for each, 2026-09-26
 
@@ -42,7 +42,7 @@ The keyframing he was angry about on 09-25 is in now: keys, a curve between them
 | 19 | Duration control | R#17, PLAN:1778 | plan | PARTIAL | Only the speed buttons (vp:14483) and per-stroke speed. No field sets the take's length in seconds |
 | 20 | Delay before it starts | R#18 | PRD | PRESENT | dtc:366 |
 | 21 | Loop and reverse | R#19 | PRD | PRESENT | Reverse dtc:523, Loop dtc:536 |
-| 22 | Restart behaviour | PLAN:1784 | plan | UNKNOWN | The cited line, PLAN:1784, reads "easing", so the plan's own words for this ask were not found. The nearest code: Loop dtc:536, and Play from the end restarts from empty, vp:9330 |
+| 22 | Restart behaviour | PLAN:1784 | plan | PRESENT | Third pass. Control: Play in the dock's transport row, `components/workspace/timeline-panel.tsx:119-123`, handed `handlePlayPause` at vp:14034. Path: Play at the end restarts from the start, vp:12232-12245, and under Reverse the start is 1, not 0. Loop dtc:759-768 wraps the clock and re-arms the delay each pass, vp:8333-8361; without Loop the pass ends, vp:8364, and the transport pauses, vp:11476. The plan file is not in the repo, so PLAN:1784's own words are still unread |
 | 23 | Select a stroke, nudge it, reset it, ripple the rest | DES 1b | doc | PRESENT | Nudge strip:418, Reset dtc:674, Ripple strip:646 |
 | **D** | **Per-stroke control** | | | | |
 | 24 | Stroke order | R#21, PLAN:1786 | PRD | PRESENT | Menu dtc:124-137, and any stroke can be dragged to any time, strip:497. The byPosition-equals-default defect in R2 was not re-checked |
@@ -59,13 +59,13 @@ The keyframing he was angry about on 09-25 is in now: keys, a curve between them
 | 35 | Letter by letter on `/`, a clean turn, no overlap | R#28, TR K | "the way they turn and then overlap into the next letter is so dog shit" | MISSING | `lib/hero-motion.ts:1938`, lab only |
 | **E** | **Writing like a hand** | | | | |
 | 36 | A draw-in that writes like a hand | R#29, TR D | "teh hwoel reason im usuing the free stroke ap was for its drawing anaimtion" | PARTIAL | Perform lets him write the pace himself (row 3). The default still plays the recorded pace, and the pen-model clock is lab only (row 8) |
-| 37 | Order that follows how a hand writes the letter | R2 N2 | doc | UNKNOWN | Strokes he draws on `/` keep the order he drew them. The ask is about traced words, and the authored table of where a hand starts each letter (R2 cites RQ:6237) was not found by name in `lib/` or `app/` |
-| 38 | The pen lifts between strokes | R2 N3 | doc | UNKNOWN | `liftHolds` holds the reveal still on each pen lift, `lib/pen-reveal.ts:173-189`, added 09-25. Whether `/` passes it, and whether the word still extrudes as one piece, was not traced |
+| 37 | Order that follows how a hand writes the letter | R2 N2 | doc | PARTIAL | Third pass. The hand order exists, lab only: the single-stroke font lists each glyph's strokes in pen order, stem before bowl, `scripts/capture/letters.mjs:160-161`, laid out by `layoutWord` :1045, whose one caller is `app/desk-doodles/page.tsx:129` and :334. On `/` there is no traced or typed word, only his own strokes, and the Order menu (dtc:159-178) offers As drawn, Reversed, Short first, Left to right and Random (`ORDER_LABELS` `lib/stroke-schedule.ts:1528-1534`). Missing: the font on `/`, and an order that puts a stroke set into how a hand writes it |
+| 38 | The pen lifts between strokes | R2 N3 | doc | PRESENT | Third pass. Control: Natural / Authentic in the transport, `components/workspace/timeline-panel.tsx:143-167`, and Clock, Recorded or Hand, dtc:583-610. Path: `/` passes `liftsLandBetweenStrokes` into `revealDistanceFraction` at vp:6359-6364, :6406 and :9596-9603, and Natural then holds still for each lift's full length (`lib/pen-reveal.ts:168-187`). Under Hand, `stampPenClock` times the lifts on `/`, `app/page.tsx:2659`. Strokes drawn on `/` are separate strokes, so the word is not one extrusion. Limit: the hold switches off under a reorder, overlap, Align end, Travel or Shrink, where it would freeze a stroke half drawn, `lib/pen-reveal.ts:207-216` |
 | 39 | Lifts that vary like a hand, 90 to 600 ms | R2 N4 | doc | PARTIAL | `humanLiftsMs` (`lib/pen-reveal.ts:1692`) runs inside `stampPenClock` (:1740), whose only callers are `app/desk-doodles/page.tsx:175` and :380 |
 | 40 | No stroke on screen for under 100 ms | R2 N5 | doc | MISSING | No floor constant found. The grep went by name only |
 | 41 | A reveal that reads pen pressure | R#30, PLAN:1814 | plan | MISSING | Recorded at `components/drawing-canvas.tsx:333` and :352. vp:14730 says no engine reads it |
 | 42 | Tip highlight | R#31, PLAN:1816 | plan | PARTIAL | The pen tip renders (vp:4135-4525). No tip control found in dtc |
-| 43 | A taper-aware reveal | PLAN:1815 | plan | UNKNOWN | `lib/stroke-schedule.ts:34` quotes an arrival formula with a taper term and cites `lib/pen-reveal.ts:446`, but that line now holds something else. Not traced to `/` |
+| 43 | A taper-aware reveal | PLAN:1815 | plan | PARTIAL | Third pass. The moving end is taper-aware on Inflate: the frame loop reads `readPenTipShape` (default `reed`, nose 1, taper 1.6, `lib/pen-reveal.ts:1147`, :1195) and writes `uFsTipTaper`, vp:7084-7149, which the shader puts in the arrival test, vp:2791-2792. Missing: no control on `/` picks or tunes the tip; it is set only through the doc (`lib/doc-store.ts:949-954`) and the dev harness, vp:12051. And it runs only where an Inflate mesh carries reveal keys, the one place `revealFracNow` is set, vp:6357-6366 |
 | 44 | Smoothing on a performed take | R2 N9 | doc | PRESENT | perform:256-259, `SMOOTH_MS_MAX` `lib/stroke-timing.ts:742` |
 | 45 | Perform slowly | DES Phase 2 | doc | PRESENT | perform:262-265, `CAPTURE_SPEEDS` `lib/stroke-timing.ts:739` |
 | 46 | Perform the whole word | DES Phase 2 | doc | PRESENT | perform:251, "All, in order" |
@@ -132,11 +132,11 @@ The keyframing he was angry about on 09-25 is in now: keys, a curve between them
 | 102 | No white spots in the strokes | TR J | "shit still has these artifacting things, these white spots" | UNKNOWN | A screen property |
 | 103 | Every animation eyed, frame by frame | R#60 | "every animation, every frame" | UNKNOWN | A process |
 | 104 | An iOS-style control panel | R#61, PLAN Layer H | plan: "It cannot be forgotten." | PARTIAL | Grouped family panels, the preset rail and sliders are there (`StylePanelScaffold` scaffold:3662, rail :122). The preset browser in the same Layer H list is row 71. Whether it reads as iOS-grade is his eye |
-| 105 | Works in 2D and in 3D | R2 N35, TR L | "we ned it to work for 2d and 3d as well" | UNKNOWN | `lib/flat-ink.ts` is imported by vp, dtc and the lab, so a 2D path exists. Whether the draw-in plays on 2D strokes on `/` was not traced. R2 N35 said the 2D renderer had no live consumer |
-| 106 | The 2D draw-in matches the 3D one | R2 N6 | doc | UNKNOWN | Not traced. R2 N6 names the cause, `ink(d)` not monotone, with no fix recorded; none was found by name |
+| 105 | Works in 2D and in 3D | R2 N35, TR L | "we ned it to work for 2d and 3d as well" | PRESENT, needs his eye | Third pass. Control: Shading, Lit object or Flat ink, dtc:421-438, through `handleFlattenChange` `app/page.tsx:690` and the `flatten` prop at :2517. Path: the frame loop reads `flatten.ink` every frame and lerps the material to one flat ink, vp:6641-6675. The reveal reads only the playhead and the schedule, never `flatten` (vp:6357-6366, :9596-9603), so the draw-in plays the same in flat ink and lit. 2D here is flat shading on the same mesh: the 2D canvas renderer `makeFlatRenderer` (`lib/flat-ink.ts:350`) still has no caller outside two comments in `lib/hero-motion.ts` |
+| 106 | The 2D draw-in matches the 3D one | R2 N6 | doc | PRESENT, needs his eye | Third pass. On `/` the 2D draw-in and the 3D one are one reveal under two shadings (row 105): Flat ink changes the material at vp:6641-6675 and nothing in the reveal path. So they match by construction. The mismatch R2 N6 measured was in the separate 2D renderer, `makeFlatRenderer` `lib/flat-ink.ts:350`, which nothing calls; no fix for its `ink(d)` was found, and none is needed for `/` while it stays uncalled |
 | **K** | **Hero and films** | | | | |
 | 107 | The hero choreography, K1 to K7 | R2 N17, TR P | "complete average, complete garbage" | PARTIAL | Lab only. No hero shape reaches `/` (row 6) |
-| 108 | Real key poses for the hero beat | R2 N18 | doc | UNKNOWN | No key-pose table found by name in `lib/hero-motion.ts`. R2 N18 counted nine of twelve poses as in-betweens. Lab only either way |
+| 108 | Real key poses for the hero beat | R2 N18 | doc | MISSING | Third pass. The beat is still the twelve phases of `HERO_PHASES`, `lib/hero-motion.ts:328-341`, with no key-pose table by name beside them. The only piece of the beat on `/` is the Flip (dtc:447-480), which takes one phase's numbers, `emerge` or `returnTurn`, from `DEFAULT_HERO_MOTION`, vp:7939-7951. Grep by name only |
 | 109 | The land shadow after the turn | R2 N19 | doc | MISSING | Zero hits for any land-shadow name in `lib/`, `components/`, `app/` or `scripts/`. R2 N19 had it computed and drawn by nothing; the computation is not found now either. Grep by name only |
 | 110 | Which hero film ships | R2 N20 | doc | UNKNOWN | His decision |
 | 111 | The drawing stands up, hinged at the baseline | R2 N23 | doc | PARTIAL | Lab only, and as a camera move: `standup` is an az/el/fill camera channel in the shipped program, `lib/hero-motion.ts:48`, :65, :97. The drawing itself does not hinge at the baseline, and nothing reaches `/` (row 6) |
@@ -146,12 +146,12 @@ The keyframing he was angry about on 09-25 is in now: keys, a curve between them
 | 115 | Page-to-page morph | R2 N29 | "whatevr happedn to teh page to page aniamtion the morphs tuff" | MISSING | No page morph or view transition found by name. R2 cites a ledger line saying the morph work was dropped; that is not his ruling |
 | 116 | Drawing lines morphing into code | R2 N30 | "the liens in drswing become code" | MISSING | Zero hits. Nothing turns the drawing's lines into code |
 | 117 | The original eased flip back | R2 N43, TR F | "the flip was basic but solid finduation" | PARTIAL | Lab only: `ddFlipEase` `lib/hero-motion.ts:2167`, cubic-bezier 0.45, 0, 0.2, 1, with the 87% breakdown at :1535 and :2375. Not on `/` (row 6) |
-| 118 | Type a word and it draws itself | R2 N42 | doc | UNKNOWN | The lab has code for scaling a typed word (`app/desk-doodles/page.tsx:1493`, a comment); its text input was not located. Nothing on `/` by name, and R2 N42 says the product side is his call |
+| 118 | Type a word and it draws itself | R2 N42 | doc | PARTIAL | Third pass. Lab: "Any text" and its input, `app/desk-doodles/page.tsx:2953-2958` (state :1490-1491), feed `layoutWord` at :334 (`scripts/capture/letters.mjs:1045`), and the word draws in. Missing on `/`: no text input, and `layoutWord` is imported nowhere but the lab. R2 N42 says whether `/` gets it is his call |
 | 119 | One temperature dial, legibility against liveliness | R2 N44 | doc | MISSING | Zero hits for a temperature dial. The one "temperature" at `lib/style-system.ts:895` is a material colour note |
 | 120 | Desk Doodles' spring landing and 40 to 60 ms stagger | R2 N45 | doc | MISSING | No 0.92-to-1 landing spring and no 40 to 60 ms stagger in the motion code. The 0.92 hits are a material and a fusion score. Grep by value only |
-| 121 | The per-unit cascade and its 16-unit cap | R2 N16 | doc | UNKNOWN | The cascade lives in `lib/hero-letters.ts:90-372` and `lib/hero-motion.ts:1905`; no 16-unit cap by name. R2 N16 says the record never said what it does, and it is his |
+| 121 | The per-unit cascade and its 16-unit cap | R2 N16 | doc | PARTIAL | Third pass. The cap is `FS_LETTER_MAX = 16`, vp:2907: how many letters the per-letter pass can turn. The shader walks at most 16 slots and leaves any other letter at rest, vp:3080-3085, rod caps fold an index past it into the last slot, vp:4677-4682, and the frame loop writes at most 16, vp:6929. The cascade turns letters from `flatten.letters`, vp:6925-6989, but only when a `letterMap` is passed, and only the lab passes one, `app/desk-doodles/page.tsx:2650`; `/` passes none at `app/page.tsx:2517`, so the pass sits idle there. Missing: the cascade on `/` |
 | 122 | A pen shadow one nib ahead of the ink | R2 N7 | doc | MISSING | Zero hits for a pen shadow or a mask one nib ahead. Grep by name only |
-| 123 | Leading-edge fade split into thickness and opacity | R2 N8 | doc | UNKNOWN | The nib as the leading edge is at `lib/flat-ink.ts:516`. A split of the leading-edge fade into thickness and opacity was not found by name, and not traced |
+| 123 | Leading-edge fade split into thickness and opacity | R2 N8 | doc | PARTIAL | Third pass. The thickness half is there on Inflate: the tip's `taper` thins the edges behind the centre so the moving end comes to a point, vp:2791-2792, fed at vp:7149 (row 43). The opacity half is not: the tip is a hard cut with a coverage ramp about one pixel wide for antialiasing, vp:2810-2830, and no fade dial exists. No control on `/` for either half |
 | 124 | The reveal survives when Inflate falls back to the loft | R2 N32 | doc | PRESENT, needs his eye | vp:9309-9317: `meshesCarryRevealKeys` flips when the built meshes carry no reveal table, which a loft fallback produces, and the next build goes through the draw-range path, `inflateRevealsByDrawRange` vp:9318 |
 
 ## What is still missing or partial, by how much he talked about it
@@ -213,3 +213,27 @@ Of the 18 still UNKNOWN, six are his call or a way of working, not code (7, 10, 
 - MISSING rows 85, 95, 109, 114, 116, 119, 120 and 122 rest on greps by name or value. A feature under another name would not show up.
 - Rows 57 and 81 stop at the viewport API and at a comment: the camera side of the View presets, and Turntable spinning on pick, were not followed.
 - Some vp ranges in rows 73 and 78 come from reads that skipped comment lines, so the end of a range can be a few lines off.
+
+## Third pass, 2026-10-02
+
+Read-only lane on `integrate/cloud-1001` (snapshot `2cc9e98`: main plus the dockview layout, keyframe anything, Hand Draw phase 3 and the carve fix). Nothing was run in a browser and no product code changed. The ten rows found in part and not traced to `/` (22, 37, 38, 43, 105, 106, 108, 118, 121, 123) were traced from the control that would show each: the transport in `components/workspace/timeline-panel.tsx`, `components/draw-in-timing-controls.tsx`, `components/dock-shell.tsx`, `components/style-panel-scaffold.tsx` and `lib/export/`. Line numbers in these ten rows are on this snapshot; the other rows still cite main at `95f724f87`, and their lines have moved.
+
+**Where the 10 went: 4 PRESENT, 5 PARTIAL, 1 MISSING, 0 still UNKNOWN.** The 8 left UNKNOWN are the six that are his call or a way of working (7, 10, 100, 103, 110, 112) and the two screen properties (101, 102).
+
+- **PRESENT (22, 38, 105, 106).** Restart is Play from the end plus Loop, and both reach the frame loop. The pen lifts hold on `/` under Natural and are timed by the Hand clock; Hand Draw phase 3 is why `stampPenClock` now has a caller on `/` (`app/page.tsx:2659`). 2D on `/` is Flat ink over the same mesh and the same reveal, so the draw-in plays in both, and the two match by construction. 105 and 106 need his eye.
+- **PARTIAL (37, 43, 118, 121, 123).** Each has working code that stops short of `/` or of a control. The hand-ordered font and the typed word live on the lab only (37, 118). The letter cascade and its 16-letter cap are real, but `/` passes no letter map (121). The taper-aware tip runs on Inflate with no control to pick it (43), and its opacity half was never built (123).
+- **MISSING (108).** No key-pose table; the beat is still twelve phases, and only the Flip's one turn reaches `/`.
+
+### Corrections the third pass found in other rows
+
+These rows were not regraded, because this pass was asked to change only the ten. They are noted so the next pass starts from them.
+
+- Rows 8, 36 and 39 say `stampPenClock` and `humanLiftsMs` are lab only. On this snapshot `/` calls `stampPenClock` under Clock: Hand (dtc:583-610 to `app/page.tsx:2659`), and `humanLiftsMs` runs inside it.
+- Rows 6 and 56 say the flat-to-solid flip and 3D first are lab only. The Form block now has a Flip row, Off, Flat to solid or 3D first (dtc:447-480), timed onto the take at vp:7939-7951.
+- Row 4 says the tools have no animation workspace. The dockview layout adds workspaces on a left rail (`components/workspace/workspaces.ts`, `components/workspace/rail.tsx`); whether one of them is an animation workspace was not checked.
+
+### Limits of the third pass
+
+- PRESENT is still source level. No browser was opened for these rows, so 105 and 106 rest on the reveal not reading `flatten`, not on a look at the screen.
+- Row 108's MISSING rests on a grep by name for a key-pose table.
+- Row 22 is graded on what the code does at the end of a pass. The plan file it cites is not in the repo, so his plan's own words for restart behaviour are still unread.
