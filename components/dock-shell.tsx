@@ -102,6 +102,11 @@
                        shell, a float only 100 px of which must stay on screen,
                        its content free to grow past it (X8 must go red)
      "previewNoFit"    the preview shows the main view's framing (X9 must go red)
+     CLOUD-LAYOUT, read by scripts/verify/assert-dock-panels.mjs row R6:
+     "nofit"           the open dock keeps the height it was given, whatever
+                       its content (R6 must go red)
+     "stripcut"        the default cap is a third of the shell however tall
+                       the closed strip is (R8 must go red at 1280x800)
    ================================================================== */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
@@ -122,6 +127,7 @@ import { useTakeTransport } from "@/lib/take-transport"
 import { toast } from "sonner"
 import { Rail, type RailPanel } from "@/components/workspace/rail"
 import {
+  ANIMATE_DOCK_PX,
   CURRENT_KEY,
   DOCK_HEADER_PX,
   WORKSPACES,
@@ -137,8 +143,8 @@ import {
 } from "@/components/workspace/workspaces"
 
 type Slots = { drawing: ReactNode; view: ReactNode; style: ReactNode }
-type Mutant = "header" | "onlyWhenVisible" | "noReuse" | "stale" | "nodock" | "toast182" | "nosync" | "unguarded" | "silent" | "nosave" | "restoreDefault" | "nopreview" | "nokeys" | "savemax" | "previewLoose" | "previewNoFit" | null
-const MUTANTS: readonly string[] = ["header", "onlyWhenVisible", "noReuse", "stale", "nodock", "toast182", "nosync", "unguarded", "silent", "nosave", "restoreDefault", "nopreview", "nokeys", "savemax", "previewLoose", "previewNoFit"]
+type Mutant = "header" | "onlyWhenVisible" | "noReuse" | "stale" | "nodock" | "toast182" | "nosync" | "unguarded" | "silent" | "nosave" | "restoreDefault" | "nopreview" | "nokeys" | "savemax" | "previewLoose" | "previewNoFit" | "nofit" | "stripcut" | null
+const MUTANTS: readonly string[] = ["header", "onlyWhenVisible", "noReuse", "stale", "nodock", "toast182", "nosync", "unguarded", "silent", "nosave", "restoreDefault", "nopreview", "nokeys", "savemax", "previewLoose", "previewNoFit", "nofit", "stripcut"]
 
 const SlotContext = createContext<Slots>({ drawing: null, view: null, style: null })
 
@@ -216,6 +222,29 @@ export { DOCK_HEADER_PX }
 /** Open, the dock takes a third of the shell, and never less than this. */
 const DOCK_OPEN_MIN_PX = 220
 const isDockGroup = (g: DockviewGroupPanel | undefined) => !!g && g.panels.some((p) => (DOCK_PANELS as readonly string[]).includes(p.id))
+
+/* THE TIMELINE'S CONTENT HEIGHT, as if the dock gave it all it wants
+   (CLOUD-LAYOUT). The panel's box is as tall as its content up to the panel
+   (viewport-3d.tsx, `data-take-panel`), and the one part that gives when it
+   is capped is the key lanes' scroll region, so the content's own height is
+   the box plus what that region hides, up to the region's own cap. Null when
+   the Timeline is not laid out (folded, hidden, another tab). */
+function timelineNaturalPx(): number | null {
+  const panel = document.querySelector<HTMLElement>('[data-dock-host="timeline"] > [data-take-panel]')
+  if (!panel) return null
+  const h = panel.getBoundingClientRect().height
+  if (!(h > 0)) return null
+  let hidden = 0
+  for (const el of panel.querySelectorAll<HTMLElement>("[data-take-scroll]")) {
+    const cap = parseFloat(getComputedStyle(el).maxHeight)
+    const want = Number.isFinite(cap) ? Math.min(el.scrollHeight, cap) : el.scrollHeight
+    hidden += Math.max(0, want - el.clientHeight)
+  }
+  return h + hidden
+}
+/** A group whose size along the height is its own: a row of a column. */
+const alongHeight = (g: DockviewGroupPanel) =>
+  g.api.location.type === "grid" && !!g.element.parentElement?.closest(".dv-split-view-container")?.classList.contains("dv-vertical")
 
 function DockHost({ name, className }: { name: DockHostName; className: string }) {
   const ref = useDockHostRef(name)
@@ -576,7 +605,21 @@ function DockShellInner({ drawing, view, style }: Slots) {
      dockview's callbacks; `collapsed` is what the header renders. */
   const [collapsed, setCollapsedState] = useState(true)
   const collapsedRef = useRef(true)
+  /** The open dock's cap: the height his last drag on its edge left it, per
+   *  workspace, saved with the layout. Null: the workspace's default. */
   const openPxRef = useRef<number | null>(null)
+  /** True while a divider is being dragged: the dock is his to size then. */
+  const sashRef = useRef<{ h0: number } | null>(null)
+  /** Set when a workspace's default is loaded: its first fit counts as the load.
+   *  A saved layout is loaded as it was saved and is not refitted; the fit
+   *  runs again when the content changes, the dock opens or its tab changes. */
+  const loadFitRef = useRef(false)
+  /** The Timeline's content height when last read: a refit is for a change in it. */
+  const naturalRef = useRef<number | null>(null)
+  /** The dock's tab when last seen, so only a change of it refits. */
+  const dockTabRef = useRef<string | null>(null)
+  /** Set by `layoutFor` when it hands back the default rather than a save. */
+  const gaveDefaultRef = useRef(false)
   const dockGroup = () => apiRef.current?.groups.find(isDockGroup)
   const setCollapsed = useCallback((v: boolean) => {
     collapsedRef.current = v
@@ -674,7 +717,8 @@ function DockShellInner({ drawing, view, style }: Slots) {
     if (maxRef.current && mutantRef.current !== "savemax") return
     const now = api.toJSON()
     if (loadedJson.current === null || JSON.stringify(now) === loadedJson.current) return
-    const r = writeSaved(wsRef.current, now)
+    // The dock's cap rides with the layout; dockview reads past the field.
+    const r = writeSaved(wsRef.current, openPxRef.current === null ? now : ({ ...now, fsDockCapPx: openPxRef.current } as SerializedDockview))
     if (!r.ok) sayStorageBlocked(r.why)
   }, [])
   const saveSoon = useCallback(() => {
@@ -685,23 +729,67 @@ function DockShellInner({ drawing, view, style }: Slots) {
     }, 300)
   }, [save])
 
-  const openPx = () => {
+  /* THE OPEN DOCK FOLLOWS ITS CONTENT, UP TO ITS CAP (CLOUD-LAYOUT). Open on
+     the Timeline, the dock is its header plus the Timeline's content, never
+     more than the cap, and the 3D view above it takes the rest. In Animate
+     with Keyframes closed the dock was its 390 px with about 100 px of it
+     blank. The cap is Animate's 390 (40% of a short shell), a third of the
+     shell elsewhere, or the height his last drag on its edge left: a drag
+     sizes the dock, and the fit never grows it past that. On Draw-in and
+     Export the dock is the cap. Only where the dock's height is its own (a
+     row of a column, as every workspace places it); moved beside another
+     panel it keeps what he gives it. Never while maximized. */
+  const capPx = () => {
+    if (openPxRef.current !== null) return openPxRef.current
     const h = boxRef.current?.getBoundingClientRect().height ?? 900
-    return openPxRef.current ?? Math.max(DOCK_OPEN_MIN_PX, Math.round(h / 3))
+    return wsRef.current === "animate" ? Math.min(ANIMATE_DOCK_PX, Math.round(h * 0.4)) : Math.max(DOCK_OPEN_MIN_PX, Math.round(h / 3))
   }
+  /* THE STRIP IS NEVER CUT BY THE DEFAULT CAP (the controller's 1280x800
+     finding: a third of a 752 px shell is 251 px, which left the closed
+     strip 124 px for 144 px of rows, so the logo's 12th row was cut). With
+     no height of his own, the cap is at least what shows the Timeline whole
+     with the lanes closed (header, strip, Keyframes row, timing note), up to
+     60% of the shell. A height he dragged stays his. */
+  const fitTarget = (g: DockviewGroupPanel): number => {
+    let cap = capPx()
+    const natural = timelineNaturalPx()
+    const head = (g.element.querySelector(":scope > .dv-tabs-and-actions-container") as HTMLElement | null)?.getBoundingClientRect().height ?? DOCK_HEADER_PX
+    if (natural !== null && openPxRef.current === null && mutantRef.current !== "stripcut") {
+      const body = document.querySelector<HTMLElement>('[data-dock-host="timeline"] [data-key-lanes-body]')?.getBoundingClientRect().height ?? 0
+      const shell = boxRef.current?.getBoundingClientRect().height ?? 900
+      cap = Math.max(cap, Math.min(Math.round(shell * 0.6), Math.ceil(head + natural - body)))
+    }
+    if (g.activePanel?.id !== "timeline" || natural === null) return cap
+    return Math.max(DOCK_HEADER_PX + 24, Math.min(cap, Math.ceil(head + natural)))
+  }
+  const fitDock = () => {
+    const api = apiRef.current
+    const g = dockGroup()
+    if (!api || !g || !g.api.isVisible || collapsedRef.current || maxRef.current || api.hasMaximizedGroup() || todayRef.current || sashRef.current) return
+    if (mutantRef.current === "nofit" || !alongHeight(g)) return
+    naturalRef.current = timelineNaturalPx()
+    const target = fitTarget(g)
+    if (Math.abs(g.element.getBoundingClientRect().height - target) > 1) g.api.setSize({ height: target })
+    // A default's fit is part of loading it: the fitted layout is what was
+    // loaded, so it is not saved as a change (a Reset leaves no save behind).
+    if (loadFitRef.current) loadedJson.current = JSON.stringify(api.toJSON())
+  }
+  /** The fit in the next frame, once the dock's content is laid out. */
+  const fitSoon = () => requestAnimationFrame(() => fitDock())
   const expand = useCallback(() => {
     const g = dockGroup()
     if (!g) return
     if (!g.api.isVisible) g.api.setVisible(true)
     setCollapsed(false)
-    g.api.setSize({ height: openPx() })
+    g.api.setSize({ height: capPx() })
+    fitDock()
+    fitSoon()
     hold()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hold, setCollapsed])
   const fold = useCallback(() => {
     const g = dockGroup()
     if (!g) return
-    const h = g.element.getBoundingClientRect().height
-    if (h > DOCK_HEADER_PX + 1) openPxRef.current = h
     setCollapsed(true)
     g.api.setSize({ height: DOCK_HEADER_PX })
     hold()
@@ -798,7 +886,23 @@ function DockShellInner({ drawing, view, style }: Slots) {
     if (g && g.api.isVisible && h <= DOCK_HEADER_PX + 1 && Math.abs(h - DOCK_HEADER_PX) > 0.5) g.api.setSize({ height: DOCK_HEADER_PX })
     loadedJson.current = JSON.stringify(api.toJSON())
     hold()
+    // What the content measures as loaded; only a change from it refits.
+    dockTabRef.current = g?.activePanel?.id ?? null
+    requestAnimationFrame(() => { naturalRef.current = timelineNaturalPx() })
   }, [hideHeaders, hold, setCollapsed])
+
+  /** The fit that counts as part of a load, once its content is laid out. */
+  const fitAsLoad = () => requestAnimationFrame(() => {
+    loadFitRef.current = true
+    try {
+      fitDock()
+    } finally {
+      loadFitRef.current = false
+    }
+  })
+  const fitIfDefault = () => {
+    if (gaveDefaultRef.current) fitAsLoad()
+  }
 
   /** Load `layout` over the panels already open. Never removes a panel. */
   const loadLayout = useCallback((layout: SerializedDockview) => {
@@ -817,6 +921,9 @@ function DockShellInner({ drawing, view, style }: Slots) {
    *  default otherwise, and the default is said out loud when a save existed. */
   const layoutFor = useCallback((ws: WorkspaceId): SerializedDockview => {
     const { w, h, wide } = shellSize()
+    // The dock's cap is the workspace's own: its saved one, or none.
+    openPxRef.current = null
+    gaveDefaultRef.current = true
     const def = defaultLayout(ws, w, h, wide)
     if (!wide) return def
     const label = WORKSPACES.find((x) => x.id === ws)!.label
@@ -832,6 +939,9 @@ function DockShellInner({ drawing, view, style }: Slots) {
         toast.warning(`The saved ${label} layout was not loaded`, { description: `${problem[0].toUpperCase()}${problem.slice(1)}. ${label} opens on its default arrangement.` })
       return def
     }
+    const cap = (saved.layout as { fsDockCapPx?: unknown }).fsDockCapPx
+    if (typeof cap === "number" && cap > DOCK_HEADER_PX) openPxRef.current = cap
+    gaveDefaultRef.current = false
     return saved.layout as SerializedDockview
   }, [])
 
@@ -842,6 +952,12 @@ function DockShellInner({ drawing, view, style }: Slots) {
     setMaximizedState(v ? v.id : null)
     // The viewport frames the drawing to the preview while it shows (CLOUD-LAYOUT).
     setPreview(!!v && v.id !== "view3d" && mutantRef.current !== "nopreview" && mutantRef.current !== "previewNoFit")
+    // The bottom rows under the preview's corner keep their controls clear of it (dock.css).
+    const r = boxRef.current?.getBoundingClientRect()
+    if (v && v.id !== "view3d" && mutantRef.current !== "nopreview" && r) {
+      document.documentElement.dataset.fsPreview = "1"
+      document.documentElement.style.setProperty("--fs-preview-reserve", `${previewBox(r.width, r.height).width + 2 * PREVIEW_MARGIN}px`)
+    } else delete document.documentElement.dataset.fsPreview
     const dockMax = !!v && (DOCK_PANELS as readonly string[]).includes(v.id)
     // The dock maximized draws its key rows at 36 px (§4, hit targets).
     if (dockMax) document.documentElement.dataset.fsDockMax = "1"
@@ -904,6 +1020,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
     setWorkspaceState(ws)
     writeCurrent(ws)
     loadLayout(layoutFor(ws))
+    fitIfDefault()
   }, [save, loadLayout, layoutFor, restore])
 
   const reset = useCallback(() => {
@@ -911,8 +1028,10 @@ function DockShellInner({ drawing, view, style }: Slots) {
     const ws = wsRef.current
     const r = deleteSaved(ws)
     if (!r.ok) sayStorageBlocked(r.why)
+    openPxRef.current = null
     const { w, h, wide } = shellSize()
     loadLayout(defaultLayout(ws, w, h, wide))
+    fitAsLoad()
   }, [loadLayout])
 
   const toggle = useCallback((id: RailPanel) => {
@@ -962,6 +1081,10 @@ function DockShellInner({ drawing, view, style }: Slots) {
     api.onDidMaximizedGroupChange(hold)
     api.onDidLayoutFromJSON(hold)
     api.onDidActivePanelChange(() => {
+      // His tab change in the dock refits it; a load's own activations do not.
+      const tab = dockGroup()?.activePanel?.id ?? null
+      if (!loadingRef.current && tab !== dockTabRef.current) fitSoon()
+      dockTabRef.current = tab
       syncDrawIn()
       readShown()
     })
@@ -986,6 +1109,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
     wsRef.current = first
     setWorkspaceState(first)
     loadLayout(layoutFor(first))
+    fitIfDefault()
 
     if (process.env.NODE_ENV !== "production") {
       const harness: DockHarness = {
@@ -1044,6 +1168,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
       const max = maxRef.current?.id ?? null
       if (max) setMax(null)
       loadLayout(layoutFor(wsRef.current))
+      fitIfDefault()
       if (max) toggleMaxRef.current(max)
     }
     // The "previewLoose" arm, set after hydration (the server renders no mutant).
@@ -1053,6 +1178,60 @@ function DockShellInner({ drawing, view, style }: Slots) {
     if (boxRef.current) ro.observe(boxRef.current)
     return () => { mq.removeEventListener("change", onChange); ro.disconnect() }
   }, [hold, loadLayout, layoutFor])
+
+  /* THE DOCK REFITS WHEN ITS CONTENT CHANGES (CLOUD-LAYOUT): Keyframes opened
+     or closed, a curve, the timing note, a stroke more, a keyed style lane.
+     Each is a node added or removed, or an open flag flipped, under the
+     shell; in the next frame the content is measured, and the dock refits
+     when its height changed. A drag on a divider sizes the
+     dock: while it runs nothing refits, and where it leaves the open dock
+     (along its height) is the dock's new cap. */
+  useEffect(() => {
+    const box = boxRef.current
+    if (!box) return
+    let raf = 0
+    const soon = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        // Only a change in the content's height refits: a load re-renders the
+        // panels too, and a saved height stays as it was saved.
+        const n = timelineNaturalPx()
+        if (n === null) return
+        const was = naturalRef.current
+        naturalRef.current = n
+        if (was !== null && Math.abs(n - was) > 1) fitDock()
+      })
+    }
+    const mo = new MutationObserver(soon)
+    mo.observe(box, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-open", "aria-expanded"] })
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest(".dv-sash")) return
+      const g = dockGroup()
+      sashRef.current = { h0: g ? g.element.getBoundingClientRect().height : 0 }
+    }
+    const onUp = () => {
+      const s = sashRef.current
+      if (!s) return
+      sashRef.current = null
+      const g = dockGroup()
+      if (!g || !g.api.isVisible || !alongHeight(g) || maxRef.current) return
+      const h = g.element.getBoundingClientRect().height
+      if (Math.abs(h - s.h0) > 1 && h > DOCK_HEADER_PX + 1) {
+        openPxRef.current = Math.round(h)
+        saveSoon()
+      }
+    }
+    box.addEventListener("pointerdown", onDown, true)
+    window.addEventListener("pointerup", onUp, true)
+    return () => {
+      mo.disconnect()
+      cancelAnimationFrame(raf)
+      box.removeEventListener("pointerdown", onDown, true)
+      window.removeEventListener("pointerup", onUp, true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveSoon])
 
   /* SHIFT+SPACE OVER A PANEL, AND ESC (L5). Blender 2.7's key: it maximizes
      the panel under the pointer, or restores. Esc restores. Not while typing.

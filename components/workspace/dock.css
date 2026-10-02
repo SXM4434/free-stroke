@@ -90,3 +90,21 @@
   overflow: hidden;
 }
 
+/* THE MAXIMIZED DOCK IS FILLED (CLOUD-LAYOUT). Unmaximized, the Timeline's
+   content is as tall as it is and the dock follows it (dock-shell.tsx,
+   `fitDock`). Maximized, the content takes the whole panel and every box
+   marked `data-take-fill` on the way down to the open key lanes grows, so
+   the lanes, not a blank band, take the height the dock has left. */
+:root[data-fs-dock-max="1"] [data-dock-host="timeline"] [data-take-panel] {
+  height: 100%;
+}
+:root[data-fs-dock-max="1"] [data-dock-host="timeline"] [data-take-fill] {
+  flex: 1 1 0%;
+}
+/* With the lanes filling the maximized dock, its two bottom rows run under
+   the floating preview's corner: the Keyframes row (the camera picker at its
+   right end) and the timing note keep the preview's width clear. */
+:root[data-fs-dock-max="1"][data-fs-preview="1"] [data-dock-host="timeline"] [data-key-lanes-row],
+:root[data-fs-dock-max="1"][data-fs-preview="1"] [data-dock-host="timeline"] [data-testid="timing-note"] {
+  padding-right: var(--fs-preview-reserve, 384px);
+}

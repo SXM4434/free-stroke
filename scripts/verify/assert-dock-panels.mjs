@@ -34,6 +34,20 @@
 //   R5  the 3D canvas fills its panel within 1 px folded and open (no band
 //       under it any more), and folding gives the height back. must-fail: the
 //       same comparison against the pre-L3 band (`pb-16`, 64 px) goes red.
+//   R6  (CLOUD-LAYOUT) THE DOCK FOLLOWS ITS CONTENT. In Animate with Keyframes closed, and again open,
+//       the dock is its header plus the Timeline's content (within 3 px) when that is under its cap (390 px,
+//       or 40% of a shorter shell), and the cap when it is over, so
+//       no band under the content is blank (the timing note's bottom within 3 px of the dock's), and the
+//       3D view takes the rest. must-fail: `"nofit"`, the dock kept at Animate's 390 px.
+//   R7  (CLOUD-LAYOUT) THE MAXIMIZED DOCK IS FILLED. The dock maximized at 1512x982 with Keyframes open:
+//       the lanes run to the region's bottom (lanes body bottom within 3 px of the region's), the rows
+//       grow past 36 px and stop at 64, the timing note sits on the dock's floor, and the camera picker at
+//       the Keyframes row's right end is not under the floating preview. must-fail:
+//       `__fsKeyFillMutant = "off"`, the 36 px rows and the content's height (the blank band).
+//   R8  (CLOUD-LAYOUT, the controller's 1280x800 finding) THE OPENED DOCK SHOWS EVERY STRIP ROW WHOLE. At
+//       1280x800, 1440x900 and 1512x982, the dock opened from folded in Draw: every stroke row the closed
+//       strip shows (up to 12, as assert-animation-panel R7 counts) lies inside its visible region. must-fail: `"stripcut"`, the default cap a third
+//       of the shell (251 px at 1280x800).
 //   G1  no page error.
 
 import { readFileSync } from "node:fs"
@@ -323,6 +337,102 @@ const fills = (m, band = 0) => !!m && Math.abs(m.canvas[0] - m.panel[0]) <= 1 &&
   })
   fired("R3", "the probe sees a context lost on purpose", lost > 0, `contexts lost seen: ${lost}`)
   await ctx.close()
+}
+
+// ---------------------------------------------------------------- R6, R7, R8 (CLOUD-LAYOUT)
+const DOCK_READ = () => {
+  const g = window.__dockHarness.api.getPanel("timeline").group.element.getBoundingClientRect()
+  const panel = document.querySelector('[data-dock-host="timeline"] > [data-take-panel]')
+  const head = document.querySelector("[data-fs-dock] > .dv-tabs-and-actions-container")?.getBoundingClientRect().height ?? 0
+  const note = document.querySelector('[data-dock-host="timeline"] [data-testid="timing-note"]')?.getBoundingClientRect()
+  const region = document.querySelector('[data-dock-host="timeline"] [data-take-scroll]')
+  const body = document.querySelector('[data-dock-host="timeline"] [data-key-lanes-body]')?.getBoundingClientRect()
+  const view = document.querySelector('[data-dock-panel="view3d"]')?.getBoundingClientRect()
+  const rr = region?.getBoundingClientRect()
+  const pick = document.querySelector('[data-dock-host="timeline"] [data-camera-picker]')
+  const pr = pick?.getBoundingClientRect()
+  const ph = pr && pr.width > 0 ? document.elementFromPoint(pr.left + pr.width / 2, pr.top + pr.height / 2) : null
+  return {
+    pickerHit: !!ph && (ph === pick || pick.contains(ph)),
+    shellH: document.querySelector("[data-fs-dock-box]")?.getBoundingClientRect().height ?? 0,
+    dock: g.height, dockBottom: g.bottom, head, content: panel ? panel.getBoundingClientRect().height + Math.max(0, (region?.scrollHeight ?? 0) - (region?.clientHeight ?? 0)) : null,
+    noteBottom: note?.bottom ?? null, regionBottom: rr?.bottom ?? null, bodyBottom: body?.bottom ?? null,
+    rowPx: Number(region?.getAttribute("data-key-row-px") ?? 0), viewH: view?.height ?? 0, viewBottom: view?.bottom ?? 0,
+  }
+}
+const setLanes = async (page, open) => {
+  await page.evaluate((open) => { const b = document.querySelector("[data-key-lanes]"); if (b && (b.getAttribute("data-open") === "1") !== open) b.click() }, open)
+  await settle(page, 600)
+}
+async function follows(mutant) {
+  const { ctx, page } = await open(mutant)
+  await page.evaluate(() => window.__dockHarness.workspace.switch("animate"))
+  await settle(page, 600)
+  const out = {}
+  for (const lanes of [false, true]) {
+    await setLanes(page, lanes)
+    const d = await page.evaluate(DOCK_READ)
+    const fits = d.content !== null && Math.abs(d.dock - (d.head + d.content)) <= 3
+    // Animate's cap: 390 px, or 40% of a shell too short for it (dock-shell.tsx, capPx).
+    const capped = d.content !== null && d.head + d.content > d.dock + 3 && Math.abs(d.dock - Math.min(390, Math.round(d.shellH * 0.4))) <= 2
+    const noBand = d.noteBottom !== null && Math.abs(d.dockBottom - d.noteBottom) <= 3
+    out[lanes ? "open" : "closed"] = { ok: (fits || capped) && noBand, d: `dock ${Math.round(d.dock)} px, header + content ${Math.round(d.head + (d.content ?? 0))}, blank under the note ${Math.round(d.dockBottom - (d.noteBottom ?? 0))} px, 3D view ${Math.round(d.viewH)} px` }
+  }
+  await ctx.close()
+  return out
+}
+{
+  const r = await follows(null)
+  row("R6", "Animate: the open dock is its header plus its content, nothing blank under it, Keyframes closed and open", r.closed.ok && r.open.ok, `closed: ${r.closed.d}; open: ${r.open.d}`)
+  const m = await follows("nofit")
+  fired("R6", "the dock kept at its given height", !(m.closed.ok && m.open.ok), `closed: ${m.closed.d}`)
+}
+async function filled(fillOff) {
+  const ctx = await browser.newContext({ viewport: { width: 1512, height: 982 } })
+  if (fillOff) await ctx.addInitScript(() => { window.__fsKeyFillMutant = "off" })
+  const page = await ctx.newPage()
+  page.on("pageerror", (e) => { if (!fillOff) errors.push(`R7: ${e.message}`) })
+  await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 240000 })
+  await page.waitForFunction(() => window.__styleHarness && window.__dockHarness?.maximize, null, { timeout: 240000 })
+  await page.evaluate((p) => window.__styleHarness.injectStrokes(p, { msPerPoint: 12, gapMs: 60 }), polys)
+  await page.waitForTimeout(1500)
+  await page.evaluate(() => window.__dockHarness.maximize.toggle("timeline"))
+  await settle(page, 400)
+  await setLanes(page, true)
+  const d = await page.evaluate(DOCK_READ)
+  await ctx.close()
+  const ok = d.bodyBottom !== null && Math.abs(d.regionBottom - d.bodyBottom) <= 3 && d.rowPx > 36 && d.rowPx <= 64 && Math.abs(d.dockBottom - d.noteBottom) <= 3 && d.pickerHit
+  return { ok, d: `camera picker reachable ${d.pickerHit}, rows ${d.rowPx} px, lanes end ${Math.round((d.regionBottom ?? 0) - (d.bodyBottom ?? 0))} px above the region's bottom, note ${Math.round(d.dockBottom - (d.noteBottom ?? 0))} px above the dock's floor` }
+}
+{
+  const r = await filled(false)
+  row("R7", "the maximized dock: the lanes take the height left, rows 36 to 64 px, the note on the floor", r.ok, r.d)
+  const m = await filled(true)
+  fired("R7", "the lanes at 36 px rows and their content's height", !m.ok, m.d)
+}
+async function stripWhole(mutant) {
+  const out = []
+  for (const size of [[1280, 800], [1440, 900], [1512, 982]]) {
+    const { ctx, page } = await open(mutant, size)
+    await page.evaluate(() => window.__dockHarness.dock.open("timeline"))
+    await settle(page, 600)
+    const r = await page.evaluate(() => {
+      const region = document.querySelector('[data-dock-host="timeline"] [data-take-scroll]')?.getBoundingClientRect()
+      const rows = [...document.querySelectorAll('[data-dock-host="timeline"] [data-take-row]')].map((e) => e.getBoundingClientRect())
+      const cut = rows.filter((b) => b.top < region.top - 0.5 || b.bottom > region.bottom + 0.5).length
+      return { rows: rows.length, cut, dock: window.__dockHarness.api.getPanel("timeline").group.element.getBoundingClientRect().height }
+    })
+    // The closed band shows up to 12 rows (144 px) and scrolls past that, by design (assert-animation-panel R7).
+    out.push({ size: size.join("x"), ok: r.rows > 0 && r.rows - r.cut >= Math.min(12, r.rows), ...r })
+    await ctx.close()
+  }
+  return out
+}
+{
+  const r = await stripWhole(null)
+  row("R8", "the dock opened from folded shows every strip row it shows whole (up to 12), 1280x800 to 1512x982", r.every((x) => x.ok), r.map((x) => `${x.size}: dock ${Math.round(x.dock)} px, ${x.rows - x.cut} of ${x.rows} rows whole`).join("; "))
+  const m = await stripWhole("stripcut")
+  fired("R8", "the default cap a third of the shell", m.some((x) => !x.ok), m.map((x) => `${x.size}: ${x.rows - x.cut} of ${x.rows} whole`).join("; "))
 }
 
 row("G1", "the page threw nothing", errors.length === 0, errors.length ? errors.slice(0, 3).join(" | ") : "0 pageerror events")

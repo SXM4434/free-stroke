@@ -639,6 +639,7 @@ export function StrokeStrip(props: StrokeStripProps & { ctx: StrokeTakeContextVa
       data-ease={ease}
       data-ripple={take.ripple ? "1" : "0"}
       data-length-ms={keys ? lengthMs.toFixed(3) : undefined}
+      data-take-fill={shared && lanesOpen ? "" : undefined}
       className="flex min-h-0 flex-col border-b border-border/60 px-3 pb-2 pt-1.5"
     >
       <div className="mb-1.5 flex shrink-0 items-center justify-between gap-3">

@@ -14712,8 +14712,12 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
           found nothing. */}
       {docked && transportHost && createPortal(<TransportRow {...transportProps} docked />, transportHost)}
       {docked && timelineHost && createPortal(
-        <div data-take-panel className="flex h-full min-h-0 flex-col">
-          <div className="flex min-h-0 flex-1 flex-col">{takeTimeline}</div>
+        /* AS TALL AS ITS CONTENT, up to the panel (CLOUD-LAYOUT). The dock reads
+           this box's height and sizes itself to it, so nothing under the strip
+           and the keys is blank dock. Maximized, `dock.css` stretches it and
+           the open lanes take what is left (key-lanes.tsx, KEY_ROW_PX_GROW_MAX). */
+        <div data-take-panel className="flex max-h-full min-h-0 flex-col">
+          <div data-take-fill className="flex min-h-0 flex-col">{takeTimeline}</div>
           {timingNote}
         </div>,
         timelineHost,

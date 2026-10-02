@@ -4,6 +4,7 @@
 //
 //   FS_PORT=3138 FS_HEADED=0 node scripts/verify/assert-key-lanes.mjs
 //   FS_PORT=3138 FS_HEADED=0 node scripts/verify/assert-key-lanes.mjs --nokeys-only --base=ea31c5b38
+//   FS_PORT=3138 FS_HEADED=0 node scripts/verify/assert-key-lanes.mjs --no-base   # no base file: row 11 FAILS
 //
 // The second form records row 11's base: the no-keys frame hashes, written to
 // docs/verification/keyframes/nokeys-base.json. The first form runs all 16 rows.
@@ -89,7 +90,11 @@ if (NOKEYS_ONLY && !baseArg) refuse(`--nokeys-only needs --base=${KEYS_BASE}, th
 if (NOKEYS_ONLY && baseArg !== KEYS_BASE) refuse(`--base=${baseArg}: row 11's base is ${KEYS_BASE}`)
 // Compare: a missing or unlabelled base is refused before any server is read.
 let baseRec = null
-if (!NOKEYS_ONLY) {
+// --no-base (CLOUD-LAYOUT): a tree with no row-11 base file to hand runs the other rows; row 11 then
+// FAILS as "no nokeys-base.json", by its own rule, and the run cannot exit 0. It never reads as a pass.
+const NO_BASE = process.argv.includes("--no-base")
+if (NO_BASE && !NOKEYS_ONLY) console.log("NO BASE: --no-base given, row 11 is not compared and FAILS; every other row runs")
+if (!NOKEYS_ONLY && !NO_BASE) {
   if (!existsSync(BASE_FILE)) refuse(`${BASE_FILE} is missing; record it with --nokeys-only --base=${KEYS_BASE} against a clean ${KEYS_BASE} server`)
   baseRec = JSON.parse(readFileSync(BASE_FILE, "utf8"))
   if (!(typeof baseRec.sha === "string" && /^[0-9a-f]{40}$/.test(baseRec.sha))) refuse(`${BASE_FILE} has no stored sha (got ${JSON.stringify(baseRec.sha)}); record it again with --nokeys-only --base=${KEYS_BASE}`)
@@ -116,7 +121,7 @@ if (NOKEYS_ONLY) {
 let self11 = false
 if (!NOKEYS_ONLY)
   try {
-    self11 = baseRec.sha === srv.head || !codeDiffers(srv, baseRec.sha)
+    self11 = !!baseRec && (baseRec.sha === srv.head || !codeDiffers(srv, baseRec.sha))
   } catch (e) {
     refuse(e.message)
   }
@@ -942,7 +947,7 @@ try {
     const graded = rows.filter((r) => !r.self)
     const selfRows = rows.filter((r) => r.self)
     const pass = graded.filter((r) => r.pass).length
-    writeFileSync(join(OUT, "assert-key-lanes.json"), JSON.stringify({ url: LAB_URL, at: new Date().toISOString(), server: srv, base: { sha: baseRec.sha, recordedFrom: baseRec.recordedFrom }, lengthMs: L, pass, graded: graded.length, self: selfRows.map((r) => r.id), of: rows.length, rows }, null, 2))
+    writeFileSync(join(OUT, "assert-key-lanes.json"), JSON.stringify({ url: LAB_URL, at: new Date().toISOString(), server: srv, base: { sha: baseRec?.sha ?? null, recordedFrom: baseRec?.recordedFrom ?? null }, lengthMs: L, pass, graded: graded.length, self: selfRows.map((r) => r.id), of: rows.length, rows }, null, 2))
     console.log(`\n${pass}/${graded.length} graded rows pass; ${selfRows.length} SELF, not graded${selfRows.length ? ": " + selfRows.map((r) => `${r.id} ${r.name}`).join("; ") : ""}; ${rows.length} of 16 rows`)
     process.exitCode = pass === graded.length && graded.length + selfRows.length === 16 ? 0 : 1
   }

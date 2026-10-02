@@ -64,20 +64,30 @@ export const KEY_GUTTER_PX = 84
  *  button: too small to grab, his "hot mess" (rulings 2026-09-26). */
 const KEY_ROW_PX_MIN = 32
 const KEY_ROW_PX_MAX = 36
+/** CLOUD-LAYOUT: in the maximized dock the open lanes take the height the
+ *  dock has left and the rows share it, from 36 px up to this cap. Past the
+ *  cap the rest of the height stays lane area: the quarter lines and the
+ *  playhead run to the region's bottom. 64 px is the tallest row that still
+ *  reads as one row of keys, not a band; at 1512x982 the seven take lanes
+ *  get 64 px each. */
+export const KEY_ROW_PX_GROW_MAX = 64
 /** The must-fail arm of scripts/verify/assert-hit-targets.mjs: the pre-L6
  *  sizes, read once. Nothing but that gate sets it. */
 const HIT_OLD = typeof window !== "undefined" && (window as unknown as { __fsHitMutant?: string }).__fsHitMutant === "old"
-function useKeyRowPx(): number {
-  const read = () =>
-    HIT_OLD ? 12 : typeof document !== "undefined" && document.documentElement.dataset.fsDockMax === "1" ? KEY_ROW_PX_MAX : KEY_ROW_PX_MIN
-  const [px, setPx] = useState(read)
+/** The must-fail arm of CLOUD-LAYOUT's fill rows (assert-key-lanes row 17):
+ *  the maximized dock's lanes keep their 36 px rows and their content's height. */
+const FILL_OFF = typeof window !== "undefined" && (window as unknown as { __fsKeyFillMutant?: string }).__fsKeyFillMutant === "off"
+const readDockMax = () => typeof document !== "undefined" && document.documentElement.dataset.fsDockMax === "1"
+function useKeyRowPx(): { px: number; dockMax: boolean } {
+  const read = () => ({ px: HIT_OLD ? 12 : readDockMax() ? KEY_ROW_PX_MAX : KEY_ROW_PX_MIN, dockMax: readDockMax() })
+  const [v, setV] = useState(read)
   useEffect(() => {
-    const mo = new MutationObserver(() => setPx(read()))
+    const mo = new MutationObserver(() => setV(read()))
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-fs-dock-max"] })
-    setPx(read())
+    setV(read())
     return () => mo.disconnect()
   }, [])
-  return px
+  return v
 }
 /** The disclosure row. Closed, this is all the lanes add. */
 export const KEY_ROW_PX = 22
@@ -562,7 +572,12 @@ export interface KeyLanesProps {
 }
 
 export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, lead, leadMaxPx = 0 }: KeyLanesProps) {
-  const PITCH = useKeyRowPx()
+  const { px: rowPx, dockMax } = useKeyRowPx()
+  /** The maximized dock's lanes fill it (CLOUD-LAYOUT): the region's height, read live. */
+  const fill = dockMax && open && !HIT_OLD && !FILL_OFF
+  const [regionPx, setRegionPx] = useState(0)
+  /** The band's height above the lanes in the shared region (it is not capped there). */
+  const [leadPx, setLeadPx] = useState(0)
   const { keys, setKeys, liveRef, mode } = ctx
   const [sel, setSel] = useState<Sel | null>(null)
   const [span, setSpan] = useState<Sel | null>(null)
@@ -808,7 +823,12 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
   const clampShown = clamp !== null && (widthTrack?.length ?? 0) > 0
   // The Width row's note line is always reserved (see its render), so it always counts: a clamp
   // appearing must not change the lanes' height and reframe the canvas.
-  const bodyH = allLanes.length * PITCH + (headed ? groups.length * GROUP_H : 0) + (curveShown ? CURVE_H : 0) + NOTE_H
+  const fixedH = (headed ? groups.length * GROUP_H : 0) + (curveShown ? CURVE_H : 0) + NOTE_H
+  const PITCH =
+    fill && regionPx > 0 && allLanes.length > 0
+      ? Math.max(rowPx, Math.min(KEY_ROW_PX_GROW_MAX, Math.floor((regionPx - leadPx - fixedH) / allLanes.length)))
+      : rowPx
+  const bodyH = allLanes.length * PITCH + fixedH
   const spanKey = curveShown ? `${openSpan.prop}:${openSpan.i}` : ""
   useEffect(() => {
     const body = bodyRef.current
@@ -834,10 +854,20 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
   useEffect(() => {
     const el = scrollRef.current
     if (!el || typeof ResizeObserver === "undefined") return
-    const ro = new ResizeObserver(readMore)
+    const measure = () => {
+      setRegionPx(el.clientHeight)
+      const body = bodyRef.current
+      if (body) setLeadPx(Math.round(body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop))
+    }
+    const ro = new ResizeObserver(() => {
+      readMore()
+      measure()
+    })
     ro.observe(el)
+    if (el.firstElementChild) ro.observe(el.firstElementChild)
+    measure()
     return () => ro.disconnect()
-  }, [])
+  }, [open])
   const fadeTop = more === "above" || more === "both"
   const fadeBottom = more === "below" || more === "both"
   const mask = more
@@ -994,17 +1024,20 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
   const sk = selKey ? trackOf(selKey.prop)[selKey.i] : null
 
   return (
-    <div data-key-lanes-root className="flex min-h-0 flex-col">
+    <div data-key-lanes-root data-take-fill={fill ? "" : undefined} className="flex min-h-0 flex-col">
       <div
         ref={scrollRef}
         data-take-scroll
+        data-take-fill={fill ? "" : undefined}
+        data-key-row-px={PITCH}
         data-take-more={more || undefined}
         onScroll={readMore}
         // -mr/pr: a key at the axis end is centred on 100%, and the region clips x.
         // 6 px of the strip's 12 px padding keeps its right half without moving the axis.
         className="-mr-1.5 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain pr-1.5"
         style={{
-          maxHeight: `${leadMaxPx + (open ? bodyH : 0)}px`,
+          // Filling the maximized dock, the region is what the dock leaves, not its content.
+          maxHeight: fill ? undefined : `${leadMaxPx + (open ? bodyH : 0)}px`,
           maskImage: mask,
           WebkitMaskImage: mask,
           // A row scrolled into view stops clear of the 16 px fade, not under it.
@@ -1013,7 +1046,14 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
       >
       {lead}
       {open && (
-        <div ref={bodyRef} data-key-lanes-body className="relative" onKeyDown={onRootKey}>
+        <div
+          ref={bodyRef}
+          data-key-lanes-body
+          className="relative"
+          // Past the rows' cap the lanes' area still runs to the region's bottom.
+          style={fill && regionPx > 0 ? { minHeight: `${Math.max(0, regionPx - leadPx)}px` } : undefined}
+          onKeyDown={onRootKey}
+        >
           <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0" style={{ left: `${KEY_GUTTER_PX}px` }}>
             {[0.25, 0.5, 0.75].map((q) => (
               <div key={q} className="absolute inset-y-0 w-px bg-border/70" style={{ left: `${q * 100}%` }} />
@@ -1042,7 +1082,7 @@ export function KeyLanes({ ctx, open, onToggle, lengthMs, playhead, freezeAxis, 
       )}
       </div>
 
-      <div className="flex min-w-0 shrink-0 items-center gap-2" style={{ height: `${KEY_ROW_PX}px` }} onKeyDown={onRootKey}>
+      <div data-key-lanes-row className="flex min-w-0 shrink-0 items-center gap-2" style={{ height: `${KEY_ROW_PX}px` }} onKeyDown={onRootKey}>
         <button
           type="button"
           data-key-lanes
