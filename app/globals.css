@@ -1,0 +1,328 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+/* ⚠ THESE TOKENS ARE COMPLETE AND NOTHING CAN REACH THEM — READ THIS BEFORE
+ * "JUST MOUNTING THE THEME PROVIDER".
+ *
+ * Every dark token below is defined, `@custom-variant dark` above keys the
+ * `dark:` variants off a `.dark` ancestor, `next-themes` is a dependency
+ * (package.json:54) and `components/theme-provider.tsx` exists — and it is
+ * mounted NOWHERE. `app/layout.tsx` renders a bare `<html lang="en">`, so no
+ * element in the product ever carries `.dark` and this whole block is dead.
+ *
+ * IT WAS NOT WIRED UP HERE, AND THE REASON IS MEASURED RATHER THAN AESTHETIC.
+ * The 3D viewport — the right HALF of the screen — paints its own background
+ * from three hardcoded light literals, none of them in a theme-able file:
+ *
+ *   components/viewport-3d.tsx:8136  style={{ background: "#fafafa" }}   (3-up)
+ *   components/viewport-3d.tsx:8228  style={{ background: … "#fafafa" }} (single)
+ *   components/viewport-3d.tsx:345   STILL_PAPER = "#fafafa"
+ *   components/viewport-3d.tsx:10168 ctx.fillStyle = "#fff"              (PNG export)
+ *
+ * So mounting the provider would produce a dark shell against a hard-white 3D
+ * pane, seamed down the middle of the app — visibly broken, and worse than the
+ * light-only product we have. `components/viewport-3d.tsx` belongs to another
+ * lane, so the four literals cannot be touched from here.
+ *
+ * WHAT IT ACTUALLY TAKES, so the next pass does not rediscover it:
+ *   1. those four literals become tokens (viewport-3d.tsx's owner);
+ *   2. the scene rig is judged on the dark paper — `lib/registers.ts` lighting
+ *      is tuned against #fafafa, and a mark lit for white paper reads as a
+ *      silhouette on black;
+ *   3. THEN `<ThemeProvider>` in layout.tsx, with `suppressHydrationWarning`
+ *      on `<html>` (next-themes writes the class before paint and React will
+ *      otherwise log a hydration mismatch on every load);
+ *   4. the PNG export decides whether it follows the theme or stays white —
+ *      an exported asset that changes colour with the app's theme is its own
+ *      defect class.
+ * Steps 1 and 2 are the work. Step 3 is the part that looks like the work.
+ */
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.145 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.145 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.396 0.141 25.723);
+  --destructive-foreground: oklch(0.637 0.237 25.331);
+  --border: oklch(0.269 0 0);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.439 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(0.269 0 0);
+  --sidebar-ring: oklch(0.439 0 0);
+}
+
+@theme inline {
+  --font-sans: 'Geist', 'Geist Fallback';
+  --font-mono: 'Geist Mono', 'Geist Mono Fallback';
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    -webkit-text-size-adjust: 100%;
+  }
+  ::selection {
+    background: oklch(0.145 0 0 / 0.9);
+    color: oklch(1 0 0);
+  }
+  .dark ::selection {
+    background: oklch(0.985 0 0 / 0.9);
+    color: oklch(0.145 0 0);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Motion + control substrate for the product shell.
+ *
+ * Easing: the built-in CSS easings are too weak to read as intentional, so all
+ * shell motion uses strong custom curves (emil-design-eng):
+ *   --ease-out-strong   entering / exiting / feedback  (starts fast)
+ *   --ease-in-out-strong on-screen movement            (natural accel/decel)
+ * ------------------------------------------------------------------------- */
+:root {
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-strong: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+/* Pressable: instant press feedback (emil: buttons must feel responsive;
+ * press feedback 100–160ms, ease-out, subtle 0.95–0.98 scale). */
+.fs-press {
+  transition: transform 160ms var(--ease-out-strong);
+  user-select: none;
+}
+.fs-press:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* KEYBOARD FOCUS, ON THE THREE CONTROL PRIMITIVES.
+ *
+ * Every control in the product shell is one of `.fs-press`, `.fs-slider` or
+ * `.fs-switch`, and not one of them defined a focus state — so a keyboard user
+ * tabbing the app got only the UA default ring, and on the one control that DID
+ * style focus (the export filename field) the default was removed and replaced
+ * with a `foreground/20` ring you cannot see. `:focus-visible` rather than
+ * `:focus` so a mouse press never draws a ring, which is the reason the default
+ * gets deleted in the first place.
+ *
+ * The offset is 2px on buttons and 4px on sliders because a slider's hit area
+ * is a 4px-tall track with a 14px thumb standing proud of it; a 2px offset
+ * clips against the thumb. */
+.fs-press:focus-visible,
+.fs-slider:focus-visible,
+.fs-switch:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.fs-slider:focus-visible {
+  outline-offset: 4px;
+}
+/* The thumb grows on keyboard focus as well as on drag, so the control the
+ * ring belongs to is unambiguous when several sit in a row. */
+.fs-slider:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+
+/* Soft slider: one consistent slider across the whole app. */
+.fs-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--border);
+  cursor: pointer;
+  outline-offset: 4px;
+}
+.fs-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--background);
+  border: 1px solid oklch(0 0 0 / 0.18);
+  box-shadow:
+    0 1px 2px oklch(0 0 0 / 0.12),
+    0 1px 4px oklch(0 0 0 / 0.08);
+  transition: transform 160ms var(--ease-out-strong);
+}
+.fs-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--background);
+  border: 1px solid oklch(0 0 0 / 0.18);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.12);
+  transition: transform 160ms var(--ease-out-strong);
+}
+.fs-slider:active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.fs-slider:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* iOS-style switch built on a native checkbox (keyboard + a11y for free). */
+.fs-switch {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  width: 30px;
+  height: 18px;
+  border-radius: 9999px;
+  background: var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 160ms var(--ease-out-strong);
+}
+.fs-switch::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--background);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.2);
+  /* State morph on screen → strong ease-out, 160ms (state-change feedback). */
+  transition: transform 160ms var(--ease-out-strong);
+}
+.fs-switch:checked {
+  background: var(--foreground);
+}
+.fs-switch:checked::before {
+  transform: translateX(12px);
+}
+.fs-switch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* Panel content entrance: tab switches are frequent (tens/day), so the motion
+ * is drastically reduced — 120ms, 3px rise, strong ease-out (entering). */
+.fs-panel-enter {
+  animation: fs-panel-enter 120ms var(--ease-out-strong);
+}
+@keyframes fs-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fs-panel-enter {
+    animation-duration: 1ms;
+  }
+  .fs-press,
+  .fs-press:active:not(:disabled) {
+    transition: none;
+    transform: none;
+  }
+}

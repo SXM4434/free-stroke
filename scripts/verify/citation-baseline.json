@@ -1,0 +1,24 @@
+{
+  "_": "THE CITATION RATCHET'S GROUND, kept OUT of assert-citations.mjs on purpose — Lane O's mechanism, copied not reinvented (see one-knob-baseline.json). The rot this pins lives in components/viewport-3d.tsx, lib/flat-ink.ts, lib/style-system.ts and app/desk-doodles/page.tsx, which are held by OTHER LANES: a lane that fixes a citation must be able to record the gain without owning this gate, or the number drifts upward from reality until nobody believes it. Run `node scripts/verify/assert-citations.mjs --record`. It writes the CURRENT measurement and REFUSES, writing nothing, if any count would RISE or if any non-ratchet channel is red. Do not hand-edit these numbers upward — that is the one move the mechanism exists to prevent.",
+  "seededAt": "2026-08-07",
+  "seededFrom": "Lane AA's first honest measurement, taken after SCAN was widened from 7 hand-listed engine modules to the whole application source tree (app/ components/ hooks/ lib/, 123 files, 1157 citations). The previous SCAN carried 14 of the source tree's 144 `:line` citations — 9.7%. These three numbers are what the gate reported on that first run; NOT ONE OF THEM WAS FIXED TO GET THERE, and every one is a real finding routed to its owning lane in explainer 46.",
+  "stale": 26,
+  "missing": 17,
+  "uncheckable": 35,
+  "notAPath__": "RULINGS: tokens that LOOK like a path and are not a claim about a location. Explainer 34 §3's pattern, one level down — no analyser can tell `assert-hero-letters.mjs` (a false claim that a gate exists) from `rough.js` (a library named in a sentence), because the difference is whether the author was citing something. So the ruling is human and written down; the machine owns only that it cannot rot silently. Every entry prints EVERY RUN. An entry whose token becomes RESOLVABLE fails; an entry nothing cites any more fails. Each was read at its citation site before being written here.",
+  "notAPath": {
+    "rough.js": "The roughjs drawing library, named in prose in the ported coverage math — `no DOM, no rough.js, no deps` and `Murray-Davies; rough.js scanline`. A library name in a sentence, never a path; the npm package is `roughjs`, and nothing in this repo imports it.",
+    "Next.js": "The framework, named in prose — `Next.js's global \"Application error\" screen`. A product name that happens to end in `.js`.",
+    "three.core.js": "A bundle file INSIDE the installed `three` package (r175), cited by line for a runtime read of the renderer's own source. Real, third-party, and not a path in this repo; `node_modules` is pruned from the index by design.",
+    "WebGLRenderer.js": "Same: three's own renderer source, named while quoting what it does to a uniform every frame.",
+    "react-three-fiber.esm.js": "Same: the installed @react-three/fiber bundle, cited by line for the resize behaviour read out of it.",
+    "react-dom-client.production.js": "Same: React DOM's production bundle, named as the thing a shipped build does NOT carry a reader for.",
+    "dialkit/dist/index.js": "A third-party package's built bundle, cited by line (`:892`) for the object it allocates each frame. A `dist/` path inside a dependency, not a repo path.",
+    "dist/cjs/index.js": "Same shape — a dependency's built output, named relative to that package's own root.",
+    "github.com/spite/ccapture.js": "A URL to a project on GitHub. The `.js` is part of the project's NAME (CCapture.js); there is no file here.",
+    ".next/types/app/desk-doodles/page.ts": "A generated build artifact, quoted verbatim INSIDE a tsc error message the comment is reproducing (`page.ts(14,13): error TS2344`). It exists only in a `.next` build directory and is deliberately not in the index.",
+    "docs/API.md": "ANOTHER project's documentation — the comment says so on the same line: `Source: VAST-AI-Research tripo-python-sdk docs/API.md`. A path relative to a third-party SDK's repo.",
+    "desk-doodles/docs/locked-refs/.../09-LOCKED-MODEL.md": "The `...` is the author's own ELISION of a long path, written as an ellipsis on purpose. Not a path that rotted — a path that was abbreviated. The file it elides is real: docs/locked-refs/F3-smart-hachure-system/09-LOCKED-MODEL.md in the Desk Doodles checkout."
+  },
+  "measuredAt": "2026-09-05"
+}

@@ -1,0 +1,36 @@
+SOURCE_URL: https://aejuice.com/blog/how-to-animate-handwriting-in-after-effects/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: aejuice.com guide to animating handwriting in After Effects including trim paths, wiggle, and timing techniques
+
+# Animating Handwriting in After Effects
+
+## Main Approaches
+
+The guide outlines eight essential methods for creating animated handwriting effects:
+
+1. Font Selection: "Choose a font that resembles handwriting to create a realistic effect. Fonts like 'Brush Script' or 'Marker Felt' work well"
+
+2. Hand-Drawn Text: Using the pen tool to manually trace letters creates a more organic appearance than standard text layers.
+
+3. Trim Paths: The article recommends applying the Trim Paths effect and animating the end value to "reveal the strokes gradually."
+
+4. Wiggle Expression: Adding subtle movement variations using the expression "wiggle(freq, amp)" simulates natural handwriting imperfections.
+
+5. Keyframe Animation: Experimenting with timing and spacing while using ease in/out functions (F9) creates realistic acceleration effects.
+
+6. Visual Enhancement: Applying glows or blur effects adds depth to the animation.
+
+7. Timing Refinement: The Graph Editor helps fine-tune speed curves for smooth transitions.
+
+8. Audio Design: Adding pen-writing sound effects enhances realism and viewer engagement.
+
+## Trim Paths in Context
+
+Trim Paths is presented as one of eight techniques, used in combination with font selection, hand-drawn geometry, and motion refinement. The article does not discuss limitations of trim paths or suggest alternative methods—it presents trim paths as a recommended technique for this type of animation work.
+
+---
+
+## Analysis
+
+This tutorial treats trim paths as a straightforward and effective animation tool, placing it within a broader workflow that includes hand-drawn geometry, timing refinement, and sound design. It does not engage with why the pure trim path technique might look artificial for handwriting, or offer critique of the method's visual output.

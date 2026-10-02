@@ -1,0 +1,13 @@
+[youtube] Extracting URL: https://www.youtube.com/watch?v=ylp_DPjdFOw
+[youtube] ylp_DPjdFOw: Downloading webpage
+[youtube] ylp_DPjdFOw: Downloading android vr player API JSON
+[youtube] ylp_DPjdFOw: Downloading player bed7a914-main
+[youtube] [jsc:deno] Solving JS challenges using deno
+[youtube] ylp_DPjdFOw: Downloading m3u8 information
+[youtube] Downloading comment section API JSON
+[youtube] Downloading ~2 comments
+[youtube] Sorting comments by top
+[youtube] Downloading comment API JSON page 1 (0/~2)
+[youtube] Extracted 2 comments
+[info] ylp_DPjdFOw: Downloading 1 format(s): 137+140
+[info] Writing video metadata as JSON to: paper-street-stopmotion.info.json
