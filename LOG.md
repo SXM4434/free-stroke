@@ -7,7 +7,8 @@ Branch `cloud/hero-real`, cut from the snapshot 2cc9e98. Nothing under `docs/thi
 ## Commits
 
 - 8fab4a2 · capture: RETURN.mode is "identical", as the model says (fix 2, pushed)
-- this commit · LOG.md
+- e0bd5a7 · LOG.md
+- this commit · LOG.md: the second fix 1 trial, and a correction
 
 Fix 1 is NOT committed. See below.
 
@@ -33,7 +34,14 @@ It cannot land with every listed check green, for two reasons:
 
 Trial, not committed (dwell `flat: 1`, `jointBreak: opened`, everything else kept): the ink row in `assert-hero-return` turns green (11/13). `assert-flip-pose` drops to 7/8 with ID-LIVE red: the lab and `/` disagree in the dwell. In the browser this also risks the ghost.
 
-The question went to the user and came back undecided, so the return is left as ruled. To land fix 1, someone has to lift either the F118 ruling or the flip-pose.ts rule. Then the change is that one dwell edit in `sampleReturn`, plus the same edit in `flipPoseAt` so ID-LIVE stays exact.
+Second trial, not committed: the same dwell edit in both `sampleReturn` and `flipPoseAt` (`ink: 1` at `lib/flip-pose.ts:316`). The ink row is green and ID-LIVE holds, but `assert-flip-pose` is still 7/8, now with ID-FLIP red. ID-FLIP holds `flipPoseAt` to a frozen copy of `sampleReturn` at 9df4eb486 (`scripts/verify/assert-flip-pose.mjs:181-183`, `flat: 0` in the dwell). An earlier note in this session said editing both files would keep flip-pose at 8/8. That was wrong.
+
+So fix 1 cannot be green on every listed check unless the frozen reference is changed too. That is a ruling, not a fix. The question went to the user twice and came back undecided both times, so the return is left as ruled. To land fix 1, three things have to be ruled:
+1. the F118 ghost ruling is lifted,
+2. `lib/flip-pose.ts` may change,
+3. ID-FLIP's frozen return may be re-frozen with the dwell at ink 1.
+
+Then the change is one dwell edit in each of `sampleReturn` and `flipPoseAt`, plus that one line in the frozen copy. Keeping the carve off on the two dwell frames would need a separate rule.
 
 ## Checks (Node; before = 2cc9e98, after = this branch)
 
