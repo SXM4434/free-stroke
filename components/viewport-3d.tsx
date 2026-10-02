@@ -9595,12 +9595,17 @@ function Scene({
          * itself, drew the pace (measured: `performed` null on all 12 strokes
          * inside a kept dwell). */
         ...(r.performed !== undefined ? { performed: r.performed } : {}),
+        /* Coverage row 31 · the same lesson: a field this copy does not name
+         * never reaches the stage. */
+        ...(r.reverse === true && ko !== "reverse" ? { reverse: true } : {}),
       }
     }
     const lifts = liftsLandBetweenStrokes(schedule, revealWindow.mode)
+    /* Coverage row 32 · the max gap rides through too, with no rows at all. */
+    const gap = take!.maxGapMs !== undefined && ko !== "maxGap" ? { maxGapMs: take!.maxGapMs } : {}
     return buildTimedSchedule(
       schedule,
-      { strokes: rows, ripple: take!.ripple },
+      { strokes: rows, ripple: take!.ripple, ...gap },
       {
         baseMs: computedDuration,
         pace: paceFromCurve((c) =>
@@ -12442,7 +12447,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
       return false
     }
     w.__fsTake = {
-      set: (rows: Record<number, unknown>, opts?: { ripple?: boolean }) => {
+      set: (rows: Record<number, unknown>, opts?: { ripple?: boolean; maxGapMs?: number }) => {
         if (!rows || typeof rows !== "object") return false
         const strokes: StrokeTimingTake["strokes"] = {}
         for (const k of Object.keys(rows)) {
@@ -12452,7 +12457,8 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
           if (!rowOk(r)) return false
           strokes[i] = { ...r }
         }
-        setTake({ strokes, ripple: !!opts?.ripple })
+        const gap = typeof opts?.maxGapMs === "number" ? { maxGapMs: opts.maxGapMs } : {}
+        setTake({ strokes, ripple: !!opts?.ripple, ...gap })
         return true
       },
       clear: () => {
@@ -12460,7 +12466,7 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
         return true
       },
       knockout: (name: string | null) => {
-        const ok = [null, "slope", "clock", "speed", "delay", "holdBack", "ease", "exportpen"]
+        const ok = [null, "slope", "clock", "speed", "delay", "holdBack", "ease", "exportpen", "reverse", "maxGap"]
         if (!ok.includes(name)) return false
         setTakeKnockout(name)
         return true

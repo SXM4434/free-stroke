@@ -53,6 +53,21 @@ async function loadBase() {
   }
 }
 
+/* A file read the way `_ts-load.mjs` would hand it over, mutants applied, for
+ * the one source check that reads a file no Node module can load (a .tsx). */
+function readMutated(rel) {
+  const src = readFileSync(join(ROOT, rel), "utf8")
+  const f = process.env.GATE_MUTATE_FILE
+  const edits = f ? JSON.parse(readFileSync(f, "utf8"))[rel] : null
+  if (!edits) return src
+  let out = src
+  for (const e of [...edits].sort((x, y) => y.pos - x.pos)) {
+    if (e.was != null && src.slice(e.pos, e.end) !== e.was) throw new Error(`stale mutant offset in ${rel}`)
+    out = out.slice(0, e.pos) + e.text + out.slice(e.end)
+  }
+  return out
+}
+
 const rows = []
 function row(id, ok, what, detail) {
   rows.push({ id, ok: !!ok, what, detail })
@@ -500,6 +515,36 @@ async function runRows() {
     row("TAP-SIG", a !== b && a === c, "the schedule's cache key follows the taps, so a new tap rebuilds what reads it", `[3,0] vs [0,3] differ ${a !== b}; the same taps agree ${a === c}`)
   }
 
+  /* ── THE STAGE'S COPY: every take field reaches the viewport ───────────────
+   * `components/viewport-3d.tsx` rebuilds the take field by field before it
+   * builds the timed schedule, and a field that copy does not name never
+   * reaches the stage (ANIM-2C lost `performed` that way; this lane's reverse
+   * and max gap were lost the same way until review). A SOURCE check, not a
+   * render: the field names come from the interfaces through the TypeScript
+   * parser, and each must be read inside that copy. */
+  {
+    const tsm = (await import("typescript")).default
+    const names = (iface) => {
+      const src = tsm.createSourceFile("t.ts", readMutated("lib/stroke-timing.ts"), tsm.ScriptTarget.ES2020, true)
+      const out = []
+      src.forEachChild((nd) => {
+        if (tsm.isInterfaceDeclaration(nd) && nd.name.text === iface) for (const m of nd.members) if (m.name) out.push(m.name.getText(src))
+      })
+      return out
+    }
+    const vp = readMutated("components/viewport-3d.tsx")
+    const a = vp.indexOf("const timed = useMemo(() => {\n    if (!isTimedTake(take)) return null")
+    const b = a >= 0 ? vp.indexOf("buildTimedSchedule(", a) : -1
+    const body = a >= 0 && b > a ? vp.slice(a, vp.indexOf("}, [take", b)) : ""
+    const rowFields = names("StrokeTiming")
+    const takeFields = names("StrokeTimingTake").filter((f) => f !== "strokes")
+    const missing = [
+      ...rowFields.filter((f) => !body.includes(`r.${f}`)),
+      ...takeFields.filter((f) => !body.includes(`take!.${f}`)),
+    ]
+    row("STAGE-FIELDS", body.length > 0 && rowFields.includes("reverse") && takeFields.includes("maxGapMs") && missing.length === 0, "the viewport's copy of the take reads every StrokeTiming and StrokeTimingTake field, reverse and maxGapMs included", body ? `row fields ${rowFields.join(", ")}; take fields ${takeFields.join(", ")}; not read: ${missing.join(", ") || "none"}` : "the copy was not found in components/viewport-3d.tsx")
+  }
+
   /* ── SAVED: every new field survives the session reader, and junk is named ── */
   {
     const D = loadTs("lib/doc-store.ts")
@@ -547,6 +592,8 @@ const MUTANTS = [
   { name: "taps read under every order", file: "lib/stroke-schedule.ts", find: "if (p.order === \"tapped\") p.taps = cleanTaps(params.taps, n)", text: "if (params.taps) p.taps = cleanTaps(params.taps, n)", red: ["TAP-CLEAN"] },
   { name: "taps left out of the cache key", file: "lib/stroke-schedule.ts", find: "const taps = p.order === \"tapped\" ? `|t${(p.taps ?? []).join(\",\")}` : \"\"", text: "const taps = \"\"", red: ["TAP-SIG"] },
   { name: "the session reader drops taps", file: "lib/doc-store.ts", find: "if (taps.length) drawIn.taps = taps", text: "void taps", red: ["DOC-TAPS"] },
+  { name: "the viewport's copy drops reverse", file: "components/viewport-3d.tsx", find: "...(r.reverse === true && ko !== \"reverse\" ? { reverse: true } : {}),", text: "", red: ["STAGE-FIELDS"] },
+  { name: "the viewport's copy drops max gap", file: "components/viewport-3d.tsx", find: "const gap = take!.maxGapMs !== undefined && ko !== \"maxGap\" ? { maxGapMs: take!.maxGapMs } : {}", text: "const gap = {}", red: ["STAGE-FIELDS"] },
   { name: "stagger preset at 500 ms", file: "lib/style-system.ts", find: "stagger: { gapMs: 50 }", text: "stagger: { gapMs: 500 }", red: ["STAGGER-PRESET"] },
 ]
 
