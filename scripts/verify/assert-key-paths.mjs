@@ -318,7 +318,7 @@ const SS = "lib/style-system.ts"
 const MUTANTS = [
   { name: "the walk skips nested objects", file: KF, find: 'else if (v !== null && typeof v === "object") walk(v, path + ".")', text: 'else if (v !== null && typeof v === "object") void 0', red: ["PATHS"] },
   { name: "a range row drifts from its slider", file: SS, find: "textureScale: { min: 0.2, max: 4, step: 0.05 },", text: "textureScale: { min: 0.2, max: 5, step: 0.05 },", red: ["SLIDERS"] },
-  { name: "styleAt samples a millisecond late", file: KF, find: "into[parts[parts.length - 1]] = valueAt(track, clockMs)", text: "into[parts[parts.length - 1]] = valueAt(track, clockMs + 1)", red: ["SAMPLE"] },
+  { name: "styleAt samples a millisecond late", file: KF, find: "into[parts[parts.length - 1]] = settleStyleSample(kp, valueAt(track, clockMs)!)", text: "into[parts[parts.length - 1]] = settleStyleSample(kp, valueAt(track, clockMs + 1)!)", red: ["SAMPLE"] },
   { name: "styleAt copies the state when nothing is keyed", file: KF, find: "return (out as StyleState | null) ?? state", text: "return (out as StyleState | null) ?? { ...state }", red: ["UNKEYED"] },
   { name: "out-of-range style keys accepted", file: KF, find: "} else if (range && (k.value < range.min || k.value > range.max)) {", text: "} else if (false) {", red: ["RANGE"] },
   { name: "a curve swinging out of range accepted", file: KF, find: "if (range && out.length === 0) out.push(...reachReasons(", text: "if (false) out.push(...reachReasons(", red: ["RANGE"] },

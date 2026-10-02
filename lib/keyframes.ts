@@ -464,6 +464,23 @@ function readLeaf(state: StyleState, path: string): number {
 }
 
 /**
+ * WHERE A KEYED STYLE SAMPLE LANDS (REVIEW 1 finding 10, and CLOUD-TESTS' D6).
+ * Inside its slider's range, always: an accepted curve stays inside it by
+ * `reachReasons`, and the clamp only takes back the last ulp a bezier's
+ * rounding can carry past an end (Easy Ease reads 1.0000000000000002 a hair
+ * before a key). On a slider whose step is a whole number (`ditherLevels`,
+ * `asciiCellSize`, `ditherAngle`), on that step, counted from the range's
+ * minimum, so a label never shows a fraction the slider cannot hold and a
+ * float uniform never draws off its grid. A fractional step (0.01) is left
+ * smooth: rounding it would stair-step every ramp for nothing.
+ */
+export function settleStyleSample(r: KeyablePath, v: number): number {
+  let out = v
+  if (r.step !== undefined && r.step >= 1 && Number.isInteger(r.step)) out = r.min + Math.round((out - r.min) / r.step) * r.step
+  return out < r.min ? r.min : out > r.max ? r.max : out
+}
+
+/**
  * The style at `clockMs`: each keyed style value replaced by its sample, every
  * other value untouched. With no style value keyed it returns `state` itself,
  * so the frame reads exactly what it reads today. Nested objects are copied
@@ -487,7 +504,7 @@ export function styleAt(state: StyleState, keys: TakeKeys | undefined, clockMs: 
       into = into[parts[i]] as Record<string, unknown>
       from = next
     }
-    into[parts[parts.length - 1]] = valueAt(track, clockMs)
+    into[parts[parts.length - 1]] = settleStyleSample(kp, valueAt(track, clockMs)!)
   }
   return (out as StyleState | null) ?? state
 }

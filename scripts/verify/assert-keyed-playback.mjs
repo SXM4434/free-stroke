@@ -295,6 +295,37 @@ async function runRows() {
     row("F7-THROTTLE", end.pendingAtEnd && end.readout === 1 && pause.readout === pause.playhead, "the readout lands on the frame loop's playhead at the end of a pass and on a Pause",
       `end of pass: a write pending on the last frame ${end.pendingAtEnd}, readout ${end.readout} for playhead ${end.playhead}; Pause at 1234 ms: readout ${pause.readout.toFixed(4)} for playhead ${pause.playhead.toFixed(4)}`)
   })
+
+  /* ---- F10-STEP: keyed values on whole-number sliders land on the step ---
+   * The review's inputs: ditherLevels 2 at 0 ms to 8 at 1000 ms read 3.296 at
+   * 300 ms, asciiCellSize 4 to 24 read 8.32. Every path whose slider step is a
+   * whole number, sampled at 200 clocks over a linear and an eased ramp, reads
+   * a value on its step and inside its range; a fractional-step path
+   * (textureIntensity, step 0.01) keeps its smooth value. */
+  check("F10-STEP", "keyed values on whole-number sliders land on the slider's step", () => {
+    const whole = K.KEYABLE_PATHS.filter((p) => p.step >= 1 && Number.isInteger(p.step))
+    let off = 0, n = 0, worst = null
+    for (const p of whole) {
+      for (const ease of ["linear", "easy"]) {
+        const mk = (t, v) => (ease === "linear" ? lin(t, v) : K.makeKey(t, v))
+        const keys = K.acceptKeys({ [p.path]: [mk(0, p.min), mk(1000, p.max)] })
+        for (let i = 0; i < 200; i++) {
+          const c = (i * 1000) / 199
+          const v = K.styleAt(base, keys, c)
+          const x = p.path.split(".").reduce((o, q) => o[q], v)
+          n++
+          const onStep = Math.abs((x - p.min) / p.step - Math.round((x - p.min) / p.step)) < 1e-12 && x >= p.min && x <= p.max
+          if (!onStep) { off++; worst ??= { path: p.path, clockMs: +c.toFixed(1), value: x } }
+        }
+      }
+    }
+    const dl = K.styleAt(base, K.acceptKeys({ ditherLevels: [lin(0, 2), lin(1000, 8)] }), 300).ditherLevels
+    const ac = K.styleAt(base, K.acceptKeys({ asciiCellSize: [lin(0, 4), lin(1000, 24)] }), 216).asciiCellSize
+    const ti = K.styleAt(base, K.acceptKeys({ textureIntensity: [lin(0, 0), lin(1000, 1)] }), 333).textureIntensity
+    row("F10-STEP", whole.length >= 3 && off === 0 && dl === 4 && ac === 8 && Math.abs(ti - 0.333) < 1e-12,
+      "keyed values on whole-number sliders land on the slider's step",
+      `${whole.map((p) => p.path).join(", ")}: ${n - off}/${n} samples on their step ${worst ? JSON.stringify(worst) : ""}; ditherLevels 2 to 8 at 300 ms reads ${dl} (raw 3.8), asciiCellSize 4 to 24 at 216 ms reads ${ac} (raw 8.32); textureIntensity 0 to 1 at 333 ms stays ${ti}`)
+  })
 }
 
 /* ---- the must-fails ----------------------------------------------------- */
@@ -314,6 +345,8 @@ const MUTANTS = [
   { name: "the key clock reads the throttled readout", file: "lib/take-transport.ts", find: "  return store ? store.playheadRef.current * (store.derived()?.totalDuration ?? 0) : 0\n", text: "  return store ? store.progress.get() * (store.derived()?.totalDuration ?? 0) : 0\n", red: ["F7-CLOCK"] },
   { name: "the throttle writes the value captured when its timer was armed", file: "lib/take-transport.ts", find: "      if (pending !== null) return\n      pending = timers.setTimeout(() => {\n        pending = null\n        write(readPlayhead())\n", text: "      if (pending !== null) return\n      const armed = readPlayhead()\n      pending = timers.setTimeout(() => {\n        pending = null\n        write(armed)\n", red: ["F7-THROTTLE"] },
   { name: "a Pause does not flush the readout", file: "lib/take-transport.ts", find: "      pending = null\n      write(readPlayhead())\n    },\n    cancel() {", text: "      pending = null\n    },\n    cancel() {", red: ["F7-THROTTLE"] },
+  { name: "a keyed sample is not snapped to a whole-number step", file: "lib/keyframes.ts", find: "  if (r.step !== undefined && r.step >= 1 && Number.isInteger(r.step)) out = r.min + Math.round((out - r.min) / r.step) * r.step\n", text: "\n", red: ["F10-STEP"] },
+  { name: "every keyed sample is snapped, fractional steps too", file: "lib/keyframes.ts", find: "  if (r.step !== undefined && r.step >= 1 && Number.isInteger(r.step)) out", text: "  if (r.step !== undefined) out", red: ["F10-STEP"] },
   { name: "the GLB writes a value that never changes", file: "lib/export/glb-material-keys.ts", find: "    if (!varies(t.values)) return false\n", text: "\n", red: ["F1-GLB"] },
 ]
 
