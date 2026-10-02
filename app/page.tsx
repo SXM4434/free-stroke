@@ -705,10 +705,13 @@ export default function Home() {
   const handleDrawInChange = useCallback(
     (patch: Partial<DrawInParams>) => {
       const key = Object.keys(patch)[0] ?? "drawIn"
-      edit(`Draw-in ${humanise(key).toLowerCase()}`, null, {
-        drawIn: { ...docRef.current.drawIn, ...patch },
-      })
+      const next = { ...docRef.current.drawIn, ...patch }
+      /* CLOUD-HANDFIX, finding 2: a draw-in change moves the base slots (the
+       * tracks), so performed rows are re-stored with it, as the preset does. */
+      const rebased = gateKnocked("clock-no-rebase-drawin") ? null : rebaseForClock({ drawIn: next })
+      edit(`Draw-in ${humanise(key).toLowerCase()}`, null, rebased ? { drawIn: next, take: rebased } : { drawIn: next })
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [edit],
   )
 
@@ -825,10 +828,13 @@ export default function Home() {
   const handleRevealWindowChange = useCallback(
     (patch: Partial<RevealWindowParams>) => {
       const key = Object.keys(patch)[0] ?? "revealWindow"
-      edit(`Window ${humanise(key).toLowerCase()}`, null, {
-        revealWindow: { ...docRef.current.revealWindow, ...patch },
-      })
+      const next = { ...docRef.current.revealWindow, ...patch }
+      /* CLOUD-HANDFIX, finding 2: Grow to Travel changes `liftsLandBetweenStrokes`
+       * and with it the pace, so performed rows are re-stored with it. */
+      const rebased = gateKnocked("clock-no-rebase-window") ? null : rebaseForClock({ revealWindow: next })
+      edit(`Window ${humanise(key).toLowerCase()}`, null, rebased ? { revealWindow: next, take: rebased } : { revealWindow: next })
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [edit],
   )
 

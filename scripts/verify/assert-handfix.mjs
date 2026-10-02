@@ -163,9 +163,29 @@ async function runRows() {
     row("F1-REPROCESS", b.ok && c.ok && d.ok, "a spacing or smoothing reprocess keeps a performed stroke's on-screen slot, on either clock", `${b.detail}; ${c.detail}; ${d.detail}`)
   }
 
+  /* ---- F2 · Draw-in and Window move the base slots ----------------------- */
+  {
+    const doc = docOf({ revealEnvelope: { ...SS.REVEAL_ENVELOPE_DEFAULTS } })
+    const a = holds("Draw-in overlap 0 -> 0.3 (Natural)", doc, { drawIn: { ...doc.drawIn, overlap: 0.3 } }, "most")
+    const hand = docOf()
+    const b = holds("Draw-in overlap 0 -> 0.3 (Hand)", hand, { drawIn: { ...hand.drawIn, overlap: 0.3 } }, "most")
+    row("F2-DRAWIN", a.ok && b.ok, "a Draw-in change keeps a performed stroke's on-screen slot", `${a.detail}; ${b.detail}`)
+    const c = holds("Window Grow -> Travel (Natural)", doc, { revealWindow: { ...doc.revealWindow, mode: "travel" } }, "most")
+    const d = holds("Window Grow -> Travel (Hand)", hand, { revealWindow: { ...hand.revealWindow, mode: "travel" } }, "most")
+    row("F2-WINDOW", c.ok && d.ok, "a Window change (Grow to Travel moves the lifts and the pace) keeps a performed stroke's on-screen slot", `${c.detail}; ${d.detail}`)
+  }
+
   /* ---- WIRING: what the page hands rebaseForClock ------------------------ */
   {
     const page = readSrc("app/page.tsx")
+    const di = bodyOf(page, "const handleDrawInChange = useCallback(")
+    row("W2-DRAWIN", /const next = \{ \.\.\.docRef\.current\.drawIn, \.\.\.patch \}/.test(di) && /rebaseForClock\(\{ drawIn: next \}\)/.test(di) && /\{ drawIn: next, take: rebased \}/.test(di),
+      "page: handleDrawInChange rebases with the next draw-in and writes both in one edit",
+      di ? "read the body of handleDrawInChange" : "no handleDrawInChange in app/page.tsx")
+    const wi = bodyOf(page, "const handleRevealWindowChange = useCallback(")
+    row("W2-WINDOW", /const next = \{ \.\.\.docRef\.current\.revealWindow, \.\.\.patch \}/.test(wi) && /rebaseForClock\(\{ revealWindow: next \}\)/.test(wi) && /\{ revealWindow: next, take: rebased \}/.test(wi),
+      "page: handleRevealWindowChange rebases with the next window and writes both in one edit",
+      wi ? "read the body of handleRevealWindowChange" : "no handleRevealWindowChange in app/page.tsx")
     const edit = bodyOf(page, "const edit = useCallback(")
     row("W1-EDIT", /patchMovesNib\(docRef\.current, patch\)/.test(edit) && /rebaseForClock\(patch\)/.test(edit),
       "page: `edit` runs every patch that moves the nib (both Thickness sliders, the geometry presets, the dev dials) through rebaseForClock",
@@ -187,6 +207,9 @@ const MUTANTS = [
   { name: "the rebase reads the old strokes on the new clock", file: "lib/clock-rebase.ts", find: "const next: ClockDoc = { ...doc, ...patch }", replace: "const next: ClockDoc = { ...doc, ...patch, processedStrokes: doc.processedStrokes }", rows: ["F1-REPROCESS"] },
   { name: "edit skips the nib rebase", file: "app/page.tsx", find: "patchMovesNib(docRef.current, patch)", replace: "false", rows: ["W1-EDIT"] },
   { name: "handleReprocessed writes the strokes only", file: "app/page.tsx", find: "rebaseForClock({ processedStrokes: processed })", replace: "null", rows: ["W1-REPROCESS"] },
+  { name: "handleDrawInChange rebases on the old draw-in", file: "app/page.tsx", find: "rebaseForClock({ drawIn: next })", replace: "rebaseForClock({})", rows: ["W2-DRAWIN"] },
+  { name: "handleRevealWindowChange never rebases", file: "app/page.tsx", find: "rebaseForClock({ revealWindow: next })", replace: "null", rows: ["W2-WINDOW"] },
+  { name: "the next doc keeps the old draw-in and window", file: "lib/clock-rebase.ts", find: "const next: ClockDoc = { ...doc, ...patch }", replace: "const next: ClockDoc = { ...doc, ...patch, drawIn: doc.drawIn, revealWindow: doc.revealWindow }", rows: ["F2-DRAWIN", "F2-WINDOW"] },
   { name: "the memo forgets its canvas", file: "app/page.tsx", find: "clockCsRef.current = clocked.cs", replace: "clockCsRef.current = settingsRef.current", rows: ["W1-CS"] },
 ]
 
