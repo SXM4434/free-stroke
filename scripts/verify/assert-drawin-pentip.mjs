@@ -304,16 +304,29 @@ const PRIOR_ARM = "free-stroke-off"
  * red only when the VALUE changes, which is what this row was always about. */
 const MODE = loadTs("lib/stroke-schedule.ts").REVEAL_ENVELOPE_DEFAULTS.mode
 const BLEND = 0.4
+/* THE BLEND IS READ TOO, for the same reason as the mode. The dock layout
+ * (ruling 2026-09-26, "workspaces built on dockable panels") moved the
+ * viewport's transport `useState`s into the page's store, `lib/take-transport.ts`
+ * `TRANSPORT_DEFAULTS`, which `createTakeTransport` copies and the viewport reads
+ * through `useTransportSlot(transport, "hybridBlend")`. The grep for
+ * `setHybridBlend] = useState(0.4)` went red on that move with the value
+ * unchanged. Reading the export goes red only when the VALUE moves, and the
+ * second check keeps the viewport on the slot, so a local `useState` that
+ * shadows the store is still caught. */
+export function blendGuard(defaults, viewportSrc) {
+  if (defaults?.hybridBlend !== BLEND)
+    return `the hybrid blend is ${defaults?.hybridBlend} in lib/take-transport.ts TRANSPORT_DEFAULTS, not ${BLEND}`
+  if (!viewportSrc.includes(`useTransportSlot(transport, "hybridBlend")`))
+    return "viewport-3d.tsx no longer reads the hybrid blend from the transport slot"
+  return null
+}
 {
-  const src = readFileSync(join(ROOT, "components/viewport-3d.tsx"), "utf8")
-  for (const [needle, what] of [
-    [`setHybridBlend] = useState(${BLEND})`, "the hybrid blend"],
-  ])
-    if (!src.includes(needle))
-      throw new Error(
-        `assert-drawin-pentip: ${what} no longer matches viewport-3d.tsx (looked for \`${needle}\`). ` +
-          `Update this file; do NOT adjust the measurement.`,
-      )
+  const why = blendGuard(
+    loadTs("lib/take-transport.ts").TRANSPORT_DEFAULTS,
+    readFileSync(join(ROOT, "components/viewport-3d.tsx"), "utf8"),
+  )
+  if (why)
+    throw new Error(`assert-drawin-pentip: ${why}. Update this file; do NOT adjust the measurement.`)
 }
 
 /* ── EVERY WINDOW, AS A MULTIPLE OF THE MARK'S OWN INK HALF-WIDTH ──────────
