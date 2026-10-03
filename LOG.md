@@ -1,74 +1,128 @@
-# HAND-DRAW-P3 cloud log, 2026-09-30
+MERGE-READY
+Both flaky checks now give 10 of 10 identical verdicts and numbers, every must-fail named below fires, and tsc is at the baseline of 6. Two reds remain, both outside this job and both red before it: assert-perform row 8 throws on the dockview layout, and assert-drawin-timing's page-errors row is red because this sandbox's proxy blocks the analytics script. Neither is caused by this branch, and neither changed verdict across runs.
 
-Branch `cloud/hand-p3` (the snapshot of main at 4bba17b). Two steps, one commit each, both pushed. Nothing under `docs/thinking` or `docs/verification` is committed; the gates wrote there and it is left untracked.
+# CLOUD-FLAKES log, 2026-10-02 to 2026-10-03
 
-## Step 1 · 4d76046 · phase 2 back on today's main
+Branch `claude/free-stroke-timing-determinism-k14hyw`, cut from `cloud/integrate-1001` at 2cc9e98 (this session's assigned branch; the brief's `cloud/<name>` was not used because the session is pinned to this one). Four steps, one commit each, each pushed. Nothing under `docs/thinking` or `docs/verification` is committed; the gates write there and it is listed in `.git/info/exclude` on this machine only.
 
-`git merge-file <path> base/<path> lane/<path>` on the four files. `lib/stroke-timing.ts` and `scripts/verify/assert-hand-clock.mjs` merged clean. Two conflicts, both kept:
-- `components/draw-in-timing-controls.tsx`, the import line: main's `curveOfEase, curveProblem` (Custom curve ease) with phase 2 dropping `takeHasPerformed` (the held clock controls are gone).
-- `app/page.tsx`, `handleRevealEnvelopeChange`: phase 2's `rebaseForClock`, so a clock or rate change and the rebase of performed rows are one `edit()`, one undo step, with main's `gesture ?? null` key. `clockUnderTake` and its toast are gone: Hand no longer yields to a performed take. Main's flip wiring (`flip`, `patchFlip`) is untouched.
-- Checked: base to main and lane to merged give the same diff on every file.
-- `docs/cloud-inbox` removed with `git rm -r`.
+An older session worked the same job this morning on `claude/fix-timing-flakes-r4whad` (89a97c1, 083f0af, 32bb489). Its step 1 is carried here unchanged (cherry-picked as dc2a0fa) and its measurements are kept below, marked as its own. Its perform fix (083f0af) was not taken: this branch's step 2 was written in parallel and measures the same numbers (dwell 1016.0, slot 1944.0, Inflate -281.2).
 
-## Step 2 · 802ccdb · R11, Inflate's holds, the export row
+"Main": `origin/main` on GitHub (a6c001c) has no history in common with this branch and no `scripts/verify`, so nothing could be compared against it. The base used throughout is the snapshot 2cc9e98.
 
-(a) R11, "Turn in the lifts". Under Hand a slot runs to the next stroke's landing (F120), so the logo's slots touch end to end ([0,520] [520,950] ...) and each lift sits in a slot's tail; only one gap existed (67 ms). The word space is 1792.8 to 1967.2 ms, 174.4 ms.
-- `paceFromCurve` returns its flats as `TimingPace.holds`. `takeLiftsMs(ts, pace, baseSlots, baseMs)` turns them into take-time lifts: each stroke inks over its slot less the holds in its base slot, carried through the row (delay, speed, ease inverse); a performed stroke inks its whole slot; lifts are the gaps in the union. Under rows it reads `ts.baseSlots`.
-- The strip publishes them on `ctx.liftsRef`; the picker passes them as `CameraTake.lifts`; `orbit-lifts` reads them when given and the slot gaps otherwise.
-- Live, logo under Hand: the move is offered and turns at 1792.8 to 1967.2 ms, 0.000 ms off the stamped lift.
+## Environment
 
-(b) Inflate's shader holds. Measured with `scripts/verify/measure-hand-tip-creep.mjs` (Inflate, Hand, the 10 lifts of 50 ms or more, 5 frames per lift, control = the same span inside the stroke before):
-- No rows: 0 px change in all 10 lifts. The tip reads the beat, which the pace holds flat.
-- A timed take (+1 ms on the last stroke): 5, 28, 28, 27, 5, 26, 19, 52, 61, 18 px. It creeps: the tip reads the take's clock, which runs on through a lift, and the stroke end's nose fills in.
-- Fed as point holds at the pen-up and pen-down points (uFsTipHold): worst 13 px, single pixels where strokes cross (the LINEAR filter blends two arrivals).
-- A lift has no ink anywhere (that is how `takeLiftsMs` finds it), so the frame loop now holds the whole tip at the lift's start under a timed take (`entry.lifts`, published on `__heroPenTip.lifts`). Result: 0 px in all 10, controls 57 to 317 px. uFsTipHold still carries performed stops only; this is the hold with no radius, not the uniform. Say if you want it moved into the uniform instead.
+- 4 cores, headless Chromium 141 from /opt/pw-browsers, SwiftShader. `lib/browser.mjs` pins `channel: "chrome"`, so /opt/google/chrome/chrome is a symlink to that Chromium.
+- `lsof` in this container sees no TCP listener and no process cwd, so `lib/server-commit.mjs` refused ("no listener on :3138"). A PATH shim in the scratchpad (not committed) answers its two `lsof` calls from /proc. The repo's lookup is unchanged.
+- Dev servers: this tree on :3138; the snapshot 2cc9e98 in a separate worktree on :3140, so "before" runs never saw an edited app.
+- The proxy blocks va.vercel-scripts.com, so the page logs `net::ERR_TUNNEL_CONNECTION_FAILED` on every load.
+- The worker restarted once; both dev servers were started again.
 
-(c) The export row, R12 in `assert-hand-clock`: `exportAnimation` over `getTotalDuration()` (what the page's own export passes) against live at 8 plan clocks. No rows: 8/8, film 4666.7 ms = take. Last stroke at 0.5x: 8/8, film 5024.9 ms = take (pen 4666.7).
+## Step 1 · dc2a0fa · assert-drawin-timing on a driven clock (the older session's 89a97c1)
 
-Also in this commit: `assert-stroke-timing`'s two ripple mutants looked for `(t.ripple ? carry : 0)`, which phase 2 moved into `placeSlots` as `(ripple ? carry : 0)`; the mutants now find it (same sabotage, same rows).
+Cause. The mid-pass row (F) polled the playhead once a frame and read it only inside 0.3..0.5: 336 ms of a 1680 ms pass. One frame of 336 ms or more steps over the band, the poll runs to the end and reads 1.000000: the 24 of 25 on main. It also always read near the band's floor (0.302 to 0.333), the first frame inside it. The B coverage control ("the same ease at the same moment draws the same amount of mark", bar 12%) compared two in-page `setTimeout` windows whose reach the frame rate decided.
+
+Fix. `playDriven(ms)`: inside one page call `performance.now` returns a value the gate sets; it steps 1 ms a frame until the playhead moves, then exactly the rest, and reads on the frame after. F and B use it. No bar moved.
+
+Ten runs each, this session, quiet machine, same app:
+
+| run | before F (0.2..0.8) | before B (12%) | before gate | after F | after B | after gate |
+|---|---|---|---|---|---|---|
+| 1 | PASS 0.3237 | PASS 0.281 vs 0.281 | 25/26 | PASS 0.400000 | PASS 0.286 vs 0.286 | 25/26 |
+| 2 | PASS 0.3022 | FAIL 0.276 vs 0.319 | 24/26 | PASS 0.400000 | PASS 0.286 vs 0.286 | 25/26 |
+| 3 | PASS 0.3226 | PASS 0.295 vs 0.281 | 25/26 | PASS 0.400000 | PASS 0.286 vs 0.286 | 25/26 |
+| 4 | PASS 0.3199 | PASS 0.319 vs 0.300 | 25/26 | PASS 0.400000 | PASS 0.286 vs 0.286 | 25/26 |
+| 5 | PASS 0.3326 | PASS 0.305 vs 0.305 | 25/26 | PASS 0.400000 | PASS 0.286 vs 0.286 | 25/26 |
+| 6 | PASS 0.3218 | PASS 0.295 vs 0.300 | 25/26 | PASS 0.400000 | PASS 0.286 vs 0.286 | 25/26 |
+| 7 | PASS 0.3150 | PASS 0.271 vs 0.276 | 25/26 | PASS 0.400000 | PASS 0.286 vs 0.286 | 25/26 |
+| 8 | PASS 0.3215 | PASS 0.295 vs 0.262 | 25/26 | PASS 0.400000 | PASS 0.286 vs 0.286 | 25/26 |
+| 9 | PASS 0.3132 | FAIL 0.276 vs 0.328 | 24/26 | PASS 0.400000 | PASS 0.286 vs 0.286 | 25/26 |
+| 10 | PASS 0.3314 | PASS 0.281 vs 0.271 | 25/26 | PASS 0.400000 | PASS 0.286 vs 0.286 | 25/26 |
+
+Before: 2 verdict strings in 10 runs. After: 10 of 10 the same verdict string, and every row's numbers identical except one (below). The 1 red in every run is "no console or page errors" (the blocked analytics script).
+
+The older session's ten and ten agree: before B red 4 of 10, after 10 of 10 identical; and 5 + 5 runs under six CPU hogs, after identical to quiet.
+
+Must-fails:
+- 600 ms main-thread stall each time the playhead crosses 0.25 (scratch copies, this session): before, F CONTROL red, playhead 1.000000 after 1737 ms, "NEVER LANDED IN BAND" (the main failure, reproduced on demand). After, green, 0.400000; the stalls fired, two of them at playhead 0.4000.
+- The older session, on the same gate file: frozen transport (Codex F113-5) turns F CONTROL red; Twos cadence turns the identity row red (0.400000 vs 0.396825); B's repeat read at 0.3 against 0.4 turns B CONTROL red (0.286% vs 0.215%). Not re-run here.
+
+Left as is: C's delay control ("with no delay it is already well under way at the same 600 ms", bar > 0.15) still sleeps 600 ms of wall time and read 0.296 to 0.352 over the ten after-runs. Green in all 10, about 0.15 clear of its bar, but its number is not deterministic. Not converted: a delay row cannot use `playDriven`'s arm loop as written (the clock does not move during the delay).
+
+## Step 2 · 08e8b50 · assert-perform drives the Perform stage's clock
+
+Cause. `components/perform-take.tsx` times a performance with `performance.now()` read in its pointer handlers and once a frame. The gate paced the pen with wall-clock sleeps and measured the dwell with `e.timeStamp`. Under SwiftShader each 16 ms CDP step really took about 450 ms, so the stage recorded the machine's speed: a 61-move performance of about 2 s recorded 26.8 to 49.8 s. Consequences, all measured in the before-runs below:
+- row 2 (flat run under 200 ms): every slow step is a recorded pause; red in 10 of 10, speeds 0.035 to 0.102;
+- rows 1b: the fit's 1600-bin cap made bins about 17 ms, more than the one-frame bar; D's 20 s hold-back no longer cleared a 27 to 50 s slot, so the neighbour audit hit and some masks came out empty (0 px);
+- the dwell itself measured 1318 to 1905 ms for a 1000 ms plan.
+
+Fix. Inside a performance `performance.now` reads a value the gate sets. Each pointer event is dispatched, the gate waits until the page has logged it (`__ptrN`), then moves the clock by the plan's step or dwell. The logger reads the same clock (no more `e.timeStamp`). Real sleeps stay, so the real clock is always ahead and the clock is handed back without running backwards. No bar moved.
+
+## Step 3 · 9bf2857 · Inflate holds the tip still through a performed pause; row 1c
+
+With the clock driven, row 1b on Inflate was red every time: stroke D's ink count changed 281 ms before the end of the 1016 ms dwell. Traced pixel by pixel (scratch probes, hero D, Inflate, 1512x982): the count is blind to a swap, and four pixels moved inside the dwell, from 20 ms in. A product defect, two causes, both in `components/viewport-3d.tsx`:
+
+- The ramp. A hold makes `fsTipD` differ per fragment, so `fsTsd` jumps at the hold disc's edge by (clock - t0), which grows through the pause. `fwidth(fsTsd)` over a quad straddling the edge read the jump as gradient, so the rim's coverage ramp widened as the clock ran: (288,306) and (291,307) swapped in and out, and (288,306) stayed in at 7108.8 ms, the 281 ms early release. Each ramp is now the gradient of a distance continuous across the quad (running outside the disc, the hold's own inside), in uniform control flow. Program key fs-pentip-v8. Probe: with only this fix those two pixels no longer moved.
+- The disc. The tip's clock runs on through a performed pause and only a disc round the pen point is frozen. (282,301) and (286,305) inked 140 and 180 ms in from outside it. Radius sweep: x1.1 neither held, x1.2 one, x1.35 both; the field's own reach (2.6 R in place of 2 R) still left (282,301) moving. So a performed pause that no other stroke's slot overlaps now holds the whole tip at its start, as a lift does (`stills`, published as `__heroPenTip.stills`). `takeLiftsMs` is unchanged: for the camera a stop is still the pen on the page. A pause another stroke overlaps keeps the disc alone.
+
+Gate. Row 1c, on Inflate, Extrude and Solid: the dwell read every 40 ms (26 reads) must ink exactly the middle's pixels. Paired arm: the same test on the slot played without its pace, which must see pixels change (+558, +469, +871 px). Must-fail knockout: `FS_GATE_MUTATE=tip-no-pausestill` (sets `window.__FS_GATE_MUTATE` before load, dev only).
+
+Measured, `--dwell-engines=inflate`:
+- fixed: 1b PASS, held 1015.0 ms, ends -0.6 and -0.1 ms; 1c PASS, 26 reads, none differ.
+- `FS_GATE_MUTATE=tip-no-pausestill`: 1b FAIL, held 839.2 ms, ends +175.2; 1c FAIL, 5 of 26 reads differ, first at 6373.8 ms at (282,301) (286,305).
+
+No pause, no change: Inflate frames at 9 playheads, snapshot :3140 against this tree :3138, three runs. With no take 9/9, 9/9, 9/9 equal (run 1 read 8/9: its very first grab, playhead 0, caught an unsettled frame; runs 2 and 3 matched it). With a timed take and no performed row 9/9 in all three.
+
+## Step 4 · 7e2dc06 · row 1b's left-out cap 5% to 3.5%, so Extrude's must-fail fires
+
+Row 1b leaves pixels within 1 px of neighbour ink out of D's mask and caps the left-out share; its must-fail reads the same frames with a 4 px margin, which must go over the cap. On this layout the 4 px margin left out 4.4% on Extrude, under the 5% cap, so the arm held and row 1b on Extrude was red in every run, before and after the driven clock. The shares come from frames with no performance and were identical in all 20 runs: at 1 px Inflate 1.6%, Extrude 0.7%, Solid 1.5%; at 4 px 7.4%, 4.4%, 8.4%. The cap is now 3.5%, between the worst real share measured on any layout (2.9%, Solid on a6ee983f9) and the smallest 4 px share. The bar is tighter; NB_WIDE and NB_REACH did not move.
+
+## assert-perform, ten runs each side
+
+Before: the snapshot's own gate on the snapshot app (runs 1 and 2 on :3138 before any app edit, runs 3 to 10 on :3140). Several before-runs shared the machine with scratch probes, which only adds load; the after-runs ran alone.
+
+Before, per run (dwell planned 1000 ms + 16):
+
+| run | verdicts, in order R1 1a R2 1b 1bInflate 1bExtrude 1bSolid 2 4 3 5 6 7 threw | dwell / D's slot, ms | 1b Inflate held, ms | row 2 speeds |
+|---|---|---|---|---|
+| 1 | `PPPPFFFFPPPPPF` | 1331.0 / 27741.8 | 917.5 | 0.064 to 0.094 |
+| 2 | `PPPPFFFFPPPPF` (threw at row 7, a TypeError) | 1318.3 / 27051.9 | 258.2 | 0.065 to 0.056 |
+| 3 | `PPPFFFFFPPFPPF` | 1905.1 / 49820.0 | 2076.1, empty mask | 0.035 to 0.059 |
+| 4 | `PPPFFFFFPPFPPF` | 1642.9 / 39337.8 | 1910.0, empty mask | 0.045 to 0.053 |
+| 5 | `PPPPFFFFPPFPPF` | 1672.3 / 45860.8 | 1900.6, empty mask | 0.038 to 0.057 |
+| 6 | `PPPPFFFFPPPPPF` | 1345.2 / 28188.4 | 809.5 | 0.063 to 0.102 |
+| 7 | `PPPPFFPFPPFPPF` | 1457.7 / 26780.6 | 1114.8 | 0.066 to 0.101 |
+| 8 | `PPPFFFFFPPPPPF` | 1463.1 / 27414.7 | 1660.5, empty mask | 0.064 to 0.102 |
+| 9 | `PPPPFFFFPPPPPF` | 1421.4 / 27751.1 | 1306.8 | 0.064 to 0.099 |
+| 10 | `PPPPFFFFPPPPPF` | 1332.9 / 27245.7 | 756.5 | 0.065 to 0.101 |
+
+Before: 6 different verdict strings in 10 runs; 1b on Rod, 1b on Solid and row 5 changed verdict, and run 2 threw at row 7; 1b Inflate, 1b Extrude and row 2 were red in all 10 on different numbers each time.
+
+After (this tree, steps 2 to 4): 10 of 10 the same 17 rows, and every row line, verdict and numbers, byte-identical across the 10 (one md5 for all ten). 16 PASS, 1 FAIL:
+- 1a: dwell 1016.0, flat run 1014.5 of a 1944.0 ms slot.
+- 1b Rod: held 1017.4 vs 1016.0. Inflate held 1015.0, ends -0.6/-0.1; Extrude and Solid held 1014.4, ends +0.1/-0.1.
+- 1c: 26 reads, none differ, on all three engines.
+- 2: speed 0.907 to 2.827. 5: performed 1180.0, slot 590.0 at 0.5x.
+- FAIL: "gate threw", row 8 (below).
+
+Must-fails, all shown firing on this tree:
+- Each row's paired arm, in every one of the 10 runs (a row passes only when its arm fails): 1b linear arms 447 to 1005, 430 to 899, 937 to 1808 px; 4 px margins 7.4%, 4.4%, 8.4% over the 3.5% cap; 1c linear arms +558, +469, +871; row 2's arm is the first take, whose 1 s dwell is a flat run over 200 ms.
+- `FS_GATE_MUTATE=tip-no-pausestill`: 1b and 1c Inflate red (step 3).
+- The stage's clock run 5% fast (`components/perform-take.tsx`, scratch edit, reverted): 1a red (flat run 1063.0 vs 1016.0), 1b Rod red (held 1065.7), 1b Inflate red, 5 red (slot 619.5 vs 590.0). The driven clock does not blind the gate to a stage that times wrong.
 
 ## Checks
 
-tsc: 6 errors, the baseline (snapshot 6, after step 1 6, after step 2 6).
+- tsc: 6 errors, the baseline, at the start and after every step (the 6 are in lib/dd-engine/handFeel.ts and lib/geometry-engines.ts, untouched).
+- `node --check` on both gates after every edit. No em dash in any added line.
+- assert-drawin-timing: 10 before, 10 after, 1 stall must-fail on each side.
+- assert-perform: 10 before, 10 after, 1 smoke run, 2 Inflate-only runs (fix, knockout), 1 clock-sabotage run.
+- Inflate no-pause frames, snapshot against this tree: 3 runs.
 
-Node gates, lane against the snapshot's own run:
+## Not run, or left
 
-| gate | lane | snapshot |
-|---|---|---|
-| assert-keyframes | 16/16 rows, 21/21 mutants | 16/16, 21/21 |
-| assert-key-paths | 6/7, 8/8 (EXISTING red) | 6/7, 8/8 (EXISTING red) |
-| assert-camera-moves | 11/11, 20/20 (new IN-LIFTS, 3 new mutants) | 10/10, 17/17 |
-| assert-stroke-timing, `STROKE_TIMING_BASE=4bba17b` | 16/16, 12/12 | 16/16, 12/12 |
-
-Browser gates, headless, one browser at a time, lane on :3138 and the snapshot on :3140 from a worktree of 4bba17b:
-
-| gate | lane | snapshot |
-|---|---|---|
-| assert-hand-clock | 13/13 rows, 13/13 must-fails fired, 0 page errors | 10/10, 10/10 |
-| assert-perform, run 1 / run 2 | 11/15, then 10/15 | 13/14 + 1 SELF, then 10/14 + 1 SELF |
-| assert-key-lanes (row 11 base re-pinned, see below) | 15/15 graded, row 11 BLIND | 15/15 graded, row 11 SELF |
-| assert-stroke-strip | 17/18 | 17/18 |
-| assert-take-timeline | 20/21 | 20/21 |
-
-hand-clock must-fails: R11 has two (`lifts-slot-gaps`, `clock-uniform`), counted fired only when both turn it red; both refused the move. R12 `exportpen`: 1/8 clocks, film 4666.7 against take 5024.9. R13 `tip-no-liftholds`: 8 to 40 px per lift. Phase 2's R11 compared `__fsTake.get().slots` (empty with no rows) and called the move itself; it now reads what the picker writes, through the real Camera button. R11 also clears the move's keys after, since R12 and R13 read frames in the lifts it turns in.
-
-Reds read as follows:
-- key-paths EXISTING and stroke-timing's own base need 747af8fa0 and b0da66626, which the squashed snapshot does not have. stroke-timing ran with its own `STROKE_TIMING_BASE` knob pointed at the snapshot.
-- perform: 1b inflate, extrude, solid and row 2 are red on the snapshot's second run too, so they swing run to run on this machine (4 cores, SwiftShader). Rod 1b passed 2 of 2 on the snapshot and 1 of 2 on the lane (held 1338.2 ms for a 1377.7 ms dwell). Nothing in this change touches Rod's playback, but I could not prove it here; worth one run on the Mac.
-- key-lanes row 11: my recorded base came from a docked canvas (755x533) and the full run is undocked (755x890), so the row is BLIND. Its intent holds: the lane's five no-key frame hashes equal the snapshot's, 5 of 5.
-- stroke-strip row 0: same cause, the base recorded with `--phase=base` is docked; 18/18 differ on both trees.
-- take-timeline E2: 36.0 rAF ticks/s on the lane and 35.9 and 27.4 on the snapshot, against a bar of 50. Headless on a loaded box.
-
-## What I could not run, and how the environment was bent
-
-- `pnpm install --frozen-lockfile` refuses: `pnpm-lock.yaml` lacks `dialkit` and `motion`, which `package.json` lists. Installed with `--no-frozen-lockfile --config.node-linker=hoisted` (the gates import `jiti` directly, which pnpm's default layout does not hoist), then restored the lockfile. Not committed.
-- `npx playwright install` was not needed: Chromium 141 is preinstalled. `scripts/verify/lib/browser.mjs` pins channel `chrome`, so `/opt/google/chrome/chrome` was symlinked to it. Outside the repo.
-- `lsof` in this container cannot map sockets or cwd to pids, so `serverCommit` saw no server. A PATH-only shim answered its two queries from /proc; dev servers were bound to 127.0.0.1. Outside the repo.
-- Bases the snapshot does not carry were recorded from the snapshot server itself, into both trees' `docs/verification` (uncommitted): perform `base-main.json` (`--phase=base --base=4bba17b`), stroke-strip `base-3a211a36d.json` (`--phase=base`), key-lanes `nokeys-base.json` through an uncommitted copy of the gate with `KEYS_BASE` set to 4bba17b (the real one refuses any commit but ea31c5b38). So those rows compare to today's main, not to their named commits.
-- Not run: the rest of the plan's PEN rows beyond what these gates carry, `assert-stroke-timing-browser`, `assert-motion-customize`, `assert-custom-presets`, and any look at the result by eye. No Mac numbers were compared.
-
-## Next
-
-- Watch Hand Draw on your own drawing with one row set on the strip, on Inflate: the lifts should now hold as still as with no rows.
-- One perform run on the Mac to clear Rod 1b.
-- RUN-QUEUE row for HAND-DRAW-P3 is not written; this log is the record.
+- assert-perform row 8 throws on this layout in every run, before and after: on the undocked page `[data-strip-perform]` never appears, because the hidden dock takes the strip with it (dockview layout). Since it throws, "no page errors" never runs. Not timing; not touched.
+- assert-drawin-timing "no console or page errors" is red in every run: the blocked analytics script.
+- C's delay control in assert-drawin-timing is still on wall time (above).
+- The base for assert-perform's row 8 was last recorded at 08e8b50; a re-record at 9bf2857 refused because a commit moved HEAD during it. Row 8 throws before reading the base, so no verdict depends on it.
+- Under the disc path (a pause another stroke inks through) the radius still misses pixels out to between 1.2x and 1.35x; the stills do not apply there. Not covered by a gate row: the corpus has no overlapping pause.
+- The older session's frozen-transport, Twos and B-at-0.3 must-fails were not re-run here; the gate file is byte-identical to the one they ran on.
+- Draw-in under CPU hogs was not re-run here (the older session ran 5 + 5).
