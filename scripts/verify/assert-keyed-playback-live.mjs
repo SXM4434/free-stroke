@@ -39,6 +39,13 @@
 //       playing: each key lands between the playhead read just before and just after the click.
 //       must-fails: `__fsProgressThrottle = "armed"` (the old throttle) for (a) and (b),
 //       `__fsKeyMutant = "readout"` (the key clock read off the readout) for (c).
+//   L6  A REMOUNT TELLS THE DOCK (finding 11). The Draw-in tab open (the store's drawInOpen) and speed
+//       2, then the viewport remounted (`__fsRemountViewport`, the re-key "Rebuild the view" performs;
+//       the crash law itself takes the whole dev page down, on the base snapshot too): the viewport
+//       resets the store to its defaults, and the dock follows: the Draw-in tab is no longer the
+//       active one and the store reads closed and speed 1. must-fail:
+//       `__fsTransportReset = "silent"`, the reset with no notify: the tab stays active over a store
+//       that says closed.
 //   G1  no page error.
 
 const { chromium } = await import("./lib/browser.mjs")
@@ -57,6 +64,9 @@ const fired = (id, name, red, detail = "") => {
 }
 const browser = await chromium.launch()
 const errors = []
+/* `FS_ROWS=L4,L6` runs only those rows (and G1); unset runs every row. */
+const ONLY = process.env.FS_ROWS ? new Set(process.env.FS_ROWS.split(",").map((x) => x.trim())) : null
+const want = (id) => !ONLY || ONLY.has(id)
 
 const STILL = { motionMode: "off", materialAnimationEnabled: false, textureAnimated: false, ditherAnimated: false, asciiAnimated: false, stackAnimationEnabled: false, fusionAnimationEnabled: false, ditherEnabled: false, asciiEnabled: false }
 const k = (t, v) => ({ tMs: t, value: v, easeOut: "linear", easeIn: "linear" })
@@ -166,7 +176,7 @@ async function live(mutant) {
     maxDiff: Math.max(0, ...samples.map((s) => s.diff)), drewWorst, recN: rec.length,
   }
 }
-{
+if (want("L1")) {
   const r = await live(null)
   row("L1", "playing, the 3D canvas changes with the keyed textureIntensity (0 to 1 over 2 s)", r.ramp >= 6 && r.rho >= 0.9 && r.heldN >= 1 && r.held >= 15 && r.heldSpread <= 1.5 && r.drewWorst <= 0.02,
     `take ${Math.round(r.L)} ms, ${r.ramp} grabs on the ramp with rank correlation ${r.rho.toFixed(3)}, ${r.heldN} past the last key at ${r.held.toFixed(2)} levels (spread ${r.heldSpread.toFixed(2)}), drew clock/2000 within ${r.drewWorst.toFixed(4)} over ${r.recN} frames; ${r.samples.map((s) => `${(s.p * r.L).toFixed(0)}ms:${s.diff.toFixed(1)}`).join(" ")}`)
@@ -221,7 +231,7 @@ async function film(mutant) {
     maxDiff: Math.max(...res.out.map((x) => x.diff)),
   }
 }
-{
+if (want("L2")) {
   const r = await film(null)
   if (r.error) row("L2", "the exported film changes with the keyed textureIntensity", false, r.error)
   else row("L2", "the exported film changes with the keyed textureIntensity", r.ramp >= 10 && r.rho >= 0.9 && r.held >= 15 && r.heldSpread <= 1.5,
@@ -280,7 +290,7 @@ async function refusal(mutant) {
     edit, cleared, click, ti: ti.map((x) => `${Math.round(x.tMs)}:${x.value}`).join(" "),
   }
 }
-{
+if (want("L3")) {
   const want = (w) => !!w.text && /26/.test(w.text) && /4 to 24/.test(w.text) && w.beside
   const r = await refusal(null)
   row("L3", "a refused key keeps the edit's other key and says why beside its diamond", r.keyedTi && r.keptCell && want(r.edit) && r.cleared.text === null && want(r.click),
@@ -344,7 +354,7 @@ async function twos(law) {
     holds: [...new Set(inner)].sort((a, b) => a - b), holdsOk: inner.length > 4 && inner.every((r) => r === 2 || r === 3),
   }
 }
-{
+if (want("L4")) {
   const r = await twos(null)
   row("L4", "under Twos the film's key clocks step at 12 Hz, as live playback's do", r.liveN >= 5 && r.liveOff < 0.01 && r.filmN >= 30 && r.filmOff < 0.01 && r.holdsOk,
     `live: ${r.liveN} distinct clocks, furthest from a step ${r.liveOff.toFixed(4)} ms; film: ${r.filmN} frames, ${r.filmDistinct} distinct clocks, furthest from a step ${r.filmOff.toFixed(4)} ms, steps held ${r.holds.join("/")} frames`)
@@ -422,7 +432,7 @@ async function clicks(mutant) {
   await ctx.close()
   return out
 }
-{
+if (want("L5")) {
   const r = await endAndPause(false)
   const okEnd = r.end.readout === 1 && r.end.playhead === 1 && r.end.look === "on" && Math.abs(r.end.slider - 0.9) < 1e-9
   const c = await clicks(false)
@@ -432,6 +442,42 @@ async function clicks(mutant) {
   fired("L5", "the old throttle (captured value, no flush)", !(m.end.readout === 1 && m.end.look === "on") || m.pauseWorst > 1e-12, `end: readout ${m.end.readout}, diamond ${m.end.look}, slider ${m.end.slider}; Pause: worst |readout - playhead| ${m.pauseWorst.toFixed(4)}`)
   const mc = await clicks(true)
   fired("L5", "the key clock read off the readout", mc.some((x) => !x.ok), `clicks keyed inside [before, after]: ${mc.filter((x) => x.ok).length}/5 (${mc.map((x) => x.behind.toFixed(1)).join(" ")} ms behind)`)
+}
+
+// ---------------------------------------------------------------- L6
+async function remount(law) {
+  const ctx = await browser.newContext({ viewport: { width: 1512, height: 982 } })
+  await ctx.addInitScript(() => { try { for (const x of Object.keys(localStorage)) if (x.startsWith("fs.layout.")) localStorage.removeItem(x) } catch {} })
+  if (law) await ctx.addInitScript(() => { window.__fsTransportReset = "silent" })
+  const page = await ctx.newPage()
+  page.on("pageerror", (e) => { if (!law) errors.push(e.message) })
+  await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 240000 })
+  await page.waitForFunction(() => window.__fsRemountViewport && window.__fsTransport && window.__dockHarness && window.__styleHarness, null, { timeout: 240000 })
+  await page.evaluate((p) => window.__styleHarness.injectStrokes(p.slice(0, 5), { msPerPoint: 12, gapMs: 60 }), polys)
+  await page.waitForTimeout(1200)
+  await page.evaluate(() => { window.__fsTransport.set("drawInOpen", true); window.__fsTransport.set("speed", 2) })
+  await settle(page, 600)
+  const tabActive = () => page.evaluate(() => [...document.querySelectorAll(".dv-tab")].some((t) => t.textContent.trim() === "Draw-in" && t.classList.contains("dv-active-tab")))
+  const before = { tab: await tabActive(), open: await page.evaluate(() => window.__fsTransport.get("drawInOpen")) }
+  await page.evaluate(() => window.__fsRemountViewport())
+  await page.waitForTimeout(3000)
+  const card = true
+  await settle(page, 400)
+  const after = {
+    tab: await tabActive(),
+    open: await page.evaluate(() => window.__fsTransport.get("drawInOpen")),
+    speed: await page.evaluate(() => window.__fsTransport.get("speed")),
+    rebuilt: await page.evaluate(() => !!window.__captureHarness && document.querySelectorAll("canvas").length > 0),
+  }
+  await ctx.close()
+  return { before, card, after }
+}
+if (want("L6")) {
+  const r = await remount(false)
+  row("L6", "a viewport remount resets the store and the dock's Draw-in tab follows", r.before.tab && r.before.open && r.card && r.after.rebuilt && !r.after.tab && r.after.open === false && r.after.speed === 1,
+    `before: tab active ${r.before.tab}, store open ${r.before.open}; remounted with a canvas ${r.after.rebuilt}; after: tab active ${r.after.tab}, store open ${r.after.open}, speed ${r.after.speed}`)
+  const m = await remount(true)
+  fired("L6", "the reset with no notify", m.after.tab && m.after.open === false, `after: tab active ${m.after.tab}, store open ${m.after.open}`)
 }
 
 row("G1", "the pages threw nothing", errors.length === 0, errors.length ? errors.slice(0, 3).join(" | ") : "0 pageerror events")

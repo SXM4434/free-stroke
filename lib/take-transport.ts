@@ -54,8 +54,9 @@ export function createProgressStore(initial: number): ProgressStore {
   return progressStoreWithReset(initial).store
 }
 /** The store, plus a reset only the transport holds: back to `initial` with
- *  no notify. Kept off `ProgressStore` so no readout can call it. */
-function progressStoreWithReset(initial: number): { store: ProgressStore; reset: () => void } {
+ *  no notify, and the notify it owes, sent later. Kept off `ProgressStore` so
+ *  no readout can call either. */
+function progressStoreWithReset(initial: number): { store: ProgressStore; reset: () => void; notify: () => void } {
   let value = initial
   const subs = new Set<() => void>()
   return {
@@ -74,6 +75,7 @@ function progressStoreWithReset(initial: number): { store: ProgressStore; reset:
     reset: () => {
       value = initial
     },
+    notify: () => subs.forEach((fn) => fn()),
   }
 }
 export function useProgressValue(store: ProgressStore): number {
@@ -210,6 +212,15 @@ export interface TakeTransport {
    * runs during render, where notifying another component is an error.
    */
   resetSilently(): void
+  /**
+   * THE NOTIFY `resetSilently` OWES (REVIEW 1 finding 11). Called by the
+   * viewport after it mounts, outside render: every slot's subscribers, the
+   * readout's and the derived values' are told, so a reader outside the
+   * viewport (the dock's Draw-in tab, a key clock) re-reads the defaults the
+   * remount put back instead of keeping the old ones. Nothing pending, it does
+   * nothing.
+   */
+  notifyReset(): void
 }
 
 export function createTakeTransport(): TakeTransport {
@@ -220,7 +231,8 @@ export function createTakeTransport(): TakeTransport {
   const playheadRef = { current: 0 }
   const clockRef = { current: 0 }
   const openingRef = { current: true }
-  const { store: progress, reset: resetProgress } = progressStoreWithReset(0)
+  const { store: progress, reset: resetProgress, notify: notifyProgress } = progressStoreWithReset(0)
+  let resetPending = false
 
   function get<K extends keyof TransportState>(key: K): TransportState[K] {
     return state[key]
@@ -282,6 +294,14 @@ export function createTakeTransport(): TakeTransport {
       openingRef.current = true
       derived = null
       resetProgress()
+      resetPending = true
+    },
+    notifyReset() {
+      if (!resetPending) return
+      resetPending = false
+      subs.forEach((set) => set.forEach((fn) => fn()))
+      notifyProgress()
+      derivedSubs.forEach((fn) => fn())
     },
   }
 }

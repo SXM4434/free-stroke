@@ -326,6 +326,35 @@ async function runRows() {
       "keyed values on whole-number sliders land on the slider's step",
       `${whole.map((p) => p.path).join(", ")}: ${n - off}/${n} samples on their step ${worst ? JSON.stringify(worst) : ""}; ditherLevels 2 to 8 at 300 ms reads ${dl} (raw 3.8), asciiCellSize 4 to 24 at 216 ms reads ${ac} (raw 8.32); textureIntensity 0 to 1 at 333 ms stays ${ti}`)
   })
+
+  /* ---- F11-RESET: a remount's reset reaches the store's readers ----------
+   * A reader of drawInOpen, one of speed, one of the readout and one of the
+   * derived values, all subscribed; the store is moved off its defaults, then
+   * reset the way a remounting viewport resets it (silently, in render) and
+   * told to notify (after mount). Every reader is called and re-reads the
+   * defaults; a second notifyReset with nothing pending calls no one. */
+  check("F11-RESET", "a viewport remount's reset notifies every reader of the store", () => {
+    const T = loadTs("lib/take-transport.ts")
+    const st = T.createTakeTransport()
+    st.publishDerived({ totalDuration: 2000, takeLen: 2000, revealEase: "linear", revealMode: "hybrid", seamWindow: { mode: "grow", length: 1 } })
+    st.set("drawInOpen", true)
+    st.set("speed", 2)
+    st.progress.set(0.6)
+    const calls = { drawIn: 0, speed: 0, progress: 0, derived: 0 }
+    st.subscribe("drawInOpen", () => calls.drawIn++)
+    st.subscribe("speed", () => calls.speed++)
+    st.progress.subscribe(() => calls.progress++)
+    st.subscribeDerived(() => calls.derived++)
+    st.resetSilently()
+    const silent = Object.values(calls).every((n) => n === 0)
+    st.notifyReset()
+    const told = Object.values(calls).every((n) => n === 1)
+    const reads = st.get("drawInOpen") === false && st.get("speed") === 1 && st.progress.get() === 0 && st.derived() === null
+    st.notifyReset()
+    const once = Object.values(calls).every((n) => n === 1)
+    row("F11-RESET", silent && told && reads && once, "a viewport remount's reset notifies every reader of the store",
+      `silent during the reset: ${silent}; after notifyReset each reader called ${JSON.stringify(calls)}: ${told}; they read the defaults: ${reads}; a second notify calls no one: ${once}`)
+  })
 }
 
 /* ---- the must-fails ----------------------------------------------------- */
@@ -347,6 +376,9 @@ const MUTANTS = [
   { name: "a Pause does not flush the readout", file: "lib/take-transport.ts", find: "      pending = null\n      write(readPlayhead())\n    },\n    cancel() {", text: "      pending = null\n    },\n    cancel() {", red: ["F7-THROTTLE"] },
   { name: "a keyed sample is not snapped to a whole-number step", file: "lib/keyframes.ts", find: "  if (r.step !== undefined && r.step >= 1 && Number.isInteger(r.step)) out = r.min + Math.round((out - r.min) / r.step) * r.step\n", text: "\n", red: ["F10-STEP"] },
   { name: "every keyed sample is snapped, fractional steps too", file: "lib/keyframes.ts", find: "  if (r.step !== undefined && r.step >= 1 && Number.isInteger(r.step)) out", text: "  if (r.step !== undefined) out", red: ["F10-STEP"] },
+  { name: "notifyReset tells no slot reader", file: "lib/take-transport.ts", find: "      subs.forEach((set) => set.forEach((fn) => fn()))\n", text: "\n", red: ["F11-RESET"] },
+  { name: "notifyReset tells the readout no one", file: "lib/take-transport.ts", find: "      notifyProgress()\n", text: "\n", red: ["F11-RESET"] },
+  { name: "notifyReset notifies again with nothing pending", file: "lib/take-transport.ts", find: "      if (!resetPending) return\n", text: "\n", red: ["F11-RESET"] },
   { name: "the GLB writes a value that never changes", file: "lib/export/glb-material-keys.ts", find: "    if (!varies(t.values)) return false\n", text: "\n", red: ["F1-GLB"] },
 ]
 

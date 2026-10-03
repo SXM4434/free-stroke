@@ -11153,6 +11153,15 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
     pageTransport.resetSilently()
     return pageTransport
   })
+  /* The reset above runs during render, where notifying another component is
+   * an error, so its notify goes out here, once the viewport has mounted
+   * (REVIEW 1 finding 11): a remount from the error boundary tells the dock's
+   * Draw-in tab, the key clock and every other reader that the store is back
+   * at its defaults. `__fsTransportReset = "silent"` is the gate's must-fail
+   * arm, the reset with no notify, as before. */
+  useEffect(() => {
+    if (readDevLaw("__fsTransportReset", ["silent"], "notify") === "notify") transport.notifyReset()
+  }, [transport])
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   /* ---- 🔴 THE CANVAS THIS COMPONENT MEANS, BY IDENTITY --------------------

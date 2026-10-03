@@ -1,6 +1,7 @@
 "use client"
 
 import dynamic from "next/dynamic"
+import { useEffect, useState } from "react"
 import type { Stroke, ProcessedStroke } from "@/lib/stroke-processing"
 import type { ExportSettings } from "@/components/drawing-canvas"
 import type { GeometryMode, ExtrudeParams, SolidParams, InflateParams } from "@/lib/geometry-engines"
@@ -163,11 +164,27 @@ export default function Viewport3DWrapper({
   settingsRef,
   apiRef,
 }: Viewport3DWrapperProps) {
+  /* DEV ONLY · A REMOUNT ON DEMAND, the one "Rebuild the view" performs after a
+   * crash: a new key, so `<Viewport3D>` unmounts and mounts again with the
+   * page's providers in place. assert-keyed-playback-live.mjs L6 uses it to
+   * show a remount reaches the transport store's readers (REVIEW 1 finding
+   * 11); the crash law cannot, because in a development build it takes the
+   * whole page down. */
+  const [mountKey, setMountKey] = useState(0)
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return
+    const w = window as unknown as { __fsRemountViewport?: () => void }
+    w.__fsRemountViewport = () => setMountKey((k) => k + 1)
+    return () => {
+      delete w.__fsRemountViewport
+    }
+  }, [])
   return (
     /* THE BOUNDARY IS OUTSIDE `<Viewport3D>`, WHICH IS THE WHOLE POINT — see the
      * import above. Inside it, it caught nothing that mattered. */
     <ViewportErrorBoundary>
       <Viewport3D
+        key={mountKey}
         processedStrokes={processedStrokes}
         rawStrokes={rawStrokes}
         geometryMode={geometryMode}
