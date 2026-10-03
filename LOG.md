@@ -1,74 +1,53 @@
-# HAND-DRAW-P3 cloud log, 2026-09-30
+MERGE-READY
 
-Branch `cloud/hand-p3` (the snapshot of main at 4bba17b). Two steps, one commit each, both pushed. Nothing under `docs/thinking` or `docs/verification` is committed; the gates wrote there and it is left untracked.
+# CLOUD-K2LIVE log, 2026-10-03
 
-## Step 1 · 4d76046 · phase 2 back on today's main
+Branch `claude/keyed-style-playback-3r6jcq`, cut from `cloud/k2live` (d38fec4, the snapshot of integrate/cloud-1001). This session's harness assigns that branch, so every push went there. Nothing was pushed to `cloud/k2live`, which is the base, not my own branch. REVIEW.md "Review 1: layout and keyed style", findings 1, 2, 5, 6, 7, 10 and 11. Findings 3, 4, 8 and 9 are not touched, and `components/dock-shell.tsx` is unchanged (finding 11 did not need it). Nothing under `docs/thinking` or `docs/verification` was created or committed. There are no em dashes in anything added.
 
-`git merge-file <path> base/<path> lane/<path>` on the four files. `lib/stroke-timing.ts` and `scripts/verify/assert-hand-clock.mjs` merged clean. Two conflicts, both kept:
-- `components/draw-in-timing-controls.tsx`, the import line: main's `curveOfEase, curveProblem` (Custom curve ease) with phase 2 dropping `takeHasPerformed` (the held clock controls are gone).
-- `app/page.tsx`, `handleRevealEnvelopeChange`: phase 2's `rebaseForClock`, so a clock or rate change and the rebase of performed rows are one `edit()`, one undo step, with main's `gesture ?? null` key. `clockUnderTake` and its toast are gone: Hand no longer yields to a performed take. Main's flip wiring (`flip`, `patchFlip`) is untouched.
-- Checked: base to main and lane to merged give the same diff on every file.
-- `docs/cloud-inbox` removed with `git rm -r`.
+The previous LOG.md (HAND-DRAW-P3, 2026-09-30) is in git history at d38fec4.
 
-## Step 2 · 802ccdb · R11, Inflate's holds, the export row
+## Steps
 
-(a) R11, "Turn in the lifts". Under Hand a slot runs to the next stroke's landing (F120), so the logo's slots touch end to end ([0,520] [520,950] ...) and each lift sits in a slot's tail; only one gap existed (67 ms). The word space is 1792.8 to 1967.2 ms, 174.4 ms.
-- `paceFromCurve` returns its flats as `TimingPace.holds`. `takeLiftsMs(ts, pace, baseSlots, baseMs)` turns them into take-time lifts: each stroke inks over its slot less the holds in its base slot, carried through the row (delay, speed, ease inverse); a performed stroke inks its whole slot; lifts are the gaps in the union. Under rows it reads `ts.baseSlots`.
-- The strip publishes them on `ctx.liftsRef`; the picker passes them as `CameraTake.lifts`; `orbit-lifts` reads them when given and the slot gaps otherwise.
-- Live, logo under Hand: the move is offered and turns at 1792.8 to 1967.2 ms, 0.000 ms off the stamped lift.
-
-(b) Inflate's shader holds. Measured with `scripts/verify/measure-hand-tip-creep.mjs` (Inflate, Hand, the 10 lifts of 50 ms or more, 5 frames per lift, control = the same span inside the stroke before):
-- No rows: 0 px change in all 10 lifts. The tip reads the beat, which the pace holds flat.
-- A timed take (+1 ms on the last stroke): 5, 28, 28, 27, 5, 26, 19, 52, 61, 18 px. It creeps: the tip reads the take's clock, which runs on through a lift, and the stroke end's nose fills in.
-- Fed as point holds at the pen-up and pen-down points (uFsTipHold): worst 13 px, single pixels where strokes cross (the LINEAR filter blends two arrivals).
-- A lift has no ink anywhere (that is how `takeLiftsMs` finds it), so the frame loop now holds the whole tip at the lift's start under a timed take (`entry.lifts`, published on `__heroPenTip.lifts`). Result: 0 px in all 10, controls 57 to 317 px. uFsTipHold still carries performed stops only; this is the hold with no radius, not the uniform. Say if you want it moved into the uniform instead.
-
-(c) The export row, R12 in `assert-hand-clock`: `exportAnimation` over `getTotalDuration()` (what the page's own export passes) against live at 8 plan clocks. No rows: 8/8, film 4666.7 ms = take. Last stroke at 0.5x: 8/8, film 5024.9 ms = take (pen 4666.7).
-
-Also in this commit: `assert-stroke-timing`'s two ripple mutants looked for `(t.ripple ? carry : 0)`, which phase 2 moved into `placeSlots` as `(ripple ? carry : 0)`; the mutants now find it (same sabotage, same rows).
+| step | commit | what |
+|---|---|---|
+| 1a | 6b3694a | Ports K2's viewport half from ae75d6bae (cloud/layout-l3), which was lost when the snapshot was folded by hand. A teammate session pointed to it. Applied with `git apply -3`, with one conflict in the keyframes import line. The frame loop reads `styleAt(styleState, framedKeys(keys), clockMs)` on the key reader's clock. Keyed loop speeds run as a sum. `__geomDebug.keyedStyle` records each frame. |
+| 1b | 03f8125 | `loopSpeedOver` (lib/keyframes.ts): over each frame a loop runs at the mean of its keyed speed across the key clock's step, read through `loopPhaseAt`, for the texture, dither, ASCII and material loops. The viewport has one `keyedStyleAtMs` and one `exportPlayhead`. The film seeks through it. The static GLB takes the keyed Custom material at the key clock the view shows. The animated GLB writes keyed roughness, metalness, clearcoat and emissive strength as `KHR_animation_pointer` channels on the draw-in clip (lib/export/glb-material-keys.ts). Sheen weight and environment strength have no glTF property, so the receipt names them as not in the file. |
+| 2 | 65997c1 | `readKeys` (lib/doc-store.ts) accepts any `isKeyPath` name and checks each track against its own range. A valid style key reloads with no repair. |
+| 5 | f6c28de | New pure module lib/key-edit.ts. `keyedStyleEdit` keys each path on its own: a refused path keeps its track and is named, and the other paths of a multi-path edit (a preset) keep their keys. `refusalWords` produces lines such as "Not keyed: 26 is outside 4 to 24" and "Not removed: without this key the curve would swing to -0.184, outside 0 to 1". The words show beside the path's diamond (role=status) and clear on the next key or after 6 s. |
+| 6 | ddeae29 | `cadenceClock` (lib/stroke-schedule.ts) is the one clock step for live playback and `exportPlayhead`, so the video, the GIF and the animated GLB step on twos as the screen does. Adds dev-only `__revealHarness.setCadence`. |
+| 7 | c0cb18e | `keyClockMs` reads the transport's `playheadRef`. `createProgressThrottle` writes the playhead when its timer fires and flushes on every pause and at the end of a pass. |
+| 10 | 1bce7ff | `settleStyleSample`: every `styleAt` sample is clamped to its slider's range and snapped to whole-number steps (ditherLevels, asciiCellSize, ditherAngle). Fractional steps stay smooth. This also closes CLOUD-TESTS' D6 and D7 without moving reachReasons' bar. |
+| 11 | f3833f4 | `resetSilently` marks a notify as owed, and `notifyReset` sends it after the viewport mounts (every slot, the readout, the derived values). Adds dev-only `__fsRemountViewport` in the wrapper, which re-keys `<Viewport3D>` the way "Rebuild the view" does. |
+| 1 gate | 526f7a6 | assert-keyed-playback-live L7 reads a real Anim GLB file. |
 
 ## Checks
 
-tsc: 6 errors, the baseline (snapshot 6, after step 1 6, after step 2 6).
+tsc: 6 errors, the baseline, after every step.
 
-Node gates, lane against the snapshot's own run:
+Node gates:
 
-| gate | lane | snapshot |
-|---|---|---|
-| assert-keyframes | 16/16 rows, 21/21 mutants | 16/16, 21/21 |
-| assert-key-paths | 6/7, 8/8 (EXISTING red) | 6/7, 8/8 (EXISTING red) |
-| assert-camera-moves | 11/11, 20/20 (new IN-LIFTS, 3 new mutants) | 10/10, 17/17 |
-| assert-stroke-timing, `STROKE_TIMING_BASE=4bba17b` | 16/16, 12/12 | 16/16, 12/12 |
+| gate | result |
+|---|---|
+| assert-keyed-playback (new) | 10 of 10 rows, 21 of 21 mutants caught (F1-LOOP, F1-GLB, F2-RELOAD, F5-EDIT, F5-WORDS, F6-CADENCE, F7-CLOCK, F7-THROTTLE, F10-STEP, F11-RESET) |
+| assert-keyed-ranges (ported from CLOUD-TESTS 5d5c659e5) | 3 of 3 rows, 10 of 10 mutants. RANGES was red at 5d5c659e5 (14 of 90292 samples an ulp out) and is now green with 0 outside. Bars are unchanged. One mutant follows the line it targeted; one new mutant removes the clamp. |
+| assert-key-paths | 6 of 7 rows, 8 of 8 mutants. EXISTING is red, the same as on the snapshot, because commit 747af8fa0 is not in this clone. One mutant follows the line it targeted. |
+| assert-keyframes | 16 of 16 rows, 21 of 21 mutants |
+| assert-transport-math | not present in this tree |
 
-Browser gates, headless, one browser at a time, lane on :3138 and the snapshot on :3140 from a worktree of 4bba17b:
+Browser gates. Each runs on its own `next dev` (:3140, FS_HEADED=0). The reference is a worktree of d38fec4 on :3139.
 
-| gate | lane | snapshot |
-|---|---|---|
-| assert-hand-clock | 13/13 rows, 13/13 must-fails fired, 0 page errors | 10/10, 10/10 |
-| assert-perform, run 1 / run 2 | 11/15, then 10/15 | 13/14 + 1 SELF, then 10/14 + 1 SELF |
-| assert-key-lanes (row 11 base re-pinned, see below) | 15/15 graded, row 11 BLIND | 15/15 graded, row 11 SELF |
-| assert-stroke-strip | 17/18 | 17/18 |
-| assert-take-timeline | 20/21 | 20/21 |
+| gate | result |
+|---|---|
+| assert-keyed-playback-live (new) | 17 PASS, 0 FAIL. L1: textureIntensity keyed 0 to 1 over 2 s while playing; the 3D canvas follows (rank 1.000, 31 levels once held). L2: the exported WebM follows (rank 1.000, 45 levels). L3: refusal words beside the diamond. L4: Twos in film and live. L5: key clock at the end, on Pause and on click. L6: a remount reaches the dock. L7: Anim GLB channels. Each row's must-fail fired, including the viewport fed the raw styleState (L1, L2). |
+| assert-keyed-style (K2) | 15 PASS, 0 FAIL with `--ref`. K4, the unkeyed frames, is byte-identical to the base tree. K1 and K1m now expect the mean speed over each frame's step and gained the "endspeed" must-fail. |
+| assert-take-transport | 9 PASS, 0 FAIL |
+| assert-key-buttons | 11 PASS, 1 FAIL. B1 fails because ditherAngle has no key button, and it fails the same way on the base snapshot. |
+| assert-drawin-timing | 25 PASS. The one FAIL is a resource blocked by the sandbox's network (ERR_TUNNEL_CONNECTION_FAILED). The base gets 24 PASS with the same network FAIL. |
 
-hand-clock must-fails: R11 has two (`lifts-slot-gaps`, `clock-uniform`), counted fired only when both turn it red; both refused the move. R12 `exportpen`: 1/8 clocks, film 4666.7 against take 5024.9. R13 `tip-no-liftholds`: 8 to 40 px per lift. Phase 2's R11 compared `__fsTake.get().slots` (empty with no rows) and called the move itself; it now reads what the picker writes, through the real Camera button. R11 also clears the move's keys after, since R12 and R13 read frames in the lifts it turns in.
+## Not run, or not able to run
 
-Reds read as follows:
-- key-paths EXISTING and stroke-timing's own base need 747af8fa0 and b0da66626, which the squashed snapshot does not have. stroke-timing ran with its own `STROKE_TIMING_BASE` knob pointed at the snapshot.
-- perform: 1b inflate, extrude, solid and row 2 are red on the snapshot's second run too, so they swing run to run on this machine (4 cores, SwiftShader). Rod 1b passed 2 of 2 on the snapshot and 1 of 2 on the lane (held 1338.2 ms for a 1377.7 ms dwell). Nothing in this change touches Rod's playback, but I could not prove it here; worth one run on the Mac.
-- key-lanes row 11: my recorded base came from a docked canvas (755x533) and the full run is undocked (755x890), so the row is BLIND. Its intent holds: the lane's five no-key frame hashes equal the snapshot's, 5 of 5.
-- stroke-strip row 0: same cause, the base recorded with `--phase=base` is docked; 18/18 differ on both trees.
-- take-timeline E2: 36.0 rAF ticks/s on the lane and 35.9 and 27.4 on the snapshot, against a bar of 50. Headless on a loaded box.
-
-## What I could not run, and how the environment was bent
-
-- `pnpm install --frozen-lockfile` refuses: `pnpm-lock.yaml` lacks `dialkit` and `motion`, which `package.json` lists. Installed with `--no-frozen-lockfile --config.node-linker=hoisted` (the gates import `jiti` directly, which pnpm's default layout does not hoist), then restored the lockfile. Not committed.
-- `npx playwright install` was not needed: Chromium 141 is preinstalled. `scripts/verify/lib/browser.mjs` pins channel `chrome`, so `/opt/google/chrome/chrome` was symlinked to it. Outside the repo.
-- `lsof` in this container cannot map sockets or cwd to pids, so `serverCommit` saw no server. A PATH-only shim answered its two queries from /proc; dev servers were bound to 127.0.0.1. Outside the repo.
-- Bases the snapshot does not carry were recorded from the snapshot server itself, into both trees' `docs/verification` (uncommitted): perform `base-main.json` (`--phase=base --base=4bba17b`), stroke-strip `base-3a211a36d.json` (`--phase=base`), key-lanes `nokeys-base.json` through an uncommitted copy of the gate with `KEYS_BASE` set to 4bba17b (the real one refuses any commit but ea31c5b38). So those rows compare to today's main, not to their named commits.
-- Not run: the rest of the plan's PEN rows beyond what these gates carry, `assert-stroke-timing-browser`, `assert-motion-customize`, `assert-custom-presets`, and any look at the result by eye. No Mac numbers were compared.
-
-## Next
-
-- Watch Hand Draw on your own drawing with one row set on the strip, on Inflate: the lifts should now hold as still as with no rows.
-- One perform run on the Mac to clear Rod 1b.
-- RUN-QUEUE row for HAND-DRAW-P3 is not written; this log is the record.
+- No real Chrome. Playwright's install from dl.google.com is blocked by the proxy, so `/opt/google/chrome/chrome` is a symlink to Playwright's Chromium 141, which the repo's launcher pins as "chrome". The GPU is software.
+- assert-key-lanes refuses to run without `docs/verification/keyframes/nokeys-base.json`, which this job may not create.
+- assert-export-glb-anim-app stops at a hidden "Transparent" button, on this tree and on the base alike. L7 covers the animated GLB path in its place.
+- The crash law (`__styleHarness.crashViewport`) takes the whole development page down on this tree and on the base, even with `console.timeStamp` deleted, so the error boundary's remount cannot be driven. L6 uses `__fsRemountViewport` instead, which performs the same re-key.
+- I could not reply to the teammate session (bridge:session_0184LDcKA7gcoxuK7T3Y8EHW), because this cloud session cannot message other sessions. Its requests were done here: the ae75d6bae port is step 1a, assert-keyed-ranges is ported, D6 and D7 are fixed in step 10, and `__geomDebug.keyedStyle` is live, so harness-surface row B should be green.
