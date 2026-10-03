@@ -46,6 +46,12 @@
 //       active one and the store reads closed and speed 1. must-fail:
 //       `__fsTransportReset = "silent"`, the reset with no notify: the tab stays active over a store
 //       that says closed.
+//   L7  THE ANIMATED GLB CARRIES A KEYED MATERIAL VALUE (finding 1). Custom material,
+//       customMaterial.roughness keyed 0.1 at 0 to 0.9 at the take's end; the real "Anim GLB" button.
+//       The downloaded file, read here with lib/export/glb-sparse.ts' reader, holds a LINEAR
+//       KHR_animation_pointer channel on every material's roughnessFactor, on the draw-in clip, one
+//       key per film frame, rising from 0.1 to 0.9 and never falling. must-fail:
+//       `__fsAnimGlbMaterial = "doc"`, the file with no keyed material: no such channel.
 //   G1  no page error.
 
 const { chromium } = await import("./lib/browser.mjs")
@@ -478,6 +484,58 @@ if (want("L6")) {
     `before: tab active ${r.before.tab}, store open ${r.before.open}; remounted with a canvas ${r.after.rebuilt}; after: tab active ${r.after.tab}, store open ${r.after.open}, speed ${r.after.speed}`)
   const m = await remount(true)
   fired("L6", "the reset with no notify", m.after.tab && m.after.open === false, `after: tab active ${m.after.tab}, store open ${m.after.open}`)
+}
+
+// ---------------------------------------------------------------- L7
+async function animGlb(law) {
+  const { loadTs } = await import("./_ts-load.mjs")
+  const G = loadTs("lib/export/glb-sparse.ts")
+  const ctx = await browser.newContext({ viewport: { width: 1512, height: 982 }, acceptDownloads: true })
+  await ctx.addInitScript(() => { try { for (const x of Object.keys(localStorage)) if (x.startsWith("fs.layout.")) localStorage.removeItem(x) } catch {} })
+  if (law) await ctx.addInitScript(() => { window.__fsAnimGlbMaterial = "doc" })
+  const page = await ctx.newPage()
+  page.on("pageerror", (e) => { if (!law) errors.push(e.message) })
+  await page.goto(LAB_URL, { waitUntil: "domcontentloaded", timeout: 240000 })
+  await page.waitForFunction(() => window.__styleHarness && window.__revealHarness && window.__fsSetKeys && window.__dockHarness && window.__fsTransport, null, { timeout: 240000 })
+  await page.evaluate((p) => window.__styleHarness.injectStrokes(p.slice(0, 2), { msPerPoint: 12, gapMs: 60 }), polys)
+  await page.waitForTimeout(1500)
+  await page.evaluate(() => { window.__revealHarness.setPlaying(false); window.__styleHarness.setStyle({ materialPreset: "custom", materialAnimationEnabled: false }) })
+  await settle(page, 300)
+  const L = await page.evaluate(() => window.__fsTransport.derived()?.totalDuration ?? 0)
+  const refused = await page.evaluate((x) => window.__fsSetKeys(x), { "customMaterial.roughness": [k(0, 0.1), k(L, 0.9)] })
+  if (refused?.length) throw new Error(`keys refused: ${refused.join("; ")}`)
+  await page.evaluate(() => window.__dockHarness?.dock.open("export"))
+  await settle(page, 400)
+  const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 900000 }), page.locator("button", { hasText: /^Anim GLB$/ }).click()])
+  const buf = readFileSync(await dl.path())
+  await ctx.close()
+  const { json, bin } = G.readGlb(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength))
+  const dv = new DataView(bin.buffer, bin.byteOffset, bin.byteLength)
+  const read = (a) => {
+    const acc = json.accessors[a]
+    const v = json.bufferViews[acc.bufferView]
+    return Array.from({ length: acc.count }, (_, i) => dv.getFloat32((v.byteOffset ?? 0) + (acc.byteOffset ?? 0) + i * 4, true))
+  }
+  const anim = (json.animations ?? []).find((a) => a.name === "draw-in")
+  const mats = (json.materials ?? []).length
+  const chans = (anim?.channels ?? []).filter((c) => /\/pbrMetallicRoughness\/roughnessFactor$/.test(c.target?.extensions?.KHR_animation_pointer?.pointer ?? ""))
+  const morph = (anim?.channels ?? []).find((c) => c.target?.path === "weights")
+  const frames = morph ? json.accessors[anim.samplers[morph.sampler].input].count : 0
+  const vals = chans.length ? read(anim.samplers[chans[0].sampler].output) : []
+  const rising = vals.every((v, i) => i === 0 || v >= vals[i - 1] - 1e-6)
+  return {
+    mats, chans: chans.length, frames, n: vals.length,
+    first: vals[0], last: vals[vals.length - 1], rising,
+    linear: chans.every((c) => anim.samplers[c.sampler].interpolation === "LINEAR"),
+    used: (json.extensionsUsed ?? []).includes("KHR_animation_pointer"),
+  }
+}
+if (want("L7")) {
+  const r = await animGlb(false)
+  row("L7", "the animated GLB carries the keyed roughness as a channel on every material", r.mats > 0 && r.chans === r.mats && r.n === r.frames && r.frames > 10 && Math.abs(r.first - 0.1) < 0.01 && Math.abs(r.last - 0.9) < 0.01 && r.rising && r.linear && r.used,
+    `${r.chans} roughness channels on ${r.mats} materials, ${r.n} keys for ${r.frames} morph keyframes, ${r.first?.toFixed(3)} to ${r.last?.toFixed(3)}, rising ${r.rising}, LINEAR ${r.linear}, KHR_animation_pointer used ${r.used}`)
+  const m = await animGlb(true)
+  fired("L7", "the file with no keyed material", m.chans === 0, `${m.chans} roughness channels`)
 }
 
 row("G1", "the pages threw nothing", errors.length === 0, errors.length ? errors.slice(0, 3).join(" | ") : "0 pageerror events")

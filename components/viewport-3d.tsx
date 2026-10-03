@@ -12966,7 +12966,9 @@ export default function Viewport3D(viewportProps: Viewport3DProps) {
           canvasWidth,
           canvasHeight,
           frames,
-          materialTracks,
+          /* `__fsAnimGlbMaterial = "doc"` parks the prior for the gate's
+           * must-fail (assert-keyed-playback-live L7): no keyed material. */
+          materialTracks: readDevLaw("__fsAnimGlbMaterial", ["doc"], "keyed") === "keyed" ? materialTracks : undefined,
         })
       } finally {
         for (const g of exportResult.disposables) g.dispose()
