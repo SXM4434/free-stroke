@@ -107,6 +107,14 @@
                        its content (R6 must go red)
      "stripcut"        the default cap is a third of the shell however tall
                        the closed strip is (R8 must go red at 1280x800)
+     CLOUD-LAYOUT, read by scripts/verify/assert-rearrange.mjs (his ruling of
+     2026-10-02: every panel can always be rearranged):
+     "nodrag"          dragging off again, the old `disableDnd` (RA1, RA6)
+     "locked"          the old `locked`: every splitview disabled, no divider
+                       can be dragged (RA3)
+     "pinned"          the layout put back after every panel move, what any
+                       code that holds a panel in place does (RA2)
+     "noreset"         Reset does nothing (RA5)
    ================================================================== */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
@@ -143,8 +151,8 @@ import {
 } from "@/components/workspace/workspaces"
 
 type Slots = { drawing: ReactNode; view: ReactNode; style: ReactNode }
-type Mutant = "header" | "onlyWhenVisible" | "noReuse" | "stale" | "nodock" | "toast182" | "nosync" | "unguarded" | "silent" | "nosave" | "restoreDefault" | "nopreview" | "nokeys" | "savemax" | "previewLoose" | "previewNoFit" | "nofit" | "stripcut" | null
-const MUTANTS: readonly string[] = ["header", "onlyWhenVisible", "noReuse", "stale", "nodock", "toast182", "nosync", "unguarded", "silent", "nosave", "restoreDefault", "nopreview", "nokeys", "savemax", "previewLoose", "previewNoFit", "nofit", "stripcut"]
+type Mutant = "header" | "onlyWhenVisible" | "noReuse" | "stale" | "nodock" | "toast182" | "nosync" | "unguarded" | "silent" | "nosave" | "restoreDefault" | "nopreview" | "nokeys" | "savemax" | "previewLoose" | "previewNoFit" | "nofit" | "stripcut" | "nodrag" | "locked" | "pinned" | "noreset" | null
+const MUTANTS: readonly string[] = ["header", "onlyWhenVisible", "noReuse", "stale", "nodock", "toast182", "nosync", "unguarded", "silent", "nosave", "restoreDefault", "nopreview", "nokeys", "savemax", "previewLoose", "previewNoFit", "nofit", "stripcut", "nodrag", "locked", "pinned", "noreset"]
 
 const SlotContext = createContext<Slots>({ drawing: null, view: null, style: null })
 
@@ -221,7 +229,10 @@ const DOCK_TITLES: Record<DockPanelId, string> = { timeline: "Timeline", drawin:
 export { DOCK_HEADER_PX }
 /** Open, the dock takes a third of the shell, and never less than this. */
 const DOCK_OPEN_MIN_PX = 220
-const isDockGroup = (g: DockviewGroupPanel | undefined) => !!g && g.panels.some((p) => (DOCK_PANELS as readonly string[]).includes(p.id))
+/* THE DOCK GROUP is the one that holds the Timeline: the transport rides on
+   its header and it folds. Draw-in or Export dragged out of it are panels in
+   whatever group they land in (CLOUD-LAYOUT). */
+const isDockGroup = (g: DockviewGroupPanel | undefined) => !!g && g.panels.some((p) => p.id === "timeline")
 
 /* THE TIMELINE'S CONTENT HEIGHT, as if the dock gave it all it wants
    (CLOUD-LAYOUT). The panel's box is as tall as its content up to the panel
@@ -242,6 +253,58 @@ function timelineNaturalPx(): number | null {
   }
   return h + hidden
 }
+/* NO STALE OVERLAY OVER ANOTHER PANEL (CLOUD-LAYOUT). With the "always"
+   renderer each panel's content is an overlay positioned over its group.
+   dockview 8.3.1 keeps an overlay's previous geometry, visible, when its
+   group's content area becomes zero tall or wide (OverlayRenderContainer,
+   `retainPreviousGeometry`): the dock folded after the Timeline had sat right
+   of the 3D view left the Timeline's 296x870 overlay over the 3D view, eating
+   its pointer events and every drop on it. A panel whose content area is
+   empty has nothing to show, so its overlay is hidden here; dockview shows it
+   again when it lays the panel out at a real size. */
+function syncOverlays(api: DockviewApi, box: HTMLElement) {
+  let stale = false
+  for (const p of api.panels) {
+    const c = p.group.element.querySelector(":scope > .dv-content-container")?.getBoundingClientRect()
+    const o = document.querySelector(`[data-dock-panel="${p.id}"]`)?.closest(".dv-render-overlay") as HTMLElement | null
+    if (!o) continue
+    if (!(c && c.width >= 1 && c.height >= 1 && p.group.api.isVisible)) {
+      if (o.style.visibility !== "hidden") {
+        o.style.visibility = "hidden"
+        o.style.pointerEvents = "none"
+      }
+      continue
+    }
+    /* The same retained geometry the other way: a panel shown again (from
+       behind a tab, after dockview's own maximize) can keep the box it had
+       before, the 3D view's canvas 1464 px wide in a 731 px group
+       (assert-dock-shell SURVIVES (d), red in about one run in three on the
+       unchanged snapshot too). A shown panel whose overlay is not its group's
+       content box gets a forced layout, which repositions every overlay. */
+    if (p.api.isVisible && p.group.api.location.type === "grid") {
+      const r = o.getBoundingClientRect()
+      if (Math.abs(r.left - c.left) > 1 || Math.abs(r.top - c.top) > 1 || Math.abs(r.width - c.width) > 1 || Math.abs(r.height - c.height) > 1) stale = true
+    }
+  }
+  if (stale) {
+    const b = box.getBoundingClientRect()
+    api.layout(b.width, b.height, true)
+  }
+  /* And the 3D canvas in it: R3F sizes its canvas from its own measure of
+     the container, which can miss a change made while the panel was hidden.
+     Back from behind a tab after dockview's maximize, the panel was 732 px
+     and the canvas still 1464 (6 of 6 runs of that sequence). A window
+     resize makes it measure again. */
+  // Only a canvas LARGER than its panel: below lg the stacked column is laid
+  // out against its content and its canvas is meant to differ from its box.
+  const view = box.querySelector<HTMLElement>('[data-dock-panel="view3d"]')
+  const c = view?.querySelector("canvas")
+  if (view && c) {
+    const host = view.getBoundingClientRect(), r = c.getBoundingClientRect()
+    if (host.width >= 1 && host.height >= 1 && (r.width > host.width + 1 || r.height > host.height + 1)) window.dispatchEvent(new Event("resize"))
+  }
+}
+
 /** A group whose size along the height is its own: a row of a column. */
 const alongHeight = (g: DockviewGroupPanel) =>
   g.api.location.type === "grid" && !!g.element.parentElement?.closest(".dv-split-view-container")?.classList.contains("dv-vertical")
@@ -295,11 +358,13 @@ type DockControl = {
   toggleMax: (panelId: string) => void
   hide: (panelId: string) => void
   collapsed: boolean
+  /** The dock is a row of a column, so it folds; moved beside a panel it does not. */
+  foldable: boolean
   /** Open the dock if it is folded, and show `id`. */
   show: (id: DockPanelId) => void
   toggleCollapsed: () => void
 }
-const DockControlContext = createContext<DockControl>({ maximized: null, toggleMax: () => {}, hide: () => {}, collapsed: true, show: () => {}, toggleCollapsed: () => {} })
+const DockControlContext = createContext<DockControl>({ maximized: null, toggleMax: () => {}, hide: () => {}, collapsed: true, foldable: true, show: () => {}, toggleCollapsed: () => {} })
 
 /* THE TABS. dockview's own tab activates on pointerdown; these take the
    pointerdown themselves and act on click, so a click on a folded dock opens
@@ -354,8 +419,9 @@ function DockTab({ api }: IDockviewPanelHeaderProps) {
   )
 }
 /* THE HEADER OF EVERY OTHER PANEL (L5): its name, in the dock tabs' type.
-   The name is not a control; a drag on the header would move the panel,
-   and dragging is off (`disableDnd`) until his eye decides it is wanted. */
+   The name is not a control: a drag on it moves the panel (his ruling of
+   2026-10-02, every panel can always be rearranged), to another edge or
+   into another panel's tab group. */
 function PanelTab({ api }: IDockviewPanelHeaderProps) {
   return (
     <div data-panel-tab={api.id} className="flex h-full select-none items-center px-2 text-[11px] font-medium text-muted-foreground">
@@ -397,7 +463,7 @@ function DockHeaderPrefix({ group }: IDockviewHeaderActionsProps) {
    the maximized one). The dock: the fold chevron after it. Every other
    panel: hide, which is the rail's show / hide for that panel. */
 function DockHeaderActions({ group }: IDockviewHeaderActionsProps) {
-  const { collapsed, toggleCollapsed, maximized, toggleMax, hide } = useContext(DockControlContext)
+  const { collapsed, toggleCollapsed, maximized, toggleMax, hide, foldable } = useContext(DockControlContext)
   const dock = isDockGroup(group)
   const id = dock ? "timeline" : group.activePanel?.id
   if (!id) return null
@@ -410,7 +476,7 @@ function DockHeaderActions({ group }: IDockviewHeaderActionsProps) {
         path={isMax ? RESTORE_ICON : MAX_ICON}
         data={{ "data-maximize": dock ? "dock" : id, "aria-pressed": String(isMax) }}
       />
-      {dock ? (
+      {dock && foldable ? (
         <button
           type="button"
           data-dock-collapse
@@ -427,7 +493,7 @@ function DockHeaderActions({ group }: IDockviewHeaderActionsProps) {
             <path d={collapsed ? "M1.5 6.5L5 3l3.5 3.5" : "M1.5 3.5L5 7l3.5-3.5"} />
           </svg>
         </button>
-      ) : (
+      ) : dock ? null : (
         !isMax && (
           <HeaderButton
             label={`Hide ${group.activePanel?.title ?? id}`}
@@ -594,6 +660,13 @@ const sayStorageBlocked = (why: string) => {
 
 const RAIL_NONE: Record<RailPanel, boolean> = { drawing: false, view3d: false, style: false, timeline: false, export: false }
 
+/* WHAT MAXIMIZE KEEPS (L5, CLOUD-LAYOUT). `from` is the layout it came from;
+   `hid` the groups it hid and `viewGroup` the 3D view's group before it
+   floated, so that a panel moved while maximized can be kept: `moved` is set
+   by any panel move, and restore then shows what it hid and docks the 3D
+   view back instead of loading `from` (which would undo the move). */
+type MaxState = { id: string; from: SerializedDockview; hid: string[]; viewGroup: string | null; moved: boolean }
+
 function DockShellInner({ drawing, view, style }: Slots) {
   const mutantRef = useRef<Mutant>(null)
   const setPreview = useSetDockPreview()
@@ -605,6 +678,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
      dockview's callbacks; `collapsed` is what the header renders. */
   const [collapsed, setCollapsedState] = useState(true)
   const collapsedRef = useRef(true)
+  const [foldable, setFoldable] = useState(true)
   /** The open dock's cap: the height his last drag on its edge left it, per
    *  workspace, saved with the layout. Null: the workspace's default. */
   const openPxRef = useRef<number | null>(null)
@@ -614,6 +688,8 @@ function DockShellInner({ drawing, view, style }: Slots) {
    *  A saved layout is loaded as it was saved and is not refitted; the fit
    *  runs again when the content changes, the dock opens or its tab changes. */
   const loadFitRef = useRef(false)
+  /** True while the shell itself moves a panel (the preview's float). */
+  const selfMoveRef = useRef(false)
   /** The Timeline's content height when last read: a refit is for a change in it. */
   const naturalRef = useRef<number | null>(null)
   /** The dock's tab when last seen, so only a change of it refits. */
@@ -636,7 +712,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
   const todayRef = useRef(false)
   /* THE MAXIMIZED PANEL (L5) and the layout it came from, kept in memory
      only: maximize is never saved. */
-  const maxRef = useRef<{ id: string; from: SerializedDockview } | null>(null)
+  const maxRef = useRef<MaxState | null>(null)
   const [maximized, setMaximizedState] = useState<string | null>(null)
   const saveTimer = useRef<number | null>(null)
   /** The layout as it stood once the last load settled. A save that would
@@ -685,7 +761,12 @@ function DockShellInner({ drawing, view, style }: Slots) {
     const r = boxRef.current?.getBoundingClientRect()
     const loose = mutantRef.current === "previewLoose"
     const { width, height } = loose || !r ? { width: PREVIEW_W, height: PREVIEW_H } : previewBox(r.width, r.height)
-    api.addFloatingGroup(v, { position: { right: PREVIEW_MARGIN, bottom: PREVIEW_MARGIN }, width, height, dragHandle: "tabbar" })
+    selfMoveRef.current = true
+    try {
+      api.addFloatingGroup(v, { position: { right: PREVIEW_MARGIN, bottom: PREVIEW_MARGIN }, width, height, dragHandle: "tabbar" })
+    } finally {
+      selfMoveRef.current = false
+    }
   }
   const refitPreview = (api: DockviewApi) => {
     if (!maxRef.current || mutantRef.current === "previewLoose") return
@@ -704,9 +785,16 @@ function DockShellInner({ drawing, view, style }: Slots) {
     if (!api || !boxRef.current) return
     refitPreview(api)
     const g = api.groups.find(isDockGroup)
-    if (g && collapsedRef.current && g.api.isVisible && !api.hasMaximizedGroup() && Math.abs(g.element.getBoundingClientRect().height - DOCK_HEADER_PX) > 0.5)
+    // Folding is the dock's own height; moved beside a panel (CLOUD-LAYOUT)
+    // it has none to fold, so it is open and nothing holds it to its header.
+    const along = !!g && alongHeight(g)
+    setFoldable(along || !g)
+    if (g && !along && g.api.location.type === "grid" && collapsedRef.current && !maxRef.current) setCollapsed(false)
+    // Never while a divider is dragged: the drag is what opens a folded dock.
+    if (g && along && collapsedRef.current && !sashRef.current && g.api.isVisible && !api.hasMaximizedGroup() && Math.abs(g.element.getBoundingClientRect().height - DOCK_HEADER_PX) > 0.5)
       g.api.setSize({ height: DOCK_HEADER_PX })
     if (todayRef.current) holdTodaysSplit(api, boxRef.current)
+    syncOverlays(api, boxRef.current)
     publishEdge()
     readShown()
   }), [publishEdge, readShown])
@@ -789,7 +877,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
   }, [hold, setCollapsed])
   const fold = useCallback(() => {
     const g = dockGroup()
-    if (!g) return
+    if (!g || !alongHeight(g)) return
     setCollapsed(true)
     g.api.setSize({ height: DOCK_HEADER_PX })
     hold()
@@ -806,7 +894,12 @@ function DockShellInner({ drawing, view, style }: Slots) {
     hold()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expand, hold, saveSoon])
-  const toggleCollapsed = useCallback(() => (collapsedRef.current ? expand() : fold()), [expand, fold])
+  const toggleCollapsed = useCallback(() => {
+    const g = dockGroup()
+    if (collapsedRef.current) expand()
+    else if (g && alongHeight(g)) fold()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expand, fold])
 
   /* DRAW-IN OPEN IS THE DRAW-IN TAB SHOWING. The store's `drawInOpen` is what
      the Animation drawer's "Show in dock" writes (OPEN_ANIMATION_PANEL_EVENT)
@@ -947,7 +1040,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
 
   /* ---- MAXIMIZE (L5) ---------------------------------------------------- */
 
-  const setMax = (v: { id: string; from: SerializedDockview } | null) => {
+  const setMax = (v: MaxState | null) => {
     maxRef.current = v
     setMaximizedState(v ? v.id : null)
     // The viewport frames the drawing to the preview while it shows (CLOUD-LAYOUT).
@@ -969,8 +1062,33 @@ function DockShellInner({ drawing, view, style }: Slots) {
     if (!m) return
     setMax(null)
     const { w, h, wide } = shellSize()
+    if (m.moved && mutantRef.current !== "restoreDefault") {
+      softRestore(m)
+      return
+    }
     loadLayout(mutantRef.current === "restoreDefault" ? defaultLayout(wsRef.current, w, h, wide) : m.from)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadLayout])
+  /* A RESTORE THAT KEEPS A MOVE MADE WHILE MAXIMIZED: every group maximize hid
+     shows again, and the floating 3D view goes back to its group, or, when
+     that group is gone, beside the panel that was maximized. */
+  const softRestore = (m: MaxState) => {
+    const api = apiRef.current
+    if (!api) return
+    for (const g of api.groups) if (m.hid.includes(g.id) && g.api.location.type === "grid" && !g.api.isVisible) g.api.setVisible(true)
+    const v = api.getPanel("view3d")
+    if (v && v.group.api.location.type === "floating") {
+      const home = m.viewGroup ? api.groups.find((g) => g.id === m.viewGroup && g.api.location.type === "grid") : undefined
+      const beside = api.getPanel(m.id)?.group
+      if (home) v.api.moveTo({ group: home, position: "center" })
+      else if (beside && beside.api.location.type === "grid") v.api.moveTo({ group: beside, position: "left" })
+      else v.api.moveTo({ position: "left" })
+    }
+    hideHeaders(api)
+    hold()
+    syncDrawIn()
+    saveSoon()
+  }
 
   const maximizePanel = useCallback((id: string) => {
     const api = apiRef.current
@@ -983,13 +1101,15 @@ function DockShellInner({ drawing, view, style }: Slots) {
     const panel = api.getPanel(id)
     if (!panel) return
     const from = api.toJSON()
-    setMax({ id, from })
     const target = panel.group
+    const hid = api.groups.filter((g) => g !== target && g.api.location.type === "grid" && g.api.isVisible).map((g) => g.id)
+    const viewGroup = api.getPanel("view3d")?.group.id ?? null
+    setMax({ id, from, hid, viewGroup, moved: false })
     if (isDockGroup(target)) {
       setCollapsed(false)
       panel.api.setActive()
     }
-    for (const g of api.groups) if (g !== target && g.api.location.type === "grid" && g.api.isVisible) g.api.setVisible(false)
+    for (const g of api.groups) if (hid.includes(g.id)) g.api.setVisible(false)
     if (!target.api.isVisible) target.api.setVisible(true)
     if (id !== "view3d" && mutantRef.current !== "nopreview") floatPreview(api)
     hideHeaders(api)
@@ -1024,6 +1144,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
   }, [save, loadLayout, layoutFor, restore])
 
   const reset = useCallback(() => {
+    if (mutantRef.current === "noreset") return
     if (maxRef.current) setMax(null)
     const ws = wsRef.current
     const r = deleteSaved(ws)
@@ -1077,7 +1198,40 @@ function DockShellInner({ drawing, view, style }: Slots) {
     // showing unless it is hidden here.
     api.onDidAddGroup((g) => dressGroup(g))
     api.onDidLayoutFromJSON(() => hideHeaders(api))
-    api.onDidMovePanel(hold)
+    api.onDidMovePanel((e) => {
+      // His move while maximized is kept by the restore; the preview's own float is not his.
+      if (maxRef.current && !selfMoveRef.current) maxRef.current.moved = true
+      // A panel moved is a panel he wants: dockview moves a hidden group's
+      // only panel by moving the group, still hidden, so it is shown here.
+      const moved = e.panel.group
+      if (!maxRef.current && !loadingRef.current && moved.api.location.type === "grid" && !moved.api.isVisible) {
+        moved.api.setVisible(true)
+        // Moved above or below a panel, the group is laid out but dockview
+        // still reads it hidden, and showing it is a no-op: hide and show
+        // puts its state (and its panel's content) back in step.
+        if (!moved.api.isVisible) {
+          moved.api.setVisible(false)
+          moved.api.setVisible(true)
+        }
+        // A group hidden in a row and moved into a column comes back with no
+        // height of its own (or the other way round): it gets a third of its
+        // neighbour's.
+        requestAnimationFrame(() => {
+          const r = moved.element.getBoundingClientRect()
+          const along = alongHeight(moved)
+          const box = boxRef.current?.getBoundingClientRect()
+          if (along && r.height < 48) moved.api.setSize({ height: Math.round((box?.height ?? 900) / 3) })
+          if (!along && r.width < 48) moved.api.setSize({ width: Math.round((box?.width ?? 1400) / 3) })
+          hold()
+        })
+        saveSoon()
+      }
+      hold()
+      if (mutantRef.current === "pinned" && loadedJson.current && !loadingRef.current) {
+        const back = JSON.parse(loadedJson.current) as SerializedDockview
+        window.setTimeout(() => loadLayout(back), 0)
+      }
+    })
     api.onDidMaximizedGroupChange(hold)
     api.onDidLayoutFromJSON(hold)
     api.onDidActivePanelChange(() => {
@@ -1293,7 +1447,7 @@ function DockShellInner({ drawing, view, style }: Slots) {
 
   return (
     <SlotContext.Provider value={slots}>
-      <DockControlContext.Provider value={{ collapsed, show, toggleCollapsed, maximized, toggleMax: maximizePanel, hide: hidePanel }}>
+      <DockControlContext.Provider value={{ collapsed, foldable, show, toggleCollapsed, maximized, toggleMax: maximizePanel, hide: hidePanel }}>
         <div className="flex min-h-0 min-w-0 flex-1">
           <Rail workspace={workspace} onWorkspace={switchTo} shown={shown} onToggle={toggle} onReset={reset} />
           <div ref={boxRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden" style={QUIET} data-fs-dock-box="">
@@ -1308,8 +1462,13 @@ function DockShellInner({ drawing, view, style }: Slots) {
               defaultRenderer={readMutant() === "onlyWhenVisible" ? "onlyWhenVisible" : "always"}
               hideBorders
               floatingGroupBounds={readMutant() === "previewLoose" ? undefined : "boundedWithinViewport"}
-              disableDnd
-              locked
+              /* EVERY PANEL CAN ALWAYS BE REARRANGED (his ruling, 2026-10-02):
+                 dragging on, every splitview live. Until CLOUD-LAYOUT these two
+                 were set, `locked` disabled every sash and `disableDnd` every
+                 drag, so only the rail's show / hide was left. The two
+                 must-fail arms set them back. */
+              disableDnd={readMutant() === "nodrag"}
+              locked={readMutant() === "locked"}
             />
           </div>
         </div>

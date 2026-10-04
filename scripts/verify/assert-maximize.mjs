@@ -41,6 +41,15 @@
 //   X9  (CLOUD-LAYOUT) THE DRAWING FITS THE PREVIEW. In the preview's own frame the ink clears every
 //       edge by 8 px and spans 70% of the width or height. must-fail: `"previewNoFit"`, the main view's
 //       framing in the preview (the logo cropped at the top and right).
+//   X10 (CLOUD-LAYOUT) A RAIL CLICK WHILE MAXIMIZED DOES WHAT ITS BUTTON SAYS. In Draw: the Drawing
+//       maximized, then the rail's Timeline, 3D view and Style; the dock maximized, then the rail's
+//       Drawing. Each click restores and leaves its panel the opposite of what its button showed
+//       (aria-pressed) before the click. must-fail: `"railflip"`, restore then flip the restored state.
+//   X11 (CLOUD-LAYOUT) CROSSING 1024 PX WHILE MAXIMIZED. Style maximized at 1512x982, the window to
+//       900x700 and back, then the rail hides the Drawing, then a reload: the hide is kept, nothing is
+//       maximized after the reload, and before it the header said Restore only while something was
+//       maximized. must-fail: `"maxstuck"`, the breakpoint reload under the maximize as before (the
+//       maximize stuck, saving off, the hide lost).
 //   G1  no page error on the lane pages.
 
 const { chromium } = await import("./lib/browser.mjs")
@@ -408,6 +417,67 @@ async function previewInk(mutant) {
   row("X9", "the drawing fits the preview: clears every edge by 8 px and spans 70% of it", r.ok, r.detail)
   const m = await previewInk("previewNoFit")
   fired("X9", "the preview shows the main view's framing", !m.ok, m.detail)
+}
+
+// ---------------------------------------------------------------- X10 (CLOUD-LAYOUT)
+async function railWhileMax(mutant) {
+  const { ctx, page } = await open({ mutant })
+  const out = []
+  for (const [max, rail] of [["drawing", "timeline"], ["drawing", "view3d"], ["drawing", "style"], ["timeline", "drawing"]]) {
+    await page.evaluate(() => window.__dockHarness.workspace.reset())
+    await settle(page, 400)
+    await M(page, "toggle", max)
+    await settle(page, 400)
+    const said = await page.locator(`[data-rail-panel="${rail}"]`).getAttribute("aria-pressed")
+    await page.locator(`[data-rail-panel="${rail}"]`).click()
+    await settle(page, 500)
+    const now = await page.evaluate((rail) => window.__dockHarness.workspace.shown()[rail], rail)
+    const cur = await M(page, "current")
+    out.push({ max, rail, said, now, ok: cur === null && now === (said !== "true") })
+  }
+  await ctx.close()
+  return out
+}
+{
+  const say = (r) => r.map((x) => `${x.max} maximized, rail ${x.rail} said ${x.said === "true" ? "on" : "off"}, now ${x.now ? "shown" : "hidden"}`).join("; ")
+  const r = await railWhileMax(null)
+  row("X10", "a rail click while maximized leaves its panel the opposite of what its button said", r.every((x) => x.ok), say(r))
+  const m = await railWhileMax("railflip")
+  fired("X10", "restore, then flip the restored state", m.some((x) => !x.ok), say(m))
+}
+
+// ---------------------------------------------------------------- X11 (CLOUD-LAYOUT)
+async function crossLg(mutant) {
+  const ctx = await browser.newContext({ viewport: { width: 1512, height: 982 } })
+  await ctx.addInitScript(() => { if (!sessionStorage.getItem("x11")) { sessionStorage.setItem("x11", "1"); try { for (const k of Object.keys(localStorage)) if (k.startsWith("fs.layout.")) localStorage.removeItem(k) } catch {} } })
+  if (mutant) await ctx.addInitScript((m) => { window.__fsDockMutant = m }, mutant)
+  const { page } = await open({ mutant, ctx })
+  await M(page, "toggle", "style")
+  await settle(page, 400)
+  await page.setViewportSize({ width: 900, height: 700 })
+  await settle(page, 900)
+  await page.setViewportSize({ width: 1512, height: 982 })
+  await settle(page, 900)
+  const during = await M(page, "current")
+  const restoreSaid = await page.evaluate(() => [...document.querySelectorAll("[data-maximize]")].filter((b) => b.getAttribute("aria-pressed") === "true").length)
+  await page.locator('[data-rail-panel="drawing"]').click()
+  await settle(page, 900)
+  const hidden = await page.evaluate(() => !window.__dockHarness.workspace.shown().drawing)
+  await page.reload({ waitUntil: "domcontentloaded" })
+  await page.waitForFunction(() => window.__dockHarness?.maximize, null, { timeout: 240000 })
+  await settle(page, 900)
+  const kept = await page.evaluate(() => !window.__dockHarness.workspace.shown().drawing)
+  const after = await M(page, "current")
+  await ctx.close()
+  const consistent = (during === null) === (restoreSaid === 0)
+  return { ok: hidden && kept && after === null && consistent, during, restoreSaid, hidden, kept, after }
+}
+{
+  const say = (x) => `maximized after the round trip: ${x.during}, Restore buttons pressed ${x.restoreSaid}; Drawing hidden ${x.hidden}, after reload ${x.kept}; maximized after reload ${x.after}`
+  const r = await crossLg(null)
+  row("X11", "maximized across 1024 px and back: consistent, a later hide saved and kept across a reload", r.ok, say(r))
+  const m = await crossLg("maxstuck")
+  fired("X11", "the breakpoint reload under the maximize (stuck)", !m.ok, say(m))
 }
 
 row("G1", "the lane pages threw nothing", errors.length === 0, errors.length ? errors.slice(0, 3).join(" | ") : "0 pageerror events")
