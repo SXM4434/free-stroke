@@ -186,35 +186,66 @@ export function detectCorners(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Chaikin-like smoothing: each interior point is replaced by the    */
-/*  average of itself and its neighbors. Endpoints are preserved.     */
+/*  Taubin (lambda|mu) smoothing — smooths WITHOUT shrinking.         */
+/*                                                                    */
+/*  The previous kernel was c*0.5 + (p+n)*0.25, i.e. a plain          */
+/*  Laplacian pass with lambda = 0.5. Laplacian smoothing always      */
+/*  pulls each point toward the chord between its neighbours, so      */
+/*  every iteration SHRINKS the curve: arcs flatten, loops close up,  */
+/*  and a tight curl drawn by hand comes out visibly smaller than     */
+/*  what the user drew. Two iterations of it were measurably eating   */
+/*  the gesture.                                                      */
+/*                                                                    */
+/*  Taubin's fix is to alternate a positive smoothing pass with a     */
+/*  slightly larger NEGATIVE one, which re-inflates the shape:        */
+/*                                                                    */
+/*      p += lambda * L(p)     (smooth, shrinks)                      */
+/*      p += mu     * L(p)     (un-shrink, mu < -lambda)              */
+/*                                                                    */
+/*  where L(p) = (prev + next)/2 - p. High-frequency tremor is        */
+/*  removed by both passes; low-frequency shape survives because the  */
+/*  two passes cancel there. The stability condition is               */
+/*  1/lambda + 1/mu > 0, which mu = -0.53 against lambda = 0.5        */
+/*  satisfies.                                                        */
+/*                                                                    */
+/*  Endpoints are always preserved — a stroke must start and end      */
+/*  exactly where the hand did.                                       */
 /* ------------------------------------------------------------------ */
+const TAUBIN_LAMBDA = 0.5
+const TAUBIN_MU = -0.53
+
+function laplacianPass(pts: Point[], factor: number): Point[] {
+  const next: Point[] = [pts[0]]
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i - 1]
+    const c = pts[i]
+    const n = pts[i + 1]
+    // L = midpoint of neighbours minus this point.
+    const lx = (p.x + n.x) * 0.5 - c.x
+    const ly = (p.y + n.y) * 0.5 - c.y
+    const hasPressure =
+      c.pressure !== undefined && p.pressure !== undefined && n.pressure !== undefined
+    next.push({
+      x: c.x + factor * lx,
+      y: c.y + factor * ly,
+      t: c.t,
+      pressure: hasPressure
+        ? c.pressure! + factor * ((p.pressure! + n.pressure!) * 0.5 - c.pressure!)
+        : c.pressure,
+    })
+  }
+  next.push(pts[pts.length - 1])
+  return next
+}
+
 function smoothPoints(points: Point[], iterations: number = 2): Point[] {
   if (points.length < 3) return [...points]
 
   let pts = points
   for (let iter = 0; iter < iterations; iter++) {
-    const next: Point[] = [pts[0]]
-    for (let i = 1; i < pts.length - 1; i++) {
-      const p = pts[i - 1]
-      const c = pts[i]
-      const n = pts[i + 1]
-      next.push({
-        x: c.x * 0.5 + (p.x + n.x) * 0.25,
-        y: c.y * 0.5 + (p.y + n.y) * 0.25,
-        t: c.t,
-        pressure:
-          c.pressure !== undefined &&
-          p.pressure !== undefined &&
-          n.pressure !== undefined
-            ? c.pressure * 0.5 + (p.pressure + n.pressure) * 0.25
-            : c.pressure,
-      })
-    }
-    next.push(pts[pts.length - 1])
-    pts = next
+    pts = laplacianPass(pts, TAUBIN_LAMBDA)
+    pts = laplacianPass(pts, TAUBIN_MU)
   }
-
   return pts
 }
 
@@ -274,6 +305,12 @@ export function processStroke(
 
   if (!smooth) return { points: resampled, cornerCount: 0 }
 
+  // Smoothing moves points off the arc-length grid the resample just built.
+  // Every downstream engine assumes roughly even spacing — Rod's tube
+  // cross-sections, Solid's rasteriser, and Inflate's loft all sample the
+  // point list directly — so uneven spacing shows up as wobbling tube radius
+  // and stair-stepped contours. Re-resampling AFTER smoothing restores the
+  // even grid while keeping the smoothed shape.
   if (preserveCorners) {
     const { smoothed, cornerCount } = smoothPreservingCorners(
       resampled,
@@ -281,10 +318,10 @@ export function processStroke(
       angleThresholdDeg,
       spacing
     )
-    return { points: smoothed, cornerCount }
+    return { points: resampleStroke(smoothed, spacing), cornerCount }
   }
 
-  return { points: smoothPoints(resampled, 2), cornerCount: 0 }
+  return { points: resampleStroke(smoothPoints(resampled, 2), spacing), cornerCount: 0 }
 }
 
 export function processAllStrokes(

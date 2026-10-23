@@ -1140,3 +1140,1305 @@ materialDoesNotTouchGeometry, future custom* reserved flags.
 ### Conclusion — `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`
 
 ### Next branch — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1`
+
+---
+
+## LOCKED CHECKPOINT — `LOGO_CAPTURE_VARIANTS_FONT_AND_TRACE_PASS`
+
+**Status: both logo-capture variants delivered.** Finishes the v0 plan that ran
+out of credits (PR #30): Variant B (clean rounded font, inflated, logo-sized)
+and Variant A (traced logo, inflated, matching the handwriting). No app code
+touched — capture tooling + stroke sources only.
+
+### What was delivered
+
+- **Variant B — font:** "Desk Doodles" laid out from the clean single-stroke
+  vector font (`letters.mjs`, size 120 scaled to the trace's 1100px coordinate
+  span so tube weight matches), injected via the DEV harnesses, Inflate mode,
+  custom near-ink material (roughness 0.35). Fully legible inflated word.
+  Output: `public/videos/desk-doodles-logo-flip-font.webm`.
+- **Variant A — trace:** the skeleton tracer no longer shreds the word. Fixed
+  `trace-logo.mjs`: walks THROUGH junctions picking the straightest
+  continuation (dot-product against the recent heading) instead of stopping,
+  then greedy endpoint-merging of fragments (≤6px gaps, direction-continuity
+  guard so neighbouring letters never bridge), then left-to-right stroke
+  ordering so the reveal draws like writing. 30 raw → 22 continuous strokes
+  (was ~60 shredded fragments). The inflated word now reads as the real
+  handwritten logo. Output: `public/videos/desk-doodles-logo-flip-traced.webm`.
+- Reference stills: `scripts/capture/variant-b-font-full.png`,
+  `scripts/capture/variant-a-traced-full.png`.
+
+### New capture driver (agent-browser replacement)
+
+- `scripts/capture/capture-run.mjs` — local Playwright-core driver using the
+  installed system Chrome (`channel: "chrome"`, headless works fine for this
+  WebGL capture since frames are grabbed via `canvas.toDataURL`, no
+  rAF-dependent motion). Supports `--source=font|trace`, `--headed`, and the
+  same env knobs as before (`DRAW_FRAMES`, `ROUGHNESS`, plus `FONT_TARGET_W`).
+- `encode.mjs` now falls back to a system `ffmpeg` on PATH when pnpm blocks
+  ffmpeg-static's postinstall download.
+- Full pipeline per variant:
+  `pnpm dev` → `node scripts/capture/capture-run.mjs --source=font|trace` →
+  `node scripts/capture/compose.mjs --mode=with3d` →
+  `node scripts/capture/encode.mjs --out=<name>.webm`
+
+### Untouched
+
+- Rod / Extrude / Solid / Inflate geometry, animation, export, style system,
+  and all app components — zero app code changed this pass.
+
+### Final locked checkpoint label
+
+`LOGO_CAPTURE_VARIANTS_FONT_AND_TRACE_PASS`
+
+(supersedes `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`
+as the latest layer; all prior checkpoints remain in effect)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1_PASS`
+
+**Status: procedural texture + animated texture are LIVE on all four modes.**
+Renderer implemented (not rails). Geometry, geometry animation, and export
+geometry untouched.
+
+### What was built
+
+- **`lib/texture-shader.ts` (NEW)** — the pattern renderer. Injects GLSL into the
+  shared `MeshPhysicalMaterial` via `onBeforeCompile`, so all four modes get
+  texture from the one live material. Patterns are COMPUTED from position (no
+  UVs — Solid's raster/contour and Inflate's loft have no usable UV
+  parameterization, so image textures were never an option).
+  - Five patterns behind ONE shader, selected by the `uFsTexType` uniform:
+    grain (per-cell hash), noise (2-octave value noise), scanlines, bands,
+    contour (value noise sliced at even levels → topo lines).
+  - `fsHash` + `fsValueNoise` with smoothstep-eased bilinear blend (the
+    `f*f*(3-2f)` easing is what kills the value-noise grid seams).
+  - Coordinate source = object space (welded to the form) or screen space
+    (graphic overlay), per `textureLockMode`.
+  - Animation = sliding the sample coordinate along a unit direction vector.
+    Clock is elapsed time (`independent`) or reveal progress (`syncToDraw`).
+  - Constant `customProgramCacheKey` so every textured material shares one
+    compiled program.
+- **`lib/style-system.ts`** — added `TextureDirection` + `textureDirection`
+  state/default. TEXTURE_PRESET_DEFS and ANIMATED_TEXTURE_PRESET_DEFS are now
+  `implemented: true` with real `applies` patches (Fine Grain, Scanlines,
+  Contour Bands, Scratched Ink, Gel Bubbles / Grain Drift, Scanline Scroll,
+  Ripple Flow, Band Crawl, Bubble Drift). They only ever write `texture*`.
+- **`components/viewport-3d.tsx`** — texture uniforms in a ref (survive material
+  re-creation); per-frame uniform writes in `useFrame`; full texture debug
+  readout; NEW mode-agnostic `GEOM_BUILD_DEBUG.buildCount`; extracted
+  `buildGLBBuffer` so the export button and the verification harness run the
+  same export code; dev-only `window.__geomDebug`.
+- **`components/style-panel-scaffold.tsx`** — real Texture panel (pattern /
+  scale / intensity / contrast / lock mode + Texture Animation with speed and
+  direction). Panel + Animation-category status flipped from "reserved" to
+  "active".
+- **`app/page.tsx`** — Texture summary chip now live (shows pattern + `·anim`);
+  dev harness gained `setStyle(patch)` for verification sweeps.
+
+### Root cause found by visual verification (not code review)
+
+First implementation darkened albedo only. On the glossy near-black Extrude
+default this was **invisible** — multiplying near-black by <1 stays near-black,
+and on a glossy dark surface nearly all visible light is the specular lobe, not
+albedo. Fix: bidirectional albedo modulation (lift AND darken) plus modulating
+`material.roughness` and `material.clearcoatRoughness` right after
+`<lights_physical_fragment>` so the HIGHLIGHT carries the pattern.
+Measured: extrude/contour meanΔ 1.94 (below perceptual floor) → 10.74.
+
+### Verification tooling (NEW, reusable for every future style phase)
+
+- `scripts/verify/verify-style.mjs` — drives the running app through
+  (mode × pattern) stills and long consecutive-frame motion runs; writes to
+  `docs/verification/<pass>/`. `--only=still|motion` no longer wipes the other
+  family.
+- `scripts/verify/diff-frames.mjs` — measures each still against its mode's
+  texture-off baseline (reads / faint / TOO SUBTLE) and each motion cell for
+  consecutive-frame change (travels / jitters / STATIC).
+- `scripts/verify/verify-gates.mjs` — asserts the geometry-rebuild gate, export
+  health, and the taxonomy gate.
+
+### Test results (all captured evidence in `docs/verification/texture-v1/`)
+
+- **Stills — 20/20 read.** Every mode × every pattern above the perceptual
+  floor. Range meanΔ 7.39 (inflate/noise) to 31.43 (solid/contour). Zero
+  TOO SUBTLE, zero faint.
+- **Motion — 4/4 travel.** inflate/grain, inflate/scanlines, solid/grain,
+  solid/scanlines all show real consecutive-frame movement (consecΔ 17.2–56.9).
+- **Geometry-rebuild gate — PASS on all four modes.** buildCount flat across 10
+  style changes each: rod 2→2, extrude 4→4, solid 5→5, inflate 6→6.
+- **Export regression — PASS on all four.** rod 2.16 MB, extrude 29 KB,
+  solid 303 KB, inflate 261 KB, all non-empty with texture active.
+- **Taxonomy gate — PASS.** Texture never enables dither or ASCII.
+- **Console errors — 0** across every capture run.
+
+### Confirmations
+
+- Dither renderer NOT implemented. ASCII renderer NOT implemented.
+- Geometry untouched. Geometry animation untouched. Export GEOMETRY untouched
+  (only the GLB-building code path was extracted to a shared function; the
+  produced buffer is identical).
+- Texture is preview-only — no texture baking into GLB (per PRD: preview first,
+  bake later).
+
+### Docs
+
+- `docs/PRD.md` (the plan, now in-repo), `docs/README.md` (the loop + doc system)
+- `docs/explainers/01-procedural-texture.md` — code / tech / math / reasoning
+- `docs/research/texture-phase.md` — every source used, what it is, what we used it for
+
+### Next branch — `POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1`
+
+### Final locked checkpoint label
+
+`POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1_PASS`
+
+(supersedes `MATERIAL_APPLICATION_DISTINCTION_AND_ANIMATION_READABILITY_FIX_PASS`;
+all prior checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1_PASS`
+
+**Status: dither + animated dither are LIVE on all four modes.** Threshold
+renderer implemented. Geometry, geometry animation, and export geometry
+untouched.
+
+### What was built
+
+- **`lib/dither-shader.ts` (NEW)** — threshold-based tonal reduction. Injects at
+  `<dithering_fragment>` — the very END of the fragment shader, AFTER lighting,
+  tone mapping and color space. This is what makes dither a genuinely different
+  system from texture (which injects at albedo + lighting stages).
+  - Core: `quantize(luminance + (threshold(x,y) - 0.5))`. The `- 0.5` centring
+    is required or average brightness drifts up (Wikipedia flags this).
+  - `fsBayer` generates the Bayer recurrence ARITHMETICALLY (one bit of x/y per
+    refinement level, accumulated base-4) instead of a lookup table, so ONE
+    function serves both 4x4 and 8x8 via a `levels` parameter.
+  - Five threshold maps: bayer4, bayer8, blueNoise (interleaved gradient noise —
+    honestly labeled "Noise threshold (IGN)", NOT true blue noise), halftone
+    (distance-from-cell-centre so dots GROW with tone, like print), lines.
+  - Rec. 709 luma weights for perceived brightness.
+  - Hue preservation: divides colour by its own luminance, quantizes brightness,
+    re-applies the tint — so material presets stay distinguishable under dither
+    instead of all collapsing to identical black/white.
+- **`lib/style-shader.ts` (NEW)** — a material has ONE `onBeforeCompile`, but
+  texture and dither must both live on the shared material. This composer
+  stitches each system's GLSL into its correct chunk while each system keeps its
+  own module, uniforms and state (the PRD's separation preserved in code).
+- **`lib/texture-shader.ts`** — refactored to export its GLSL as constants
+  (`TEXTURE_COMMON_GLSL` / `TEXTURE_MAP_GLSL` / `TEXTURE_LIGHTS_GLSL`) for the
+  composer. Behaviour identical.
+- **`lib/style-system.ts`** — added `ditherIntensity`, `ditherLevels`, and a
+  DEDICATED `ditherLockMode` (dither gets its own, not texture's). DITHER and
+  ANIMATED_DITHER preset defs are now `implemented: true` with real `applies`
+  patches (Bayer Classic, Dot Matrix, Hard Threshold, Soft Dither, Pixel Signal /
+  Dither Crawl, Threshold Sweep, Reveal Dither, Completion Pulse Dither,
+  Diagonal Matrix Drift).
+- **`components/viewport-3d.tsx`** — dither uniforms ref + per-frame uniform
+  writes; two genuinely different animation behaviours (see below); full dither
+  debug readout.
+- **`components/style-panel-scaffold.tsx`** — real Dither panel (threshold map /
+  cell size / tone levels / threshold bias / contrast / amount / lock mode +
+  Dither Animation with speed and motion kind). Panel + Animation-category
+  status flipped to "active".
+- **`app/page.tsx`** — Dither summary chip now live; harness gained
+  `selectPreset(family, id)` so gates exercise the REAL preset path.
+
+### Animated dither = THRESHOLD motion (not pattern motion)
+
+- **Matrix crawl** (direction chosen): offsets the threshold lookup coordinate,
+  so the dither structure travels while tone stays put.
+- **Threshold-bias sweep** (direction "static"): oscillates the bias so tone
+  opens and closes in place, like an aperture. Verified in frames: sparse dots →
+  open checkerboard.
+- **Sync to Draw**: threshold opens as the reveal progresses.
+
+### NEW verification check — pairwise distinctness
+
+`diff-frames.mjs` now also compares every variant against every OTHER variant
+within a mode, not just against the off baseline. This is the check that would
+have caught the historical "all the material presets look the same" bug — a set
+of options can each differ hugely from off while being near-identical to each
+other. Retroactively run on texture-v1 too; both systems pass.
+
+### Test results (evidence in `docs/verification/dither-v1/`)
+
+- **Stills — 20/20 read.** Every mode × threshold map, meanΔ 22.83 (extrude/
+  lines) to 119.80 (solid/halftone). Zero TOO SUBTLE, zero faint.
+- **Distinctness — distinct on all four modes.** Closest pair is bayer4 vs
+  bayer8 (same family, different resolution): 9.68 extrude / 17.36 rod /
+  36.52 inflate / 70.93 solid.
+- **Texture distinctness (retroactive) — distinct on all four modes.** Closest
+  pair grain vs noise: 13.84–23.90.
+- **Motion — 3/3 travel.** solid/crawl (consecΔ 72.15), solid/sweep (9.56),
+  inflate/halftonesweep (13.10).
+- **Geometry-rebuild gate — PASS on all four modes** across 20 combined
+  texture+dither style changes each: rod 3→3, extrude 5→5, solid 6→6,
+  inflate 7→7.
+- **Export regression — PASS on all four** (unchanged byte counts).
+- **Taxonomy gates — PASS.** Texture never enables dither/ASCII; the dither
+  preset `dotMatrix` applies `ditherType: halftone` and touches neither
+  `textureMode` nor `ascii*`. Asserted through the real `handleSelectPreset`.
+- **Console errors — 0** across every run.
+
+### Confirmations
+
+- ASCII renderer NOT implemented (next phase).
+- Geometry untouched. Geometry animation untouched. Export geometry untouched.
+- Dither is preview-only — no dither baking into GLB.
+- Texture (pattern) / Dither (threshold) / ASCII (glyphs) remain separate
+  systems with separate state, separate modules, and separate shader stages.
+
+### Docs
+
+- `docs/explainers/02-dither.md` — code / tech / math / reasoning
+- `docs/research/dither-phase.md` — every source used
+
+### Next branch — `POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1`
+
+### Final locked checkpoint label
+
+`POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1_PASS`
+
+(supersedes `POST_MVP_TEXTURE_AND_ANIMATED_TEXTURE_PHASE_1_PASS`; all prior
+checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1_PASS`
+
+**Status: ASCII + animated ASCII are LIVE on all four modes.** Glyph renderer
+implemented. All three visual primitives (texture / dither / ASCII) now exist
+and compose. Geometry, geometry animation, and export geometry untouched.
+
+### What was built
+
+- **`lib/ascii-shader.ts` (NEW)** — glyph-grid renderer. Injects at
+  `<dithering_fragment>` AFTER dither, so glyphs represent the tone dither
+  produced.
+  - **No font, no texture atlas.** Each character is a 5x5 bitmap packed into
+    bits (bit index = x + 5*y); a pixel works out its position in the cell and
+    tests one bit.
+  - **PRECISION:** a full 5x5 block is 2^25-1 but GLSL floats are only exact to
+    2^24 — every glyph is split into lo (13 bit) / hi (12 bit) halves. Storing
+    the raw value would silently corrupt the densest glyphs.
+  - Five charsets: classic `.:-=+*#%@`, blocks, binary, dots, code marks.
+- **`scripts/gen/glyphs.py` (NEW)** — generates the bit tables from readable
+  ASCII-art strings so bitmaps are reviewable as pictures, not magic numbers.
+  **Self-validating:** our `0` encodes to 15255086, the exact constant the
+  Codrops reference publishes for the same glyph — confirms the bit convention.
+- **`lib/style-shader.ts`** — now composes all three systems into one
+  `onBeforeCompile` with the correct stage ordering.
+- **`lib/style-system.ts`** — `AsciiAnimationType` (scroll / rain / cycle /
+  flicker / revealDensity), `asciiLockMode`. ASCII + ANIMATED_ASCII presets now
+  `implemented: true` with real `applies` patches.
+- **`components/viewport-3d.tsx`** — ASCII uniforms + per-frame writes + full
+  debug readout.
+- **`components/style-panel-scaffold.tsx`** — real ASCII panel (charset / cell
+  size / density / contrast / lock + animation behaviour / speed / direction,
+  with direction disabled for the behaviours that don't travel).
+- **`app/page.tsx`** — ASCII chip live.
+
+### Three bugs found ONLY by looking at frames
+
+1. **Empty output.** Raw luminance of near-black ink (~0.05–0.25) only ever
+   selected the two sparsest glyphs. Fixed with an exposure step: divide
+   luminance by a reference representing "bright for this subject". Density IS
+   that reference.
+2. **Flat mesh.** The first exposure fix over-corrected — hard contrast
+   expansion saturated every cell to the DENSEST glyph, so no character
+   variation showed. Contrast multiplier reduced ~3.0 → ~1.1.
+3. **Invisible glyphs.** Lit pixels were `surface * 1.35`, which on near-black
+   is still near-black. Now hue is recovered by dividing by luminance and
+   brightness is set explicitly (bright glyph / near-black gap), same technique
+   as dither, so material presets stay distinguishable.
+
+All three were correct code that rendered wrong. This is the third consecutive
+phase where the frames-verified rule caught something review would not have.
+
+### CONVENTION NOTE (deliberate inversion)
+
+Traditional ASCII art maps DARK → DENSE (black chars on white paper). Free
+Stroke's glyph pixels are the LIT part of a dark object, so we map
+BRIGHT → DENSE. Copying the traditional convention would make highlights vanish
+and shadows glow.
+
+### Animated ASCII = GLYPH motion, five genuinely different behaviours
+
+scroll (grid travels) / rain (each column falls at its own hashed speed) /
+cycle (glyphs change in place, walking the ramp) / flicker (random cells jump
+per tick) / revealDensity (density follows draw-in).
+
+### Test results (evidence in `docs/verification/ascii-v1/` + `stack-v1/`)
+
+- **Stills — 20/20 read.** meanΔ 17.06 (extrude/blocks) to 100.42
+  (solid/blocks). Zero TOO SUBTLE, zero faint.
+- **Distinctness — distinct on all modes.** Closest pair classic vs custom
+  (17.03 extrude / 31.43 rod / 58.04 inflate).
+- **Motion — 4/4 travel.** solid/scroll 61.86, solid/cycle 46.79, solid/rain
+  38.46, inflate/flicker 13.21 (consecutive-frame change).
+- **Geometry-rebuild gate — PASS on all four modes** across 30 combined
+  texture+dither+ASCII style changes each.
+- **NEW: all three systems STACKED — PASS.** texture + dither + ASCII
+  simultaneously: no geometry rebuild (buildCount 10→10), export still works
+  (261 KB), zero console errors. Four-step layering series captured in
+  `docs/verification/stack-v1/`.
+- **Taxonomy gates — PASS.** ASCII preset `blockGlyph` applies
+  `asciiCharset: blocks` and touches neither `texture*` nor `dither*`. Asserted
+  through the real `handleSelectPreset`.
+- **Export regression — PASS on all four.**
+- **Console errors — 0.**
+
+### Known limitation (documented, not hidden)
+
+Character selection uses PER-PIXEL luminance, not cell-mean luminance, because
+this runs in the MATERIAL shader where a fragment cannot read its neighbours.
+The ramp is coarsely quantized so nearly every cell resolves to one character; a
+cell on a brightness boundary can show two. True cell-averaging requires a
+post-process pass — listed in the panel's future controls.
+
+### Observation for the layer-stack phase
+
+With all three systems on at default strengths the result is legible but dark.
+Tasteful stacking defaults (one dominant graphic layer, others supporting) are
+explicitly that phase's job; `stack-v1/` gives it a baseline.
+
+### Docs
+
+- `docs/explainers/03-ascii.md` — code / tech / math / reasoning
+- `docs/research/ascii-phase.md` — every source, incl. the deliberate
+  convention inversion and the finding no source covers (dark subjects)
+
+### Next branch — `POST_MVP_VISUAL_TIMING_SYSTEM_PHASE_1`
+
+### Final locked checkpoint label
+
+`POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1_PASS`
+
+(supersedes `POST_MVP_DITHER_AND_ANIMATED_DITHER_PHASE_1_PASS`; all prior
+checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_VISUAL_TIMING_SYSTEM_PHASE_1_PASS`
+
+**Status: one shared clock now drives every animated style layer.** Replaces
+three hand-rolled per-system clocks. Geometry, geometry animation, and export
+untouched.
+
+### Why this phase existed
+
+Texture, dither and ASCII each grew their own timing code during their own
+phases — three near-duplicate implementations with different multipliers and no
+shared vocabulary. That drifts, and it makes the interesting behaviours
+impossible: "everything pulses together on completion" and "dither joins half a
+second after texture" cannot be expressed when each layer only knows its own
+accumulator. Fusion (a later phase) is *layers influencing each other over
+time*, which requires them to agree on what time is.
+
+### What was built
+
+- **`lib/style-clock.ts` (NEW)** — the single place a layer's phase is computed.
+  - `StyleClock`: shared scene time, reveal progress, **seconds since the reveal
+    completed**, and stroke duration. Advanced ONCE per frame before any layer
+    reads it.
+  - Completion is detected by watching the 0→1 BOUNDARY CROSSING, not by testing
+    `reveal >= 1` each frame. So a playhead parked at 1 does not retrigger,
+    scrubbing back re-arms for replay, and `Infinity` cleanly means "hasn't
+    happened yet".
+  - `evaluateLayerTime()` returns `{ time, amount, active }`. **`amount` is the
+    key design choice**: a 0..1 envelope the caller multiplies effect strength
+    by, so one-shot and continuous modes share one interface and renderers never
+    branch on mode.
+  - `resolveSyncMode()` maps the coarse user-facing MotionMode onto the finer
+    per-layer sync mode, so renderers never branch on motionMode either.
+- **Six sync modes:** independent / revealSynced / strokeTimeSynced (the
+  gesture's own tempo — a slowly-drawn stroke gets slow style motion) /
+  delayedAfterReveal / completionPulse / loopSynced (shared loop length so
+  layers repeat in lockstep).
+- **`lib/style-system.ts`** — added `delayedAfterReveal` to `StyleSyncMode`
+  (the PRD lists it; the union was missing it), plus per-layer
+  `{texture,dither,ascii}SyncMode` + `Delay`, and a shared `styleLoopSeconds`.
+- **`components/viewport-3d.tsx`** — all three renderers rewired onto the shared
+  clock; their bespoke accumulators deleted. New `STYLE_CLOCK_DEBUG` singleton
+  (same pattern as SOLID_ANIM_DEBUG) so the Debug panel can read a clock that
+  lives inside `<AnimatedStrokes>`. Timing debug fields added.
+- **`components/style-panel-scaffold.tsx`** — one reusable `LayerTimingControl`
+  (timing mode + delay) used by all three panels, so new sync modes appear
+  everywhere at once. Shared loop length exposed in the Animation panel.
+
+### The bug the new assertions caught
+
+`assert-timing.mjs` checks each mode behaves in its OWN pattern, not merely that
+it moves. The pulse failed its third assertion:
+
+```
+PASS  completionPulse / bursts at completion — consecΔ 23.59
+FAIL  completionPulse / decays back to still — consecΔ 1.14
+```
+
+It was decaying 95% but never STOPPING — with a 1.1s decay and a 1% cutoff it
+kept creeping at ~10% strength for many seconds. A one-shot that never ends is
+not a one-shot. Every screenshot of this looks correct ("it bursts and fades");
+only measuring frame-to-frame change long after the burst exposes it. Fixed with
+a 0.55s decay + 4% cutoff → definite ~1.8s lifetime, then EXACTLY static
+(verified 0.00).
+
+### New verification tooling
+
+- `scripts/verify/verify-timing.mjs` — captures each mode under conditions
+  designed to expose it (continuous with reveal parked; delayed/pulse across a
+  completion event; reveal-synced both held and scrubbed).
+- `scripts/verify/assert-timing.mjs` — turns those into pass/fail behavioural
+  assertions.
+- `diff-frames.mjs` metric fix: a periodic effect that completes a full cycle
+  inside the capture window ends where it started, which the old scoring
+  mislabeled "jitters in place". Low span + HIGH frame-to-frame change now reads
+  "travels (periodic — returned to phase)".
+
+### Test results
+
+- **Timing assertions — 10/10 PASS.**
+  - independent 40.24, loopSynced 38.21 (animate freely)
+  - delayedAfterReveal: **0.00 during** the reveal, 37.83 after
+  - completionPulse: **0.00 before**, 14.14 burst, **0.00 settled**
+  - revealSynced: **0.00 held**, 32.69 when scrubbed
+- **Regression — texture + dither animation re-captured after the refactor,
+  all still travel** (texture 17.78–59.00, dither 9.87–73.43).
+- **All 20 gates still PASS**, including all three systems stacked with no
+  geometry rebuild and working export.
+- **Console errors — 0.**
+
+### Docs
+
+- `docs/explainers/04-timing-system.md` — the model, the six modes, the
+  completion-detection detail, and the one-shot bug
+
+### Next branch — `POST_MVP_LAYER_STACK_PHASE_1`
+
+Carry forward: the stack phase owns TASTEFUL DEFAULTS. With all three systems on
+at full strength the result is legible but dark (see `docs/verification/stack-v1/`).
+The PRD's guidance — one dominant graphic layer, others supporting — is that
+phase's job, and it now has both a baseline capture and a shared clock to build
+group animation on (`amount` exists for exactly that).
+
+### Final locked checkpoint label
+
+`POST_MVP_VISUAL_TIMING_SYSTEM_PHASE_1_PASS`
+
+(supersedes `POST_MVP_ASCII_AND_ANIMATED_ASCII_PHASE_1_PASS`; all prior
+checkpoints remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_LAYER_STACK_PHASE_1_PASS`
+
+**Status: the stack compositor is LIVE.** Three independent effects are now a
+composition: per-layer opacity, blend mode, post-lighting order, and five
+tasteful presets. Geometry, geometry animation, and export untouched.
+
+### The refactor that made it possible
+
+Dither and ASCII were INLINE blocks pasted into the shader tail, each mutating
+`gl_FragColor` where it sat. An inline block can only ever run where it was
+pasted — text already substituted cannot be reordered. Both became pure
+`vec3 -> vec3` functions (`fsApplyDither`, `fsApplyAscii`), and the composer
+picks order at runtime from a uniform. Both orders compile into ONE shader, so
+switching order costs nothing (no recompile, no material swap, rebuild gate
+still passes). Composability had to exist in the shader's SHAPE before it could
+exist in the UI.
+
+### The honest constraint: texture cannot be reordered
+
+Texture is not a layer over the object — it IS part of the object, modulating
+albedo + roughness BEFORE/DURING lighting. Dither and ASCII operate on final
+shaded tone AFTER lighting. Putting texture "above" ASCII would mean re-running
+the entire lighting calculation on top of the glyphs (rendering the material
+twice). So the UI shows texture as "1 · Texture (base)" with an explanation, and
+offers order only for the two layers that genuinely swap. **A control that
+silently does nothing is worse than a missing one.**
+
+Dither <-> ASCII order genuinely matters (measured Δ 56.16, among the largest
+differences in the stack):
+- dither → ascii: characters chosen from already-quantized tone. Crisper, printed.
+- ascii → dither: glyphs get thresholded, so dither breaks up the character
+  shapes. Grittier, degraded-terminal.
+
+### What was built
+
+- **`lib/style-stack.ts` (NEW)** — blend modes (normal / multiply / screen),
+  order model, the shared `fsStackBlend` GLSL helper every layer routes through,
+  and `resolveStack()`.
+- **`lib/style-shader.ts`** — composer emits the ordered branch; new
+  `StackUniforms`.
+- **`lib/dither-shader.ts` / `lib/ascii-shader.ts`** — refactored to composable
+  functions; gained blend + amount uniforms. Dead standalone installers removed.
+- **`lib/style-system.ts`** — `stack{Texture,Dither,Ascii}Opacity`,
+  `stack{Dither,Ascii}Blend`, `stackOrder`. LAYER_STACK presets now
+  `implemented: true` with real compositions.
+- **`components/viewport-3d.tsx`** — stack resolved once per frame; layer
+  amounts now compose THREE multipliers (own control × stack opacity × timing
+  envelope); stack debug fields.
+- **`components/style-panel-scaffold.tsx`** — real Layers panel: per-layer
+  opacity + blend rows, order control, preset buttons.
+
+### Taste, expressed numerically
+
+Soft Signal Stack (the only preset using all three layers):
+`stackTextureOpacity 0.30 / stackDitherOpacity 0.35 / stackAsciiOpacity 0.85`,
+dither on multiply. That is the PRD's "one dominant layer, others supporting"
+rule as numbers. The five presets each pick a different dominant layer.
+
+**Confirmation that earlier decisions paid off:** the presets visibly carry their
+MATERIAL colour (Terminal Stack reads cyan from Signal, Graphic Slab reads warm
+from Matte Clay). That is the hue-preservation choice from the dither and ASCII
+phases — both divide by luminance and re-apply the tint rather than outputting
+pure black/white — so the material system still means something underneath the
+graphic layers.
+
+### Test results (evidence in `docs/verification/stack-v1/`)
+
+`assert-stack.mjs` (NEW) exists because a control that renders identically
+whatever you set it to is worse than a missing control. **9/9 PASS:**
+
+- layering: texture Δ31.43, dither Δ47.67, ascii Δ31.23
+- **order**: dither-first vs ascii-first Δ56.16
+- blend: normal/multiply Δ24.98, normal/screen Δ25.28, multiply/screen Δ50.26
+- **opacity**: full vs low Δ58.58
+- all five presets pairwise distinct, closest Δ22.37
+
+Presets applied through the REAL `handleSelectPreset`, not a parallel path.
+
+- **All 20 gates still PASS** after the shader refactor (incl. no geometry
+  rebuild with all three systems stacked, export intact).
+- **All 10 timing assertions still PASS.**
+- **Console errors — 0.**
+
+### Docs
+
+- `docs/explainers/05-layer-stack.md` — the constraint, the refactor, the three
+  multipliers, and what taste means numerically
+
+### Next branch — `POST_MVP_ANIMATED_LAYERING_AND_STACK_ANIMATION_PHASE_1`
+
+Stack-level animation (the whole group animating as one container) is next. It
+will build on the shared clock's `amount` envelope, which exists for exactly
+this. Per-layer animation already works; what's missing is the group.
+
+### Final locked checkpoint label
+
+`POST_MVP_LAYER_STACK_PHASE_1_PASS`
+
+(supersedes `POST_MVP_VISUAL_TIMING_SYSTEM_PHASE_1_PASS`; all prior checkpoints
+remain in effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `POST_MVP_STACK_ANIMATION_PHASE_1_PASS`
+
+**Status: stack-level animation is LIVE.** The whole layer group animates as one
+container while layers stay independently editable. Geometry, geometry
+animation, and export untouched.
+
+### The distinction this phase makes concrete
+
+- per-layer animation: one layer moves on its own (built earlier)
+- **STACK animation: the group moves together (this phase)**
+- fusion animation: layers influence EACH OTHER (still absent, next major phase)
+
+The mental model is a Photoshop layer group / AE precomp: contents keep their own
+settings and keep doing their own thing; you animate the container.
+
+### How it works
+
+Two group values applied UNIFORMLY to every layer:
+- `amount` multiplies each layer's contribution (fades, pulses)
+- `timeOffset` is added to each layer's phase (the stack drifts in formation)
+- plus `frozen` for freeze-on-complete
+
+Uniform application is the point: layers keep their RELATIVE BALANCE, so a preset
+tuned "ASCII dominant, others supporting" arrives in that proportion rather than
+rearranging itself on the way in.
+
+A layer's final strength now composes four dials:
+`own control × stack opacity × its timing envelope × group amount`.
+
+### Seven behaviours
+
+fadeIn / pulse (bottoms out at 0.45, never fully vanishes) / drift / 
+delayAfterReveal / completionPulse (swells ABOVE resting, settles back to exactly
+1) / freezeOnComplete / loop. Six stack-animation presets implemented.
+
+### The bug the assertions caught
+
+`fadeIn` failed: presence 66.3 → 67.5 across the whole fade. Root cause was a
+real design mistake — **the fade measured from SCENE START**. By the time a user
+enables fadeIn, `clock.elapsed` is already far past the 1.2s fade, so the group
+is at full strength before the first frame renders. The feature was invisible in
+exactly the situation where you would use it. Fixed by measuring from when the
+behaviour was ARMED (viewport stamps `clock.elapsed` when `(enabled, behaviour)`
+changes and passes `sinceArmed`). Also gives drift/loop a sensible start phase.
+After: 90.2 → 73.6.
+
+**This is the SECOND "measure from when?" bug** (the first was completion
+detection in the timing phase). Standing lesson recorded in the explainer:
+time-based effects need an explicit origin, and "scene start" is almost never it.
+
+### freezeOnComplete needed a phase snapshot
+
+Freezing cannot just stop the clock — it is shared. Instead the viewport
+snapshots each layer's current phase ON THE TRANSITION into freeze and pins the
+uniforms there, clearing on release so replay works. Verified consecutive-frame
+change 61.46 during the reveal, **0.00** after — identical frames, not "nearly
+still".
+
+### Test results (evidence in `docs/verification/stack-anim-v1/`)
+
+`assert-stack-anim.mjs` — **6/6 PASS:**
+- fadeIn presence 90.2 → 73.6 across the fade
+- pulse oscillates (consecΔ 54.98)
+- drift slides (consecΔ 44.89)
+- delay: absent during reveal (93.3) vs present after (67.6)
+- freeze: animates during (61.46), EXACTLY still after (0.00)
+
+Note the deliberate mix of measures: motion questions use frame-to-frame change,
+presence questions use mean luminance over the object's pixels. "How much of the
+effect is present" is not the same question as "is it moving" — using the wrong
+measure would have passed a broken fade.
+
+**Full regression: 20/20 gates, 10/10 timing, 9/9 stack — all still PASS.**
+Console errors 0.
+
+### Docs
+
+- `docs/explainers/06-stack-animation.md`
+
+### Next branch — `POST_MVP_FUSION_PRESETS_PHASE_1`
+
+Fusion is where layers stop being independent and start influencing each other
+(ASCII density driving dither threshold, etc). Per the PRD this must come after
+the individual systems and the stack — both now exist, so fusion is unblocked.
+
+### Final locked checkpoint label
+
+`POST_MVP_STACK_ANIMATION_PHASE_1_PASS`
+
+(supersedes `POST_MVP_LAYER_STACK_PHASE_1_PASS`; all prior checkpoints remain in
+effect as underlying layers)
+
+---
+
+## LOCKED CHECKPOINT — `CRAFT_PASS_TEXTURE_AND_MATERIAL_STRENGTH`
+
+**Status: quality pass on the two systems Sebs called weak.** Fable craft agent,
+judged in a HEADED browser (headless:false, Metal ANGLE) per his explicit
+instruction. No geometry touched; all gates still pass.
+
+### Sebs's verdict that triggered this
+
+"a lot of the animations for textures are hard to notice or just don't do
+anything · need more options · a lot of the options are just weak · texture and
+material are the easiest to make and they suck"
+
+He was right, and my verification was the reason I missed it: I measured "did
+the pixels change", never "is this strong enough to be worth having". Those are
+different questions. Every numeric gate passed on effects that looked like
+nothing.
+
+### Real bugs found (all mine, all invisible to the existing gates)
+
+1. **completionFlash never ended.** `completion` stays 1 after the draw, so the
+   "flash" froze into a permanent gray glow. Before-frames 1s apart were
+   BYTE-IDENTICAL. Rewired to ramp over the last 20% of the draw then decay on a
+   real `sinceCompletion` clock — a genuine one-shot.
+2. **Animation-off left material state stuck.** metalness / emissive /
+   sheenColor kept their last animated values instead of pinning back to base.
+3. **Animated textures genuinely did not move perceptibly.** Frames 1s apart at
+   54 dB PSNR (bubbleDrift) = nothing. Texture clock base rate was 0.6.
+4. **contourBands and gelBubbles were INVISIBLE** — textured and untextured
+   frames indistinguishable.
+
+### Changes
+
+- **Texture strength**: albedo gain 1.6→2.4, roughness swing 0.85→1.3; noise
+  re-expanded + third octave; bands smoothstep-shaped; contour lines thickened;
+  grain now re-seeds on a time step so it BOILS like film grain instead of
+  sliding invisibly.
+- **Texture motion**: clock base 0.6→1.2, preset speeds roughly doubled, preset
+  intensities 0.35–0.55 → 0.6–0.75. Emil framework: decorative, rarely-seen,
+  expressive canvas motion may be present; target one visible feature-cycle per
+  ~1–1.5s (was ~4s, which reads as static).
+- **7 NEW texture patterns** (indices APPENDED so saved states stay valid):
+  crosshatch, dots (ink-dot grid — texture, not dither), woodgrain, cellular,
+  brushed, craquelure, ripple. Plus 4 new animated presets.
+- **7 NEW materials**: ceramic, chalk, chrome, gold, wax, neon, iridescent
+  (thin-film via new optional MaterialParams fields). Existing six retuned so
+  glossyPlastic/softGel/rubber stop collapsing into each other.
+- **Environment rig strengthened** (key 3→5, rim 1.6→2.5, fill 1.1→1.8, streak
+  4→8 narrower, + a horizon band) — glossy and metal now have something to
+  mirror. This was the root cause of "every material is slightly different
+  black": roughness differences are invisible without reflections.
+- **Animated material**: env swells now ADDITIVE as well as multiplicative (a
+  multiplier alone dies on a matte base); roughnessPulse reaches near-mirror;
+  gelShimmer forces a visible sheenColor on black-sheen bases; signalFlicker
+  gained hard dropout blinks (61→37 dB frame change).
+
+### Measured improvement
+
+- Texture pairwise distinctness (closest pair, grain vs noise):
+  **13.8–23.9 → 28.9–42.7** across the four modes.
+- Animated texture frame-pairs: **37–54 dB/s → 29–37 dB per 0.6s.**
+- `verify-gates.mjs`: **ALL GATES PASS** (rebuild counts flat on all four modes
+  incl. the 7 new patterns, exports valid, taxonomy clean, 0 console errors).
+
+### New tool
+
+`scripts/verify/verify-live.mjs` — opens a REAL VISIBLE Chrome window and holds
+it open. The headless scripts answer "did pixels change"; only a live window
+answers "is this noticeable". Use it for any judgment call from now on.
+
+### Still weak (honest)
+
+- **shineSweep** is a global gloss wave, not a travelling highlight. A real
+  positional sweep needs a shader-level band next to the texture injection
+  (~half a day of GLSL).
+- **chrome** reads as dark metal rather than a mirror — there is little in the
+  scene for it to reflect. A richer environment would fix it.
+- **chalk vs ceramic** are close head-on; they separate on orbit.
+- **iridescent** shift is real but modest at stroke scale.
+
+### Standing lesson
+
+Numeric gates must test the effect's OWN signature and its STRENGTH, not just
+that something changed. "Reads" needs a perceptual floor a designer would agree
+with, not a pixel-difference floor.
+
+### Final locked checkpoint label
+
+`CRAFT_PASS_TEXTURE_AND_MATERIAL_STRENGTH`
+
+---
+
+## LOCKED CHECKPOINT — `CRAFT_PASS_SWEEP_ENV_AND_MATERIAL_FAMILY`
+
+**Status: the four named residual weaknesses are fixed.** Fable pass, judged
+headed. Geometry untouched; all gates pass.
+
+### 1. shineSweep is now a real travelling highlight
+
+It was a GLOBAL gloss wave (whole surface brightening together). Now a
+soft-edged band in normalized stroke units (`uFsSweepCx/Cy/R` from stroke
+bounds, so ±1.35 clears any drawing size), injected at TWO points:
+`<emissivemap_fragment>` adds a luminance-adaptive glow (carries dark bodies),
+`<lights_physical_fragment>` pulls roughness→0.03 and eats diffuse scaled by
+body luminance (carries light bodies as a glassy stripe). On light bodies the
+band FLANKS additionally pull specular/clearcoat down, giving "dark wet flanks
+around a white-hot streak" — because a bright band has nowhere to go on white.
+
+Measured: distinct frames per 8 samples went **4/10 → 7/8 (ink), 7/8 (ceramic),
+8/8 (matteClay)**. On ink (the default) it is dramatic — one frame has the right
+half brilliantly lit, four frames later the band has left the form.
+
+### 2. chrome is a mirror now
+
+Root cause was an empty environment — nothing to reflect. The reflection-only
+rig went from 4 to **11 Lightformers**: key, cool rim, warm low fill, tight
+streak, horizon band, three vertical window slats on the camera side (the
+structural edges a mirror needs head-on), a dim wall behind camera (kills
+black-hole front faces), warm floor bounce. Matte presets did NOT wash out —
+they shield themselves via low envMapIntensity (matteClay 0.12, chalk 0.05,
+rubber 0.4).
+
+### 3. chalk vs ceramic separate head-on
+
+Double-coded: TEMPERATURE (ceramic #e2e6ea cool blue-white vs chalk #e7e2d6 warm
+ivory) and SURFACE (ceramic roughness 0.12 + clearcoat 1.0 + env 1.8 → crisp
+glaze streak; chalk roughness 1.0, reflectivity 0.03, env 0.05 + a powder sheen
+lobe → flat, dusty, zero specular).
+
+### 4. iridescent reads as oil-slick
+
+Thickness range widened to 120–800nm, metalness 0.65, roughness 0.06, env 2.6,
+plus `IRIDESCENCE_SWIRL_GLSL` (compiled only under `USE_IRIDESCENCE`) which
+swirls per-fragment film thickness with two octaves of value noise. Without a
+thickness MAP three.js uses ONE thickness for the whole surface, which is why it
+previously showed a single hue head-on. Now multiple hues band across one tube
+simultaneously.
+
+### Also fixed
+
+- `completionFlash` **never ended** — `completion` stays 1 after the draw, so the
+  flash froze into a permanent glow (frames 1s apart were byte-identical). Now
+  ramps over the last 20% of the draw and decays on a real `sinceCompletion`
+  clock.
+- Turning material animation OFF left metalness / emissive / sheenColor stuck at
+  their last animated values.
+
+### Verification
+
+`verify-gates.mjs` ALL PASS. Sweep verified by frame series on ink / ceramic /
+matteClay; chrome, gold and iridescent verified as stills; full 13-material ×
+4-mode contact sheets reviewed.
+
+### Honest limits
+
+- shineSweep on **chrome** barely reads (a band inside a mirror). Would need a
+  per-fragment env-intensity override in `getIBLRadiance` (~2h GLSL).
+- shineSweep on **white bodies** is inherently subtler — it works by darkening
+  flanks, since white cannot get brighter.
+
+### Final locked checkpoint label
+
+`CRAFT_PASS_SWEEP_ENV_AND_MATERIAL_FAMILY`
+
+---
+
+## LOCKED CHECKPOINT — `ENGINE_PASS_1_ROD_EXPORT_AND_CAMERA_FRAMING`
+
+**GEOMETRY IS NOW UNLOCKED.** Sebs explicitly lifted the PRD's "do not touch
+geometry" rule ("even if its from the inflate extrude etc maximise and improve
+to max"). Because that lock existed for a reason, a regression net was built
+FIRST and must be used for every engine change from now on.
+
+### NEW: `scripts/verify/geometry-baseline.mjs` — the geometry regression net
+
+Runs 8 stroke shapes drawn from this project's own failure history (open C,
+closed O, near-touch gap, zigzag corners, self-intersecting scribble, two
+strokes, degenerate tick, loopy S) through all four modes; records export size
+and a rendered PNG per cell.
+
+```
+node scripts/verify/geometry-baseline.mjs --save=before
+...change an engine...
+node scripts/verify/geometry-baseline.mjs --save=after
+node scripts/verify/geometry-baseline.mjs --compare=before,after
+```
+
+A HARD failure is geometry or export DYING. Everything else is a judgment call —
+the PNGs are there to be looked at. Improving an engine SHOULD move the numbers;
+the point is that every move is visible and deliberate.
+
+### Rod export was 10.7 MB. Now 1.84 MB.
+
+**Root cause:** joint spheres. They fill the wedge gap on the OUTSIDE of a sharp
+corner where two consecutive tube cross-sections don't meet — so the vast
+majority of each sphere is buried inside the tube, and only a small cap is ever
+visible. They were being built at full `SPHERE_SEGMENTS` (14x14 = 225 verts) and
+deduplicated only every `0.75 x TUBE_RADIUS`, so consecutive spheres overlapped
+almost entirely. A dense scribble piled up hundreds of them.
+
+**Fix:** new `JOINT_SPHERE_SEGMENTS = 8` (81 verts, 2.8x cheaper) used for
+joints only — caps keep full resolution because caps ARE visible at stroke ends
+— and dedup widened to `1.8 x TUBE_RADIUS`. A sphere spans 2x radius, so
+adjacent joints still touch and corners stay filled. Applied to BOTH the export
+path and the preview path so parity is preserved.
+
+**Measured (export bytes, before → after):**
+
+| shape | change |
+| --- | --- |
+| scribble | **-83%** (10.7 MB → 1.84 MB) |
+| zigzag | -81% |
+| closedO | -77% |
+| nearTouch | -76% |
+| loopyS | -69% |
+| openC | -67% |
+| twoStrokes | -60% |
+| tick | -39% |
+
+Extrude, Solid and Inflate exports are **byte-identical** across all 8 shapes,
+confirming the change was surgical. Corners verified visually on the zigzag case
+(the sharpest) — no gaps, no change in appearance.
+
+### Camera never framed a newly drawn stroke
+
+**Symptom:** draw a stroke and the 3D panel showed a hugely-zoomed, apparently
+empty grid until the user found "Reset camera".
+
+**Root cause:** the auto-frame effect required `prevCountRef.current === 0`
+while `prevCountRef.current = strokeCount` ran UNCONDITIONALLY at the end. The
+mesh is built in a memo downstream of this effect, so on the render where the
+first stroke arrives `bounds` is usually still null — the effect did nothing,
+but the counter advanced anyway, permanently consuming the one-shot.
+
+**Fix:** `hasFramedRef` is the real one-shot gate, so gate on that alone (plus a
+valid bounds radius and live controls) and let the effect re-attempt on the next
+render that has bounds. Verified by drawing with real pointer events: the form
+is framed immediately.
+
+### Gates
+
+`verify-gates.mjs` ALL PASS.
+
+### Final locked checkpoint label
+
+`ENGINE_PASS_1_ROD_EXPORT_AND_CAMERA_FRAMING`
+
+---
+
+## LOCKED CHECKPOINT — `CRAFT_PASS_DITHER_AND_ASCII_STRENGTH`
+
+**Status: dither and ASCII brought up to the bar texture/material already met.**
+5 dither types → **10**; 5 ASCII charsets → **10**. Fable pass, judged headed.
+
+### Root causes found (all invisible to the previous numeric gates)
+
+- **Default cell sizes were SUBPIXEL.** `ditherScale: 1` made halftone cells
+  smaller than a pixel, which is why halftone rendered as a solid black stroke —
+  completely invisible. `asciiCellSize: 8` gave 1.6px per glyph pixel, so no
+  charset could read as characters; it was woven rope texture.
+- **Same near-black exposure disease ASCII already had.** The stroke's real
+  tonal range measured 0.30–0.62 with mass at 0.538, so contrast-about-0.5 left
+  every pixel half-open and bayer/blueNoise came out as uniform 1px mush.
+- **`lines` washed the form into the paper** — the `tint * q` rebuild sent lit
+  cells to luminance 1.0, matching the background.
+
+### Fixes
+
+- New `ditherExposure` uniform + slider: divides raw luminance by
+  `mix(1.9, 0.16, e)` so the subject's real range spans the ramp.
+- Pattern floor `max(lum, pow(raw/ref, 0.4) * 0.42)`: a glossy-black subject
+  (rod/extrude, raw ~0.04) was previously unrescuable at ANY dial setting; it
+  now keeps 10–15% threshold structure. Default material unaffected.
+- Ink/paper duotone rebuild, light end capped at 0.9 tint — the form no longer
+  dissolves into the background.
+- `ditherScale` 1→3, `asciiCellSize` 8→13, per-type cell factor x2.4 for
+  cell-grown marks.
+
+### New options
+
+**Dither (+5, all threshold-based, with a new `ditherAngle` dial):** dotScreen
+(angled clustered dot — classic print screen), hatch (bold 45° triangle-profile),
+crosshatch (min of two orthogonal screens — engraving weave), diamond (L1 dots),
+newsprint (angled dot + IGN grain — ragged cheap print). All 10 distinct,
+closest pair 26.97 meanΔ.
+
+**ASCII (+5):** braille, boxes, arrows, punct, numeric. `glyphs.py` now also
+emits `fsRampMaxFor(charset)`, replacing a hand-maintained nested ternary.
+Indices 0–25 unchanged, 26–56 new. All 10 distinct, closest pair 17.75 meanΔ.
+
+### Verification
+
+`verify-gates.mjs` ALL PASS (19/19), gate sweep extended to all 10 dither types
+and 10 charsets. Animation measured over ink pixels per ~90ms frame: crawl 90.7,
+scroll 60.0, cycle 46.1, rain 35.5, flicker 13.7.
+
+### Still weak
+
+- Flicker is the least present animation (13.7).
+- Numeric/punct glyphs read as marks rather than unmistakable digits below
+  cell ~16.
+- Rod is ~8px thin, so any screen coarser than bayer shows only 1–2 pattern
+  rows — inherent to the geometry, not the shader.
+
+### Final locked checkpoint label
+
+`CRAFT_PASS_DITHER_AND_ASCII_STRENGTH`
+
+---
+
+## LOCKED CHECKPOINT — `ENGINE_PASS_2_EXTRUDE_JOINS_CAPS_AND_STRATEGY_COLLAPSE`
+
+**Status: Extrude polished and its dead strategy chain removed.** 885 lines
+deleted, 218 added. Rod / Solid / Inflate untouched and byte-identical.
+
+### The strategy chain was 100% dead weight
+
+Instrumented live across all 8 baseline shapes: **every stroke — including
+straight lines and the 6-point degenerate tick — ran `legacy → continuous-ribbon`.**
+The "preferred" legacy parametric `buildRibbonShape` → `THREE.ExtrudeGeometry`
+path **never once succeeded** (its self-built contour always failed
+`validateShapeContour`); the raster-trace strategy was **unreachable** (a
+compile-time const never flipped); Rod fallback effectively never fired.
+
+Continuous-ribbon IS the Extrude engine now. Removed: `rasterizeStrokeToRibbonMask`,
+`buildRasterizedRibbonShape`, `buildRibbonShape`, `EXTRUDE_GEOMETRY_STRATEGY`,
+`validateShapeContour` + four contour helpers, `safeExtrude`,
+`isExtrudeGeometryDegenerate`, `_deprecatedBuildSegmentedRibbonGeometry`. Kept
+`segmentsIntersect` (Solid uses it), the `ExtrudeStrategyTag` type (debug
+overlay), and Rod fallback strictly for <2-sample input.
+
+### The years-old "spikes/blob" mystery, solved
+
+The deprecated miter used `halfWidth / sin(φ/2)` — which **DIVERGES on
+nearly-straight vertices** — where it needed `halfWidth / cos(φ/2)`. That single
+error is why miters were abandoned in this codebase and replaced with the
+pinch-prone clamp that has been degrading corners ever since.
+
+### Fixes
+
+- **Joins**: correct miter (`halfWidth / cos(φ/2)`, clamped 2x, obtained free
+  from the averaged-normal length since `|n1+n2| = 2cos(φ/2)`). Corners were
+  pinching to ~70% width with bright artifacts; they are now full-width and
+  sharp. Compare `extrude_before/zigzag_extrude.png` → `extrude_after/`.
+- **Caps**: flat chopped quads → rounded half-disks (profile revolved around the
+  endpoint, watertight, winding handled per cap handedness).
+- **Twist**: impossible by construction (offsets planar XY, Z constant);
+  confirmed edge-on.
+- **Bevel toggle was doing NOTHING** — continuous-ribbon ignored it. It now
+  switches a sharp rectangular profile against a chamfered octagonal one,
+  carried around the caps too. Verified by clicking the real button.
+
+### Cost
+
+Extrude export bytes roughly doubled (openC 28→57 KB, scribble 131→262 KB).
+That is the octagonal chamfer (4→8 verts/sample, bevel ON by default) plus round
+caps — bought function, not waste. Extrude remains by far the lightest mode
+(59 KB vs Rod's 704 KB on the gate export).
+
+### Verification
+
+`verify-gates.mjs` ALL PASS. Geometry net: Rod/Solid/Inflate `=` on every metric
+for every shape. Live headed orbit inspection (front, ~50° right, upper grazing,
+edge-on) on zigzag / loopyS / scribble, plus a bevel-off pass and a
+25/50/75/100% reveal sweep — partial reveals cap correctly, so the animation
+contract holds. Stills in `docs/verification/geometry/extrude_orbit/`.
+
+### Still weak
+
+- Tiny tan flecks at extreme corner tips (pre-existing, present in the before
+  PNGs). Mesh is watertight there; reads as clamped-miter chamfer normals
+  catching the warm ground reflection. A true fix is arc-fan round JOINS at
+  clamp-triggering corners (~40 lines).
+- Overlapping scribble regions are coplanar overlap, not a real union. Invisible
+  today; a CSG union is the principled fix if styles ever make it show.
+
+### Final locked checkpoint label
+
+`ENGINE_PASS_2_EXTRUDE_JOINS_CAPS_AND_STRATEGY_COLLAPSE`
+
+---
+
+## LOCKED CHECKPOINT — `ENGINE_PASS_3_STROKE_PROCESSING_MATH`
+
+**Status: smoothing algorithm corrected, spacing contract restored.** Honest
+result: one change is preventive rather than a fix for a visible bug — see the
+measurement below.
+
+### Change 1 — Taubin (lambda|mu) smoothing instead of plain Laplacian
+
+The kernel was `c*0.5 + (p+n)*0.25`, i.e. a Laplacian pass with lambda = 0.5,
+run twice. Laplacian smoothing always pulls each point toward the chord between
+its neighbours, so every iteration SHRINKS the curve. Taubin alternates the
+smoothing pass with a slightly larger NEGATIVE pass (mu = -0.53) which
+re-inflates; high-frequency tremor is removed by both, low-frequency shape
+survives because they cancel there. Stability condition `1/lambda + 1/mu > 0`
+holds.
+
+**MEASURED HONESTLY: at the default 4px spacing this changed rendered size by
+0.00%.** Shrinkage per pass scales roughly as `s^2 / 8R`, so at s=4px against a
+~170px radius it is ~0.006px — below noticing. The change is therefore
+PREVENTIVE, not a fix for a visible defect: it matters at coarse spacing and
+tight curvature (s=20px against R=50px works out near 4% over four passes), both
+of which the spacing slider can reach. It is the correct algorithm and costs
+nothing, so it stays — but it should not be described as having fixed a bug.
+
+### Change 2 — re-resample AFTER smoothing (the measurable win)
+
+Smoothing moves points off the arc-length grid the resample just built, and
+every downstream engine assumes roughly even spacing: Rod's tube cross-sections,
+Solid's rasteriser and Inflate's loft all sample the point list directly, so
+uneven spacing shows up as wobbling tube radius and stair-stepped contours.
+Re-resampling after smoothing restores the even grid while keeping the smoothed
+shape.
+
+Measured effect (export bytes): twoStrokes rod -15%, extrude -22%, inflate -23%;
+tick -9% across modes; the dense shapes unchanged. Fewer, better-placed samples
+for the same form.
+
+### Verification
+
+Geometry net `sp_before` vs `sp_after`: no hard regressions, nothing died.
+Rendered bounding boxes measured on closedO / openC / loopyS in both solid and
+rod: **0.00% change** on every axis except a 0.35% rounding on one. Hole
+detection on the closed O still correct. `verify-gates.mjs` ALL PASS.
+
+### Not done (deliberately)
+
+Input jitter filtering (one-euro / velocity-adaptive low-pass on raw pointer
+data) and curvature-adaptive sample density were both considered. Neither was
+implemented: the first needs real hand-drawn input to tune against rather than
+synthetic test strokes, and the second changes the point-count contract that
+Solid's animation hole-stabilisation depends on. Both are worth doing with a
+human in the loop.
+
+### Final locked checkpoint label
+
+`ENGINE_PASS_3_STROKE_PROCESSING_MATH`
+
+---
+
+## LOCKED CHECKPOINT — `CRAFT_PASS_STACK_AND_ALL_ANIMATION`
+
+**Status: stack presets rebuilt, three animation bugs fixed, and a headline
+feature found silently dead in 3 of 4 modes.** Fable pass, judged headed.
+
+### THE BIG ONE: Natural/Authentic did nothing in Solid, Extrude and Inflate
+
+`filterStrokesByProgress` cuts the reveal by **raw arc length**, so those three
+modes always played back at constant speed regardless of how the stroke was
+actually drawn — and the Natural/Authentic toggle, a user-facing control, was
+**silently inert in three of the four modes**. Only Rod honoured pen timing.
+
+Fixed with `penTimeDistanceFraction` in `viewport-3d.tsx`: maps the playhead's
+time fraction through the processed points' own timestamps, with the same
+hybrid/raw/smooth semantics Rod already used. Verified deterministically — the
+same time fraction now produces different fronts per mode (Authentic 934 vs
+Natural 950 at t=0.5), both correctly lagging linear through a slow section,
+with the final frame still bit-identical to the static preview.
+
+**Natural vs Authentic is real but conditional**: measured within-stroke speed
+contrast ~4x (Authentic) vs ~2.7x (Natural) on a hesitating stroke; on evenly
+paced strokes they are identical BY CONSTRUCTION. Nothing in the UI says this.
+
+### Two more "technically correct, perceptually absent" bugs
+
+- **`drift` was completely static in the real user flow** (consecutive-frame
+  Δ 0.00). Static ASCII ignored the group offset entirely, static dither had a
+  zero direction vector, and horizontal scanlines are invariant along their own
+  travel axis — so the one behaviour whose entire job is moving the group moved
+  nothing. Now static dither borrows the diagonal travel vector and static ASCII
+  rides the scroll branch on the shared offset; rate 0.6→1.1. Δ ~48/frame.
+- **`completionPulse`'s swell was architecturally invisible**: `fsStackBlend`
+  clamped `amount` at 1.0, so a 1.0 → 1.6 → 1.0 envelope rendered IDENTICAL
+  frames on any preset with near-1 opacities. Fixed with overdrive headroom
+  (amount clamps at 1.6, output still clamps to 1). Peak now Δ34.
+- `pulse` had **no preset chip at all** — the only behaviour missing from the
+  rail. Added.
+- `loop` was indistinguishable from drift and snapped N units at the wrap on
+  non-periodic patterns. Rewritten as a **ping-pong** on the shared loop clock:
+  continuous Δ ~45 with a smooth velocity dip at the turnaround, no snap.
+
+### Three of five stack presets had ROTTED
+
+They were authored before the material/dither/ASCII strengthening passes AND
+before `ditherExposure` existed, so none set exposure — bright bodies sat above
+every threshold, dark bodies below.
+
+- `cleanInkStack` — grain fully invisible (0.3 × 0.7 = 0.21 effective).
+- `terminalStack` — glyphs below the 13px legibility floor; woven mesh.
+- `graphicSlabStack` — worst case: matte clay clamped below every threshold, so
+  only the shader's pattern floor rendered — flat checker wallpaper, zero tonal
+  modelling.
+- `softSignalStack` — **completely dead**: darker rubber sat at ramp level 0, so
+  every ASCII cell drew the blank glyph and the "all three layers" preset
+  rendered as a plain black stroke.
+- `ditheredGelStack` — the one that survived. Untouched.
+
+All retuned live. **6 new presets** (11 total): newsprintStack, woodcutStack,
+porcelainPrintStack, marqueeStack, blueprintStack, gildedStack — each a concept,
+each iterated live until it read.
+
+### Verification (all re-run independently by me)
+
+- `assert-stack.mjs` **9/9** — 11 presets pairwise distinct, closest Δ 60.08
+  (was 22.37 with five).
+- `assert-stack-anim.mjs` **6/6** — drift consecΔ 86.02, freeze exactly 0.00.
+- `assert-timing.mjs` **10/10**.
+- `verify-gates.mjs` **ALL PASS**.
+
+### Still weak
+
+- **Solid draw-in runs at ~6–10 fps** — the per-tick geometry rebuild. Pacing is
+  correct but choppy. Fix lives in the raster/contour rebuild path.
+- Texture whose travel axis is degenerate for its own pattern (horizontal travel
+  on horizontal scanlines) still doesn't slide under group drift; dither and
+  ASCII carry it. A per-pattern "natural travel axis" would fix it.
+- Marquee bulbs read as square dots — 5x5 glyph bitmaps have no sub-pixel
+  roundness at any cell size.
+- Natural/Authentic has no UI explanation of when it matters.
+
+### Final locked checkpoint label
+
+`CRAFT_PASS_STACK_AND_ALL_ANIMATION`
+
+---
+
+## LOCKED CHECKPOINT — `ENGINE_PASS_4_SOLID_PERFORMANCE_AND_INFLATE_FORM`
+
+**Status: the last two engines done. All four engines have now had a real pass.**
+
+### Another buried mistake, same species as Extrude's sin/cos
+
+`contourSelfIntersects()` ran an **O(n²) check every animation frame on the raw
+per-lattice-edge contour** (thousands of unit segments). On a traced
+grid-boundary loop a proper crossing is **geometrically impossible** — the edges
+are unit, axis-aligned, and each undirected edge is emitted at most once. So it
+was performing millions of segment-vs-segment tests per frame **to compute a
+constant `false`.** The gate now runs on the collinear-simplified loop (identical
+polygon, 10–30x fewer vertices).
+
+### Solid draw-in: ~17fps → smooth
+
+Measured headed with real rAF deltas via the actual Play button.
+
+| | before | after |
+| --- | --- | --- |
+| standard stroke | 57.4ms/frame busy mean (~17fps), 28 frames >40ms | **0 frames >40ms**, max 34ms, p99 26ms |
+| heavy 600-pt scribble | 66.5ms (~15fps) | 34.1ms (**~29fps**) |
+
+Causes fixed, all in `lib/solid-mask.ts` unless noted:
+- the impossible O(n²) self-intersection test above
+- both flood fills used `queue.shift()` — O(n) per pop → head-pointer queues
+- a fresh canvas + non-`willReadFrequently` 2D context per rasterize (2x/frame)
+  → cached module-level canvas with `willReadFrequently: true`
+- ~8 `console.log`s with object payloads per build per frame → gated to
+  animated builds only; static/export logging unchanged
+- animated builds rasterize at **384px instead of 512** (playback ONLY — static,
+  final committed frame and export stay at 512). Hole thresholds scale by
+  resScale so topology decisions stay resolution-independent.
+
+### Edge aliasing fixed — and Solid exports shrank 53–93%
+
+The raw 512-res marching boundary (pixel staircase) fed directly into earcut,
+the H3 walls and the silhouette. Now: exact collinear simplification → 3 Chaikin
+corner-cut passes → Douglas-Peucker at 0.45px, with guards (area retention
+90–105%, self-intersection check, fallback to the exact loop). Max deviation
+<0.9 mask px — inside the ≥1px filled wall separating hole from outer boundary,
+so smoothing can never fuse or create topology. Applied to the outer contour and
+every hole rim.
+
+### Inflate — honest verdict and two real fixes
+
+It remains a swept tube loft, not an inflated volume. Two genuine deficiencies
+fixed without a rewrite:
+- **End caps**: the old "hemisphere" faded the ring radius to zero ACROSS the
+  last in-stroke samples — shortening the form, making cap shape depend on
+  sample spacing, and leaving a degenerate final ring. Replaced with true
+  protruding ellipsoid domes appended beyond each endpoint.
+- **Crossings**: tubes previously hard-interpenetrated. New
+  `inflateComputeCrossingBulge` (spatial hash over samples) swells both tubes
+  smoothly where another body passes within a merged diameter — peak +22–40%
+  radius scaling with Puff. The circle's loop closure now reads as a fused
+  knuckle. Still an approximation: surfaces interpenetrate under the swell.
+
+**Recommendation on the field approach:** true merging needs an implicit field
+(per-sample anisotropic capsule field, smooth-min union, marching cubes ~96³,
+one Laplacian pass). A loft can never re-topologize at crossings. Deliberately
+NOT started — unfinishable in one pass.
+
+### Verification
+
+- Geometry net: **Rod and Extrude byte-identical (`=`) on all 8 shapes.**
+- Solid: loopyS −82%, openC −87%, closedO −83%, nearTouch −86%, zigzag −64%,
+  scribble −82%, twoStrokes −93%, tick −72%. Inflate +1–15%.
+- **Correctness confirmed by eye: closedO keeps its through-hole; openC stays
+  open; nearTouch keeps its gap. No false holes.**
+- Final animated frame still pixel-identical to the static build (sticky-hole
+  path intact).
+- `verify-gates.mjs` ALL PASS, 0 console errors.
+
+### Still weak
+
+- Heavy-scribble draw-in is ~29fps, not 60. Remaining cost is the per-tick full
+  pipeline. Next steps: typed-array masks (blocked by `boolean[]` in
+  `MaskSolidStages` consumed by the debug overlay) or Scene-side cadence and
+  interpolation.
+- Faint residual segment striping on Solid inner rim walls under grazing light.
+- Inflate crossings swell but do not truly fuse — see the field recommendation.
+
+### Final locked checkpoint label
+
+`ENGINE_PASS_4_SOLID_PERFORMANCE_AND_INFLATE_FORM`

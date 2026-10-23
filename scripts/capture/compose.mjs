@@ -26,10 +26,25 @@ const CENTER_Y = H / 2
 const mode = (process.argv.find((a) => a.startsWith("--mode=")) || "--mode=with3d").split("=")[1]
 
 // Phase durations (seconds)
-const HOLD_3D = 0.5
-const FLIP = 0.55
-const HOLD_LOGO = 1.4
+const HOLD_3D = 0.9
+const FLIP = 0.85
+const HOLD_LOGO = 1.8
+const DRAW_SECONDS = 3.8
 const secToFrames = (s) => Math.round(s * FPS)
+
+// Flip easing. The card's on-screen width is |cos(angle)|, which is already
+// slow at the ends and fast at the middle. Easing the ANGLE therefore
+// compounds: quart stacked on cos left ~0.25s of visually dead card at each
+// end (reads draggy) and a 1-frame blink through edge-on. Cubic keeps the
+// commit/settle readable while still whipping through edge-on.
+const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+// Draw-in retiming: handwriting is near-constant motion (a pen travels at
+// roughly steady speed), so it wants mostly-linear with only a soft
+// touch-down and pen-lift. Pure easeInOutSine peaks at 1.57x mid-word which
+// makes the middle letters rush; blending linear in caps the peak at ~1.3x.
+const easeInOutSine = (t) => -(Math.cos(Math.PI * t) - 1) / 2
+const DRAW_LINEAR_BLEND = 0.45 // 0 = full sine, 1 = fully linear
+const drawEase = (t) => DRAW_LINEAR_BLEND * t + (1 - DRAW_LINEAR_BLEND) * easeInOutSine(t)
 
 function opaqueBBox(img) {
   const c = createCanvas(img.width, img.height)
@@ -53,6 +68,15 @@ function opaqueBBox(img) {
   return { minX, minY, maxX, maxY, w: maxX - minX + 1, h: maxY - minY + 1, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 }
 }
 
+// 2D/3D continuity treatment for the flat logo face. The 3D side is #1a1a1a
+// soft ink tubes; the raw logo is pure-#000 hairline pen strokes. Two subtle,
+// honest adjustments make the flat face read as the same object:
+//   - INK lifts pure black to the tube ink color (#1a1a1a)
+//   - FATTEN_PX thickens the strokes slightly (multi-offset stamping) toward
+//     the tube weight without redrawing or distorting the logo
+const INK = "#1a1a1a"
+const FATTEN_PX = 2.5
+
 // Renders the flat logo into a full-frame 1920x1080 canvas, scaled to `targetW`
 // width and centered on the frame center. Returns the canvas.
 function renderLogoFrame(logo, targetW, targetCy) {
@@ -67,7 +91,20 @@ function renderLogoFrame(logo, targetW, targetCy) {
   const drawH = logo.height * scale
   const dx = CENTER_X - (lb.cx * scale)
   const dy = targetCy - (lb.cy * scale)
+  // Stamp the logo at 8 sub-pixel offsets around a circle (+ center) to
+  // fatten the hairline strokes by ~FATTEN_PX toward the 3D tube weight.
+  if (FATTEN_PX > 0) {
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2
+      ctx.drawImage(logo, dx + Math.cos(a) * FATTEN_PX, dy + Math.sin(a) * FATTEN_PX, drawW, drawH)
+    }
+  }
   ctx.drawImage(logo, dx, dy, drawW, drawH)
+  // Recolor to the ink tone, preserving the (fattened) alpha edges.
+  ctx.globalCompositeOperation = "source-in"
+  ctx.fillStyle = INK
+  ctx.fillRect(0, 0, W, H)
+  ctx.globalCompositeOperation = "source-over"
   return c
 }
 
@@ -129,12 +166,18 @@ async function main() {
     return c
   }
 
-  // Phase 1: draw-in (3D frames as-is), or a logo flip-in for logoonly
+  // Phase 1: draw-in. The captured frames advance reveal progress uniformly,
+  // so resampling them with an eased index re-times the pen without
+  // recapturing: soft start, confident middle, settled finish.
   if (mode === "with3d") {
-    for (const f of drawInFrames) {
-      const img = await loadImage(join(FRAMES, f))
+    const srcImgs = []
+    for (const f of drawInFrames) srcImgs.push(await loadImage(join(FRAMES, f)))
+    const outN = secToFrames(DRAW_SECONDS)
+    for (let i = 0; i < outN; i++) {
+      const t = outN === 1 ? 1 : i / (outN - 1)
+      const src = srcImgs[Math.min(srcImgs.length - 1, Math.round(drawEase(t) * (srcImgs.length - 1)))]
       const c = blank()
-      c.getContext("2d").drawImage(img, 0, 0, W, H)
+      c.getContext("2d").drawImage(src, 0, 0, W, H)
       emit(c)
     }
     // Phase 2: hold full 3D
@@ -144,13 +187,14 @@ async function main() {
       c.getContext("2d").drawImage(full, 0, 0, W, H)
       emit(c)
     }
-    // Phase 3: flip 3D out (scaleX 1->0), then logo in (0->1)
+    // Phase 3: flip 3D out (scaleX 1->0), then logo in (0->1). Eased angle:
+    // the card commits slowly, whips through edge-on, settles into the logo.
     const full3d = full
     const flipN = secToFrames(FLIP)
     for (let i = 0; i <= flipN; i++) {
-      const t = i / flipN
+      const t = easeInOutCubic(i / flipN)
       const angle = t * Math.PI // 0..180deg
-      const sx = Math.abs(Math.cos(angle))
+      const sx = Math.max(Math.abs(Math.cos(angle)), 0.035) // clamp: keep an edge-on sliver, never a blank frame
       const c = blank()
       const ctx = c.getContext("2d")
       const shade = 0.35 * (1 - sx)
@@ -159,11 +203,11 @@ async function main() {
     }
     // Phase 4: hold logo
     for (let i = 0; i < secToFrames(HOLD_LOGO); i++) emit(cloneCanvas(logoFrame))
-    // Phase 5: flip back (logo out -> 3D in)
+    // Phase 5: flip back (logo out -> 3D in), same eased sweep
     for (let i = 0; i <= flipN; i++) {
-      const t = i / flipN
+      const t = easeInOutCubic(i / flipN)
       const angle = t * Math.PI
-      const sx = Math.abs(Math.cos(angle))
+      const sx = Math.max(Math.abs(Math.cos(angle)), 0.035) // clamp: keep an edge-on sliver, never a blank frame
       const c = blank()
       const ctx = c.getContext("2d")
       const shade = 0.35 * (1 - sx)

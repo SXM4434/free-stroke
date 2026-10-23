@@ -301,6 +301,169 @@ export interface MaskSolidStages {
 
 const MASK_RESOLUTION = 512
 
+// Animated builds (holeStabilization override or disableHolesForAnimation)
+// run per rAF tick — console logging there costs real frame budget and
+// floods the console. Static/export builds keep full logging.
+let QUIET = false
+
+// ============= Contour simplification + anti-stairstep smoothing =============
+//
+// The boundary tracer emits one vertex per lattice edge, so a 512-res mask
+// contour arrives as thousands of unit-length axis-aligned segments: a pixel
+// staircase. That staircase used to feed DIRECTLY into validation
+// (O(n^2) self-intersection over ~thousands of points — the single biggest
+// per-frame cost during draw-in), into earcut, and into the H3 wall builder
+// (one wall quad per unit lattice edge — export bloat), and it is the visible
+// stair-step aliasing on the extruded silhouette.
+//
+// Pipeline per loop (outer + each hole):
+//   1. simplifyCollinearMask  — EXACT: drops interior points of straight runs.
+//      The polygon is geometrically unchanged.
+//   2. smoothLatticeLoop      — 3 Chaikin corner-cut passes (max deviation
+//      from the lattice loop <= ~0.44 px) + Douglas-Peucker decimation at
+//      0.45 px. Total deviation stays under ~0.9 px, i.e. inside the >=1 px
+//      filled wall that always separates a hole boundary from the outer
+//      boundary in the mask — smoothing can never fuse a hole into the outer
+//      or punch a new one.
+//   3. Guards: smoothed loop must keep >=90% (and <=105%) of the exact loop's
+//      area and must not self-intersect; otherwise fall back to the exact
+//      simplified loop. Topology (hole presence/absence) is mask-derived and
+//      untouched either way.
+
+/** EXACT collinear-run removal for integer lattice loops (mask space). */
+function simplifyCollinearMask(pts: Point2D[]): Point2D[] {
+  const n = pts.length
+  if (n < 5) return pts
+  const out: Point2D[] = []
+  for (let i = 0; i < n; i++) {
+    const p1 = pts[(i - 1 + n) % n]
+    const p2 = pts[i]
+    const p3 = pts[(i + 1) % n]
+    const cross = (p2.x - p1.x) * (p3.y - p2.y) - (p2.y - p1.y) * (p3.x - p2.x)
+    if (cross !== 0) out.push(p2)
+  }
+  return out.length >= 4 ? out : pts
+}
+
+/** One Chaikin corner-cutting pass on a CLOSED loop. */
+function chaikinClosed(pts: Point2D[]): Point2D[] {
+  const n = pts.length
+  if (n < 3) return pts
+  const out: Point2D[] = new Array(n * 2)
+  for (let i = 0; i < n; i++) {
+    const a = pts[i]
+    const b = pts[(i + 1) % n]
+    out[i * 2] = { x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 }
+    out[i * 2 + 1] = { x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 }
+  }
+  return out
+}
+
+/** Douglas-Peucker on an OPEN polyline segment (indices lo..hi inclusive). */
+function dpMark(pts: Point2D[], lo: number, hi: number, tol2: number, keep: Uint8Array): void {
+  if (hi <= lo + 1) return
+  const a = pts[lo]
+  const b = pts[hi]
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const lenSq = dx * dx + dy * dy
+  let maxD = -1
+  let maxI = -1
+  for (let i = lo + 1; i < hi; i++) {
+    const p = pts[i]
+    let d: number
+    if (lenSq < 1e-12) {
+      const ex = p.x - a.x, ey = p.y - a.y
+      d = ex * ex + ey * ey
+    } else {
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq))
+      const ex = p.x - (a.x + t * dx)
+      const ey = p.y - (a.y + t * dy)
+      d = ex * ex + ey * ey
+    }
+    if (d > maxD) {
+      maxD = d
+      maxI = i
+    }
+  }
+  if (maxD > tol2) {
+    keep[maxI] = 1
+    dpMark(pts, lo, maxI, tol2, keep)
+    dpMark(pts, maxI, hi, tol2, keep)
+  }
+}
+
+/** Douglas-Peucker decimation of a CLOSED loop (anchors at the two most distant vertices). */
+function dpSimplifyClosed(pts: Point2D[], tol: number): Point2D[] {
+  const n = pts.length
+  if (n < 8) return pts
+  // Anchor 0 and the vertex farthest from it — stable split for closed loops.
+  let far = 1
+  let farD = -1
+  const p0 = pts[0]
+  for (let i = 1; i < n; i++) {
+    const dx = pts[i].x - p0.x
+    const dy = pts[i].y - p0.y
+    const d = dx * dx + dy * dy
+    if (d > farD) {
+      farD = d
+      far = i
+    }
+  }
+  const keep = new Uint8Array(n)
+  keep[0] = 1
+  keep[far] = 1
+  const tol2 = tol * tol
+  dpMark(pts, 0, far, tol2, keep)
+  // Second half wraps: unroll it into a temp open polyline.
+  const tail: Point2D[] = []
+  const tailIdx: number[] = []
+  for (let i = far; i < n; i++) {
+    tail.push(pts[i])
+    tailIdx.push(i)
+  }
+  tail.push(pts[0])
+  tailIdx.push(0)
+  const keepTail = new Uint8Array(tail.length)
+  keepTail[0] = 1
+  keepTail[tail.length - 1] = 1
+  dpMark(tail, 0, tail.length - 1, tol2, keepTail)
+  for (let i = 1; i < tail.length - 1; i++) {
+    if (keepTail[i]) keep[tailIdx[i]] = 1
+  }
+  const out: Point2D[] = []
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(pts[i])
+  return out.length >= 4 ? out : pts
+}
+
+function shoelaceAbs(pts: Point2D[]): number {
+  let s = 0
+  for (let i = 0; i < pts.length; i++) {
+    const p1 = pts[i]
+    const p2 = pts[(i + 1) % pts.length]
+    s += p1.x * p2.y - p2.x * p1.y
+  }
+  return Math.abs(s) / 2
+}
+
+/**
+ * Smooth a lattice boundary loop (mask space): 3 Chaikin passes + DP 0.45 px.
+ * Falls back to the exact input loop if the result loses area fidelity or
+ * self-intersects. Input should already be collinear-simplified.
+ */
+function smoothLatticeLoop(exactLoop: Point2D[]): Point2D[] {
+  if (exactLoop.length < 8) return exactLoop
+  const exactArea = shoelaceAbs(exactLoop)
+  if (exactArea < 4) return exactLoop
+  let smooth = chaikinClosed(chaikinClosed(chaikinClosed(exactLoop)))
+  smooth = dpSimplifyClosed(smooth, 0.45)
+  if (smooth.length < 4) return exactLoop
+  const smoothArea = shoelaceAbs(smooth)
+  if (smoothArea < exactArea * 0.9 || smoothArea > exactArea * 1.05) return exactLoop
+  if (contourSelfIntersects(smooth)) return exactLoop
+  return smooth
+}
+
 // ============= H2 COUNTER-PRESERVING DETECTION =============
 // When the actual stroke is thick (medium-weight Solid lettering), small
 // closed counters (e.g. the lower loop of a cursive 'b' or 'e') get fully
@@ -406,8 +569,12 @@ export function buildMaskSolid(
   disableHolesForAnimation?: boolean
 ): MaskSolidResult {
   const startTime = performance.now()
-  
-  console.log("[v0-solid] FLAT_OR_NULL pipeline executing")
+
+  // Animated builds run per rAF tick — silence hot-path logging for them.
+  // Static + export builds (no override, holes enabled) keep full logging.
+  QUIET = holeStabilization !== undefined || disableHolesForAnimation === true
+
+  if (!QUIET) console.log("[v0-solid] FLAT_OR_NULL pipeline executing")
   
   // Initialize empty structures
   const emptyStages: MaskSolidStages = {
@@ -505,7 +672,15 @@ export function buildMaskSolid(
   }
   
   // ========== STAGE 1: Render stroke to mask ==========
-  const { mask, width, height, filledCount, rasterDebug } = renderStrokeToMask(stroke.points, thickness, canvasWidth, canvasHeight)
+  // Animated builds (QUIET) run per rAF tick — use a reduced mask resolution
+  // during playback only. Geometry is resolution-independent (mask -> world
+  // transforms derive from width/height) and the contour smoothing hides the
+  // coarser lattice; the final committed frame and every static/export build
+  // stay at full MASK_RESOLUTION. Hole-detection pixel thresholds are scaled
+  // by resScale below so topology decisions match the static behavior.
+  const buildRes = QUIET ? 384 : MASK_RESOLUTION
+  const resScale = buildRes / MASK_RESOLUTION
+  const { mask, width, height, filledCount, rasterDebug } = renderStrokeToMask(stroke.points, thickness, canvasWidth, canvasHeight, buildRes)
   
   emptyStages.maskData = mask
   emptyStages.maskWidth = width
@@ -618,8 +793,8 @@ export function buildMaskSolid(
   // component. THIS DOES NOT MODIFY GEOMETRY OUTPUT. Results are reported
   // through solidDiagnostics only. THREE.Shape, caps, walls, and the entire
   // extrusion path are unchanged regardless of detection results.
-  const holeDetection = detectInteriorHoles(componentMask, width, height)
-  console.log("[v0-solid] H1 HOLE DETECTION:", {
+  const holeDetection = detectInteriorHoles(componentMask, width, height, resScale)
+  if (!QUIET) console.log("[v0-solid] H1 HOLE DETECTION:", {
     detected: holeDetection.detectedHoleCount,
     valid: holeDetection.validHoleCount,
     rejected: holeDetection.rejectedHoleCount,
@@ -632,6 +807,11 @@ export function buildMaskSolid(
   const outerContour = traceOuterContour(componentMask, width, height)
   emptyStages.outerContour = outerContour
   emptyStages.rawOuter = outerContour
+
+  // EXACT collinear simplification (polygon geometrically unchanged).
+  // All O(n^2) work below (self-intersection gate) and all geometry
+  // (earcut, walls) runs on this instead of the raw per-lattice-edge chain.
+  const outerExact = simplifyCollinearMask(outerContour)
   
   // Compute signed area in mask space
   let outerSignedArea = 0
@@ -656,8 +836,10 @@ export function buildMaskSolid(
     contourClosed = closeDist < 2.0
   }
   
-  // Check 2: Ordered loop (no self-intersection)
-  const contourOrdered = !contourSelfIntersects(outerContour)
+  // Check 2: Ordered loop (no self-intersection).
+  // Runs on the EXACT collinear-simplified loop — the identical polygon with
+  // ~10-30x fewer vertices, so the O(n^2) test drops ~100-900x in cost.
+  const contourOrdered = !contourSelfIntersects(outerExact)
   
   // Check 3: Meaningful area
   const areaToFillRatio = largestSize > 0 ? outerAreaAbs / largestSize : 0
@@ -684,7 +866,7 @@ export function buildMaskSolid(
   }
   
   // Log gate execution
-  console.log("[v0-solid] VALIDATION GATE:", {
+  if (!QUIET) console.log("[v0-solid] VALIDATION GATE:", {
     gateExecuted: "YES",
     outerContourPoints: outerContour.length,
     outerAreaAbs: outerAreaAbs.toFixed(2),
@@ -814,7 +996,7 @@ export function buildMaskSolid(
   
   // HARD FAIL: Return NULL geometry if validation fails
   if (contourRejected) {
-    console.log("[v0-solid] REJECTED: Not building geometry")
+    if (!QUIET) console.log("[v0-solid] REJECTED: Not building geometry")
     
     return {
       geometry: null,
@@ -843,9 +1025,14 @@ export function buildMaskSolid(
   
   const toWorldX = (mx: number) => (mx - width / 2) * scale * normScale
   const toWorldY = (my: number) => -(my - height / 2) * scale * normScale
-  
+
+  // Anti-stairstep smoothing (Chaikin x3 + DP 0.45 px, guarded — falls back
+  // to the exact loop on any fidelity/self-intersection failure). This is
+  // what removes the raster stair-step aliasing from the extruded silhouette.
+  const outerForGeometry = smoothLatticeLoop(outerExact)
+
   // Convert to THREE.Vector2
-  let shapePts = outerContour.map(p => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
+  let shapePts = outerForGeometry.map(p => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y)))
   
   // Ensure CCW winding for THREE.Shape
   let worldSignedArea = 0
@@ -895,8 +1082,8 @@ export function buildMaskSolid(
   let flatGeom: THREE.BufferGeometry | null = null
   try {
     flatGeom = new THREE.ShapeGeometry(validatedShape)
-    
-    console.log("[v0-solid] FLAT_BASE: Built FLAT geometry", {
+
+    if (!QUIET) console.log("[v0-solid] FLAT_BASE: Built FLAT geometry", {
       inputPoints: shapePts.length,
       vertexCount: flatGeom.getAttribute("position")?.count ?? 0
     })
@@ -927,7 +1114,7 @@ export function buildMaskSolid(
   }
   
   // ========== SUCCESS — Branch on SOLID_GEOMETRY_MODE ==========
-  emptyStages.simplifiedOuter = outerContour
+  emptyStages.simplifiedOuter = outerForGeometry
   
   const successStats: MaskSolidStats = {
     maskResolution: MASK_RESOLUTION,
@@ -1012,16 +1199,21 @@ export function buildMaskSolid(
     let counterHoleSource: "ACTUAL_MASK" | "COUNTER_MASK" = "ACTUAL_MASK"
     let activeHoleDetection = holeDetection
     
-    if (actualThicknessPx > COUNTER_DETECTION_MIN_PX + COUNTER_DETECTION_MIN_GAP_PX) {
+    // Pixel thresholds scale with the animated-build resolution reduction so
+    // counter-detection decisions match static behavior.
+    const cdMinPx = COUNTER_DETECTION_MIN_PX * resScale
+    const cdMaxPx = COUNTER_DETECTION_MAX_PX * resScale
+    const cdMinGapPx = COUNTER_DETECTION_MIN_GAP_PX * resScale
+    if (actualThicknessPx > cdMinPx + cdMinGapPx) {
       counterDetectionThicknessPx = Math.max(
-        COUNTER_DETECTION_MIN_PX,
+        cdMinPx,
         Math.min(
-          COUNTER_DETECTION_MAX_PX,
+          cdMaxPx,
           actualThicknessPx * COUNTER_DETECTION_THICKNESS_SCALE
         )
       )
-      
-      if (counterDetectionThicknessPx < actualThicknessPx - COUNTER_DETECTION_MIN_GAP_PX) {
+
+      if (counterDetectionThicknessPx < actualThicknessPx - cdMinGapPx) {
         counterDetectionEnabled = "YES"
         // Scale the WORLD-space input thickness by the same ratio, so the
         // re-render lands at the desired mask-px counter thickness.
@@ -1032,7 +1224,8 @@ export function buildMaskSolid(
           stroke.points,
           worldCounterThickness,
           canvasWidth,
-          canvasHeight
+          canvasHeight,
+          buildRes
         )
         
         // Same canvas+resolution should produce same mask dims; bail otherwise.
@@ -1065,13 +1258,14 @@ export function buildMaskSolid(
             const counterHoles = detectInteriorHoles(
               counterComponentMask,
               counterRender.width,
-              counterRender.height
+              counterRender.height,
+              resScale
             )
             counterDetectedHoleCount = counterHoles.detectedHoleCount
             counterValidHoleCount = counterHoles.validHoleCount
             counterHoleAreas = counterHoles.holeAreas.slice()
             
-            console.log("[v0-solid] COUNTER MASK detection:", {
+            if (!QUIET) console.log("[v0-solid] COUNTER MASK detection:", {
               actualThicknessPx,
               counterDetectionThicknessPx,
               counterDetected: counterHoles.detectedHoleCount,
@@ -1106,7 +1300,7 @@ export function buildMaskSolid(
                 const cy = sy / n
                 if (pointInPolygonMask(cx, cy, outerContour)) {
                   filteredIdx.push(k)
-                } else {
+                } else if (!QUIET) {
                   console.log(
                     `[v0-solid] counter hole label=${lid} centroid=(${cx.toFixed(1)},${cy.toFixed(1)}) REJECTED (outside actual outer)`
                   )
@@ -1138,7 +1332,7 @@ export function buildMaskSolid(
                   validHoleBboxes: filteredBboxes,
                 }
                 counterHoleSource = "COUNTER_MASK"
-                console.log(
+                if (!QUIET) console.log(
                   `[v0-solid] COUNTER MASK selected as hole source (valid=${filteredLabelIds.length})`
                 )
               }
@@ -1207,9 +1401,16 @@ export function buildMaskSolid(
           h2HoleContourRejectReasons.push(`label=${labelId} area=${pxCount} traced<3pts`)
           continue
         }
-        
+
+        // Same exact-simplify + guarded anti-stairstep smoothing as the outer
+        // contour, so hole rims match the outer silhouette's edge quality.
+        // Deviation is bounded < 1 mask px; the mask guarantees >= 1 px of
+        // filled wall between a hole boundary and the outer boundary, so
+        // smoothing cannot fuse the two.
+        const holeSmoothed = smoothLatticeLoop(simplifyCollinearMask(holeContourMask))
+
         // Convert to world coordinates using the same transform as the outer.
-        let holePts = holeContourMask.map(
+        let holePts = holeSmoothed.map(
           (p) => new THREE.Vector2(toWorldX(p.x), toWorldY(p.y))
         )
         
@@ -1257,7 +1458,7 @@ export function buildMaskSolid(
         }
         cx /= holePts.length; cy /= holePts.length
         
-        console.log(`[v0-solid] H2 hole label=${labelId}`, {
+        if (!QUIET) console.log(`[v0-solid] H2 hole label=${labelId}`, {
           maskAreaPx: pxCount,
           contourPts: holePts.length,
           worldSignedArea: holeSignedArea.toFixed(6),
@@ -1343,7 +1544,7 @@ export function buildMaskSolid(
         stabilization_holeOverrideKeptCount = orderedHoles.length
         usedHoleLabelIds.length = 0
         for (let i = 0; i < orderedHoles.length; i++) usedHoleLabelIds.push(-(i + 1))
-        console.log("[v0-solid] H3 ANIMATION_GATED override applied", {
+        if (!QUIET) console.log("[v0-solid] H3 ANIMATION_GATED override applied", {
           finalHoleCountIn: holeStabilization.activeFinalHolesWorld.length,
           kept: stabilization_holeOverrideKeptCount,
           rejected: stabilization_holeOverrideRejectedCount,
@@ -1454,7 +1655,7 @@ export function buildMaskSolid(
     const flatCapTris = flatIndexCount(flatGeom)
     const triDelta = h2FrontCapTris - flatCapTris
     
-    console.log("[v0-solid] FLAT_CAP_WITH_HOLES:", {
+    if (!QUIET) console.log("[v0-solid] FLAT_CAP_WITH_HOLES:", {
       // H1 inputs
       h1DetectedHoleCount: holeDetection.detectedHoleCount,
       h1ValidHoleCount: holeDetection.validHoleCount,
@@ -1494,7 +1695,7 @@ export function buildMaskSolid(
     // what actually fed H2 (matters when COUNTER_MASK was selected).
     const activeViability = computeSmallestValidHoleViability(activeHoleDetection)
     
-    console.log("[v0-solid] H2 small-counter viability:", {
+    if (!QUIET) console.log("[v0-solid] H2 small-counter viability:", {
       activeSource: counterHoleSource,
       smallestValidHoleArea: activeViability.smallestValidHoleArea,
       smallestValidHoleBboxW: activeViability.smallestValidHoleBboxW,
@@ -1727,7 +1928,7 @@ export function buildMaskSolid(
           ? extrudedH3.boundingBox.max.z - extrudedH3.boundingBox.min.z
           : 0
 
-        console.log("[v0-solid] EXTRUDE_FROM_FLAT_CAP_WITH_HOLES (H3):", {
+        if (!QUIET) console.log("[v0-solid] EXTRUDE_FROM_FLAT_CAP_WITH_HOLES (H3):", {
           solidDepthParam: depth,
           solidDepthEffective,
           halfDepth,
@@ -2025,14 +2226,33 @@ interface RasterDebugInfo {
   rasterRejectReason: string
 }
 
+// Cached raster canvas + context (see renderStrokeToMask). One per module —
+// buildMaskSolid is synchronous, so there is no concurrent use.
+let _rasterCanvas: HTMLCanvasElement | null = null
+let _rasterCtx: CanvasRenderingContext2D | null = null
+
+function getRasterCtx(width: number, height: number): CanvasRenderingContext2D {
+  if (!_rasterCanvas || !_rasterCtx) {
+    _rasterCanvas = document.createElement("canvas")
+    _rasterCanvas.width = width
+    _rasterCanvas.height = height
+    _rasterCtx = _rasterCanvas.getContext("2d", { willReadFrequently: true })!
+  } else if (_rasterCanvas.width !== width || _rasterCanvas.height !== height) {
+    _rasterCanvas.width = width
+    _rasterCanvas.height = height
+  }
+  return _rasterCtx
+}
+
 function renderStrokeToMask(
   points: Point2D[],
   thickness: number,
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  resolution: number = MASK_RESOLUTION
 ): { mask: boolean[], width: number, height: number, filledCount: number, rasterDebug: RasterDebugInfo } {
-  const width = MASK_RESOLUTION
-  const height = Math.round(MASK_RESOLUTION * (canvasHeight / canvasWidth))
+  const width = resolution
+  const height = Math.round(resolution * (canvasHeight / canvasWidth))
   
   // Initialize raster debug info
   const rasterDebug: RasterDebugInfo = {
@@ -2096,11 +2316,11 @@ function renderStrokeToMask(
   const thicknessPx = thickness / worldScale * (width / canvasWidth)
   rasterDebug.rasterThicknessPx = thicknessPx
   
-  // Create offscreen canvas
-  const canvas = document.createElement("canvas")
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext("2d")!
+  // Reuse a single offscreen canvas across calls (this runs per rAF tick
+  // during draw-in, twice per tick when counter-detection re-rasters).
+  // willReadFrequently keeps the canvas on the CPU so getImageData is not a
+  // GPU readback stall every frame.
+  const ctx = getRasterCtx(width, height)
   
   // Clear to black (background)
   ctx.fillStyle = "black"
@@ -2144,7 +2364,7 @@ function renderStrokeToMask(
     rasterDebug.rasterRejectReason = `stroke bounds (${rasterDebug.rasterStrokeBoundsX}, ${rasterDebug.rasterStrokeBoundsY}) may be outside mask`
   }
   
-  console.log("[v0-solid] RASTER DEBUG:", rasterDebug)
+  if (!QUIET) console.log("[v0-solid] RASTER DEBUG:", rasterDebug)
   
   return { mask, width, height, filledCount, rasterDebug }
 }
@@ -2169,9 +2389,10 @@ function labelConnectedComponents(
         
         const queue: number[] = [idx]
         labels[idx] = componentCount
-        
-        while (queue.length > 0) {
-          const ci = queue.shift()!
+        let head = 0
+
+        while (head < queue.length) {
+          const ci = queue[head++]
           size++
           const cx = ci % width
           const cy = Math.floor(ci / width)
@@ -2564,7 +2785,16 @@ function detectInteriorHoles(
   componentMask: boolean[],
   width: number,
   height: number,
+  /**
+   * Resolution scale relative to MASK_RESOLUTION (1 for static/export builds,
+   * <1 for reduced-resolution animated builds). Pixel-count thresholds scale
+   * with it (area by resScale^2, lengths by resScale) so hole-topology
+   * decisions are resolution-independent.
+   */
+  resScale: number = 1,
 ): HoleDetectionResult {
+  const minAreaPx = Math.max(4, Math.round(HOLE_MIN_AREA_PX * resScale * resScale))
+  const minBboxPx = Math.max(2, Math.round(HOLE_MIN_BBOX_PX * resScale))
   const emptyLabels = new Int32Array(width * height)
   
   interface RawComponent {
@@ -2596,9 +2826,10 @@ function detectInteriorHoles(
       
       const queue: number[] = [idx]
       emptyLabels[idx] = labelCounter
-      
-      while (queue.length > 0) {
-        const ci = queue.shift()!
+      let head = 0
+
+      while (head < queue.length) {
+        const ci = queue[head++]
         size++
         const cx = ci % width
         const cy = (ci - cx) / width
@@ -2668,11 +2899,11 @@ function detectInteriorHoles(
       c.maxX <= width - 1 - HOLE_MIN_BORDER_INSET_PX &&
       c.maxY <= height - 1 - HOLE_MIN_BORDER_INSET_PX
     
-    if (c.size < HOLE_MIN_AREA_PX) {
-      rejectReasons.push(`area=${c.size}<${HOLE_MIN_AREA_PX}`)
+    if (c.size < minAreaPx) {
+      rejectReasons.push(`area=${c.size}<${minAreaPx}`)
       rejectedHoleAreas.push(c.size)
-    } else if (bw < HOLE_MIN_BBOX_PX || bh < HOLE_MIN_BBOX_PX) {
-      rejectReasons.push(`bbox=${bw}x${bh}<${HOLE_MIN_BBOX_PX}(area=${c.size})`)
+    } else if (bw < minBboxPx || bh < minBboxPx) {
+      rejectReasons.push(`bbox=${bw}x${bh}<${minBboxPx}(area=${c.size})`)
       rejectedHoleAreas.push(c.size)
     } else if (ratio < HOLE_MIN_AREA_RATIO) {
       rejectReasons.push(`ratio=${ratio.toFixed(2)}<${HOLE_MIN_AREA_RATIO}(area=${c.size})`)
