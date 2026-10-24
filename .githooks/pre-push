@@ -1,0 +1,73 @@
+#!/bin/sh
+# pre-push: nothing under docs/thinking ever reaches the public repo.
+#
+# docs/thinking holds his own messages, captured every session. github.com/SXM4434/free-stroke is public,
+# so a push there that carries any commit touching docs/thinking is refused, history included. Push a
+# snapshot without docs/thinking instead (docs/CLOUD.md says how). Added 2026-09-29 after he asked whether
+# anything already did this; nothing did.
+#
+# Hardened 2026-10-02 after Codex got four pushes through. The hook now reads the WHOLE ancestry of every
+# tip being pushed, not "what the remote lacks". Once the push lands, every ancestor of the tip is
+# reachable on the remote through that ref, and that is the set that matters. It also means the answer
+# never depends on a local tracking ref (Codex input 1), on a remote sha this clone may not have (input 2),
+# or on the remote already holding the private commit, which is a leak to scrub and not a reason to wave
+# the next push through (input 4). The path is matched in any letter case (input 3; macOS and GitHub both
+# fold case), with --full-history so a side branch that adds and deletes under a merge still counts.
+# Any git error refuses the push and prints git's own message. Nothing here fails open.
+remote_name="$1"
+remote_url="$2"
+
+# GitHub ignores case in the owner and repo, and accepts a trailing slash or .git.
+url=$(printf '%s' "$remote_url" | tr '[:upper:]' '[:lower:]')
+url=${url%/}; url=${url%.git}; url=${url%/}
+case "$url" in
+  *sxm4434/free-stroke) ;;
+  *) exit 0 ;;
+esac
+
+# Settings in the caller's environment that would change what the check below sees: literal pathspecs
+# turn :(icase) into a plain string that matches nothing, and replace refs or grafts can show this hook a
+# different history from the objects git actually sends.
+unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
+GIT_NO_REPLACE_OBJECTS=1; export GIT_NO_REPLACE_OBJECTS
+# A path under /dev/null can never exist, so git reads no graft file and prints no deprecation hint.
+GIT_GRAFT_FILE=/dev/null/no-grafts; export GIT_GRAFT_FILE
+
+# git's stderr goes to a file, so a warning can never end up inside a sha.
+errf=$(mktemp -t prepush) || { echo "pre-push: refused. mktemp failed, so git's errors could not be kept." >&2; exit 1; }
+trap 'rm -f "$errf"' EXIT
+
+refuse() {
+  echo "pre-push: refused. $1" >&2
+  status=1
+}
+
+is_zero() { case "$1" in *[!0]*) return 1 ;; *) return 0 ;; esac; }
+
+status=0
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha extra || [ -n "$local_ref" ]; do
+  if [ -z "$remote_sha" ] || [ -n "$extra" ]; then
+    refuse "git handed the hook a line it cannot read: '$local_ref $local_sha $remote_ref $remote_sha $extra'."
+    continue
+  fi
+  # A delete sends no objects.
+  is_zero "$local_sha" && continue
+  if ! tip=$(git rev-parse --verify --quiet "$local_sha^{commit}" 2>"$errf"); then
+    refuse "$local_ref ($local_sha) is not a commit, so this hook cannot read its history. $(cat "$errf")"
+    continue
+  fi
+  if ! hit=$(git rev-list --full-history -n 1 "$tip" -- ':(icase)docs/thinking' 2>"$errf"); then
+    refuse "git could not read the history of $local_ref, so nothing proves it is clean. git said: $(cat "$errf")"
+    continue
+  fi
+  [ -z "$hit" ] && continue
+  what=$(git log -1 --format='%h %s' "$hit" 2>"$errf") || what=$hit
+  refuse "$local_ref carries docs/thinking (commit $what), and $remote_url is public."
+  # silent-ok: these two only pick the extra line below; a remote sha this clone lacks just skips it.
+  if ! is_zero "$remote_sha" && git cat-file -e "$remote_sha^{commit}" 2>/dev/null \
+     && git merge-base --is-ancestor "$hit" "$remote_sha" 2>/dev/null; then
+    echo "pre-push: $remote_ref on the remote already holds that commit. It needs scrubbing there; this push would keep it reachable." >&2
+  fi
+  echo "pre-push: push a snapshot without docs/thinking instead; see docs/CLOUD.md." >&2
+done
+exit $status

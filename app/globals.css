@@ -39,6 +39,42 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/* ⚠ THESE TOKENS ARE COMPLETE AND NOTHING CAN REACH THEM — READ THIS BEFORE
+ * "JUST MOUNTING THE THEME PROVIDER".
+ *
+ * Every dark token below is defined, `@custom-variant dark` above keys the
+ * `dark:` variants off a `.dark` ancestor, `next-themes` is a dependency
+ * (package.json:54) and `components/theme-provider.tsx` exists — and it is
+ * mounted NOWHERE. `app/layout.tsx` renders a bare `<html lang="en">`, so no
+ * element in the product ever carries `.dark` and this whole block is dead.
+ *
+ * IT WAS NOT WIRED UP HERE, AND THE REASON IS MEASURED RATHER THAN AESTHETIC.
+ * The 3D viewport — the right HALF of the screen — paints its own background
+ * from three hardcoded light literals, none of them in a theme-able file:
+ *
+ *   components/viewport-3d.tsx:8136  style={{ background: "#fafafa" }}   (3-up)
+ *   components/viewport-3d.tsx:8228  style={{ background: … "#fafafa" }} (single)
+ *   components/viewport-3d.tsx:345   STILL_PAPER = "#fafafa"
+ *   components/viewport-3d.tsx:10168 ctx.fillStyle = "#fff"              (PNG export)
+ *
+ * So mounting the provider would produce a dark shell against a hard-white 3D
+ * pane, seamed down the middle of the app — visibly broken, and worse than the
+ * light-only product we have. `components/viewport-3d.tsx` belongs to another
+ * lane, so the four literals cannot be touched from here.
+ *
+ * WHAT IT ACTUALLY TAKES, so the next pass does not rediscover it:
+ *   1. those four literals become tokens (viewport-3d.tsx's owner);
+ *   2. the scene rig is judged on the dark paper — `lib/registers.ts` lighting
+ *      is tuned against #fafafa, and a mark lit for white paper reads as a
+ *      silhouette on black;
+ *   3. THEN `<ThemeProvider>` in layout.tsx, with `suppressHydrationWarning`
+ *      on `<html>` (next-themes writes the class before paint and React will
+ *      otherwise log a hydration mismatch on every load);
+ *   4. the PNG export decides whether it follows the theme or stays white —
+ *      an exported asset that changes colour with the app's theme is its own
+ *      defect class.
+ * Steps 1 and 2 are the work. Step 3 is the part that looks like the work.
+ */
 .dark {
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
@@ -157,6 +193,34 @@
 }
 .fs-press:active:not(:disabled) {
   transform: scale(0.97);
+}
+
+/* KEYBOARD FOCUS, ON THE THREE CONTROL PRIMITIVES.
+ *
+ * Every control in the product shell is one of `.fs-press`, `.fs-slider` or
+ * `.fs-switch`, and not one of them defined a focus state — so a keyboard user
+ * tabbing the app got only the UA default ring, and on the one control that DID
+ * style focus (the export filename field) the default was removed and replaced
+ * with a `foreground/20` ring you cannot see. `:focus-visible` rather than
+ * `:focus` so a mouse press never draws a ring, which is the reason the default
+ * gets deleted in the first place.
+ *
+ * The offset is 2px on buttons and 4px on sliders because a slider's hit area
+ * is a 4px-tall track with a 14px thumb standing proud of it; a 2px offset
+ * clips against the thumb. */
+.fs-press:focus-visible,
+.fs-slider:focus-visible,
+.fs-switch:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.fs-slider:focus-visible {
+  outline-offset: 4px;
+}
+/* The thumb grows on keyboard focus as well as on drag, so the control the
+ * ring belongs to is unambiguous when several sit in a row. */
+.fs-slider:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.12);
 }
 
 /* Soft slider: one consistent slider across the whole app. */

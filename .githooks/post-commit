@@ -1,0 +1,20 @@
+#!/bin/sh
+# Regenerate the measured state block in docs/STATUS.md.
+#
+# WHY HERE: a commit is the moment the state changes, so it is the only moment the block
+# can be refreshed without anyone remembering to. `HANDOFF-TO-OZ.md`'s state section went
+# seventeen days wrong because refreshing it depended on a human remembering.
+#
+# It does NOT amend the commit. Rewriting a commit from inside its own hook is how a hook
+# eats work. It regenerates, then says so, and the block rides the next commit.
+[ -n "$FS_NO_STATE" ] && exit 0
+command -v node >/dev/null 2>&1 || exit 0
+out=$(node "$(git rev-parse --show-toplevel)/scripts/gen/state.mjs" 2>&1) || {
+  printf '\033[33m⚠ state.mjs failed, docs/STATUS.md is now STALE:\033[0m\n%s\n' "$out" >&2
+  exit 0
+}
+printf '\033[2m%s\033[0m\n' "$out"
+if ! git diff --quiet -- docs/STATUS.md 2>/dev/null; then
+  printf '\033[2m  docs/STATUS.md moved. It rides your next commit.\033[0m\n'
+fi
+exit 0

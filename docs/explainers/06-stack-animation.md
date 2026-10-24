@@ -44,21 +44,32 @@ proportion while the group fades in — the composition arrives, rather than
 rearranging itself on the way in. That's the whole reason group animation is a
 separate mechanism instead of "animate all the layers at once."
 
-### The three multipliers, completed
+### The multipliers, completed
 
 A layer's final strength is now:
 
 ```
-its own control  ×  stack opacity  ×  its timing envelope  ×  group amount
+its own control  ×  its stack opacity  ×  GROUP opacity  ×  its timing envelope  ×  group amount
 ```
 
-Four dials, four distinct meanings: *how strong is this effect*, *how much does
-it contribute to the composition*, *where is it in its own animation*, and *what
-is the whole group doing*.
+Five dials, five distinct meanings: *how strong is this effect*, *how much does
+this layer contribute to the composition*, *how present is the composition as a
+whole*, *where is this layer in its own animation*, and *what is the whole group
+doing*.
+
+**Group opacity is the one that arrived late, and it is deliberately not part of
+the animation.** It is resolved in `resolveStack`, not in
+`evaluateStackAnimation` (`lib/style-stack.ts`), because it is not motion — a
+group can sit at 40% with nothing animating at all. Folding it into the
+animation would have made a user's chosen level silently stop applying the
+moment they switched the animation off, and a dial whose value quietly stops
+mattering is worse than one that was never built. It is gated on
+`layerStackEnabled` alone and defaults to 1, so every composition authored
+before it existed resolves byte-identically.
 
 ---
 
-## 3. The seven behaviours
+## 3. The eight behaviours
 
 - **fadeIn** — the stack arrives over ~1.2s.
 - **pulse** — everything breathes together. Bottoms out at 0.45 rather than 0,
@@ -72,7 +83,35 @@ is the whole group doing*.
 - **freezeOnComplete** — layers animate during the draw, then hold their final
   frame. This is the one with a practical payoff: a still capture matches what
   the viewer last saw moving.
-- **loop** — a wrapped shared offset, so the whole stack repeats seamlessly.
+- **loop** — a shared PING-PONG offset on the loop clock: the stack slides out
+  and comes home once per cycle. It was a *wrapped* offset in v1, and that was
+  wrong twice over — between wraps it is indistinguishable from `drift` (same
+  slide, same look), and AT the wrap the offset snapped N units back, which is
+  only seamless for patterns that happen to be periodic in the offset. A
+  there-and-back cycle is visibly a repeating figure and never jumps.
+- **revealSynced** — the group IS the playhead. Strength tracks draw progress,
+  and the shared offset is driven by that same 0..1 rather than by wall clock,
+  so scrubbing the reveal backwards genuinely *un-builds* the stack instead of
+  continuing to advance it. Its `4` is `evaluateLayerTime`'s `revealScale`
+  default, so a reveal-synced GROUP travels the same distance over a full draw
+  as a reveal-synced LAYER does — one named idea, one number, at both scales.
+
+### Direction is the SIGN of speed, and only four behaviours can use it
+
+`stackAnimationSpeed` is signed: the magnitude is the rate, the sign is the
+PRD's "direction" control. One field rather than two, because the group's
+motion is a single scalar phase offset and a separate `direction` enum would
+have been a second dial multiplying into the same number — the "two dials, one
+lever" shape this repo has already had to unpick once.
+
+But the sign only *means* anything where the behaviour produces an offset.
+`drift`, `loop` and `revealSynced` slide the whole stack, and running them
+backwards is a genuinely different read. Every other behaviour is an amplitude
+over time, and a negative amplitude clock is not a direction — it is a fade that
+never arrives (`fadeIn` with a raw negative speed returns `min(1, negative/1.2)`,
+clamped at 0 forever, i.e. an invisible stack that looks like a broken preset).
+Those branches take the magnitude only, and the panel *disables* the Direction
+control on them rather than leaving a control on screen that does nothing.
 
 ---
 

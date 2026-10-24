@@ -335,6 +335,62 @@ float fsGlyphPixel(int idx, vec2 g) {
   float shift = a < 13.0 ? a : a - 13.0;
   return mod(floor(src / pow(2.0, shift)), 2.0);
 }
+
+// ROUND DOTS.
+//
+// The glyph table is a 5x5 BITMAP, and the bitmap sampler above quantises the
+// cell with floor(): a lit bit fills its whole 1/5-of-a-cell square, hard edge
+// to hard edge. For letterforms that is exactly right — the strokes of a '#' or
+// a box-drawing glyph ARE square-ended. For the DOT alphabets it is not: the
+// braille cells the Marquee stack lights up along the neon tube are supposed to
+// read as BULBS, and a bulb is round. They were rendering as squares because
+// nothing in this shader ever drew a circle.
+//
+// This samples the same bitmap CONTINUOUSLY. Work in glyph-pixel space (the
+// cell is 5x5 units), and for the 3x3 neighbourhood of lit bits around the
+// current position measure the distance to each bit's centre. Coverage is a
+// radial falloff about that centre, and the neighbourhood max composites
+// touching dots into one blob instead of clipping them at the bit boundary.
+//
+//   |  d < CORE          full brightness — the filament
+//   |  CORE < d < EDGE   smoothstep shoulder — the glass, and the antialias
+//   |  d > EDGE          off
+//
+// EDGE is deliberately just under half a glyph pixel (0.46) so neighbouring
+// bulbs keep a dark gap between them: a marquee is a row of separate lamps, and
+// the gap is what makes you read it as lamps rather than as a lit tube.
+#define FS_BULB_CORE 0.24
+#define FS_BULB_EDGE 0.46
+
+float fsGlyphDot(int idx, vec2 inCell) {
+  vec2 gp = inCell * 5.0;           // position in glyph-pixel units
+  vec2 base = floor(gp);
+  float cov = 0.0;
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      vec2 g = base + vec2(float(dx), float(dy));
+      if (fsGlyphPixel(idx, g) < 0.5) continue;
+      float d = length(gp - (g + 0.5));
+      cov = max(cov, 1.0 - smoothstep(FS_BULB_CORE, FS_BULB_EDGE, d));
+    }
+  }
+  return cov;
+}
+
+// Which charsets are drawn as round bulbs rather than as bitmap glyphs.
+//
+// BRAILLE ONLY (5), deliberately. The 'dots' charset (3) is also a dot
+// alphabet, and round would be conceptually right there too, but it is used by
+// Sparse Glyph at an 8px cell — a glyph pixel is then 1.6 device pixels, which
+// has no room to read as a circle and only loses light: measured over the ink
+// region, mean luminance fell 57.8 -> 21.7 (-62%) when that preset was rendered
+// with round dots, turning a "subtle overlay" into almost nothing. Braille runs
+// at the Marquee stack's 22px cell (4.4px per glyph pixel), which is enough
+// room for a bulb. If 'dots' is ever wanted round, its presets need re-tuning
+// for the lost coverage first.
+bool fsIsDotCharset(int charset) {
+  return charset == 5;
+}
 `
 
 /**
@@ -343,7 +399,7 @@ float fsGlyphPixel(int idx, vec2 g) {
  * layer reordering impossible).
  */
 export const ASCII_APPLY_GLSL = /* glsl */ `
-vec3 fsApplyAscii(vec3 fsAC) {
+vec3 fsApplyAscii(vec3 fsAC, float fsNdV) {
   if (uFsAscOn < 0.5) return fsAC;
 
   // --- 1. the cell grid -------------------------------------------------
@@ -366,47 +422,83 @@ vec3 fsApplyAscii(vec3 fsAC) {
   // --- 2. brightness -> which character ---------------------------------
   float fsARaw = dot(fsAC, vec3(0.2126, 0.7152, 0.0722));
 
-  // EXPOSURE. Dividing by a reference luminance rescales the subject's actual
-  // tonal range onto the full ramp. Density IS that reference: a low reference
-  // means dimmer pixels already count as "bright", which selects denser
-  // characters. MEASURED against the live default material (2026-07 craft
-  // pass): the shaded stroke sits at luminance ~0.30 (shadow) .. 0.62 (lit),
-  // mass at 0.54. The old mix(1.1, 0.16, d) put default density at ref 0.63,
-  // which sent the whole form to the DENSEST glyph — every charset read as a
-  // uniform woven texture, never as characters. ref ~1.0 at the default puts
-  // the body mid-ramp so shading actually walks the ramp.
-  float fsRef = mix(1.9, 0.16, clamp(uFsAscDensity, 0.0, 1.0));
-  float fsALum = clamp(fsARaw / max(fsRef, 0.02), 0.0, 1.0);
-  // Moderate contrast. A hard expansion here crushes the shading variation
-  // that makes DIFFERENT characters appear across the form — over-expand and
-  // every cell saturates to the densest glyph, which reads as a flat mesh
-  // rather than as text.
-  fsALum = clamp((fsALum - 0.5) * (0.6 + uFsAscContrast * 1.8) + 0.5, 0.0, 1.0);
+  // FORM TONE, then the shared TONE WINDOW (see style-shader.ts). The previous
+  // divide-by-reference could only scale the subject's tone, and the subject
+  // does not have a range to scale: measured over a real frame, the Solid
+  // engine's ink is p25 = p50 = p75 = 0.538. Every cell therefore resolved to
+  // the SAME ramp level and every charset rendered as one repeated character
+  // (docs/verification/style-craft/sheets/solid_ascii_macro.png). Density
+  // slides the window, contrast narrows it — and the contrast dial, which
+  // previously produced five identical frames across its whole range, now
+  // changes how many distinct characters appear.
+  float fsAForm = fsFormTone(fsARaw, fsNdV);
+  float fsALum = fsToneWindow(fsAForm, uFsAscDensity, uFsAscContrast * 0.72);
+
+  // revealDensity acts BEFORE quantization.
+  //
+  // It used to act after — 'fsLevel = floor(fsLevel * reveal + 0.5)' on an
+  // (NB: single quotes, not backticks — this comment is inside a GLSL template
+  // literal, so a backtick here terminates the string and breaks the build.)
+  // already-integer level — which has two failures in one line. It is
+  // bit-identical to no animation whenever the playhead rests at 1 (the state
+  // the user judges the preset in, and the state the whole rail is browsed in),
+  // and while the draw-in IS running it moves in whole ramp steps, so the
+  // "density grows" it advertises arrives as three or four visible jumps.
+  // Scaling the continuous tone instead gives a smooth build, and the same
+  // identity at rest is then a property of the effect being finished rather
+  // than of the arithmetic collapsing.
+  if (uFsAscAnim > 4.5) {
+    fsALum *= clamp(uFsAscReveal, 0.0, 1.0);
+  }
 
   float fsRampMax = fsRampMaxFor(int(uFsAscCharset + 0.5));
   float fsLevel = floor(fsALum * fsRampMax + 0.5);
 
   if (uFsAscAnim > 2.5 && uFsAscAnim < 3.5) {
-    // cycle: every cell walks up the ramp over time (glyphs change in place)
-    fsLevel = mod(fsLevel + floor(uFsAscTime * 3.0), fsRampMax + 1.0);
+    // cycle: every cell walks up the ramp over time (glyphs change in place).
+    //
+    // THE PHASE IS PER-CELL. Without the hash term every cell walked the ramp
+    // in lockstep, which means the whole form passed through the ramp's BLANK
+    // glyph at the same instant — a full-frame flash to dark, roughly every
+    // 3.3s. Read it in docs/verification/screen-layers/after/sheets/
+    // motion_asc_cycle_strip.png: f6 is a dense weave, f12 is an almost empty
+    // silhouette, f36 is dense again, f42 empty. In the numbers it is the
+    // worst strobe signature in the family — mean frame delta 7.9 with a peak
+    // of 43.7 and a floor of 0.0, i.e. long stretches of nothing punctuated by
+    // one enormous jump. A global luminance flash is the first thing an
+    // animation review fails, and nothing about "characters change in place"
+    // requires the changes to be simultaneous.
+    //
+    // Offsetting by a per-cell random multiple of the ramp length keeps every
+    // cell on the same speed and the same ramp — so it is still one coherent
+    // behaviour, not noise — while the blank glyph is reached at a different
+    // time in each cell. The form now shimmers instead of blinking.
+    float fsCycPhase = fsAscHash(fsCell) * (fsRampMax + 1.0);
+    fsLevel = mod(fsLevel + floor(uFsAscTime * 3.0 + fsCycPhase), fsRampMax + 1.0);
   } else if (uFsAscAnim > 3.5 && uFsAscAnim < 4.5) {
     // flicker: a few cells jump to a random glyph each tick
     float tick = floor(uFsAscTime * 8.0);
     float r = fsAscHash(fsCell + tick);
     if (r > 0.86) fsLevel = floor(fsAscHash(fsCell + tick + 7.0) * fsRampMax + 0.5);
-  } else if (uFsAscAnim > 4.5) {
-    // revealDensity: characters thicken as the stroke draws in
-    fsLevel = floor(fsLevel * clamp(uFsAscReveal, 0.0, 1.0) + 0.5);
   }
+  // (revealDensity is handled above, before quantization.)
 
-  int fsIdx = fsRampIndex(int(uFsAscCharset + 0.5), int(fsLevel + 0.5));
+  int fsCharset = int(uFsAscCharset + 0.5);
+  int fsIdx = fsRampIndex(fsCharset, int(fsLevel + 0.5));
 
   // --- 3. draw the glyph ------------------------------------------------
-  // 5x5 bitmap sampled inside the cell. floor(inCell * 5) gives the pixel of
-  // the character; y is flipped because glyph row 0 is the TOP row while
-  // gl_FragCoord.y grows upward.
-  vec2 fsG = floor(vec2(fsInCell.x, 1.0 - fsInCell.y) * 5.0);
-  float fsOn = fsGlyphPixel(fsIdx, fsG);
+  // 5x5 bitmap sampled inside the cell; y is flipped because glyph row 0 is the
+  // TOP row while gl_FragCoord.y grows upward.
+  //
+  // Letterforms take the bitmap straight (floor() -> square bit cells, which is
+  // what a character stroke should be). Dot alphabets go through fsGlyphDot
+  // instead, which reads the same bits as ROUND bulbs with a falloff — see the
+  // note there; the Marquee stack's braille cells are bulbs on a sign, and a
+  // square bulb is just a mistake.
+  vec2 fsCellUV = vec2(fsInCell.x, 1.0 - fsInCell.y);
+  float fsOn = fsIsDotCharset(fsCharset)
+    ? fsGlyphDot(fsIdx, fsCellUV)
+    : fsGlyphPixel(fsIdx, floor(fsCellUV * 5.0));
 
   // Lit glyph pixels must be MUCH brighter than unlit ones or the characters
   // are invisible on dark ink (multiplying near-black by 1.35 is still
@@ -415,8 +507,14 @@ vec3 fsApplyAscii(vec3 fsAC) {
   // bright for lit glyph pixels, near-black for the rest. This keeps material
   // presets distinguishable instead of collapsing every surface to white.
   vec3 fsATint = fsARaw > 0.002 ? fsAC / fsARaw : vec3(1.0);
-  vec3 fsOnCol = clamp(fsATint * 0.82, 0.0, 1.0);
-  vec3 fsOffCol = clamp(fsATint * 0.05, 0.0, 1.0);
+  // Both ends track tone as well as the glyph does. A fixed on/off pair threw
+  // away every bit of shading that did not survive the (coarse) ramp
+  // quantization, so the form read as a black silhouette wearing wallpaper.
+  // Letting the lit pixels brighten with tone is the cheapest way to carry the
+  // continuous part of the shading through a discrete alphabet, and giving the
+  // unlit pixels a small tonal lift keeps the object legible as an object.
+  vec3 fsOnCol = clamp(fsATint * (0.55 + 0.42 * fsALum), 0.0, 1.0);
+  vec3 fsOffCol = clamp(fsATint * (0.04 + 0.11 * fsALum), 0.0, 1.0);
   vec3 fsGlyphed = mix(fsOffCol, fsOnCol, fsOn);
 
   return fsStackBlend(fsAC, fsGlyphed, uFsAscBlend, uFsAscAmount);

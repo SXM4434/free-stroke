@@ -269,11 +269,21 @@ function unionPolygons(polygons: Point2D[][]): Polygon[] {
   // For our expanded outlines, we just have outers (no holes yet)
   // Each input polygon becomes a single-polygon Geom: [[ring]]
   const geoms: [number, number][][][] = polygons.map(pts => [[...toRing(pts)]])
-  
+
   try {
-    // Union all polygons progressively
-    // polygon-clipping.union takes Geom arguments and returns Geom
-    let result: [number, number][][][] = geoms[0]
+    /* THE SEED WAS A POLYGON WHERE EVERY LATER VALUE IS A MULTIPOLYGON.
+     *
+     * `geoms[i]` is `[ring]` — a polygon-clipping POLYGON (`Ring[]`). `union`
+     * returns a MULTIPOLYGON (`Polygon[]`). Seeding `result` from `geoms[0]`
+     * therefore gave it a Polygon on iteration 0 and a MultiPolygon from then
+     * on, which is the type error and, worse, means the `for (const poly of
+     * result)` loop below would read RINGS as POLYGONS if the union loop ever
+     * did not execute. It cannot today — `polygons.length === 1` returns
+     * early above — so this is a latent hazard rather than a live defect, and
+     * it is closed by seeding with a one-polygon MultiPolygon instead. The
+     * library accepts either form as an argument, so the union output is the
+     * same geometry; only the variable's shape is now constant. */
+    let result: [number, number][][][] = [geoms[0]]
     for (let i = 1; i < geoms.length; i++) {
       result = polygonClipping.union(result, geoms[i]) as [number, number][][][]
     }
@@ -559,14 +569,14 @@ export function generateTestStrokes(): {
       description: "Open curved stroke like a 'C' - should produce one clean blob, no ribbon artifacts",
       stroke: {
         points: [
-          { x: 300, y: 100 },
-          { x: 200, y: 120 },
-          { x: 130, y: 180 },
-          { x: 100, y: 280 },
-          { x: 100, y: 380 },
-          { x: 130, y: 480 },
-          { x: 200, y: 540 },
-          { x: 300, y: 560 }
+          { x: 300, y: 100, t: 0 },
+          { x: 200, y: 120, t: 10 },
+          { x: 130, y: 180, t: 20 },
+          { x: 100, y: 280, t: 30 },
+          { x: 100, y: 380, t: 40 },
+          { x: 130, y: 480, t: 50 },
+          { x: 200, y: 540, t: 60 },
+          { x: 300, y: 560, t: 70 }
         ],
         cornerCount: 0
       }
@@ -577,31 +587,31 @@ export function generateTestStrokes(): {
       stroke: {
         points: [
           // Start of loop
-          { x: 100, y: 300 },
-          { x: 150, y: 250 },
-          { x: 200, y: 200 },
-          { x: 250, y: 200 },
-          { x: 300, y: 250 },
-          { x: 300, y: 350 },
-          { x: 250, y: 400 },
-          { x: 200, y: 400 },
-          { x: 150, y: 350 },
-          { x: 150, y: 300 },
+          { x: 100, y: 300, t: 0 },
+          { x: 150, y: 250, t: 10 },
+          { x: 200, y: 200, t: 20 },
+          { x: 250, y: 200, t: 30 },
+          { x: 300, y: 250, t: 40 },
+          { x: 300, y: 350, t: 50 },
+          { x: 250, y: 400, t: 60 },
+          { x: 200, y: 400, t: 70 },
+          { x: 150, y: 350, t: 80 },
+          { x: 150, y: 300, t: 90 },
           // Continue to second loop
-          { x: 200, y: 300 },
-          { x: 250, y: 280 },
-          { x: 350, y: 250 },
-          { x: 400, y: 250 },
-          { x: 450, y: 300 },
-          { x: 450, y: 400 },
-          { x: 400, y: 450 },
-          { x: 350, y: 450 },
-          { x: 300, y: 400 },
-          { x: 300, y: 350 },
+          { x: 200, y: 300, t: 100 },
+          { x: 250, y: 280, t: 110 },
+          { x: 350, y: 250, t: 120 },
+          { x: 400, y: 250, t: 130 },
+          { x: 450, y: 300, t: 140 },
+          { x: 450, y: 400, t: 150 },
+          { x: 400, y: 450, t: 160 },
+          { x: 350, y: 450, t: 170 },
+          { x: 300, y: 400, t: 180 },
+          { x: 300, y: 350, t: 190 },
           // Tail
-          { x: 350, y: 350 },
-          { x: 400, y: 380 },
-          { x: 500, y: 400 }
+          { x: 350, y: 350, t: 200 },
+          { x: 400, y: 380, t: 210 },
+          { x: 500, y: 400, t: 220 }
         ],
         cornerCount: 0
       }
@@ -611,18 +621,18 @@ export function generateTestStrokes(): {
       description: "Messy self-overlapping stroke - should produce a stable filled solid, no shard/sliver explosion",
       stroke: {
         points: [
-          { x: 100, y: 200 },
-          { x: 200, y: 400 },
-          { x: 300, y: 200 },
-          { x: 400, y: 400 },
-          { x: 500, y: 200 },
-          { x: 450, y: 350 },
-          { x: 350, y: 250 },
-          { x: 250, y: 350 },
-          { x: 150, y: 250 },
-          { x: 200, y: 300 },
-          { x: 300, y: 300 },
-          { x: 400, y: 300 }
+          { x: 100, y: 200, t: 0 },
+          { x: 200, y: 400, t: 10 },
+          { x: 300, y: 200, t: 20 },
+          { x: 400, y: 400, t: 30 },
+          { x: 500, y: 200, t: 40 },
+          { x: 450, y: 350, t: 50 },
+          { x: 350, y: 250, t: 60 },
+          { x: 250, y: 350, t: 70 },
+          { x: 150, y: 250, t: 80 },
+          { x: 200, y: 300, t: 90 },
+          { x: 300, y: 300, t: 100 },
+          { x: 400, y: 300, t: 110 }
         ],
         cornerCount: 0
       }

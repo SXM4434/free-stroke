@@ -1,0 +1,68 @@
+SOURCE_URL: https://help.procreate.com/procreate/handbook/brushes/brush-studio-settings
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Procreate Brush Studio documentation - stamp-based brush engine using repeated brush shape stamps along path with configurable spacing, jitter, taper, and fall-off opacity
+
+## Procreate Brush Studio: Stamp-Based Architecture
+
+Procreate's core brush mechanism uses a **stamp-based rendering model**: brush shapes stamp repeatedly along the stroke path rather than as a continuous swept outline.
+
+## Stroke Path Properties
+
+### Spacing
+Determines how frequently the brush shape stamps itself along the stroke path.
+- **Low spacing** creates a fluid continuous stroke (shapes merge into one)
+- **High spacing** reveals individual shapes with visible gaps between stamps
+
+### Spacing Jitter
+Adds variability to the Spacing value, making stamp placement more random and organic.
+- Intensifies when combined with Lateral and Linear Jitter
+- Can be tied to Apple Pencil pressure input
+
+### Jitter Lateral
+Controls perpendicular displacement of stamps relative to stroke direction.
+- A horizontally-drawn stroke with high lateral jitter shows vertical stamp displacement
+
+### Jitter Linear
+Manages jitter aligned with the stroke direction itself.
+- Higher values extend stamp placement beyond actual stroke endpoints
+
+## Taper Settings
+
+### Pressure Taper
+Artificial tapering extends natural pencil-like endpoints when using Apple Pencil.
+- Visual slider adjusts taper length at stroke beginning and/or end
+- Separate controls for size and opacity tapering
+
+### Touch Taper
+Artificially adds tapers to stroke beginning and end using Touch Taper.
+- Needed because finger input lacks pressure sensitivity data
+
+### Classic Taper
+Legacy toggle returning taper behavior to previous Procreate versions.
+
+## Shape Behavior & Stamping
+
+### Core Mechanism
+Brush shapes stamp repeatedly along the stroke path with adjustable:
+- **Scatter**: Random offset from the central path
+- **Rotation**: Angle of each stamp
+- **Count**: Up to 16 stamps per point
+- **Azimuth/Barrel Roll**: Directional responsiveness of stamp orientation
+
+### Fall Off
+- Start at full opacity
+- Fade away as stroke progresses
+- Can be disabled entirely for uniform opacity
+
+## Advanced Features
+
+The stamp-based model allows complex behaviors:
+- Each stamp is an independent shape rendered at specific intervals
+- Pressure affects size and opacity independently
+- Tilt and rotation can be linked to stylus orientation
+- Multiple stamps per point create textured, natural media effects
+
+This contrasts with continuous swept-outline models—Procreate builds strokes as a sequence of discrete marks rather than a single expanded path.
+
+Reference: https://help.procreate.com/procreate/handbook/brushes/

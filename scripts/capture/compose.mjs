@@ -8,13 +8,19 @@
 //
 // Usage: node scripts/capture/compose.mjs [--mode=with3d|logoonly]
 import { createCanvas, loadImage } from "@napi-rs/canvas"
-import { readdirSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs"
+import { readdirSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
+import { stageEvidence } from "../verify/lib/evidence-swap.mjs"
 
 const DIR = dirname(fileURLToPath(import.meta.url))
 const FRAMES = join(DIR, "frames")
-const OUT = join(DIR, "composed")
+/* STAGED, same as the two capture scripts beside it: `scripts/capture/composed`
+ * holds 298 tracked PNGs and this wipe emptied them at the top of a compose that
+ * takes minutes. lib/evidence-swap.mjs. */
+const FINAL = join(DIR, "composed")
+const EV = stageEvidence(FINAL)
+const OUT = EV.dir
 const LOGO = join(DIR, "..", "..", "public", "desk-doodles-logo.png")
 
 const W = 1920
@@ -131,8 +137,7 @@ function drawFlip(ctx, src, scaleX, shade = 0) {
 }
 
 async function main() {
-  if (existsSync(OUT)) rmSync(OUT, { recursive: true })
-  mkdirSync(OUT, { recursive: true })
+  EV.open()
 
   const logo = await loadImage(LOGO)
 
@@ -240,7 +245,9 @@ async function main() {
     }
   }
 
-  console.log(`[compose] wrote ${idx} frames to ${OUT} (mode=${mode})`)
+  /* THE SWAP. The only moment `composed` is written at all. */
+  EV.commit()
+  console.log(`[compose] wrote ${idx} frames to ${FINAL} (mode=${mode})`)
 }
 
 function cloneCanvas(src) {

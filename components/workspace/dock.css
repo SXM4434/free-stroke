@@ -1,0 +1,119 @@
+/* THE DOCK'S HEADER (L3, components/dock-shell.tsx). Only the group marked
+   `data-fs-dock` shows a header; the Drawing and 3D view groups keep theirs
+   hidden. The header is one 36 px row: the transport first, taking what the
+   tabs leave, then the tabs, then the fold chevron. The 1 px rule on top is the
+   same `border-border` edge the panels use. */
+.fs-dock-theme .dv-groupview[data-fs-dock] > .dv-tabs-and-actions-container {
+  height: 36px;
+  border-top: 1px solid var(--border);
+  box-sizing: border-box;
+  background: var(--background);
+}
+.fs-dock-theme .dv-groupview[data-fs-dock] > .dv-tabs-and-actions-container > .dv-pre-actions-container {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+.fs-dock-theme .dv-groupview[data-fs-dock] > .dv-tabs-and-actions-container .dv-tabs-container {
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-left: 1px solid var(--border);
+  overflow: visible;
+}
+.fs-dock-theme .dv-groupview[data-fs-dock] > .dv-tabs-and-actions-container .dv-void-container {
+  flex: 0 0 0;
+}
+.fs-dock-theme .dv-groupview[data-fs-dock] .dv-tab {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  background: transparent;
+}
+.fs-dock-theme .dv-groupview[data-fs-dock] > .dv-content-container {
+  background: var(--background);
+}
+
+/* Dockview's always-rendered overlay can keep its last geometry after the
+   dock folds to a zero-height content box. Hide the overlay itself so its
+   stale contents neither paint over another panel nor take pointer events. */
+.fs-dock-theme .dv-render-overlay:has([data-dock-folded]),
+.fs-dock-theme .dv-render-overlay:has([data-dock-folded]) * {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* EVERY OTHER PANEL'S HEADER (L5): 28 px, the panel's name on the left, maximize
+   and hide on the right, one 1 px rule under it. */
+.fs-dock-theme .dv-groupview:not([data-fs-dock]) > .dv-tabs-and-actions-container {
+  height: 28px;
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+  background: var(--background);
+}
+.fs-dock-theme .dv-groupview:not([data-fs-dock]) .dv-tab {
+  padding: 0;
+  background: transparent;
+}
+.fs-dock-theme .dv-groupview:not([data-fs-dock]) > .dv-tabs-and-actions-container .dv-void-container {
+  flex: 1 1 auto;
+}
+
+/* THE FLOATING 3D PREVIEW (L5): 360x216, 12 px in from the bottom right, a
+   1 px edge and the export cards' shadow; no header of its own. */
+.fs-dock-theme .dv-resize-container:has([data-fs-preview]) {
+  border: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  /* The edge is a ring, not a border, so the 3D view keeps the whole 360x216. */
+  box-shadow: 0 0 0 1px var(--border), 0 8px 24px rgb(0 0 0 / 0.12);
+  background: var(--background);
+}
+/* The preview is a view, not a place to work: Top and Reset camera stay on
+   the 3D view's own panel and are not drawn over the 360x216 preview. */
+.fs-dock-theme .dv-render-overlay-float [data-camera-bar] {
+  display: none;
+}
+
+/* RESIZE EDGES (L6, BUILD-PLAN.md §4): an 8 px grab strip over the 1 px line.
+   dockview places its sash for a 4 px width (splitview, sashWidth = 4), so the
+   strip is widened by 2 px each way around the same centre. */
+:root:not([data-fs-hit-old]) .fs-dock-theme .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash {
+  width: 8px;
+  margin-left: -2px;
+}
+:root:not([data-fs-hit-old]) .fs-dock-theme .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash {
+  height: 8px;
+  margin-top: -2px;
+}
+
+/* THE PREVIEW HOLDS ITS CONTENT (CLOUD-LAYOUT). Below `lg` the 3D column is a
+   flex item in a column, whose `min-height: auto` let it grow to its content
+   inside the float: at 900x700 the view ran 64 px past its 216 px box and past
+   the window's bottom. In the float the column is the box, no larger. */
+[data-fs-dock-box]:not([data-fs-preview-loose]) .dv-render-overlay-float [data-dock-panel="view3d"] {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* THE MAXIMIZED DOCK IS FILLED (CLOUD-LAYOUT). Unmaximized, the Timeline's
+   content is as tall as it is and the dock follows it (dock-shell.tsx,
+   `fitDock`). Maximized, the content takes the whole panel and every box
+   marked `data-take-fill` on the way down to the open key lanes grows, so
+   the lanes, not a blank band, take the height the dock has left. */
+:root[data-fs-dock-max="1"] [data-dock-host="timeline"] [data-take-panel] {
+  height: 100%;
+}
+:root[data-fs-dock-max="1"] [data-dock-host="timeline"] [data-take-fill] {
+  flex: 1 1 0%;
+}
+/* With the lanes filling the maximized dock, its two bottom rows run under
+   the floating preview's corner: the Keyframes row (the camera picker at its
+   right end) and the timing note keep the preview's width clear. */
+:root[data-fs-dock-max="1"][data-fs-preview="1"] [data-dock-host="timeline"] [data-key-lanes-row],
+:root[data-fs-dock-max="1"][data-fs-preview="1"] [data-dock-host="timeline"] [data-testid="timing-note"] {
+  padding-right: var(--fs-preview-reserve, 384px);
+}

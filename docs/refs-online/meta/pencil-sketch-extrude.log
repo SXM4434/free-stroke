@@ -1,0 +1,13 @@
+[youtube] Extracting URL: https://www.youtube.com/watch?v=3yLlI65B808
+[youtube] 3yLlI65B808: Downloading webpage
+[youtube] 3yLlI65B808: Downloading android vr player API JSON
+[youtube] 3yLlI65B808: Downloading player bed7a914-main
+[youtube] [jsc:deno] Solving JS challenges using deno
+[youtube] 3yLlI65B808: Downloading m3u8 information
+[youtube] Downloading comment section API JSON
+[youtube] Downloading ~0 comments
+[youtube] Sorting comments by top
+[youtube] Downloading comment API JSON page 1 (0/~0)
+[youtube] Extracted 0 comments
+[info] 3yLlI65B808: Downloading 1 format(s): 135+251
+[info] Writing video metadata as JSON to: pencil-sketch-extrude.info.json

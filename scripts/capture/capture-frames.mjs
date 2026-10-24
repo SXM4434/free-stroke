@@ -2,19 +2,24 @@
 // transparent draw-in of the traced "Desk Doodles" logo strokes.
 // Output: scripts/capture/frames/3d_0000.png ... 3d_full.png (1920x1080 alpha)
 import { execFileSync } from "node:child_process"
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs"
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
-import { layoutWord } from "./letters.mjs"
+import { stageEvidence } from "../verify/lib/evidence-swap.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const FRAMES = join(__dirname, "frames")
+/* STAGED. This is not under docs/verification, so the census of the class missed
+ * it, and it is the same defect: `scripts/capture/frames` holds 344 tracked PNGs
+ * and this wipe emptied them before a capture that takes minutes. The run writes
+ * to a sibling `.frames.staging` and the stored set is replaced only once every
+ * frame exists. lib/evidence-swap.mjs. */
+const FINAL = join(__dirname, "frames")
+const EV = stageEvidence(FINAL)
+const FRAMES = EV.dir
 const STROKES = join(__dirname, "logo-strokes.json")
 
 const DRAW_FRAMES = parseInt(process.env.DRAW_FRAMES || "60", 10)
 const ROUGHNESS = parseFloat(process.env.ROUGHNESS || "0.35")
-// STROKE_SOURCE=font (Variant B, clean hand font) | trace (Variant A, traced logo skeleton)
-const STROKE_SOURCE = process.env.STROKE_SOURCE || "font"
 
 function ab(args) {
   return execFileSync("agent-browser", args, { encoding: "utf8" }).trim()
@@ -24,26 +29,11 @@ function evalJS(js) {
 }
 
 function setup() {
-  rmSync(FRAMES, { recursive: true, force: true })
-  mkdirSync(FRAMES, { recursive: true })
-}
-
-function getPolylines() {
-  if (STROKE_SOURCE === "font") {
-    // Variant B: clean hand font, centered around the origin so frontView
-    // framing (which centers on the geometry bounds) lines it up nicely.
-    const { polylines, width, height } = layoutWord("Desk Doodles", { x: 0, y: 0, size: 120 })
-    const cx = width / 2
-    const cy = height / 2
-    return polylines.map((pl) => pl.map((p) => ({ x: p.x - cx, y: p.y - cy })))
-  }
-  // Variant A: traced logo skeleton
-  const { polylines } = JSON.parse(readFileSync(STROKES, "utf8"))
-  return polylines
+  EV.open()
 }
 
 function injectAndStyle() {
-  const polylines = getPolylines()
+  const { polylines } = JSON.parse(readFileSync(STROKES, "utf8"))
   const poly = JSON.stringify(polylines)
   // Ink material but with a slightly higher roughness via the custom path,
   // since the "ink" preset is locked to 0.3 and the user asked for ~0.35.
@@ -93,6 +83,8 @@ async function main() {
   evalJS("window.__revealHarness.setProgress(1.0)")
   await sleep(400)
   grabTo(join(FRAMES, "3d_full.png"))
+  /* THE SWAP. The only moment `scripts/capture/frames` is written at all. */
+  EV.commit()
   console.log("[cap] done")
 }
 

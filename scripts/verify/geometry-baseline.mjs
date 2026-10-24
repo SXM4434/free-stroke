@@ -24,10 +24,20 @@
 // A change is not automatically a regression — improving an engine SHOULD move
 // these numbers. The point is that every move is visible and deliberate rather
 // than discovered three phases later.
-import { chromium } from "playwright-core"
+import { chromium } from "./lib/browser.mjs"
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
+// DISPATCH §3 — one knob, one name: FS_PORT, resolved once here. This file is
+// NAMED IN §3 as a required step ("geometry-baseline.mjs --save=<label> before
+// and after anything touching geometry"), and it hardcoded :3000 — so a lane
+// that followed the rule got a baseline measuring the CANONICAL tree, and
+// everything it later compared against that baseline was wrong. Lane B hit this
+// on 2026-08-07 with `--save=laneB-before` and DISCARDED the measurement rather
+// than adjusting it. A required tool reading the wrong tree is worse than a gate
+// doing it: a gate prints one wrong verdict, a baseline poisons every later
+// comparison. Explainer 27 §1.
+import { LAB_URL } from "./lib/dev-server.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, "..", "..")
@@ -112,13 +122,13 @@ async function capture(label) {
   const OUT = join(BASE, label)
   mkdirSync(OUT, { recursive: true })
 
-  const browser = await chromium.launch({ channel: "chrome", headless: false, args: ["--use-angle=metal"] })
+  const browser = await chromium.launch({ headed: true })
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
   const errors = []
   page.on("console", (m) => {
     if (m.type() === "error" && !m.text().includes("404")) errors.push(m.text().slice(0, 160))
   })
-  await page.goto("http://localhost:3000", { waitUntil: "networkidle" })
+  await page.goto(LAB_URL, { waitUntil: "networkidle" })
   await page.waitForFunction(
     () => window.__styleHarness && window.__captureHarness && window.__geomDebug,
     null,
@@ -140,7 +150,21 @@ async function capture(label) {
       await page.evaluate(() => window.__captureHarness.frontView(1))
       await page.waitForTimeout(350)
 
-      const stats = await page.evaluate(() => window.__geomDebug.stats?.() ?? null)
+      // `stats?.()` used to optional-chain here, so a harness that had lost its
+      // stats() reporter degraded to `verts=? tris=?` IN SILENCE and every row
+      // of the report fell back to exportBytes — a number that moves for
+      // compression reasons and cannot tell a bevel from a comb. A regression
+      // net whose measurement can go missing without saying so is not a net.
+      // Hard-fail instead: a broken instrument must look broken.
+      const stats = await page.evaluate(() =>
+        typeof window.__geomDebug?.stats === "function" ? window.__geomDebug.stats() : null,
+      )
+      if (!stats || typeof stats.vertices !== "number") {
+        throw new Error(
+          `__geomDebug.stats() unavailable for ${name}/${mode} — the regression net cannot ` +
+            `measure topology and would silently report only exportBytes. Restore the harness.`,
+        )
+      }
       const bytes = await page.evaluate(() => window.__geomDebug.exportBytes())
       const url = await page.evaluate(() => window.__captureHarness.grab())
       const m = (url || "").match(/base64,(.+)/)

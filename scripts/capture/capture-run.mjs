@@ -8,13 +8,21 @@
 //
 // Usage: node scripts/capture/capture-run.mjs --source=font [--headed]
 import { chromium } from "playwright-core"
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs"
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
 import { layoutWord } from "./letters.mjs"
+import { stageEvidence } from "../verify/lib/evidence-swap.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const FRAMES = join(__dirname, "frames")
+/* STAGED. This is not under docs/verification, so the census of the class missed
+ * it, and it is the same defect: `scripts/capture/frames` holds 344 tracked PNGs
+ * and this wipe emptied them before a capture that takes minutes. The run writes
+ * to a sibling `.frames.staging` and the stored set is replaced only once every
+ * frame exists. lib/evidence-swap.mjs. */
+const FINAL = join(__dirname, "frames")
+const EV = stageEvidence(FINAL)
+const FRAMES = EV.dir
 const STROKES = join(__dirname, "logo-strokes.json")
 
 const source = (process.argv.find((a) => a.startsWith("--source=")) || "--source=trace").split("=")[1]
@@ -37,8 +45,7 @@ function getPolylines() {
 }
 
 async function main() {
-  rmSync(FRAMES, { recursive: true, force: true })
-  mkdirSync(FRAMES, { recursive: true })
+  EV.open()
 
   const polylines = getPolylines()
   console.log(`[cap] source=${source} polylines=${polylines.length}`)
@@ -102,6 +109,8 @@ async function main() {
   await grabTo(join(FRAMES, "3d_full.png"))
 
   await browser.close()
+  /* THE SWAP. The only moment `scripts/capture/frames` is written at all. */
+  EV.commit()
   console.log("[cap] done")
 }
 

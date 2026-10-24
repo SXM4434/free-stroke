@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28" width="28" height="28" fill="none">
+  <!-- The product in one mark: a drawn stroke, and the same stroke given depth.
+       Identical path data to the two empty states (components/drawing-canvas.tsx
+       and components/viewport-3d.tsx), so the tab, the canvas and the viewport
+       are visibly the same drawing rather than three separate icons.
+       `currentColor` + a colour-scheme media query so it reads on either tab. -->
+  <style>
+    path { stroke: #121110; }
+    @media (prefers-color-scheme: dark) { path { stroke: #fafafa; } }
+  </style>
+  <path d="M4 20 C 8 8, 12 8, 14 14 S 20 22, 24 10" transform="translate(2.5,-2.5)" stroke-opacity="0.35" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M4 20 C 8 8, 12 8, 14 14 S 20 22, 24 10" stroke-width="2.6" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,36 @@
+SOURCE_URL: https://rive.app/docs/editor/manipulating-shapes/trim-path
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Rive animation platform documentation for trim path feature on vector shapes
+
+# Rive Trim Path Documentation
+
+## Overview
+
+Trim Path is a Rive feature that enables partial stroke drawing on vector shapes, facilitating animations where lines follow paths. Each stroke can have independent Trim Path settings.
+
+## Activation
+
+To enable Trim Path, select a stroked shape and access stroke options in the inspector. Choose between Sequential or Synced mode from the Trim Path dropdown menu.
+
+## Operating Modes
+
+Sequential Mode: "Paths are animated sequentially. The order in which they animate is dictated by their order under the shape." This approach works well for multi-path shapes where sequential progression is desired.
+
+Synced Mode: "Synced mode animates the trim path along all paths concurrently." This mode applies trimming uniformly across all paths simultaneously.
+
+## Key Controls
+
+Start and End Points: By default, strokes span from 0% to 100%. You can adjust these percentage values to reposition where the trim begins and ends along the path's full length.
+
+Offset: "Use Offset to easily move the trimmed portion of the path." This allows dynamic repositioning of the trimmed section without changing start/end values.
+
+## Related Feature: Dashed Stroke
+
+Dashed Stroke offers similar dynamic animation capabilities through customizable dash sizes and gaps. Like Trim Path, it supports offset adjustments to move dashes along the path using pixels or percentages.
+
+---
+
+## Technical Note
+
+Rive's trim path is implemented at the platform level and operates on the same underlying principle as After Effects trim paths and SVG dasharray animation: revealing portions of a stroke by clipping or offsetting the dash pattern. It shares the same visual limitations regarding handwriting authenticity.

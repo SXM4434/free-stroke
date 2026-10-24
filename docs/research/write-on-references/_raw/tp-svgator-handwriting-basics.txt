@@ -1,0 +1,34 @@
+SOURCE_URL: https://www.svgator.com/tutorials/how-to-create-a-handwriting-effect-basics
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: SVGator tutorial on creating handwriting effects using stroke offset animation in a visual editor
+
+# Creating Handwriting Effects in SVGator: A Tutorial
+
+## Core Approach
+
+This tutorial demonstrates animating text to appear as if it's being written in real-time using SVGator's stroke offset technique.
+
+## Key Steps
+
+Preparation & Organization:
+The process begins by organizing SVG paths as individual strokes. The tutorial recommends grouping layers and "label[ing] each stroke layer based on the animation order you want" to maintain workflow efficiency.
+
+Stroke Animation Method:
+The primary technique uses the Stroke Offset feature. For each stroke, creators should "copy the Length value to both the Offset and Dashes fields" to initially hide the stroke, then animate the offset to zero, revealing it sequentially.
+
+Direction Control:
+If strokes animate incorrectly, "add a minus sign to the Offset value" to reverse the animation direction from the opposite starting point.
+
+## Why This Approach Works
+
+Sequential layer organization ensures smooth pacing between strokes. The Stroke Offset method creates authentic handwriting motion because it simulates ink appearing progressively along each path. Using easing (like "Ease In Out") adds natural motion quality rather than linear movement.
+
+Multi-Layer Efficiency:
+Instead of reanimating, creators can duplicate groups and "apply a Hue filter to the entire" layer, shifting keyframes forward to create color variations with consistent timing.
+
+---
+
+## Analysis
+
+SVGator presents stroke offset animation as a practical technique within its visual editor. The tutorial suggests that timing and easing can contribute to authenticity ("adds natural motion quality rather than linear movement"), but does not engage with the material limitations that make pure SVG animation read as fake for handwriting.

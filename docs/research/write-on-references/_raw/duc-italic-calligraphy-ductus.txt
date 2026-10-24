@@ -1,0 +1,48 @@
+SOURCE_URL: https://www.paulshawletterdesign.com/2011/10/tutorial-no-5%E2%80%94calligraphy-the-basics-of-italic-3/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Italic hand calligraphy ductus with explicit entry/exit stroke sequences and directional guidance for letter formation.
+
+# Italic Calligraphy Ductus: Entry/Exit Strokes
+
+Paul Shaw's detailed ductus for the Italic hand, showing stroke sequences and directions.
+
+## Row 1: Letters with Entry & Exit Strokes (l, i, d, p)
+
+For **l** and **d**:
+"Place the broad-edged nib under the ascender line" then "slide the pen slightly upward and diagonally" before curving at both top and bottom into hairlines.
+
+## Row 2: Letters Without Entry or Exit
+
+The **t** lacks an entry stroke.
+
+**Closed forms** like **a**, **q**, and **b** have restricted entry/exit capabilities.
+
+For **j** and **y**: Shaw warns: "Do not over-exaggerate this entry stroke" as it creates "a big sloppy curve."
+
+## Row 3: Multi-stroke Letters (n, m, h, u, k)
+
+These letters begin with entry strokes like the **i** group, follow standard construction, then conclude with exit strokes.
+
+The instruction emphasizes treating curls "as the equivalent of an elbow: sharp but not sharp like a knife."
+
+## Diagonal Strokes (Rows 4 & 5)
+
+**Diagonal letters** should have entry strokes that are "knife-like" rather than sweeping curves.
+
+## Special Cases
+
+**The z**: Requires gentle sliding movements: "Do not overdo the wiggle or the z will look like a fluttering flag."
+
+## General Principles
+
+In calligraphy, **exemplars are fully written alphabets that include the ductus**, which indicates the order of each stroke needed to form the letter with directional arrows.
+
+**Ductus as Suggestion**: "The more complicated a letter becomes the more ways there are to make it so a ductus is only a suggestion not a hard-and-fast mandate."
+
+## Italic Hand Characteristics
+
+- Practiced with a broad-edged tool (nib + ink, fountain pen, or marker)
+- Written at a slant between 5 and 10 degrees
+- Letters usually taller than wide
+- Minuscules typically sized at 5 nib widths

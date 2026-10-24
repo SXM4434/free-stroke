@@ -1,0 +1,22 @@
+Two artefacts are deliberately NOT committed, because they are large and both
+regenerate from one command against a file that IS committed.
+
+1 · frames-fountain/  (392 PNGs, 99 MB)
+    Every frame of the reference handwriting footage, which §4.3 and §5 of
+    docs/research/write-on-timing.md were written from.
+
+    mkdir -p docs/research/write-on-references/_raw/frames-fountain
+    ffmpeg -v error -i docs/research/write-on-references/_raw/vid-fountain-pen-writing.mpg \
+      -vf "fps=25,scale=942:-1" docs/research/write-on-references/_raw/frames-fountain/%04d.png
+
+    Expect 392 frames. The ones the doc describes are 297 to 327.
+
+2 · uci-character-trajectories.zip  (7.6 MB)
+    Deleted because uci-ct/ is the same data already unpacked. To re-fetch:
+
+    curl -L -o uci-character-trajectories.zip \
+      "https://archive.ics.uci.edu/static/public/175/character+trajectories.zip"
+
+The scripts in ../_measure/ read uci-ct/mixoutALL_shifted.mat and
+qd-face-raw.ndjson directly, and both of those ARE committed.
+They need numpy and scipy; there is no venv in the repo, make your own.

@@ -15,10 +15,17 @@
 //
 // Frames captured here come from the SAME window you are watching, so a
 // screenshot and the live impression cannot disagree.
-import { chromium } from "playwright-core"
+import { chromium } from "./lib/browser.mjs"
 import { writeFileSync, mkdirSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
+// ONE KNOB, ONE NAME — this tool used to hardcode the default dev-server address,
+// so a lane running it on its own port captured the CANONICAL tree and filed those
+// frames under its own label. DISPATCH §3; explainers 27 §1 and 28 §3.2 (importing
+// the resolver rather than copying the port line is what keeps the legacy-name throw).
+// This comment deliberately spells no URL: a comment is source text too, and the
+// surveys that measure this debt are greps (explainer 28 §4.1).
+import { LAB_URL } from "./lib/dev-server.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OUT = join(__dirname, "..", "..", "docs", "verification", "live")
@@ -48,16 +55,12 @@ async function main() {
   mkdirSync(OUT, { recursive: true })
 
   // HEADED. Metal-backed GL on macOS, real compositor, real timing.
-  const browser = await chromium.launch({
-    channel: "chrome",
-    headless: false,
-    args: ["--use-angle=metal", "--window-size=1500,1000"],
-  })
+  const browser = await chromium.launch({ headed: true, args: ["--window-size=1500,1000"] })
   const page = await browser.newPage({ viewport: { width: 1440, height: 940 } })
   page.on("console", (m) => {
     if (m.type() === "error" && !m.text().includes("404")) console.log("[page-error]", m.text().slice(0, 200))
   })
-  await page.goto("http://localhost:3000", { waitUntil: "networkidle" })
+  await page.goto(LAB_URL, { waitUntil: "networkidle" })
   await page.bringToFront()
   await page.waitForFunction(() => window.__styleHarness && window.__captureHarness, null, { timeout: 30000 })
 

@@ -1,0 +1,45 @@
+SOURCE_URL: https://9p.io/who/hobby/87_2-04.pdf (Also cited: Journal of the ACM 1989, Vol 36 No 2, pp 209-229)
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: John D. Hobby's "Rasterizing Curves of Constant Width" - fast linear-time algorithm for rendering curved lines with constant width stroke, foundational for METAFONT pen model
+
+## Paper Overview
+
+This paper by John D. Hobby (published in the Journal of the ACM, Volume 36, Issue 2, 1989) presents a fast, linear-time algorithm for generating high-quality pixel representations of curved lines.
+
+## Core Algorithm
+
+The method approximates selecting a circle whose diameter is the desired line width and turning on all pixels covered by the circle as it moves along the desired curve. However, the circle is replaced by a carefully chosen **polygon** whose deviations from the circle represent **subpixel corrections** designed to improve the aesthetic qualities of the rasterized curve.
+
+## Key Innovation
+
+Instead of using perfect circular envelopes (computationally expensive), Hobby's method:
+1. Uses a polygon approximation of the circle
+2. Applies subpixel adjustments at polygon corners
+3. Achieves high-quality results with linear time complexity
+
+## Applicability to METAFONT
+
+Knuth adopted Hobby's envelope rasterization method in METAFONT to compute the envelope of an ellipse stroking along a Bézier curve. This approach:
+- Computes the envelope in terms of the raster (pixels) rather than scalable curves
+- Reduces computational geometry to manipulating line segments and polygons
+- Avoids direct polynomial curve mathematics
+
+This method is documented in **The METAFONTbook §524** where Knuth sidesteps the complex mathematics of computing smooth envelope contours by discretizing to the pixel grid.
+
+## Significance for Stroke Rendering
+
+The paper established that:
+- Curved strokes can be rasterized efficiently without computing exact envelopes
+- Subpixel polygon corrections improve quality over naive raster approximation
+- Linear-time algorithms are feasible for quality stroke rendering
+
+## Related Work
+
+This technique influenced:
+- Rasterization approaches in digital typesetting
+- Pen model implementations in METAFONT
+- Modern understanding of constant-width stroke rendering
+
+Full PDF available at: https://9p.io/who/hobby/87_2-04.pdf
+Published version: Journal of the ACM 36(2), pages 209-229, April 1989

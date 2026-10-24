@@ -27,6 +27,14 @@
  *                     more degraded-terminal.
  */
 import type { StyleState } from "./style-system"
+import {
+  completionTrigger,
+  pulseEnvelope,
+  pingPongPhase,
+  DEFAULT_REVEAL_SCALE,
+  PULSE_CUTOFF,
+  PULSE_SWELL,
+} from "./style-clock"
 
 /** Blend modes available to stack layers. Kept deliberately small for v1. */
 export type StackBlendMode = "normal" | "multiply" | "screen"
@@ -98,11 +106,23 @@ export interface ResolvedStack {
  */
 export function resolveStack(s: StyleState): ResolvedStack {
   const on = s.layerStackEnabled
+  /* GROUP OPACITY — the container's own level, multiplied into every layer at
+   * once (PRD §4's "opacity"). It is resolved HERE and not in
+   * `evaluateStackAnimation` on purpose: it is not motion. A group can sit at
+   * 40% with nothing animating, and folding it into the animation would have
+   * made it disappear the moment the animation was switched off — a dial whose
+   * value silently stops applying is worse than one that is missing.
+   *
+   * Gated on `layerStackEnabled` alone, because until the stack is on there is
+   * no container whose opacity this could be, and the individual layers are
+   * still each user-controlled. Defaults to 1, so every existing composition
+   * resolves byte-identically. */
+  const g = on ? s.stackAnimationOpacity : 1
   return {
-    textureAmount: on ? s.textureIntensity * s.stackTextureOpacity : s.textureIntensity,
-    ditherAmount: on ? s.ditherIntensity * s.stackDitherOpacity : s.ditherIntensity,
+    textureAmount: on ? s.textureIntensity * s.stackTextureOpacity * g : s.textureIntensity,
+    ditherAmount: on ? s.ditherIntensity * s.stackDitherOpacity * g : s.ditherIntensity,
     ditherBlend: STACK_BLEND_INDEX[on ? s.stackDitherBlend : "normal"],
-    asciiAmount: on ? s.stackAsciiOpacity : 1,
+    asciiAmount: on ? s.stackAsciiOpacity * g : 1,
     asciiBlend: STACK_BLEND_INDEX[on ? s.stackAsciiBlend : "normal"],
     order: STACK_ORDER_INDEX[on ? s.stackOrder : "ditherFirst"],
   }
@@ -136,6 +156,9 @@ export type StackAnimationBehaviour =
   | "completionPulse"
   | "freezeOnComplete"
   | "loop"
+  /** The group rides the draw-in playhead. See `StackAnimationType` in
+   *  lib/style-system.ts for why it was added and what its honest limit is. */
+  | "revealSynced"
 
 export interface StackAnimationState {
   /** Group opacity multiplier, 0..1. */
@@ -147,6 +170,22 @@ export interface StackAnimationState {
 }
 
 export const STACK_ANIM_NEUTRAL: StackAnimationState = { amount: 1, timeOffset: 0, frozen: false }
+
+/* THE STRUCK-BELL ENVELOPE IS IMPORTED, NOT RE-STATED.
+ *
+ * This file used to carry its own copy — `STACK_PULSE_ATTACK = 0.09`,
+ * `STACK_PULSE_DECAY = 0.5` — under a comment reading "Deliberately the same
+ * shape and constants as the per-layer pulse in lib/style-clock.ts". The decay
+ * was 0.5 and the per-layer one was 0.55, so the two had NOT been the same for
+ * however long it took someone to tune one of them: the group's swell settled
+ * at 1.70 s and the layers' at 1.86 s, and on a preset that fires both, the
+ * container finished its event 162 ms before its contents finished theirs.
+ *
+ * That is what a duplicate costs here. Nothing renders wrong the day the copy
+ * is made; the copy is what makes the later divergence invisible, and the
+ * comment claiming they match is what makes it survive review. One idea, one
+ * implementation — and `scripts/verify/assert-style-contracts.mjs` §1 now
+ * measures the two scales against each other instead of trusting a sentence. */
 
 /**
  * Evaluates the group-level animation for this frame.
@@ -179,17 +218,51 @@ export function evaluateStackAnimation(opts: {
   const elapsed = sinceArmed
   if (!enabled || behaviour === "none") return STACK_ANIM_NEUTRAL
 
+  /* SPEED IS SIGNED, AND THE SIGN IS PRD §4's "DIRECTION".
+   *
+   * Splitting rate and direction into two state fields would have been two
+   * dials multiplying into one scalar — the shape this repo already had to
+   * unpick once when `fusionIntensity` turned out to be a coupling depth and a
+   * motion switch at the same time. One signed number is the honest model for
+   * a scalar phase offset.
+   *
+   * But the sign is only MEANINGFUL where the behaviour produces an offset.
+   * `drift`, `loop` AND `revealSynced` slide the whole stack, and running them
+   * backwards is a genuinely different read. Every other behaviour here is an
+   * AMPLITUDE over time — a fade that arrives, an envelope that decays — and a
+   * negative amplitude clock is not a direction, it is a fade that never
+   * arrives and an envelope that is spent before it starts. (Verified by
+   * reading each branch: with a raw negative `speed`, `fadeIn` returns
+   * `min(1, negative/1.2)` → clamped at 0 forever, i.e. an invisible stack that
+   * looks like a broken preset.) So those branches take `mag`.
+   *
+   * ⚠ THIS LIST USED TO PUT `revealSynced` ON THE WRONG SIDE, naming it as an
+   * amplitude behaviour that "takes `mag`". Read the branch: it returns
+   * `r * DEFAULT_REVEAL_SCALE * mag * dir + phase` — it honours the sign AND
+   * the phase offset, and always has. The PANEL had it right all along (its
+   * `dirLive` and `phaseLive` sets both include `revealSynced`), so the only
+   * thing wrong was the prose, in the two files a reader would trust most.
+   * `lib/style-system.ts`'s `stackAnimationSpeed` and `stackAnimationPhase`
+   * docs carried the same error and are corrected too.
+   *
+   * The panel therefore disables the Direction control on every behaviour that
+   * ignores it, rather than leaving a control on screen that does nothing —
+   * the same rule the Inflate strip already follows for Blend/Resolution under
+   * the loft strategy. */
+  const mag = Math.abs(speed)
+  const dir = speed < 0 ? -1 : 1
+
   switch (behaviour) {
     case "fadeIn": {
       // The stack arrives over ~1.2s of scene time, then stays.
-      const t = elapsed * speed
+      const t = elapsed * mag
       return { amount: Math.min(1, t / 1.2), timeOffset: 0, frozen: false }
     }
 
     case "pulse": {
       // Every layer breathes together. Bottoms out at 0.45 rather than 0 so the
       // composition never fully disappears.
-      const v = 0.5 + 0.5 * Math.sin(elapsed * speed * 2.2 + phase)
+      const v = 0.5 + 0.5 * Math.sin(elapsed * mag * 2.2 + phase)
       return { amount: 0.45 + v * 0.55, timeOffset: 0, frozen: false }
     }
 
@@ -198,21 +271,51 @@ export function evaluateStackAnimation(opts: {
       // Rate 0.6 -> 1.1 (stack craft pass): at 0.6 x the default preset speed
       // the ASCII grid moved ~0.2 cell/s, which read as STATIC in live
       // viewing. Decorative canvas motion is allowed to be present.
-      return { amount: 1, timeOffset: elapsed * speed * 1.1 + phase, frozen: false }
+      return { amount: 1, timeOffset: elapsed * mag * 1.1 * dir + phase, frozen: false }
+
+    case "revealSynced": {
+      // THE GROUP IS THE PLAYHEAD. Strength tracks draw progress, and the
+      // shared offset is driven by the same 0..1 rather than by wall clock, so
+      // scrubbing the reveal backwards genuinely un-builds the stack instead of
+      // continuing to advance it.
+      //
+      // `DEFAULT_REVEAL_SCALE` is `evaluateLayerTime`'s own default, IMPORTED
+      // rather than re-typed as a bare `4` under a comment promising it
+      // matched. A reveal-synced GROUP must travel the same distance over a
+      // full draw as a default reveal-synced LAYER — one named idea, one
+      // number, at both scales. (The live layers deliberately override the
+      // default per layer; see the constant's own note.)
+      const r = reveal < 0 ? 0 : reveal > 1 ? 1 : reveal
+      return { amount: r, timeOffset: r * DEFAULT_REVEAL_SCALE * mag * dir + phase, frozen: false }
+    }
 
     case "delayAfterReveal": {
       // The style stack lands AFTER the form is drawn.
-      if (sinceCompletion === Infinity) return { amount: 0, timeOffset: 0, frozen: false }
-      return { amount: Math.min(1, (sinceCompletion * speed) / 0.6), timeOffset: 0, frozen: false }
+      //
+      // ARMING. `sinceCompletion` alone made this unreachable by hand: the
+      // playhead rests at 1 after any draw, so by the time the user picked
+      // this behaviour the "delay" had elapsed tens of seconds ago and the
+      // stack was already at full strength on the first rendered frame — the
+      // exact scene-start-fade trap this function's own `sinceArmed` doc
+      // warns about, arriving through the other input. `completionTrigger`
+      // takes whichever of completion / arming happened more recently, and
+      // preserves the Infinity sentinel so "still drawing" stays silent.
+      const s = completionTrigger(sinceCompletion, sinceArmed)
+      if (s === Infinity) return { amount: 0, timeOffset: 0, frozen: false }
+      return { amount: Math.min(1, (s * mag) / 0.6), timeOffset: 0, frozen: false }
     }
 
     case "completionPulse": {
       // One-shot swell when the drawing finishes, then back to the normal look.
-      if (sinceCompletion === Infinity) return { amount: 1, timeOffset: 0, frozen: false }
-      const decay = Math.exp(-(sinceCompletion * speed) / 0.5)
-      if (decay < 0.04) return STACK_ANIM_NEUTRAL
+      const s = completionTrigger(sinceCompletion, sinceArmed)
+      if (s === Infinity) return { amount: 1, timeOffset: 0, frozen: false }
+      // Same struck-bell envelope as the per-layer sibling (lib/style-clock.ts):
+      // a short attack so the peak is actually SEEN, then the settle. A bare
+      // decay peaks on frame one and the eye only ever catches the tail.
+      const env = pulseEnvelope(s * mag)
+      if (env < PULSE_CUTOFF) return STACK_ANIM_NEUTRAL
       // Swell ABOVE the resting value, then settle back to exactly 1.
-      return { amount: 1 + decay * 0.6, timeOffset: 0, frozen: false }
+      return { amount: 1 + env * PULSE_SWELL, timeOffset: 0, frozen: false }
     }
 
     case "freezeOnComplete":
@@ -230,10 +333,11 @@ export function evaluateStackAnimation(opts: {
       // is only seamless for patterns that happen to be periodic in the
       // offset. A there-and-back cycle is visibly a REPEATING figure, never
       // jumps, and stays honest about riding the shared loop clock.
-      const loop = Math.max(loopSeconds, 0.1)
-      const t = (((elapsed * speed) % loop) + loop) % loop
-      const tri = t < loop / 2 ? t : loop - t // 0 -> loop/2 -> 0
-      return { amount: 1, timeOffset: tri + phase, frozen: false }
+      // `pingPongPhase` (lib/style-clock.ts) is now the single home for this
+      // law. It was written out here AND, differently, in `evaluateLayerTime`'s
+      // `loopSynced`, which still sawtoothed — see that case for the 479x snap
+      // that cost. Two callers, one function, so they cannot drift again.
+      return { amount: 1, timeOffset: pingPongPhase(elapsed * mag, loopSeconds) * dir + phase, frozen: false }
     }
 
     default:

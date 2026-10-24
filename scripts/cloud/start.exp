@@ -1,0 +1,50 @@
+#!/usr/bin/expect -f
+# start.exp: start a Claude Code cloud session from a folder, unattended, and print its link.
+# `claude --cloud` needs a real terminal and asks once whether to trust the folder; this answers Yes
+# (the option below the default "No, exit").
+#
+#   cd <clone> && expect scripts/cloud/start.exp <brief-file> [log-file] [timeout-seconds] [rows] [cols] [grace-seconds]
+#
+# Once the link prints, it waits up to grace-seconds (default 15) for claude to finish, and reads how it ended:
+#   CLOUD_URL <link>         claude exited 0, or is still running when the grace runs out (a CLOUD_RUNNING line
+#                            says so). Exit 0.
+#   CLOUD_FAILED ...         claude exited non-zero or was killed after printing the link. Exit 3, no CLOUD_URL.
+#   CLOUD_EOF ...            claude ended before printing a link. Exit 2.
+#   CLOUD_TIMEOUT            no link within timeout-seconds. Exit 1.
+# Hardened 2026-10-02: Codex had claude print a link and exit 7 while this printed CLOUD_URL and exited 0.
+set briefFile [lindex $argv 0]
+set logFile [expr {[llength $argv] > 1 ? [lindex $argv 1] : "/dev/null"}]
+set timeout [expr {[llength $argv] > 2 ? [lindex $argv 2] : 150}]
+set rows [expr {[llength $argv] > 3 ? [lindex $argv 3] : 50}]
+set cols [expr {[llength $argv] > 4 ? [lindex $argv 4] : 200}]
+set grace [expr {[llength $argv] > 5 ? [lindex $argv 5] : 15}]
+log_file -noappend $logFile
+set fp [open $briefFile r]; set brief [read $fp]; close $fp
+set answered 0
+
+# How the spawned claude ended: "0", another exit code, or a sentence naming the signal or the wait error.
+# wait returns {pid spawn_id os_error value ?CHILDKILLED signal message?}.
+proc child_status {} {
+  set w [wait]
+  if {[lindex $w 2] != 0} { return "wait failed, errno [lindex $w 3]" }
+  if {[llength $w] > 4} { return "killed by [lindex $w 5]" }
+  return [lindex $w 3]
+}
+
+spawn claude --cloud $brief
+stty rows $rows columns $cols < $spawn_out(slave,name)
+expect {
+  -re "cancel" { if {$answered == 0} { set answered 1; sleep 2; send "\033\[B"; sleep 1; send "\r" }; exp_continue }
+  -re "(https://claude\\.ai/code/session_\[A-Za-z0-9_-\]+)" { set url $expect_out(1,string) }
+  timeout { puts "\nCLOUD_TIMEOUT"; exit 1 }
+  eof { puts "\nCLOUD_EOF claude ended ([child_status]) before printing a session link"; exit 2 }
+}
+set timeout $grace
+expect {
+  eof {
+    set st [child_status]
+    if {$st eq "0"} { puts "\nCLOUD_URL $url"; exit 0 }
+    puts "\nCLOUD_FAILED claude ended ($st) after printing $url"; exit 3
+  }
+  timeout { puts "\nCLOUD_URL $url"; puts "CLOUD_RUNNING claude still running ${grace}s after the link printed; its exit status is not known yet"; exit 0 }
+}

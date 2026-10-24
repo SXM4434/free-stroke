@@ -1,0 +1,1170 @@
+{
+ "body": {
+  "bg": "lab(100 0 0)",
+  "color": "lab(2.75381 0 0)",
+  "font": "Geist, \"Geist Fallback\"",
+  "fs": "16px",
+  "fw": "400",
+  "rad": "0px",
+  "border": "0px solid lab(90.952 0 -0.0000119209)",
+  "shadow": "none",
+  "pad": "0px",
+  "h": 982
+ },
+ "html": "rgba(0, 0, 0, 0)",
+ "sampleButtons": [
+  {
+   "label": "Rod",
+   "bg": "lab(100 0 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0",
+   "pad": "4px 12px",
+   "h": 24
+  },
+  {
+   "label": "Extrude",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 12px",
+   "h": 24
+  },
+  {
+   "label": "Solid",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 12px",
+   "h": 24
+  },
+  {
+   "label": "Inflate",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 12px",
+   "h": 24
+  },
+  {
+   "label": "Desk Doodles",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 12px",
+   "h": 24
+  },
+  {
+   "label": "Free Stroke",
+   "bg": "lab(100 0 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0",
+   "pad": "4px 12px",
+   "h": 24
+  },
+  {
+   "label": "MaterialInk",
+   "bg": "lab(100 0 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "11px",
+   "fw": "400",
+   "rad": "3.35544e+07px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 10px",
+   "h": 26.5
+  },
+  {
+   "label": "TextureNone",
+   "bg": "lab(100 0 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "11px",
+   "fw": "400",
+   "rad": "3.35544e+07px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 10px",
+   "h": 26.5
+  },
+  {
+   "label": "DitherOff",
+   "bg": "lab(100 0 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "11px",
+   "fw": "400",
+   "rad": "3.35544e+07px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 10px",
+   "h": 26.5
+  },
+  {
+   "label": "ASCIIOff",
+   "bg": "lab(100 0 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "11px",
+   "fw": "400",
+   "rad": "3.35544e+07px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 10px",
+   "h": 26.5
+  },
+  {
+   "label": "AnimationStatic",
+   "bg": "lab(100 0 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "11px",
+   "fw": "400",
+   "rad": "3.35544e+07px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 10px",
+   "h": 26.5
+  },
+  {
+   "label": "LayersOff",
+   "bg": "lab(100 0 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "11px",
+   "fw": "400",
+   "rad": "3.35544e+07px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 10px",
+   "h": 26.5
+  },
+  {
+   "label": "FusionNone",
+   "bg": "lab(100 0 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "11px",
+   "fw": "400",
+   "rad": "3.35544e+07px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 10px",
+   "h": 26.5
+  },
+  {
+   "label": "PresetNone",
+   "bg": "lab(100 0 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "11px",
+   "fw": "400",
+   "rad": "3.35544e+07px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 10px",
+   "h": 26.5
+  },
+  {
+   "label": "Show panel",
+   "bg": "lab(100 0 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "11px",
+   "fw": "500",
+   "rad": "3.35544e+07px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "4px 10px",
+   "h": 26.5
+  },
+  {
+   "label": "Undo",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "6px 12px",
+   "h": 28
+  },
+  {
+   "label": "Redo",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "6px 12px",
+   "h": 28
+  },
+  {
+   "label": "Clear",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "6px 12px",
+   "h": 28
+  },
+  {
+   "label": "Smoothing",
+   "bg": "lab(2.75381 0 0)",
+   "color": "lab(100 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "6px 12px",
+   "h": 28
+  },
+  {
+   "label": "Corners",
+   "bg": "lab(2.75381 0 0)",
+   "color": "lab(100 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "6px 12px",
+   "h": 28
+  },
+  {
+   "label": "Perform",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "2px 6px",
+   "h": 21
+  },
+  {
+   "label": "Ripple",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "2px 6px",
+   "h": 21
+  },
+  {
+   "label": "Keyframes",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "0px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "0px",
+   "h": 15
+  },
+  {
+   "label": "Camera",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "2px 6px",
+   "h": 21
+  },
+  {
+   "label": "Play",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "16px",
+   "fw": "400",
+   "rad": "8px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "0px",
+   "h": 28
+  },
+  {
+   "label": "Natural",
+   "bg": "lab(2.75381 0 0)",
+   "color": "lab(100 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "2px 8px",
+   "h": 19
+  },
+  {
+   "label": "Authentic",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "2px 8px",
+   "h": 19
+  },
+  {
+   "label": "0.5x",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "2px 6px",
+   "h": 19
+  },
+  {
+   "label": "1x",
+   "bg": "lab(2.75381 0 0)",
+   "color": "lab(100 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "2px 6px",
+   "h": 19
+  },
+  {
+   "label": "2x",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "2px 6px",
+   "h": 19
+  },
+  {
+   "label": "Draw-in",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "0px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "0px",
+   "h": 15
+  },
+  {
+   "label": "Debug",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "500",
+   "rad": "8px",
+   "border": "1px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "2px 8px",
+   "h": 21
+  },
+  {
+   "label": "This drawing was made at",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "10px",
+   "fw": "400",
+   "rad": "0px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "0px",
+   "h": 13.75
+  },
+  {
+   "label": "Top",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "6px 12px",
+   "h": 28
+  },
+  {
+   "label": "Reset camera",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "6px 12px",
+   "h": 28
+  },
+  {
+   "label": "PNG",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "6px 12px",
+   "h": 28
+  },
+  {
+   "label": "PNG export settings",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "16px",
+   "fw": "400",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "0px",
+   "h": 30
+  },
+  {
+   "label": "Video",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "6px 12px",
+   "h": 28
+  },
+  {
+   "label": "Video export settings",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(48.496 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "16px",
+   "fw": "400",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "0px",
+   "h": 30
+  },
+  {
+   "label": "GLB",
+   "bg": "rgba(0, 0, 0, 0)",
+   "color": "lab(2.75381 0 0)",
+   "font": "Geist, \"Geist Fallback\"",
+   "fs": "12px",
+   "fw": "500",
+   "rad": "10px",
+   "border": "0px solid lab(90.952 0 -0.0000119209)",
+   "shadow": "none",
+   "pad": "6px 12px",
+   "h": 28
+  }
+ ],
+ "regions": [
+  {
+   "tag": "DIV",
+   "attrs": "data-take-dock=true",
+   "r": [
+    757,
+    92,
+    756,
+    890
+   ]
+  },
+  {
+   "tag": "CANVAS",
+   "attrs": "data-engine=three.js r175",
+   "r": [
+    757,
+    92,
+    756,
+    533
+   ]
+  },
+  {
+   "tag": "DIV",
+   "attrs": "data-animation-panel=true",
+   "r": [
+    769,
+    637,
+    732,
+    281
+   ]
+  },
+  {
+   "tag": "DIV",
+   "attrs": "data-take-timeline=true data-stroke-strip=true data-take-clock=1.000000 data-axis-ms=13116.000 data-ease=linear data-ripple=0",
+   "r": [
+    770,
+    638,
+    730,
+    208
+   ]
+  },
+  {
+   "tag": "DIV",
+   "attrs": "data-key-lanes-root=true",
+   "r": [
+    782,
+    671,
+    706,
+    166
+   ]
+  },
+  {
+   "tag": "DIV",
+   "attrs": "data-take-scroll=true",
+   "r": [
+    782,
+    671,
+    712,
+    144
+   ]
+  },
+  {
+   "tag": "DIV",
+   "attrs": "data-animation-transport=true",
+   "r": [
+    770,
+    846,
+    730,
+    44
+   ]
+  }
+ ],
+ "ctrls": [
+  {
+   "t": "BUTTON",
+   "type": "submit",
+   "label": "Rod",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    372,
+    12,
+    46,
+    24
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "submit",
+   "label": "Extrude",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    419,
+    12,
+    68,
+    24
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "submit",
+   "label": "Solid",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    487,
+    12,
+    53,
+    24
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "submit",
+   "label": "Inflate",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    539,
+    12,
+    60,
+    24
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "submit",
+   "label": "Desk Doodles",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    932,
+    12,
+    102,
+    24
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "submit",
+   "label": "Free Stroke",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    1034,
+    12,
+    89,
+    24
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "MaterialInk",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    50,
+    56,
+    87,
+    27
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "TextureNone",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    145,
+    56,
+    94,
+    27
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "DitherOff",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    247,
+    56,
+    76,
+    27
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "ASCIIOff",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    331,
+    56,
+    73,
+    27
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "AnimationStatic",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    412,
+    56,
+    111,
+    27
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "LayersOff",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    531,
+    56,
+    79,
+    27
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "FusionNone",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    618,
+    56,
+    90,
+    27
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "PresetNone",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    715,
+    56,
+    89,
+    27
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Show panel",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    1414,
+    56,
+    82,
+    27
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Undo",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    17,
+    937,
+    54,
+    28
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Redo",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    75,
+    937,
+    53,
+    28
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Clear",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    145,
+    937,
+    54,
+    28
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Smoothing",
+   "exp": null,
+   "pressed": "true",
+   "r": [
+    378,
+    937,
+    85,
+    28
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Corners",
+   "exp": null,
+   "pressed": "true",
+   "r": [
+    468,
+    937,
+    68,
+    28
+   ]
+  },
+  {
+   "t": "INPUT",
+   "type": "range",
+   "label": "",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    611,
+    949,
+    80,
+    4
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Perform",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    1320,
+    644,
+    51,
+    21
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Ripple",
+   "exp": null,
+   "pressed": "false",
+   "r": [
+    1378,
+    644,
+    44,
+    21
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Keyframes",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    782,
+    819,
+    62,
+    15
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Camera",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    1425,
+    816,
+    62,
+    21
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "submit",
+   "label": "Play",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    782,
+    854,
+    28,
+    28
+   ]
+  },
+  {
+   "t": "INPUT",
+   "type": "range",
+   "label": "",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    866,
+    866,
+    226,
+    4
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Natural",
+   "exp": null,
+   "pressed": "true",
+   "r": [
+    1099,
+    859,
+    50,
+    19
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Authentic",
+   "exp": null,
+   "pressed": "false",
+   "r": [
+    1151,
+    859,
+    61,
+    19
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "0.5x",
+   "exp": null,
+   "pressed": "false",
+   "r": [
+    1271,
+    859,
+    32,
+    19
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "1x",
+   "exp": null,
+   "pressed": "true",
+   "r": [
+    1305,
+    859,
+    24,
+    19
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "2x",
+   "exp": null,
+   "pressed": "false",
+   "r": [
+    1331,
+    859,
+    24,
+    19
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Draw-in",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    1373,
+    861,
+    49,
+    15
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "submit",
+   "label": "Debug",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    1438,
+    858,
+    49,
+    21
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "This drawing was made at a near-constant",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    782,
+    897,
+    520,
+    14
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Top",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    993,
+    937,
+    44,
+    28
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Reset camera",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    1041,
+    937,
+    101,
+    28
+   ]
+  },
+  {
+   "t": "INPUT",
+   "type": "text",
+   "label": "Filename prefix for exports",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    1161,
+    935,
+    96,
+    30
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "PNG",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    1261,
+    936,
+    49,
+    28
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "PNG export settings",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    1310,
+    935,
+    28,
+    30
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Video",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    1351,
+    936,
+    56,
+    28
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "Video export settings",
+   "exp": "false",
+   "pressed": null,
+   "r": [
+    1407,
+    935,
+    28,
+    30
+   ]
+  },
+  {
+   "t": "BUTTON",
+   "type": "button",
+   "label": "GLB",
+   "exp": null,
+   "pressed": null,
+   "r": [
+    1448,
+    936,
+    47,
+    28
+   ]
+  }
+ ]
+}

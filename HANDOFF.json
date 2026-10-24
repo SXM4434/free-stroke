@@ -1,0 +1,179 @@
+{
+  "schema": 1,
+  "task": "free-stroke: land the 2026-08-20 lane run in front of Sebs's eyes, and get the sixteen picks decided",
+  "decided": [
+    {
+      "what": "The ledger lives at docs/RUN-QUEUE.md in THIS repo",
+      "why": "The only other RUN-QUEUE.md files are the portfolio's and are a different scope"
+    },
+    {
+      "what": "The state block in docs/STATUS.md is generated, never typed",
+      "why": "HANDOFF-TO-OZ.md's state section was 17 days wrong on page one because refreshing it depended on a human remembering"
+    },
+    {
+      "what": "Do not write a sixth handoff document. Supersede the stale ones in place and point at STATUS.md, RUN-QUEUE.md and HANDOFF.json.",
+      "why": "Five handoff docs existed and four said 'no commits' on page one, which stopped being true on 2026-08-24. A new document just restarts the staleness clock, which is the call commit 4f546884 already made."
+    }
+  ],
+  "constraints": [
+    "SUPERSEDED 2026-09-04. The old text said 'nothing has been built since 2026-08-07' and that stopped being true on 08-24. Since then: the broad nib, the stub filter, the draw-in scheduler, the window, the playback envelope, five Family-14 presets, the take timeline, the form channel, the cadence, and camera framing. Check git log before believing any sentence in this file that starts with 'nothing'.",
+    "A journal entry is evidence something was SAID, never that something was BUILT. capture-thinking.py files returns under a project label and the label is not a claim the work landed there. Check mtimes.",
+    "SUPERSEDED 2026-09-04. The old text said 'main is a dead v0 scaffold ... Not a merge decision.' It was right that main is not a RECONCILIATION and wrong that it is not a decision. Measured today: main was 242 behind, 0 ahead, and a true ancestor of HEAD, so the fast-forward was a pointer move that could not lose anything. Done; main is now at the session HEAD. His own complaint, quoted by the merge-barrier hook, was 'why do nothing getting merged', four times across three days. Run `git rev-list --left-right --count main...HEAD` before believing any sentence about main, including this one.",
+    "docs/RUN-QUEUE.md is the ledger. A row goes in BEFORE dispatch, not after the return.",
+    "No git worktree in this repo. Lanes run as plain copies under ~/.fs-lanes/.",
+    "tsc baseline is EXACTLY 6. A count BELOW 6 is a failure, not a win.",
+    "A document saying a question is open is not evidence the question was ever asked. Check whether it reached him.",
+    "This repo serves on :3105. FS_PORT defaults to 3000, so a gate run bare reports UNSWEPT and is correct to. Pass FS_PORT=3105.",
+    "SUPERSEDED 2026-09-04. The old text said browser gates must run HEADED and that waitUntil:networkidle never resolves headless. Measured false: 18 runs, headless 5/9 green against headed 5/9, identical renderer strings, networkidle resolving headless in 1067ms. Every gate run on 09-04 ran headless. The port was the trap, never the head.",
+    "BEFORE opening a row against a defect, grep docs/explainers/ for the symptom. Five rows (F5 F6 F7 F9 F10) were opened on 2026-08-28 against work explainers 28, 35 and 38 had already closed on 08-07. An explainer here is the record of a fix, with the mechanism at file:line and a post-fix number.",
+    "Being FIXED and being GATED are two different states and this repo has only tracked one. assert-export-plan read 11 PASS while the ends-full defect was live. A fix no gate would redden can come back silently.",
+    "Nine times in one night the answer was already on disk, and four times prose was mistaken for code. Grep the record before opening a row, and never match a module name when you mean a binding.",
+    "START THE DEV SERVER WITH THE COMMAND IN package.json AND NOTHING ELSE: `next dev`, which is TURBOPACK here. `--webpack` came from a lane note on 2026-09-04, and it BREAKS the implicit-surface Web Worker (assert-geom-offthread reports a page-level 'SyntaxError: Invalid or unexpected token') AND kills hot reload. It cost a whole browser battery run: 30 of 58 gates judged, 11 red, none of them findings.",
+    "`next dev` TAKES A LOCK AT .next/dev/lock — ONE PER CHECKOUT. A second one fails with 'Unable to acquire lock'. Parallel lanes that each need a server need their own COPY under ~/.fs-lanes/, which is the pattern this repo already uses.",
+    "NEVER RUN TWO BATTERIES, OR A BATTERY AND A CAPTURE, AGAINST ONE SERVER. A source save hot-reloads the page and `window.__captureHarness` disappears mid-run: the probes die with 'Cannot read properties of undefined (reading setPenTip)'. _probe-pentip-sweep.mjs documents three consecutive deaths from this. On 2026-09-04 it also produced TWO FALSE REDS on gates that were green an hour earlier. A browser verdict taken under concurrent load may be reporting the load.",
+    "A DEV SERVER LEFT UP FOR DAYS STOPS SEEING EDITS. pid 7765 had been up 9 days 3 hours; a token injected into a rendered string never appeared and `find .next -newermt today` returned 0. Restart it before believing any browser measurement. Filed as F84.",
+    "THE STORED EVIDENCE IN THIS REPO IS BROADLY A MONTH STALE and a PROVENANCE row is an instruction, not a defect: re-shoot with the gate's verify-* or _probe-* twin. Re-shooting is where the real findings are — assert-timing's two consecDelta NaN rows were missing frames, and screen-layers went from 'the evidence is old' to naming two live rendering defects.",
+    "A GATE'S DEFAULT LABEL MUST BE DERIVED, NOT TYPED. assert-screen-layers read arg('label','final') and 'final' was shot 2026-08-04, so the one directory it would ever look at was frozen in its own source. Same defect as assert-fusion-combo-liveness had. Re-shooting a stored label is NOT the fix: 3,818 files are tracked under screen-layers and a sibling is named same-as-final-DO-NOT-CITE."
+  ],
+  "verified": [
+    {
+      "what": "tsc --noEmit is exactly 6, the same six in the same two files",
+      "evidence": "node scripts/verify/assert-tsc-baseline.mjs: 2 PASS 0 FAIL 2 UNSWEPT exit 3, run 2026-08-25",
+      "by": "claude-code",
+      "head": "ef55538c"
+    },
+    {
+      "what": "A month of engine work is committed. The 'nothing committed since 07-28' emergency is closed.",
+      "evidence": "git log 5f3faa5f 4c752f1b 099e1ccc, 2026-08-24",
+      "by": "claude-code",
+      "head": "ef55538c"
+    },
+    {
+      "what": "Data safety: 134 rows, 0 failures",
+      "evidence": "docs/verification/data-safety/after/report.json",
+      "by": "claude-code",
+      "head": "ef55538c"
+    },
+    {
+      "what": "Lane V landed. The blanket browser prohibition in HANDOFF-TO-OZ.md is obsolete.",
+      "evidence": "scripts/verify/lib/browser.mjs and lib/dev-server.mjs exist; gates import them",
+      "by": "claude-code",
+      "head": "ef55538c"
+    },
+    {
+      "what": "tsc is fully swept, 4 PASS 0 FAIL 0 UNSWEPT, once the gate is given the port this repo actually serves on. The recorded exit-3 PARTIAL was the wrong port, never a defect in the gate.",
+      "evidence": "FS_PORT=3105 node scripts/verify/assert-tsc-baseline.mjs, run 2026-08-28. Bare: 2 PASS 2 UNSWEPT exit 3.",
+      "by": "claude-code",
+      "head": "6eb76ae6"
+    },
+    {
+      "what": "HERO_URL throws when set, as docs/DISPATCH.md section 3 says it should. The legacy name is not silently honoured.",
+      "evidence": "HERO_URL=http://localhost:3105 node scripts/verify/assert-tsc-baseline.mjs, run 2026-08-28: throws",
+      "by": "claude-code",
+      "head": "6eb76ae6"
+    },
+    {
+      "what": "F5 F6 F7 F9 F10 were already fixed by the 2026-08-07 run. The 8/20 journal was re-reporting closed defects, not describing open ones.",
+      "evidence": "viewport-3d.tsx:9903 'used to resolve their target with querySelector(canvas)'; viewport-3d.tsx:1263 'setFlatten({flat:0}) used to return'; geometry-baseline.mjs:31 'it hardcoded :3000' and now imports LAB_URL from lib/dev-server.mjs, only 3000 left is {timeout:30000} at :135. Explainers 28, 35, 38.",
+      "by": "claude-code",
+      "head": "2d207735"
+    },
+    {
+      "what": "The app's default beat is the film his 2026-07-31 ruling was written against. DEFAULT_HERO_MOTION is shape:shipped + camera:prior, the four-move camera. Three parked camera laws that satisfy the ruling are built, gated, and one click away in the panel.",
+      "evidence": "lib/hero-motion.ts:1626 camera:'prior', :1631 shape:'shipped', and the comment at :1622-1625 naming the regression bill. Films read off :178-302.",
+      "by": "claude-code",
+      "head": "0dbba014"
+    },
+    {
+      "what": "Pick 5 is four films, not seven. solidFirst is out on its own text ('there is no draw-in in this film') against the 08-01 draw-in-is-the-benchmark ruling; cutaway is out on 'the transform is never shown' against the same ruling's 'the read comes from the transformation'.",
+      "evidence": "lib/hero-motion.ts:190-206 solidFirst, :202-210 cutaway; docs/rulings/2026-08-01.md",
+      "by": "claude-code",
+      "head": "0dbba014"
+    },
+    {
+      "what": "The artifact he has complained about since 2026-08-04 is gone. It was nine traced strokes shorter than the pen is wide, so the pen could only stamp its own footprint.",
+      "evidence": "docs/verification/mark-2026-08-28/AB-stubs-Dstem.png, before over after; 9 of 22 strokes at 4.9 units against a 22.6-unit nib, 16.8 percent of the clock; record 16.805s to 13.977s",
+      "by": "claude-code",
+      "head": "35207495"
+    },
+    {
+      "what": "The mark was a monoline and the broad-nib fix had been specified in full and never built. Now built and carried to both engine families.",
+      "evidence": "docs/research/stroke-width-models.md; assert-nib-contrast 13/13 with five known-bads; desk-doodles contrast 1.163 to 1.825; md5 of before/after desk-doodles frames identical before the adapter fix",
+      "by": "claude-code",
+      "head": "35207495"
+    },
+    {
+      "what": "assert-gate-integrity refused to sweep before tonight. Now CALIBRATED 41/41 across channels A-L, and it says about 53 of 104 gates cannot report the failure they exist for.",
+      "evidence": "node scripts/verify/assert-gate-integrity.mjs, two runs on a quiet tree: 54 then 53",
+      "by": "claude-code",
+      "head": "35207495"
+    },
+    {
+      "what": "The camera now frames the drawing. Nothing did before, which is why the beat played like crap: 18 of 24 sampled frames were a static first stroke while the rest of the mark drew off-screen.",
+      "evidence": "assert-camera-frames-the-drawing.mjs 8/8 with two controls; fillK measured at 1.0/1.45/1.7/2.5 with a server restart between each",
+      "by": "claude-code",
+      "head": "7110ea96"
+    },
+    {
+      "what": "The whole take persists: drawIn, revealWindow, and the playback envelope (pace, ease, delay, loop, reverse). The envelope was four loose useState calls inside viewport-3d.tsx.",
+      "evidence": "assert-take-persists 45/45 controls included; fresh/authored/reloaded read identical across a real reload",
+      "by": "claude-code",
+      "head": "708a38d9"
+    },
+    {
+      "what": "Five of the six Family-14 motion presets are real and produce five distinct takes. Completion Pulse stays a shell and says why on its own pill.",
+      "evidence": "driven through the panel: 5 clickable, 5 distinct takes, 0 page errors; assert-preset-registry 61/61, assert-style-contracts 44/44, both calibrated against a known-bad",
+      "by": "claude-code",
+      "head": "6eb19499"
+    },
+    {
+      "what": "The form channel is reachable on the product route. `flatten` had never been passed, so `/` could only draw the last frame of the beat.",
+      "evidence": "popover CLOSED: Lit->Flat 6,052px, flat ink turned to 86deg 10,822px, noise floor 0",
+      "by": "claude-code",
+      "head": "d1cfcad7"
+    },
+    {
+      "what": "The pen tip is DEAD: all six shapes draw identical pixels on both routes and in all four geometry modes.",
+      "evidence": "F81. Positive control 8,761px, noise floor 0, gate open (frac 0.446, whole false), __inflateProbe.drawDiag().tip null",
+      "by": "claude-code",
+      "head": "e7ecf9cb"
+    }
+  ],
+  "remaining": [
+    "SIXTEEN QUESTIONS NEVER ASKED. HANDOFF-TO-OZ.md section 4 gathered them 10:0x on 08-07; his last message here was 09:32 and from 08-08 he was on portfolio. Not a backlog he owes. Reconcile each against docs/rulings/ BEFORE putting any to him.",
+    "His 8/04 ask: the artifacting / missing letter pieces. Instrument exists, not run recently, never seen.",
+    "His 8/04 ask: a fusion for every combination of styles. assert-fusion-combo-ui.mjs exists, not run recently, never seen.",
+    "slowWeather needs a NEW CELL, not an edit. Sebs only.",
+    "Everything tagged [LANE CLAIM NO ARTIFACT ON DISK] in docs/RUN-QUEUE.md. Questions, not findings.",
+    "The headless networkidle trap. assert-fusion-combo-ui dies at 30s bare, 14/14 headed, and every gate here uses waitUntil:networkidle. Measured 08-25, not inherited from the 8/20 journal.",
+    "Pick 5, narrowed: which of turnLands / popUp / standTurn / letterByLetter ships, and whether DEFAULT_HERO_MOTION moves off camera:'prior'. Recommendation turnLands. NOT flipped, per DISPATCH 2.8 open-picks-stay-open and a stated regression bill.",
+    "The gate-integrity count drifts by one on a frozen tree (54 then 53). NOT caused by the gate editing its own subject, measured: 0 files touched. 24 of its rows are staleness rows and some compare against wall-clock. Unconfirmed which row flips."
+  ],
+  "blocked": [
+    "16 picks in HANDOFF-TO-OZ.md section 4 are Sebs-only and have been open since 2026-08-07"
+  ],
+  "next_agent": {
+    "may": [
+      "Re-run any gate. Lane V landed, so browsers are permitted again.",
+      "Write rows into docs/RUN-QUEUE.md and commit freely."
+    ],
+    "must_not": [
+      "Treat docs/thinking/2026-08-20.md as a record of what this repo contains. Check mtimes first.",
+      "Quote a [LANE CLAIM NO ARTIFACT ON DISK] row as a fact or as a completed fix.",
+      "Mark anything DONE that Sebs has not seen at 1x.",
+      "Re-tune slowWeather or any other relationship Sebs can still pick. Section 0.7.",
+      "Put any of the sixteen picks to Sebs without first checking docs/rulings/. At least two are already answered by his own 08-01 and 08-03 rulings.",
+      "Believe any HANDOFF-*.md or MORNING-BRIEF.md or SESSION-HANDOFF.md. All five are superseded in place as of 2026-08-28 and each carries a header naming what is false in it.",
+      "Flip DEFAULT_HERO_MOTION without his word. Every camera assertion in scripts/verify/ reads it, so it is a pick with a regression bill, not a tidy-up.",
+      "Open his browser. Drive your own headless Chrome with its own profile dir and port, kill by exact pid. A lane put 127.0.0.1:7999 in his own window on 2026-08-28 through a webbrowser.open() three layers down.",
+      "Start the dev server with anything but the command in package.json. --webpack breaks the Web Worker and hot reload, and it invalidated a whole battery run on 2026-09-04.",
+      "Run a browser gate while anything else touches the same server. It may be reporting the load rather than the subject, and it produced two false reds on 2026-09-04.",
+      "Believe a browser measurement taken against a dev server that has been up for days. Restart it first.",
+      "Read a PROVENANCE row as a defect. It is an instruction to re-shoot, and the re-shoot is where the real findings are.",
+      "Leave the session branch unmerged. If main is 0 ahead and an ancestor of HEAD the fast-forward is lossless, and he has asked for it repeatedly."
+    ]
+  },
+  "created_by": "claude-code",
+  "head": "7110ea96",
+  "updated_by": "claude-code"
+}

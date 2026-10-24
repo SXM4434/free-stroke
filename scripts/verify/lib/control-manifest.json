@@ -1,0 +1,749 @@
+{
+  "_": "PROPOSED: scripts/verify/lib/control-manifest.json — channel K's subject. One entry per assert-* gate: does it exercise a KNOWN-BAD on the bare invocation, and is that control's red in the exit code? `verdict` is a human ruling (an AST cannot tell a control from a measurement); `line` + `token` are what the machine re-checks every run, so a ruling that has rotted goes red instead of going quiet. Surveyed 2026-08-07 by lane I (89 gates); RE-VERIFIED and extended to 95 by lane L the same night — 2 citations had already rotted, 3 `control` rulings carried no citation at all (line:0, which the rot check SKIPPED), and 6 gates had landed with no entry. RE-VERIFIED 2026-08-28 by lane N7: 100 gates, 97 entries, 28 red — 3 gates with no entry and 25 citations that had NEVER been right. Not one of those 25 gates had been touched since the manifest last landed, so the numbers were wrong the moment they were written, not rotted by later edits. Every one of the 28 sites was OPENED. 26 are real negative controls and were cited where they actually live; 1 (assert-flat-silhouette) had been cited on a threshold scaler its own header disowns as not-a-control and is re-pointed at the --mutate=prior self-spawn; 1 (assert-pen-carve) has no known-bad on the bare invocation at all and is re-ruled `partial`. A 101st gate, assert-nib-contrast, landed from lane N6 mid-repair and is ruled `none` because it throws before reaching its own three known-bad arms. EXTENDED 2026-08-28 by lane N10 (F23a/b/c): K3 now cites by TOKEN over a COMMENT-MASKED copy of the gate and treats `line` as an advisory bookmark. No code hit is red, several code hits are disambiguated by the line, and a line that has simply drifted is reported and fixed by --recite rather than failed. Measured over the 99 cited entries: 96 tokens unique in code, 2 ambiguous and both correct, 1 with no code hit (assert-pen-carve, `partial`, so unchecked). Two entries were cited on PROSE and are re-pointed: assert-gate-integrity itself and assert-pen-carve. The gate list is now IMPORTED from run-battery's discover() instead of a flat readdir of scripts/verify, which is what brought docs/storyboard/tools/assert-moment.mjs into channel K for the first time, 104 gates. And `unswept` below is channel L's job queue. ⚠ K3 still checks only `control` entries: a `partial` entry cites where a WITHHELD control lives, which is legitimately prose, so requiring executable text there would be requiring the wrong thing. Three `partial` citations were nonetheless found pointing at the wrong line and fixed by hand (assert-one-knob :367->:628, assert-draft-taper :240->:236, assert-handfeel :180->:176); nothing in this repo would have noticed.",
+  "gates": {
+    "assert-arm-took.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 1151,
+      "token": "D · CALIBRATED — the analyser separates a dropped answer from a read one",
+      "note": "RULED 2026-08-28 lane N7, read in full. Channel D writes eight fixtures to a temp dir, five of them known-bad shapes (dropped-at-caller, dropped-at-boundary, bound-but-never-read, a driver named only in prose, a reader), and requires the analyser to return the recorded verdict for each. It runs unconditionally on the bare invocation, and a miss exits 1 rather than reporting a sweep."
+    },
+    "assert-cap-fit.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 311,
+      "token": "capFit:\"source\" reproduces the recorded defect exactly"
+    },
+    "assert-carve-graze.mjs": {
+      "verdict": "control",
+      "kind": "inverted-arm",
+      "line": 279,
+      "token": "KNOWN-BAD A (the same rows graded the OTHER way round) is REJECTED"
+    },
+    "assert-citations.mjs": {
+      "verdict": "control",
+      "kind": "inverted-arm",
+      "line": 926,
+      "token": "KNOWN-BAD — a citation whose anchor is NOWHERE in the file it names is REJECTED",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :412 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-corner-split.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 70,
+      "token": "the PRIOR arm still reports"
+    },
+    "assert-data-safety.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 394,
+      "token": "the OLD container-only filter accepts it",
+      "note": "RE-CITED 2026-08-07 lane L — was :360; lane K edited this file tonight and the line moved"
+    },
+    "assert-dead-code.mjs": {
+      "verdict": "partial",
+      "kind": "none",
+      "line": 66,
+      "token": "the reachability analyser calibrated in both directions",
+      "why": "two-directional and exit-coupled, but neither direction is a deliberately wrong input: _probe-dead-code.mjs:28 promises 'a deliberately-unreferenced canary must come back dead' and NO CANARY EXISTS; the row that runs is `dead.length > 0`, a count"
+    },
+    "assert-draft-taper.mjs": {
+      "verdict": "partial",
+      "kind": "dead-cell",
+      "line": 236,
+      "token": "straight / back face is not displaced",
+      "why": "a structurally-inert arm required to read ~0, but the naive own-centre wiring this gate is named for is never re-armed"
+    },
+    "assert-drawin-2d-parity.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 475,
+      "token": "const MUST_REDDEN = {",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved"
+    },
+    "assert-drawin-attrs.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 573,
+      "token": "KNOWN-BAD · BOTH HALVES OFF"
+    },
+    "assert-drawin-monotone.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 421,
+      "token": "KNOWN-BAD (rebuild from a clipped copy) is REJECTED"
+    },
+    "assert-drawin-parity.mjs": {
+      "verdict": "control",
+      "kind": "inverted-arm",
+      "line": 267,
+      "token": "CONTROL · KNOWN-BAD — a stage held at the END of the draw is REJECTED",
+      "note": "FIXED 2026-08-07 lane I; `--expect-pop=` deleted, known-bad re-armed on the real stage · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :257 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-drawin-pentip.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 1213,
+      "token": "THE RULER THIS FILE REPLACES",
+      "note": "RE-CITED 2026-08-28 lane N10 after lane N9's evidence-safety repairs (3a6ebb0a) moved this control 167 lines, :1038 -> :1205, WITHOUT TOUCHING IT. The token is unchanged and still unique. 🔴 This is the case F23a was argued from, and unlike the 25 citations N7 opened, this one genuinely moved: legitimate repair work rotted a citation by 167 lines in a single session, hours after all 29 were repaired. Under the line-primary rule it was a red row about a gate whose control was never edited. Under the token rule it reconciled on the spot and printed as advisory drift. The control itself is the parked Cartesian ruler this gate replaces, run on the same frames and required to fail."
+    },
+    "assert-drawin-timing.mjs": {
+      "verdict": "control",
+      "kind": "inverted-arm",
+      "line": 336,
+      "token": "CONTROL · forwards, on the same clock"
+    },
+    "assert-elbow.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 543,
+      "token": "ROUTE-5b NEGATIVE CONTROL"
+    },
+    "assert-export-app.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 414,
+      "token": "__fsExportGround: \"none\""
+    },
+    "assert-export-encoders.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 155,
+      "token": "a corrupted IDAT must be REFUSED"
+    },
+    "assert-export-live.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 309,
+      "token": "a truncated copy of the same file must come up short"
+    },
+    "assert-export-plan.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 178,
+      "token": "planFrames({ penDurationMs: 2000"
+    },
+    "assert-export-window.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 1163,
+      "token": "KNOWN-BAD · the call site as it stands TODAY still writes the blank hold",
+      "why": "Ruled by the controller 2026-08-07 by READING :865 and :950. Lane P's gate landed after the manifest was written; channel K caught it as missing-entry, which is the channel working. Its known-bad is explicitly NOT a synthetic mutant (:865) — it is the unwired call site as shipped, required to still write the blank hold, so the row goes red the moment the wiring it guards is removed. Lane S is live on the call site; when S lands, this arm should stay red on the OLD path and the gate green on the new one."
+    },
+    "assert-flat-silhouette.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 550,
+      "token": "CONTROL · KNOWN-BAD — the PARKED carve law",
+      "note": "RE-POINTED 2026-08-28 lane N7. The old citation named `cmp.emdRel >= 3 * noise.emdRel`, which is CONTROL A's threshold scaler, and this gate's own header disowns it: \"a blind CONTROL A makes this gate GREENER and never red — a scaling factor is not a negative control\". The real control is here: the bare run spawns itself on --mutate=prior, requires BOTH shape rows to go red on the parked carve law, and folds the child's exit into its own."
+    },
+    "assert-fold-census.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 463,
+      "token": "CAL-5 KNOWN-BAD square/inflate"
+    },
+    "assert-form-orbit.mjs": {
+      "verdict": "partial",
+      "kind": "inverted-arm",
+      "line": 183,
+      "token": "solid / square keeps its corners",
+      "why": "a real inverted gesture, but wrapped in `if (existsSync(squareFile))` so a missing frame silently skips it"
+    },
+    "assert-fusion-authoring.mjs": {
+      "verdict": "control",
+      "kind": "bogus-key",
+      "line": 220,
+      "token": "reports a MISS for a control that does not exist",
+      "note": "RE-CITED 2026-08-07 lane L — was :214, rotted within hours of lane I writing it · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :219 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-fusion-bundle-fresh.mjs": {
+      "verdict": "control",
+      "kind": "bogus-key",
+      "line": 101,
+      "token": "CALIBRATION · the same route REFUSES a key that is not in the set",
+      "note": "RULED 2026-08-07 lane L — landed after lane I surveyed; control verified on the BARE path (no CLI flag gates it)"
+    },
+    "assert-fusion-combo-distinct.mjs": {
+      "verdict": "control",
+      "kind": "self-compare",
+      "line": 402,
+      "token": "CALIBRATION · a crop compared with itself reads 0 and is below the floor",
+      "note": "RULED 2026-08-07 lane L — landed after lane I surveyed; control verified on the BARE path (no CLI flag gates it)"
+    },
+    "assert-fusion-combo-liveness.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 266,
+      "token": "CALIBRATION · the four structurally empty cells read DEAD on the same instrument",
+      "note": "RULED 2026-08-07 lane L — landed after lane I surveyed; control verified on the BARE path (no CLI flag gates it)"
+    },
+    "assert-fusion-combo-ui.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 273,
+      "token": "CALIBRATION · the same counter reports 40 for a press that recorded a step per frame",
+      "note": "RULED 2026-08-07 lane L — landed after lane I surveyed; control verified on the BARE path (no CLI flag gates it)"
+    },
+    "assert-fusion-combos.mjs": {
+      "verdict": "control",
+      "kind": "bogus-key",
+      "line": 114,
+      "token": "CALIBRATION · the set check reads the real list",
+      "note": "RULED 2026-08-07 lane L — landed after lane I surveyed; control verified on the BARE path (no CLI flag gates it)"
+    },
+    "assert-fusion-newborn.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 304,
+      "token": "the 2026-08-02 build IS reproducibly dead"
+    },
+    "assert-fusion-rail.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 150,
+      "token": "reports STILL for the loudest relationship at intensity 0"
+    },
+    "assert-fusion-two-dead.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 224,
+      "token": "CALIBRATION · the same measurement, on the same page, in the same window, reports the KNOWN-DEAD state as dead",
+      "note": "RULED 2026-08-07 lane L — landed after lane I surveyed; control verified on the BARE path (no CLI flag gates it)"
+    },
+    "assert-fusion-ui.mjs": {
+      "verdict": "control",
+      "kind": "bogus-key",
+      "line": 196,
+      "token": "reports a MISS for a control that does not exist",
+      "note": "RE-CITED 2026-08-07 lane L — was :171, rotted within hours of lane I writing it · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :193 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-gate-integrity.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 2384,
+      "token": "failed += calibrate()",
+      "note": "RE-POINTED 2026-08-28 lane N10, and it is this manifest ruling on itself. The old :897 was a PARAGRAPH ABOUT the control, inside a block comment, and it satisfied the line-primary K3 for three weeks. Same class as assert-flat-silhouette citing a threshold scaler, found this time by construction rather than by reading. The control is `failed += calibrate()` on the bare invocation: 41 known-answer pairs, each rule with a case it must reject and a case it must accept, and `if (failed) process.exit(1)` refuses to sweep on any of them. Found by the code-only token rule, which is why that rule masks comments instead of searching raw text."
+    },
+    "assert-geom-offthread.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 179,
+      "token": "NEGATIVE CONTROL: a different wobble produces a DIFFERENT hash"
+    },
+    "assert-geometry-presets.mjs": {
+      "verdict": "control",
+      "kind": "self-compare",
+      "line": 216,
+      "token": "CONTROL · the same preset, rebuilt from scratch"
+    },
+    "assert-gloss-rim.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 85,
+      "token": "CONTROL · KNOWN-BAD — the pre-fix `crossing` rim",
+      "note": "FIXED 2026-08-07 lane L — the two rows it CALLED `the control` were known-GOOD specificity guards (renamed to SPECIFICITY); a real negative control now grades check 2s own predicate `notAComb` against the measured pre-fix reading (rimTurnMeanDeg 90 / alternation 0.987) plus two clause-isolating known-bads and one accept."
+    },
+    "assert-handfeel.mjs": {
+      "verdict": "partial",
+      "kind": "dead-cell",
+      "line": 176,
+      "token": "wobble 0 leaves the path alone",
+      "why": "a deliberately-inert arm, but satisfiable by a blind instrument — a deviation metric stuck at 0 passes it"
+    },
+    "assert-harness-surface.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 791,
+      "token": "F · CALIBRATED — the analyser separates a real call from a phantom",
+      "note": "RULED 2026-08-28 lane N7, read in full. Channel F hands the analyser five publisher/consumer fixture pairs. The known-bad ones — a call naming a member the harness does not have, a key census naming an absent key — must come back flagged, and the clean pairs must not. calibrate() runs unconditionally and this row is exit-coupled."
+    },
+    "assert-hero-camera.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 560,
+      "token": "MUST_FAIL.has(c.key) && c.pass"
+    },
+    "assert-hero-carve.mjs": {
+      "verdict": "control",
+      "kind": "self-compare",
+      "line": 445,
+      "token": "CONTROL · that same clause REJECTS a capture compared with ITSELF",
+      "note": "FIXED 2026-08-07 lane I; --mutate=blind|clock deleted, both controls on the default path"
+    },
+    "assert-hero-dead-channels.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 377,
+      "token": "the CONTACT row cannot catch a centre-pinned squash",
+      "note": "RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :350 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-hero-dials.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 910,
+      "token": "await liveArm(true)",
+      "note": "RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :914 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-hero-flatstate.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 430,
+      "token": "the KNOWN-BAD REPRODUCES THE DEFECT",
+      "why": "Re-ruled by the controller 2026-08-07 by READING :432-436, not by un-rotting. Lane Q's edit moved the old citation (:303 'DEAD-ON THE POOL IS INVISIBLE') to :557, but that row was never the control — it is a subject row. :434 is the parked prior armed inline on the bare invocation and required to reproduce (kbBogus true AND kbRetracted true AND kbMoved >= 2000), which is what a `control` verdict is supposed to point at. Q proposed this line and the controller confirmed it by opening it.",
+      "note": "RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :434 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-hero-hold.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 249,
+      "token": "shadowLaw \"prior\""
+    },
+    "assert-hero-k7-intact.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 580,
+      "token": "is REJECTED by the intactness row",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :411 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-hero-k7-news.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 458,
+      "token": "const CONTROLS = [",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :462 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-hero-ledger.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 319,
+      "token": "const MUST_FAIL = new Set([\"ledger\", \"held\", \"moments\", \"stillness\"])"
+    },
+    "assert-hero-live-shadow.mjs": {
+      "verdict": "control",
+      "kind": "dead-cell",
+      "line": 209,
+      "token": "the SAME two playheads with the camera DEAD-ON at el",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :213 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-hero-option-panel.mjs": {
+      "verdict": "control",
+      "kind": "bogus-key",
+      "line": 479,
+      "token": "an EIGHTH film the panel does not have is",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :483 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-hero-options.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 1263,
+      "token": "letterLeadSec: 0, letterBeatSec: 0"
+    },
+    "assert-hero-reduced-motion.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 357,
+      "token": "const typed = Math.max(0, 10 - n.elMin)",
+      "note": "RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :355 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-hero-return.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 347,
+      "token": "az: s.az + 0.5"
+    },
+    "assert-hero-rise.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 114,
+      "token": "riseCurve: \"prior\""
+    },
+    "assert-hero-switch.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 445,
+      "token": "THE PRIOR READ DEMONSTRABLY DOES NOT"
+    },
+    "assert-hero-transition.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 1303,
+      "token": "spawnSync(\"node\", [THIS_FILE",
+      "note": "FIXED 2026-08-07 lane I; the bare run spawns ITSELF once per control (the cited line IS that spawn). CITED 2026-08-07 lane L — lane I left line:0, which K3 skipped entirely."
+    },
+    "assert-hero-turn.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 179,
+      "token": "mode: \"prior\""
+    },
+    "assert-hero-twos.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 222,
+      "token": "cadence \"ones\""
+    },
+    "assert-hero-windup.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 277,
+      "token": "releaseLaw: \"prior\""
+    },
+    "assert-hero-word-legible.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 252,
+      "token": "the other law breaks the ceiling on the long rungs"
+    },
+    "assert-implicit-reveal.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 316,
+      "token": "NEGATIVE CONTROL: a reversed reveal order is rejected"
+    },
+    "assert-inflate-fusion.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 224,
+      "token": "A2 loft DOES interpenetrate at the crossing"
+    },
+    "assert-joint-beading.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 662,
+      "token": "control: caps-complete REJECTS the extrude arm",
+      "note": "RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :658 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-layer-flicker.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 230,
+      "token": "key: \"cal_strobe\""
+    },
+    "assert-letter-seam.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 173,
+      "token": "KNOWN-BAD (per-vertex ownership) is REJECTED"
+    },
+    "assert-material-craft.mjs": {
+      "verdict": "control",
+      "kind": "self-spawn",
+      "line": 514,
+      "token": "CONTROL · KNOWN-BAD ${c.argv.join(\" \")} (recorded at ${c.site})",
+      "note": "FIXED 2026-08-07 lane L — the four mis-invocations recorded in comments at :128/:298/:338/:409 (each DEMONSTRATED BY HAND at the time and then stored as prose) now RUN as self-spawned controls on the bare invocation, plus a fifth for the zero-check guard. Break-proved: restoring `run[PHASE] || presets` turns control 1 red."
+    },
+    "assert-mode-rims.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 519,
+      "token": "CALIBRATION / census reports a die-cut rim as die-cut",
+      "note": "RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :518 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-moment.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 165,
+      "token": "NEGATIVE CONTROL — mis-registered layer swap (+6 px at the collapse)",
+      "note": "RULED 2026-08-28 lane N10, read in full. FIRST RULING. This gate lives in docs/storyboard/tools/ and was invisible to channel K until this file's inventory started importing run-battery's discover(). It was never unswept: both batteries have run it since 08-07. Four SYNTHETIC negative controls are built on the bare invocation and required to be REJECTED: the mis-registered layer swap (+6 px at the collapse, which is the defect gate 4 was written to catch), the same swap offset vertically, a hard cut to two blank frames, and a one-frame blink. They are graded by the SHIPPED criteria in scripts/verify/lib/hero-moment.mjs, not by a second copy, and a disagreement between the truth table and the wanted verdict sets `sound = false` and exits 1 at :245."
+    },
+    "assert-motion-off.mjs": {
+      "verdict": "control",
+      "kind": "inverted-arm",
+      "line": 302,
+      "token": "CONTROL — \"Independent clock\" leaves neutral on",
+      "note": "RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :306 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-motion-paste.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 202,
+      "token": "KNOWN-BAD `drift` — one beat moved and the paste was not re-pressed",
+      "note": "RULED 2026-08-28 lane N10, read in full. Three known-bads run on the bare invocation against the REAL comparator, `reconcile()`, which is exported for exactly that reason: a drifted paste (one beat moved and the button not pressed, the defect docs/README.md says has already happened twice in two days), a pasted constant with no counterpart in the source (which must go red rather than be skipped, so the table cannot go silently short), and a drift in the LAST decimal the paste itself wrote (so the rounding rule cannot be made blind by rounding). Each is a `say(...)` row and a red row exits 1 at :195."
+    },
+    "assert-nib-contrast.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "token": "aspect 1.0, the round pen that shipped — on desk-doodles, literally the geometry the pre-F34 adapter produced",
+      "why": "RE-RULED 2026-08-28 by the controller, replacing lane N7's `none`. N7's ruling was correct WHEN MADE and is now dead: it read `the file THROWS before it reaches any arm (TypeError at thin.degWorld)`, measured 3 of 3 at 03:10 while lane N6 was still building the gate. N6 finished it. Measured since, repeatedly: 31 of 31 rows, exit 0, on both families, with FIVE known-bad arms live. `mono` at aspect 1.0 is the strongest parked-prior in this file because it is literally the geometry that shipped until that night. And the gate now carries a `shipped-dial` row that a changed default trips, which is the one row the others cannot replace: every other threshold in the file DERIVES from the constants under test, so they move with the defect. Codex proved that by mutation, aspect 1.8 to 1.6 and angle 30 to 20, both 30/30 exit 0 before the ratchet and both FAIL after. ⚠️ AND A CORRECTION TO THIS ENTRY ITSELF: its first token was copied from a lane's suggested text without opening the file, and it appeared on NO line of code. `--recite` refused it, correctly, and the meta-gate went NOT CALIBRATED 1/41 until it was fixed. That is the same defect this manifest exists to catch, committed while writing an entry FOR this manifest. The token now is the real one, read off the coverage matrix at :250.",
+      "line": 250
+    },
+    "assert-one-browser.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 602,
+      "token": "CALIBRATED · the real known-bad is caught on all four channels",
+      "note": "RULED 2026-08-28 lane N7, read in full. The bare run parses three synthetic files, and the known-bad is the REAL line that was live in verify-screen-layers.mjs, `headless: process.env.SL_HEADLESS === \"1\"`, which no `headless: false` grep could see. All four channels must catch it while a converted file and a prose mention stay clean, and a miss exits 1 instead of printing seven green rows. The larger 24-row control set stays behind --mutate, which no sweep passes."
+    },
+    "assert-one-knob.mjs": {
+      "verdict": "partial",
+      "kind": "bogus-key",
+      "line": 628,
+      "token": "allowed but no longer violates anything",
+      "withheld": "--mutate at :88 (4 purpose-built mutants, 6 judgements)",
+      "why": "the only thing that would go red if the analyser went blind is channel E's exemption-staleness check — a control's work done by side effect, not a purpose-built known-bad"
+    },
+    "assert-param-guards.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 180,
+      "token": "the PRIOR formula still reads"
+    },
+    "assert-pen-carve.mjs": {
+      "verdict": "partial",
+      "kind": "inverted-arm",
+      "line": 76,
+      "token": "── THE NEGATIVE CONTROLS ──",
+      "withheld": "--mutate=epsilon|lit|breakdrift, three purpose-built known-bads aimed at rows 1, 2 and 4",
+      "why": "RE-RULED 2026-08-28 lane N7, was `control` citing `(MUTATE === \"breakdrift\" || opened.added > 0)` — machinery of a withheld arm, not a control. Nothing deliberately wrong runs bare: rows 1 and 3 are a null-input / real-input pair, the same two-directional shape already ruled `partial` on assert-dead-code, and run-battery's EXTRA_ARGS is EMPTY, so no sweep passes any --mutate."
+    },
+    "assert-pen-field-alloc.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 303,
+      "token": "the parked pre-fix realloc (setFieldRealloc(false))",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :309 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-pen-field.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 314,
+      "token": "a tube channel baked at 1.0 R instead of 1.35 R is REJECTED",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved"
+    },
+    "assert-penfield-offthread.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 203,
+      "token": "NEGATIVE CONTROL: a different wobble produces a DIFFERENT hash"
+    },
+    "assert-pentip-specks.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 1525,
+      "token": "a tip literally cut off AT THE PEN"
+    },
+    "assert-preset-pixels.mjs": {
+      "verdict": "control",
+      "kind": "bogus-key",
+      "line": 268,
+      "token": "__not_a_view_preset__",
+      "note": "BOOKMARK MOVED 264 -> 268 2026-09-04 lane D2, by hand and not by --recite: the token is unchanged and still unique, only this gate was edited, and nine other entries drifted in the same run that belong to other lanes. RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :268 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-preset-registry.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 564,
+      "token": "the reversibility detector DOES catch a resolver that mutates its input"
+    },
+    "assert-preset-routing.mjs": {
+      "verdict": "control",
+      "kind": "inverted-arm",
+      "line": 480,
+      "token": "CONTROL · the same check DOES fire",
+      "note": "RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :484 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-register-light.mjs": {
+      "verdict": "control",
+      "kind": "guard-bypassed",
+      "line": 580,
+      "token": "the control actually reached the render",
+      "note": "RE-CITED 2026-08-28 lane N7, was :584. Read in full: the same-register rim-off arm runs on the bare invocation through __registerHarness.setRim, a missing harness makes the row RED rather than skipping it, and the arm-took row cited here is exit-coupled. The stronger known-bad, --mutate=warmrig, is WITHHELD and run-battery's EXTRA_ARGS is empty, so no sweep reaches it."
+    },
+    "assert-rod-caps.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 53,
+      "token": "CAL-1 FIRES on `capPositions: []`"
+    },
+    "assert-screen-layers.mjs": {
+      "verdict": "partial",
+      "kind": "dead-cell",
+      "line": 325,
+      "token": "reveal_control",
+      "why": "a real null-subject arm whose verdict is never ASSERTED — :343 is an unconditional pass() that prints its reading"
+    },
+    "assert-seam.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 436,
+      "token": "KNOWN-BAD-1 `capped` Inflate self-intersects"
+    },
+    "assert-shell-states.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 407,
+      "token": "calibration (toaster forced to bottom:0)"
+    },
+    "assert-slot-routing.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 66,
+      "token": "PRIOR still collides"
+    },
+    "assert-stack-anim.mjs": {
+      "verdict": "control",
+      "kind": "inverted-arm",
+      "line": 270,
+      "token": "the fade graded BACK TO FRONT (a fade-OUT under a fadeIn name) is REJECTED",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved"
+    },
+    "assert-stack.mjs": {
+      "verdict": "control",
+      "kind": "self-compare",
+      "line": 183,
+      "token": "the same composition compared with ITSELF is REJECTED",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved"
+    },
+    "assert-still-export.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 421,
+      "token": "const cube = await runArm(\"cube\", true)",
+      "note": "BOOKMARK MOVED 386 -> 421 2026-09-04 lane D2, by hand and not by --recite: the token is unchanged and still unique, only this gate was edited, and nine other entries drifted in the same run that belong to other lanes. FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :390 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-stroke-guards.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 112,
+      "token": "a.prior === \"OOM\" || a.prior === \"HANG\""
+    },
+    "assert-stroke-schedule.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 1071,
+      "token": "the KNOWN-BAD is REJECTED — the tip left in the recording's arcs",
+      "why": "Ruled by the controller 2026-08-07 by READING the gate, not from the lane's report. Six known-bads, all armed inline on the bare invocation with no argv guard around them (the file's only process.argv use is the --label reader at :38), and each carries its own 'the known-bad ACTUALLY TOOK' row so a control that silently refuses cannot pass for one. Cited row is the tip-rides-the-schedule arm at :1068.",
+      "note": "RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :1068 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-stub-filter.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 330,
+      "token": "NO ARM TURNS IT RED — this row cannot say no",
+      "note": "RULED 2026-08-28 lane N10, read in full. The `off` arm is the PARKED PRIOR in the literal sense, the sub-nib filter disabled, i.e. the word that shipped until tonight, and `crowded` moves the threshold to nine nib diameters, inside the word's own stroke cluster. The cited row is the COVERAGE assertion over them: every gating row must be turned red by at least one arm, and a row no arm can redden fails by name rather than being counted. Exit-coupled at :251. The guard's own control at :240 is a second, independent known-bad (`length >= NaN` keeps 0 of 22 strokes)."
+    },
+    "assert-style-contracts.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 456,
+      "token": "CONTROL · the finiteness check catches a seeded NaN"
+    },
+    "assert-sweep-release.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 234,
+      "token": "const hazard = await runArm(\"hazard\")",
+      "note": "FIXED 2026-08-07 lane N; the withheld control(s) now run on the bare invocation and are mutation-proved · RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :238 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-taper-envelope.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 480,
+      "token": "ENV-3 NEGATIVE CONTROL",
+      "note": "RE-CITED 2026-08-28 lane N7. The site was OPENED and read: it is a real negative control on the bare invocation. The old :419 was never right in any committed tree — this gate has not been touched since the manifest last landed."
+    },
+    "assert-texture-motion.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 192,
+      "token": "controlOk = m < WEAK && restored"
+    },
+    "assert-texture-relief.mjs": {
+      "verdict": "control",
+      "kind": "dead-cell",
+      "line": 279,
+      "token": "const over = dead.filter",
+      "note": "RE-POINTED AND RE-KINDED 2026-09-04 lane D2, and the control really did change. It was the PARKED PRIOR (uFsTexBump 0) required to put a preset under the 2.0 floor, cited on `const under = prior.filter`. That arm only fell under the floor because dOff averaged over the WHOLE crop, paper included, while the floor is quoted from diff-frames.mjs, which averages over inked pixels only — lane C2's aa4830f7 on the sibling gate. Once the row is graded on the floor's own scale the parked prior reads dInk 8.348 at its weakest, well OVER the floor, so that arm would have stopped being a control silently. The known-bad is now the option PRESENT AND DEAD (textureIntensity 0), which reads dInk 0.000 on 12 of 12 presets, hence dead-cell. The parked-prior arm still runs and still carries the relief's own comparative row; it is demoted, not deleted."
+    },
+    "assert-timing-frames.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 279,
+      "token": "the snap-back rule REJECTS a curve parked at full strength"
+    },
+    "assert-timing-origin.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 152,
+      "token": "CONTROL · KNOWN-BAD — the PRE-FIX consumer",
+      "note": "FIXED 2026-08-07 lane L — the pre-fix shims at :45-69 were installed as `??` fallbacks and so were unreachable on any current checkout; the pre-fix consumer is now CALLED directly through a parameterised sweepLayer and row 1a must reject it. Break-proved."
+    },
+    "assert-timing.mjs": {
+      "verdict": "control",
+      "kind": "parked-prior",
+      "line": 164,
+      "token": "CONTROL · KNOWN-BAD after ${c.after} / during ${c.during}",
+      "note": "FIXED 2026-08-07 lane L — the parked prior at :155 was PRINTED in a detail string and changed no verdict; it is now executed against the known-bad it degenerates on, in both directions. Break-proved: CLEARLY_LIVELIER*0 turns 2 of 3 red."
+    },
+    "assert-tsc-baseline.mjs": {
+      "verdict": "none",
+      "kind": "none",
+      "why": "nothing deliberately broken is ever compiled or fetched; the instrument's ability to tell a real baseline from a parse-halted one is ARGUED IN THE HEADER rather than demonstrated at runtime — and that is the exact failure the baseline-is-SIX rule exists to stop"
+    },
+    "assert-view-presets.mjs": {
+      "verdict": "control",
+      "kind": "inverted-arm",
+      "line": 304,
+      "token": "CONTROL · both edge-on framings FAIL the row above's own predicate"
+    },
+    "assert-camera-frames-the-drawing.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 182,
+      "token": "CONTROL — a mark drawn far outside the current frame is framed too"
+    },
+    "assert-form-channel.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 106,
+      "token": "CONTROL — the same state photographed twice is identical"
+    },
+    "assert-closed-loops.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 160,
+      "token": "E. KNOWN-BAD — the shipped pre-fix state, and it must be REJECTED"
+    },
+    "assert-taper-port.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 129,
+      "token": "D. KNOWN-BAD — the shipped port, and it must be REJECTED"
+    },
+    "assert-debug-surface-fenced.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 101,
+      "token": "function control(sawWhatItShould, label, detail) {"
+    },
+    "assert-take-persists.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 107,
+      "token": "function control(sawWhatItShould, label, detail) {"
+    },
+    "assert-take-timeline.mjs": {
+      "verdict": "control",
+      "kind": "mutant",
+      "line": 63,
+      "token": "control(${controlName})=${control}"
+    },
+    "assert-paired-controls.mjs": {
+      "verdict": "control",
+      "kind": "known-answer",
+      "line": 106,
+      "token": "CONTROL — the detector CATCHES the real defect it was written for"
+    },
+    "assert-no-duplicate-keys.mjs": {
+      "verdict": "control",
+      "kind": "known-answer",
+      "line": 67,
+      "token": "CONTROL — it CATCHES a key declared twice in one literal"
+    }
+  },
+  "unswept": {
+    "_": "CHANNEL L's JOB QUEUE, not a permanent exemption. Sound instruments this repo runs by hand that channel L's `--selftest` derivation cannot reach. The meta-gate prints every entry BY NAME on every run, with the one change that would move its subject into a sweep, because a count is a number somebody gets used to and a list of names is a list of things somebody has to answer for. Nothing in here can turn a run red, and that is the point of saying so out loud. An entry whose file no longer exists IS red: an exemption that outlives its subject is the ALLOW list's own failure mode.",
+    "_RESOLVED_2026-08-28": "`scripts/verify/_probe-port-resolver.mjs` was removed from this list on 2026-08-28. It was here because channel L's `--selftest` derivation could not reach it. Lane N1 then added the flag and channel L now runs it every sweep (PASS, 9 rows, exit 0). THE FAILURE MODE THIS ENTRY DEMONSTRATED IS THE LIST'S OWN, and it is worth keeping written down: the meta-gate only fails an `unswept` entry when its FILE IS MISSING, so an entry whose subject has since been WIRED IN sits here silently, still printing by name, still claiming a hole that was closed. A list of exemptions needs a check that an exemption is still NEEDED, not only that its file still exists. That check does not exist yet."
+  }
+}

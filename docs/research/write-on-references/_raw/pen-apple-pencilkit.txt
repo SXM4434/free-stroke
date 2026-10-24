@@ -1,0 +1,47 @@
+SOURCE_URL: https://developer.apple.com/documentation/pencilkit
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Apple PencilKit framework documentation - PKStroke and PKStrokePoint classes recording pressure-sensitive drawing with azimuth, altitude, force, size, opacity per point
+
+## PencilKit Framework Overview
+
+PencilKit is a framework that provides drawing and annotation capabilities for iOS and macOS apps with Apple Pencil support including pressure and tilt sensitivity.
+
+## Key Components
+
+- **PKCanvasView** - A canvas view for freehand drawing
+- **PKToolPicker** - UI for selecting drawing tools and inking settings  
+- **PKDrawing** - Data model representing complete drawing as a collection of strokes
+- **PKStroke** - Individual brush stroke within a drawing
+- **PKStrokePoint** - Single point within a stroke, capturing detailed input data
+
+## PKStrokePoint Properties
+
+Each point in a stroke captures the following properties:
+
+- **timeOffset** - The time offset from the start of the stroke (in seconds)
+- **force** - The pressure/force applied at this point (normalized 0-1)
+- **azimuth** - The azimuthal angle of the stylus or Apple Pencil (0-2π radians)
+- **altitude** - The altitude angle of the stylus or Apple Pencil (0-π/2 radians)
+- **size** - The size/width of the stroke rendering at this point
+- **opacity** - The opacity/alpha value at this point
+
+## Stroke Recording Mechanism
+
+When a user draws with Apple Pencil or finger:
+- Pressure is recorded as normalized force value
+- Orientation angles (azimuth and altitude) capture stylus tilt
+- Timing information is recorded relative to stroke start
+- Size and opacity can be pre-computed or determined during rendering
+
+## Use Cases
+
+Typical use of PKStroke and PKStrokePoint:
+- Recording detailed stylus/touch input data with full fidelity
+- Reconstructing or analyzing strokes with pressure and angle information
+- Creating custom drawing applications with stylus sensitivity
+- Implementing pressure-responsive brush engines
+
+## Reference
+
+Official documentation at https://developer.apple.com/documentation/pencilkit/

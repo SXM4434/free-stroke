@@ -1,0 +1,52 @@
+SOURCE_URL: https://pmc.ncbi.nlm.nih.gov/articles/PMC9853007/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Measured pause duration and inter-stroke timing in handwriting with specific millisecond values for children by grade level.
+NUMBERS: Grade 3 average pause: 414 ms (SD = 360 ms); Grade 5: ~360 ms; Adult inter-letter intervals: ~90 ms (simple syllables), 155 ms (complex syllables); Preschool minimum: 1000 ms; ~1.5-1.8 pauses per letter; Outlier threshold: 2030 ms
+
+# Handwriting Pause Duration and Timing Measurements
+
+Research on children's handwriting pauses reveals consistent temporal patterns across development.
+
+## Average Pause Duration
+
+**Grade 3 Typical Developers**: 414 ms (SD = 360 ms)
+**Grade 5 Both Groups**: Approximately 360 ms
+
+**Key Finding**: Struggling writers demonstrated significantly longer individual pauses despite making similar pause counts as typically developing peers.
+
+## Pause Frequency
+
+- Children made "about 1.5 pauses per letter" during alphabet tasks
+- Grade 3: Approximately 1.8 pauses per letter
+- Grade 5: Approximately 1.4 pauses per letter
+
+## Inter-Letter Intervals (from prior research cited)
+
+**Adult Writers**:
+- "Around 90 ms in simple syllables"
+- "Up to 155 ms for complex syllables"
+
+**Preschool Children**:
+- "A minimum of 1 second" (1000 ms) for inter-letter intervals
+
+## Outlier Exclusion Threshold
+
+The study removed pauses "3 SDs above the mean (i.e., ≥ 2.030 ms)" for analysis purposes, representing 0.02% of data.
+
+## Temporal Characteristics in Dysgraphia
+
+Dysgraphic children showed:
+- Lack of continuity and fluency
+- Longer lift duration or extended lift intervals between strokes
+- Increased pause time per stroke
+- Increased number of directional changes in velocity
+
+## Analysis Methods
+
+These metrics are commonly used in digitizer-based handwriting analysis to study:
+- Handwriting fluency
+- Automaticity
+- Diagnosis of writing difficulties (dysgraphia, DCD)
+
+The measurements were captured using digital tablet technology at high temporal resolution.

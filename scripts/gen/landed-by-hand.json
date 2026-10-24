@@ -1,0 +1,8 @@
+{
+  "_": "Lane commits that reached the branch by HAND, so `git cherry` finds no patch-equivalent. Each entry names the commit that landed it; unlanded-lanes.mjs checks that commit is really on the branch, so an entry cannot outlive the landing it claims. Add one only with a reason of that kind.",
+  "b54dcef02805131a153742266136047ff086620a": {
+    "as": "5afc0dc9",
+    "lane": "laneD3",
+    "why": "conflict-resolved onto assert-export-window.mjs after the branch had reworked the same row, so the landed patch differs from the lane's"
+  }
+}

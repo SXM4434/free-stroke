@@ -1,0 +1,54 @@
+SOURCE_URL: https://cursive-generation.com/foundational-hand
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Edward Johnston's Foundational Hand stroke order principles with 7-stroke rule, letter families, and lowercase 'o' ductus with pen angle control.
+
+# Edward Johnston's Foundational Hand: Stroke Order & Ductus
+
+Foundational hand is based on Johnston's studies of 9th and 10th century Carolingian script manuscripts.
+
+## Core Stroke Principles
+
+**Construction-Based Approach**: "Writing uses a repeatable sequence of strokes so the same letter can be made again tomorrow."
+
+**7-Stroke Maximum Rule**: Letters should require no more than seven deliberate pen movements. Most letters need fewer strokes, encouraging efficient construction over patching weak shapes.
+
+## Letter Family Progression
+
+The Foundational hand teaches letters in families based on shared stroke characteristics:
+
+1. **Round letters first**: o, c, e, a, d, g, q
+   - The lowercase 'o' serves as the foundational test piece
+
+2. **Straight-stem letters**: i, l, t
+
+3. **Branched letters**: n, m, h, r
+
+4. **Ascenders**: b, d, h, k, l
+
+5. **Descenders**: p, q, g, y
+
+## Detailed Lowercase 'O' Ductus
+
+**Stroke Sequence with 30° Pen Angle:**
+
+1. Set 30° pen angle consistently
+2. Begin at upper right shoulder, just below x-height
+3. Pull curved stroke down and left through the lower bowl
+4. Keep curve moving through baseline (avoid flattening)
+5. Close left and top curves back toward starting point
+6. Maintain clean, centered counter with even visual weight
+
+## Key Technique: Pen Angle Control
+
+**Critical principle**: The 30° angle must remain constant throughout all strokes.
+
+**Why this matters**: Rotating the nib to "rescue" letters ruins subsequent letterforms by creating inconsistent stroke weights.
+
+## Historical Context
+
+Edward Johnston (1872-1944) is regarded, along with Rudolf Koch, as the father of modern calligraphy, particularly for popularizing the broad-edged pen as a writing tool.
+
+Johnston's foundational work "Writing & Illuminating & Lettering" (published 1908) remains the primary reference in the calligraphy domain, containing detailed instruction on stroke order and technique that calligraphers have studied for over a century.
+
+Based on 9th-10th century Carolingian script, which was a fluent, cursive hand with fewer pen lifts than most historical scripts.

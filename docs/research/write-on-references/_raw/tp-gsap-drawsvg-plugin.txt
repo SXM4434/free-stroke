@@ -1,0 +1,44 @@
+SOURCE_URL: https://gsap.com/docs/v3/Plugins/DrawSVGPlugin/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: GSAP DrawSVGPlugin official documentation describing SVG stroke animation via stroke-dasharray/dashoffset properties
+
+# DrawSVGPlugin Documentation
+
+DrawSVGPlugin is a GSAP tool for animating SVG strokes. As the docs state: "DrawSVGPlugin allows you to progressively reveal (or hide) the stroke of an SVG path, line, polyline, polygon, rect, or ellipse."
+
+## How It Works
+
+The plugin controls stroke visibility through CSS properties. It manipulates stroke-dashoffset and stroke-dasharray to create a drawing effect. You can animate from specific points along the path or outward from the center.
+
+## Basic Usage
+
+```javascript
+gsap.registerPlugin(DrawSVGPlugin);
+gsap.from('.draw-me', { duration: 1, drawSVG: 0 });
+```
+
+## Key Properties
+
+- Values: Use percentages or absolute lengths (e.g., "20% 80%" or "0 100%")
+- "live" option: Recalculates path length during animation for responsive elements
+- Staggering: Works seamlessly with GSAP's stagger feature for multiple elements
+
+## Important Requirements
+
+Strokes must be defined before animation via CSS (stroke-width and stroke properties) or via SVG attributes on elements.
+
+## Available Methods
+
+- DrawSVGPlugin.getLength() — retrieves stroke length
+- DrawSVGPlugin.getPosition() — obtains current DrawSVG position
+
+## Limitations
+
+The plugin affects only strokes, not fills. Certain browsers (Firefox, iOS Safari) have rendering quirks requiring workarounds like path conversion or percentage adjustments.
+
+---
+
+## Analysis for Write-On Research
+
+DrawSVG is an optimized wrapper around the same stroke-dasharray/dashoffset mechanism that creates the "fake" aesthetic. It does not address or solve the fundamental issue that perfectly uniform, unchanging strokes cannot replicate the material qualities of real handwriting: ink bleed, pressure variation, skip, saturation changes. The plugin is technically excellent but operates within the same visual limitations as the base technique.

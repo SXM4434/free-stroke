@@ -1,0 +1,30 @@
+SOURCE_URL: https://photography.tutsplus.com/tutorials/how-to-animate-trim-paths-in-after-effects--cms-107113
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Envato Tuts+ tutorial on animating trim paths in After Effects
+
+# Trim Paths in After Effects Tutorial
+
+## What Are Trim Paths?
+
+Trim paths are a feature available in shape layers and converted layers (text, illustrations) that allow animators to define start and end points for animation sequences. According to Adobe's documentation, "If the Trim Paths path operation is below multiple paths in a group, then you can choose to have the paths trimmed simultaneously or treated as a compound path and trimmed individually."
+
+## How to Add and Use Trim Paths
+
+To implement this effect, navigate to your shape layer, select Add, then choose Trim Paths from the menu. The trim path appears at the bottom of the shape layer stack and affects all elements above it.
+
+The primary properties for trim paths are the start and end values. You can roll back the end value to reveal how the shape will animate, then set keyframes using the stopwatch icon to define animation timing.
+
+## Practical Application
+
+The tutorial demonstrates setting keyframes at different timeline points—for example, starting at 0% and animating to 100% over approximately 1.5 seconds. Animators can then adjust timing by duplicating and repositioning keyframes to create quick bursts or pauses in the animation sequence.
+
+## Limitations and Considerations
+
+The tutorial focuses on timing adjustments and coordination with other animated elements like character appearances, rather than discussing the visual limitations of the trim path technique itself for handwriting animation.
+
+---
+
+## Context for Research
+
+This tutorial teaches the mechanics of trim path use in After Effects but does not address why the resulting animations may look artificial or "fake" for handwriting effects. It presents trim paths as a straightforward animation tool without engaging with the material limitations.

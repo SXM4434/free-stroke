@@ -1,5 +1,671 @@
 # Free Stroke — Session Handoff
 
+> # ⏹ SUPERSEDED 2026-08-28. NOT DELETED.
+>
+> **Live: `docs/STATUS.md`, `docs/RUN-QUEUE.md`, `HANDOFF.json`.**
+>
+> **False here now:** *"the 51-error baseline"* (`:344`, `:513`, `:3246`, `:3389`) — it has
+> been **6** since 2026-08-02. *"No commits"* (`:8`, `:138`, `:3389`) — closed 2026-08-24.
+>
+> At 187 KB this is the largest document in the repo and it reads as a live checkpoint.
+> It is a record of 2026-08-01. Its hero-beat detail is superseded by
+> `docs/hero-beat-storyboard.md`, which itself reads back-to-front: **start at §11.9.**
+
+## CHECKPOINT — `HERO_BEAT_RECORD_RECONCILED_AGAIN` — the re-cut shipped, the paste had not
+
+*2026-08-01, overnight. **Two files written: `docs/hero-beat-storyboard.md` and
+`scripts/capture/motion.mjs`** (plus `docs/README.md` and this file). `lib/`,
+`components/`, `app/` and `scripts/verify/` were READ and RUN, never written —
+three other lanes are live in them. No commits.*
+
+### THE PREVIOUS CHECKPOINT'S ONE BLOCKING NUMBER IS CLOSED
+
+`beats.draw` is **140 frames / 4.6667 s** in the model. The beat is
+**371 frames / 12.3667 s**, twelve phases. `assert-hero-ledger.mjs` reads
+**4/4 · SOUND**, with **4/4 correctly FAILING** on the whole prior beat. Read
+stillness **36.1 %**. The hand is at **3.60×**, not 7.88×, and
+`measure-drawin-pacing.mjs`'s `human-speed` row moved **30.6 ms → 66.9 ms**
+against a 100 ms floor — **more than half of that row closed by the re-cut
+alone**, which is the clearest evidence that giving the trim back was a
+correction rather than a preference.
+
+⚠ **THE STILLNESS MARGIN IS UNDER ONE FRAME.** 134 of 371 = 36.1 % against C8's
+36 % bar; 371 frames need 133.56. **Drop one repeat frame and the row goes red.**
+Anyone retiming a phase should read storyboard §11.2a first, not after.
+
+### VERIFIED FIRST-HAND THIS PASS — every number re-run, nothing inherited
+
+| | result | command |
+|---|---|---|
+| the frame ledger | **4/4**, 4/4 correctly FAIL on the prior beat | `assert-hero-ledger.mjs` |
+| the wind-up **releases INTO the turn** | **7/7**, 4/4 discriminating rows FAIL on `releaseLaw: "prior"` | `assert-hero-windup.mjs` |
+| the panel | **31 controls, 31 live**, 3/3 | `assert-hero-dials.mjs` |
+| **K7's news RENDERS** | **8/8**, interior sd **0.000**, **1544 px ink→paper / 0 px paper→ink**, 0 console errors | `assert-hero-k7-news.mjs` |
+| gate 1 is **blind to a uniform re-value** | `--mutate=shade`: **13934 of 13934** px moved, gate 1 unmoved. `--mutate=wash`: **1325** px moved, gate 1 → sd 18.8 | `… --mutate=shade\|wash` |
+| `velocity-bell` | **22/22** (was 10/22) | `measure-drawin-pacing.mjs` |
+| the current capture | **8/9** on `k7final` | `assert-hero-transition.mjs --label=k7final` |
+| the meta-gate | exit **1** — 2 scripts named `assert-*` that cannot report a failure | `assert-gate-integrity.mjs` |
+| `motion.mjs` ⇄ the model | max \|Δ\| **az 1.83e-3° · el 1.28e-3° · fill 9.6e-6**; **19.57°** against the parked laws | own parity probe, 372 frames |
+
+**The dead-dial sweep found EIGHT, not three.** Hold tension was read by nothing
+on any arm — the wind-up had no third act to give it a consumer, so *the dial was
+dead because the beat had a hole*, which no amount of tracing the wire finds.
+Overshoot (`backC1`) is a **0/not-0 switch on a 0–4 slider** — 400 reachable
+positions, two states, still load-bearing because 0 is what reduced motion sets.
+Swell was **mislabelled**: an ink dial that moved `az 19.1° / el 25.2° / fill
+0.10` and depth by exactly nothing. Now split into `riseOvershoot`.
+
+### FOUR CLAIMS I WAS HANDED DID NOT SURVIVE — each corrected where it belongs
+
+1. **"`motion.mjs` still carries the falsified rationale."** It does **not**, and
+   has not since §11.7.5 — the falsified lines are struck ✗ history, `breath`
+   reads 1.1, `PUSH_SCALE_END` is not exported. **What was actually stale was the
+   CONSTANTS block**, and that is a different failure mode worth naming: a
+   rationale goes stale because nobody re-reads it; a *pasted constant* goes
+   stale because the paste is a manual step with no gate, and the file looks
+   current either way.
+2. **"the instrument tally is TWELVE."** It is **ELEVEN** — 8 + 3, and the
+   repo's own new `assert-gate-integrity.mjs` header says eleven. No twelfth
+   found; recorded as eleven.
+3. **"`assert-taper-envelope.mjs` contains NO CHECK AT ALL."** True as history,
+   **false as current state** — it has three assertions, a real negative control
+   and `exit(1)` on failure. The *other two* are still red.
+4. **"`--label=after` is 7/9"** — correct, and it also moved the row I was not
+   told about: **`--label=turn3` is 8/9, not 7/9.** Both `--gates=prior` arms
+   reproduce byte-identically (4/7 and 7/7), which is what makes the movement
+   attributable to the gate rewrite rather than to a re-run.
+
+### ONE GATE OPEN — `max cy step 2.00 px` against a ceiling of 2
+
+`assert-hero-transition.mjs --label=k7final` → **8/9**. `cx` is at **1.00 px**,
+the instrument's own floor, so §11.7.1's orthographic fix is holding; the
+vertical axis alone sits *exactly on* the ceiling. **LANE 6 owns it.** I verified
+the reading and the arm; I did **not** reproduce the ruling that it is unrelated
+to the K7 break, and that is stated as theirs in storyboard §11.9.6.
+
+### 🔴 ONE-TOKEN FIX FOR THE LANE THAT OWNS `lib/`
+
+```
+lib/hero-motion.ts:757      `flat-ink.ts:59`  →  `flat-ink.ts:97`
+```
+
+`INK_DIAMETER_IN_STROKE_SPACE = 22` lives at **`lib/flat-ink.ts:97`**;
+`flat-ink.ts:59` is inside an unrelated doc comment. The claim is correct, only
+the number rotted. It sits in `HeroReturn.breakK`'s doc — the dial that sizes
+K7's news — so the next reader of that comment is someone changing the thing
+that was just gated 8/8.
+
+### A SHADER TRAP WORTH KNOWING, because every diagnostic reads green
+
+**`discard` inside a dynamically-bounded loop hangs Chrome's Metal backend.**
+rAF 121/s, JS responsive, zero console errors, the page's own published data
+correct — and **no frames presented**. The only symptom is a screenshot timing
+out, which reads as a flaky harness. Bisected in
+`components/viewport-3d.tsx:912-922`: the same loop with `break` renders in
+46 ms, the same `discard` hoisted out renders in 60 ms.
+
+### `scripts/capture/motion.mjs` — REGENERATED, and now diffable against the model
+
+Constants re-emitted (`draw` 2.1333 → **4.6667**, `tilt` 0.7 → **0.4333**,
+`DRAW_LINEAR_BLEND` 0.45 → **1**, five missing exports added). **And
+`cameraProgram()` was rewired to read them** — pasting a block that names three
+laws over a program that ignores all three is the same defect as a falsified
+rationale in different clothes. Three poses were second opinions: `tilt` ran the
+parked symmetric ease from `lieEl`, `standup` took its overshoot from the *ink's*
+swell dial, `descend` left the hold at full speed.
+
+**The parity residual turned out to be worth a number.** It is not floating
+point: `toMotionMjsSource` emits `toFixed(4)`, so `MOVE_ACCEL_FRAC` arrives as
+0.1905 against `4/21 = 0.190476…` and the whole residual sits in `handoffEase`'s
+nose. Feed the model the same 4-dp values and it agrees to 2.2e-13. **The film
+and the page can never be bit-identical across this transfer, and the gap is now
+0.0018° of azimuth rather than an assumption.**
+
+### NOT done, stated plainly
+
+- **`assert-joint-beading.mjs` and `assert-layer-flicker.mjs` are named, not
+  fixed.** Both emit zero PASS/FAIL rows on the invocation a sweep makes and
+  cannot return non-zero from their own judgement. `scripts/verify/` is another
+  lane's. The flicker one prints `asc_flicker … STROBE` in its default output and
+  passes anyway — a row that names the failure and does not raise it.
+- **Eleven `file:line` citations in the storyboard pointed at the wrong line**
+  and are corrected in one table (§11.9.8) rather than eleven scattered notes.
+  A rotted citation almost never lands on nothing — it lands on real code, so the
+  reader gets a wrong answer with no signal. `page.tsx:1309` used to be the
+  "Copy motion.mjs constants" button; it is now the timeline dock's phase
+  read-out. **That table will rot too**; the durable fix is to cite a *symbol*.
+- **`docs/storyboard/*.png` still show the old beat** — now two re-cuts out of
+  date, not one.
+- **K1's silhouette complaint (§3 K1) has survived three passes unexamined.**
+- **Sebs's picks are untouched.**
+
+---
+
+## CHECKPOINT — `HERO_BEAT_RECONCILED` — the ledger, the record, and one number that is still wrong
+
+*2026-07-31 evening. Documentation only — this pass wrote `docs/hero-beat-storyboard.md`
+and this file, and nothing else. `lib/`, `components/`, `app/`, `scripts/`,
+`docs/research/` and `docs/explainers/` were READ and RUN, never written; three
+other lanes are live in them. No commits.*
+
+### THE ONE THING TO ACT ON: the draw beat is 7.88× a real hand, and the ledger was blocking the fix
+
+`scripts/verify/assert-hero-ledger.mjs` hard-codes `docs/hero-beat-storyboard.md`
+§10.3's ten-row ledger as its `LEDGER` const — `draw: 64` among them — and asserts
+*"the beat lands on §10.3's ledger, row by row."* §10.3 closed at **270 frames /
+9.00 s** and had **no row at all** for the two camera moves. The beat that exists
+has **twelve** phases and runs **295 frames / 9.833 s**. So the stale table was a
+live constraint holding the draw at 64 frames.
+
+**Measured** (`node scripts/verify/measure-drawin-pacing.mjs`):
+
+```
+the Sigma-Lognormal reconstruction's own duration   16.805 s
+the hero beat's draw                                 2.133 s
+compression                                          7.88×
+median stroke   0.360 s recorded → 45.7 ms on screen
+shortest stroke 0.241 s recorded → 30.6 ms on screen
+the literature's floor for a real hand movement (research §3): 100 ms
+draw beat that clears it, MEDIAN stroke:    4.666 s   ← the defensible value
+draw beat that clears it, SHORTEST stroke:  6.971 s
+```
+
+**§10.3'S FRAME LEDGER IS RE-CUT** — `docs/hero-beat-storyboard.md` §10.3,
+*"The frame ledger, RE-CUT"*, with the old table left standing beside it and a ⚠
+note saying what it used to say. Twelve rows, `draw` **64 → 140 frames**, every
+other row unchanged:
+
+| | §10.3's ledger | shipped | **RE-CUT** |
+|---|---|---|---|
+| `draw` | 64 | 64 | **140** |
+| every other row, summed | 206 — **nine** rows, no `tilt`, no `descend` | 232 — **eleven** rows | 232, unchanged |
+| row sum | 270 | 296 | **372** |
+| **measured total** | **270 fr / 9.00 s** | **295 fr / 9.833 s** | **371 fr / 12.367 s** |
+
+(Row sum exceeds the measured total by one frame because `emerge` and
+`returnTurn` are each 27.5 frames — `0.85 + 2/30` at 30 fps — and each rounds up.
+That is frame rounding, and it is the tolerance `assert-hero-ledger.mjs` already
+carries.)
+
+**NEW BEAT TOTAL: 371 frames / 12.367 s at 30 fps. READ STILLNESS: 36.1 %**,
+against C8's 36 % bar — 90 frames in shots that genuinely stop + 44 frames
+elsewhere identical to the frame before them = 134 of 371.
+
+⚠ **State the margin honestly: 36.1 % against 36 % is one third of a frame.** It
+clears; it is not a number to build a second decision on. Three measured facts
+around it, all in §10.3:
+
+- **6.971 s does NOT clear the bar** — 440 frames, **30.5 %**. That is the second,
+  independent reason to reject the shortest-stroke figure. (The first: that stroke
+  is polyline #1, three raw points, **0.153 % of the word's travel**.)
+- **`draw` is deliberately not in `PARKED_PHASES`** and that is where the margin
+  went (`lib/hero-motion.ts:104-107` — *"quantising it quantises the handwriting.
+  One line to add if that is wanted; it is not assumed"*). If it were added, 140
+  frames on the 12 Hz grid hold 56 distinct states → **58.8 %**. Real option, real
+  cost, **not taken here** — it is a hand-feel call.
+- **The bar is being applied to the wrong unit, and C8 is the section that says
+  so.** The draw-in is our SETUP, not our payoff. On everything from `breath`
+  onward the beat is **134 / 231 = 58.0 % still, and that number does not move by
+  one frame however long the draw runs.** Mechanics §4.6 measures Exquisite
+  Corpse's setup:payoff at **1 : 1.05** and concludes *"The film spends as long
+  refusing to show you the thing as it spends showing it."* The re-cut moves our
+  accent from 40.6 % (Babbu's placement, 1 : 1.46) to **52.8 % (1 : 0.90)** —
+  onto Exquisite Corpse's.
+
+### CLOSED, each verified first-hand by running the repo's own asserts
+
+| | verdict | evidence |
+|---|---|---|
+| **registration** | **CLOSED**, `max cx step 1.00 px` | `assert-hero-transition.mjs --label=reg-affine` **9/9**; `--label=reg-persp` **8/9, the one failure is registration alone**; `_probe-hero-projection.mjs` → intervention 46.50 vs 1.00 px, prediction fitted to WIDTHS ONLY rms **3.31** vs null **30.10** px. Fixed with an **orthographic hero stage**. **§7's third number, "one centre", is RESTORED** — §11 said it was lost, and that note is corrected in place. |
+| **the value wash** | **NOT A DEFECT — a RAKE** | dark core **12.6 vs settled 12.6 to the digit**; only the lit end rises (87.0 vs 35.0), which a cross-dissolve cannot do. Two measurement faults fixed: statistic → dark core (§3 K3's own method), reference → the brighter endpoint. `--gates=prior` reproduces the old FAIL `37.2 vs 23.4`; `--mutate=wash` drives the new row red. |
+| **the squash (K2)** | **RENDERS** | `assert-hero-dead-channels.mjs` ALL PASS — h **−4.57 %** against a dialled −4.50 %, w **+1.96 %** against +1.80 %, and pinned at the CONTACT (`cy 501.0 → 505.0`). |
+| **K4 and K7** | **BOTH BUILT** | `assert-hero-hold.mjs` **8/8**; `assert-hero-return.mjs` **13/13** with a per-claim control matrix (`prior` kills 12/13, `identical` kills exactly 1) and a mutation-tested stillness detector. **Call 1 can now be taken, not only decided.** |
+| **the contact shadow** | **CLOSED, root-caused** | `StudioContactShadow` renders in `Scene`, off `Scene`'s own prop — **re-rendering a child cannot change a parent's prop**, so the channel never saw the override. **0 of 943,040 pixels** before. Live now: `assert-hero-flatstate.mjs` all rows pass, pool 249.79 → 244.73 at el 35, and it honestly reports that dead-on the pool is invisible by construction. |
+| **`motion.mjs`** | **REGENERATED** | `breath: 1.1`, twelve-phase `PHASES`, `PUSH_SCALE_END` gone — and the falsified lines kept as an explicit ✗ list of what it used to say. |
+| **the camera** | **TWO SEAMS CLOSED** | `assert-hero-camera.mjs` **9/9**, 8/8 correctly FAIL on the prior camera. `orbit→descend` **0 → 375.9 deg/s in one frame** out of a 933 ms hold → first frame is 10 % of its own peak. `tilt→standup` **el 0.8 → 84.0 deg/s in the SAME direction — a 105× re-acceleration with no turnaround** → 4.7 %. Worst same-direction step ratio **56.0× → 5.1×**. **`lieEl: 65` was lying — the camera reached 70.35°.** The rise rebalance had silently broken `prefers-reduced-motion` (`riseOut` reads `riseGatherDepth`, which the switch had stopped reaching); `assert-hero-reduced-motion.mjs` is **4/4**, its fourth row being the control that makes the other three mean anything. |
+
+### THE HEADLINE CORRECTION — the draw-in, and the answer to *"what was all this research we did"*
+
+**It was never a lesser system. It WAS explainer 18's real reveal — fed
+synthesised timestamps: 12 ms per point on a 4 px arc-length grid.** Pearson r
+between per-stroke arc length and per-stroke duration, where **1.0000 is a
+machine**: `--clock=uniform` **0.9986**, shipped `lognormal` **0.8412**.
+
+`lib/pen-kinematics.ts` already had the Sigma-Lognormal model and already
+exported `timeNorm` — *"so a caller can re-time its own `t` channel without
+changing the stroke's total duration."* And `PenKinematicsSettings.retime`
+preserved *"the stroke's own first/last timestamps exactly."* **So the model was
+allowed to say when the pen was fast WITHIN a stroke and forbidden to say that
+one stroke took longer than another.** That is what pinned r at 1.0. The research
+was done, implemented, documented with its provenance — and one preservation
+clause was holding it shut. Timing character **2.23 % → 7.59 %**; AUTHENTIC vs
+SMOOTH peak lead/lag **13.6 ink diameters**.
+
+> ⚠ **`velocity-bell` IS NOW 22/22, and `human-speed` reads 66.9 ms at 3.60×
+> compression, not 30.6 ms at 7.88× — 2026-08-01, re-run.** The located cause
+> below is what made the bell fixable, so the paragraph is left standing. The
+> `human-speed` row is still failing deliberately; it moved because `beats.draw`
+> went 64 → 140 frames, so the model's own 16.805 s of pen time is squeezed into
+> 4.667 s instead of 2.133 s.
+
+Two rows of `measure-drawin-pacing.mjs` are left FAILING **deliberately** and
+both are findings, not instrument defects: `human-speed` (that is the ledger
+re-cut's reason to exist) and `velocity-bell` at 10/22, whose cause is located
+not guessed — RDP-reduced strokes keep only their endpoints through
+`resampleStroke`'s linear `t` interpolation, and `lib/stroke-processing.ts` is
+shared with the live canvas where `t` is real recorded input and must not be
+re-derived.
+
+### EIGHT instrument bugs, all found by RUNNING rather than reading
+
+> ⚠ **ELEVEN as of 2026-08-01, and the three added are a DIFFERENT CLASS.** The
+> eight below all had something change underneath a constant; the defence is to
+> derive every window from the model's own offsets. Items 9–11 —
+> `assert-taper-envelope.mjs`, `assert-joint-beading.mjs`,
+> `assert-layer-flicker.mjs` — were **born unable to fail** and nothing changed
+> underneath them, so deriving helps nothing and the only defence is an audit.
+> That audit is now itself an assertion: **`scripts/verify/assert-gate-integrity.mjs`**,
+> exit 1, naming the two still red. Storyboard §11.8 items 9–11.
+
+Recorded together in `docs/hero-beat-storyboard.md` §11.8, because the pattern
+only reads at eight. §10.4's whole lesson is that a gate must be RUN, not read,
+and this is now the strongest evidence in the repo for it.
+
+1. the emerge window derived by phase NAME → ran **backwards** after the reorder (72 frames, negative span, every filename correct)
+2. a "blank frame" at the moment that was **CLIPPING** — an expanded dock squeezed the stage 1120×702 → 1120×350
+3. the gate's fixed `+0.55 s` window → **`settled` taken from the DWELL** (24 px), every threshold measured against the frames it was judging
+4. **the vacuous yaw claim** — `yaw <= 90` passed on the parked ramp, whose yaw is 0 on every frame
+5. **the overshoot window read a flat 10.0° on BOTH arms** — hardcoded at 4.30 s, which lands where the camera is parked at el 0
+6. **`hold.png` landing on the flat return** — K7 moved the shot out from under its name, so a row asserted "lit object" on a drawing and read `sd 0.0` on both arms: a gate that cannot PASS
+7. **the blind area-symmetric reversal control** — inked area is symmetric under reversal, so an area metric cannot see direction; the position metric separates the arms 7.8 % vs 91.1 %
+8. **gate 2 sampling a phase that is flat BY DESIGN** — `hold` is the returned drawing now, `sd 0.00 / spread 0.0`, and gate 2 was asking it for the tonal range of a lit solid
+
+**Six of eight were caused by the beat changing underneath a constant.** Every
+hardcoded time in this beat's tooling has now been wrong at least once. Three
+could not fail and two could not pass — the same defect in opposite colours, and
+both invisible without a control.
+
+### Handed figures that did NOT survive checking — five of them, and none changes a conclusion
+
+- *"median stroke 160.9 ms"* at a 4.67 s draw — **measured 100.1 ms.** 4.666 s is
+  *defined* as the beat that puts the median stroke exactly on the 100 ms floor,
+  so 100 ms is the number, and it is the cleaner statement.
+- *"6.97 s still leaves the shortest stroke at 5.6 ms"* — **measured 100.0 ms**,
+  also by construction. The 3-point tick and its 0.153 % of the word are both
+  confirmed exactly; only the 5.6 ms is not, and the likeliest source is the
+  projection probe's `worst 5.61 px`. **The argument against 6.97 s stands on
+  different and better ground**: stillness 30.5 %, below the bar.
+- *"read stillness 37.2 % / 31.4 %"* — **measured 36.1 % / 30.5 %.** Both handed
+  figures assume 138 still frames; the model produces **134**. The 4.67 s case
+  still clears the bar, by one third of a frame instead of by 1.2 points.
+- Also: the contact shadow's *"135,509 pixels after"* is not on disk and was not
+  reproduced (the before-figure is verbatim in the code); and reduced-motion's
+  *"2/4 → 4/4"* — the 4/4 is verified, the 2/4 before-state is not reproducible
+  from the shipped script, though the breakage mechanism is confirmed in the
+  camera assert's per-dial control matrix.
+
+⚠ **`lib/hero-motion.ts` was edited by a live lane at 20:45 mid-pass.** Readings
+before that gave 43 repeat frames / 45.1 %; after, 44 / 45.4 %. Every figure above
+is the later one. These numbers are true of a working tree at a timestamp.
+
+### FOR THE LANE THAT OWNS `lib/hero-motion.ts` AND `scripts/verify/assert-hero-ledger.mjs`
+
+**UNBLOCKED.** §10.3's re-cut ledger is landed and the value is expressible:
+set `beats.draw` to **`140 / 30`** and `LEDGER.draw` to **`140`**. Nothing else in
+the ledger moves. Expect `assert-hero-ledger.mjs` to report **371 frames /
+12.37 s** and read stillness **36.1 %** — and note that the fourth row's margin
+is one third of a frame, so if you also change any phase that contributes still
+frames, re-read that row rather than assuming it.
+
+### NOT done, stated plainly
+
+> ⚠ **THE FIRST TWO BULLETS ARE CLOSED — 2026-08-01, verified by running
+> `assert-hero-ledger.mjs`.** The model ships **`draw: 140` / 4.6667 s**, not
+> `draw: 64`; the re-cut is landed, not a document. And the margin is stated
+> exactly rather than as *"one third of a frame"*: **134 frames against a
+> required 133.56 = 0.44 of a frame.** (The "one third" reading comes from
+> 36.1 − 36.0 = 0.1 % of 371; the direct arithmetic is the safer one to quote.)
+> The bullets are left standing per the never-delete rule.
+
+- **No code was written and none should be inferred as written.** The re-cut is a
+  document; the model still ships `draw: 64`.
+- **The 36.1 % margin is not comfortable and this pass did not spend it.** The two
+  ways to widen it (draw on twos; restating the bar against the payoff unit) are
+  both named with their measured values and both left as calls.
+- **`docs/storyboard/*.png` thumbnail sheets still show the old beat** and were
+  not re-rendered.
+- **Sebs's picks are untouched:** call 1's flat-vs-changed-flat is answered in
+  code but the pick between it and the parked `ret.mode: "identical"` is his, and
+  the orthographic stage **changes the look** (axonometric rather than
+  photographic; measured: the ¾'s tonal range is not reduced, the sliver reads
+  17 px vs perspective's 24 px).
+
+---
+
+## CHECKPOINT — The reveal stopped rebuilding, and DialKit took the clock
+
+Write-up: `docs/explainers/18-the-reveal-stopped-rebuilding.md`.
+Research: `docs/research/reveal-cost-and-timeline-ownership.md`.
+
+### The previous agent's revert DID complete
+
+It was cut off mid-sentence, so this was checked first. `app/desk-doodles/page.tsx`
+carries the labelled pills, the `chromeless` viewport and the phase-progress
+readout, and carries NO `FlatInkLayer` / `useDialTimeline` imports. Typecheck was
+at the 51-error baseline. Nothing to unwind.
+
+One thing the revert could not have restored: **`dialkit` was gone from
+`node_modules` entirely** — it had never been in `package.json`, so some
+`npm install` pruned it as extraneous. It and its `motion` peer are now real
+dependencies (`dialkit@^1.4.3`, `motion@^12.43.0`).
+
+### The 1.1s stall is gone at its source
+
+**Measured first, in node.** `scripts/verify/measure-implicit-cost.mjs` runs the
+real engine under `_ts-load.mjs` — none of the polygoniser touches WebGL — so the
+cost split is readable at a hundred sample points with no compositor in the
+signal. Hero word, `resolution: 5`:
+
+    reveal 0.05 -> 24.5ms    0.50 -> 246.7ms    1.00 -> 531.5ms
+    split: march 55% / normals 39% / audit 6% / acceleration grid ~0%
+
+It is a **RAMP, not a cliff** (full/half = 2.15x, linear in revealed arc length),
+already over a frame budget at five percent of the word, and one draw-in asks for
+~120 of them inside 2.6s. That kills all four candidate fixes on the numbers:
+`res 3` still costs 158ms; a signature cache does nothing for the FIRST play;
+build-at-mount does nothing for a reveal that needs a different surface every
+tick; building progressively IS the defect.
+
+**So the rebuild stopped happening.** `lib/implicit-surface.ts` §6 derives an
+arc-length ordering marching cubes does not give you — nearest-capsule key per
+vertex, max per triangle, counting-sorted index buffer — and `AnimatedStrokes`
+reveals Inflate/implicit by binary search + `setDrawRange`, which is Rod's
+mechanism, unchanged since Rod. Zero geometry work per frame. Surcharge 39ms
+once, on a build that already cost 600ms and now runs once instead of 120 times.
+
+Real time, through the page's own Play button, headed Metal:
+**worst frame 1100ms -> 10.4ms, 0 frames over 100ms, and the 0.54s emerge gets 65
+frames where it used to get none.**
+
+Proved, not asserted (`scripts/verify/assert-implicit-reveal.mjs`): the drawRange
+reveal inks the same region the rebuild did (worst 0.52% of word width across six
+playheads); the surface is byte-identical in positions and normals with the same
+147,452 triangles, only reordered; and a NEGATIVE CONTROL with the keys reversed
+FAILS at 100%, so the metric can fail.
+
+### DialKit owns the beat
+
+> 🔨 **⚠ Stale in its numbers, not in its mechanism (2026-07-31).** *"Eight
+> phases, eight clips"* → **twelve** (`land`, `solid`, `descend`, `returnTurn`
+> landed); *"the 0.54s emerge"* → **0.9167 s**; *"total 10.20s → 9.08s"* → the
+> beat is **9.833 s**. And *"worst frame 1100ms → 10.4ms"* disagrees with
+> `explainers/18`'s own table, which says **16.7 ms** —
+> `hero-beat-storyboard.md` §10.3 uses the doc's figure. The derivation
+> (`HeroBeats` from `tl.<phase>.duration`, a second copy unrepresentable) is
+> unchanged and still correct. Left standing per §0.7.
+
+Eight phases, eight clips. `HeroBeats` is DERIVED from `tl.<phase>.duration` and
+the page's own state is `Omit<HeroMotionParams, "beats">`, so a second copy is
+unrepresentable rather than merely discouraged. The playhead is `tl.time`; the
+page's rAF loop is deleted. The Beats panel has NO sliders — it reports live
+values and says where to drag.
+
+`at` is derived: the phases are strictly sequential, so the page writes the
+cumulative sum back into DialKit's store whenever it disagrees (DialKit's
+`reconcileValues` preserves stored values against changed defaults, so a
+config-side push is not an option). Edge-drag ripples; body-drag snaps back,
+which is correct for a fixed phase order.
+
+**This could not have landed before the stall was fixed.** `TimelineStore.tick`
+advances on a raw unclamped `now - lastTick`; the page's old `MAX_STEP = 0.25`
+clamp existed solely to stop the stall swallowing the emerge. Handing the clock
+to DialKit with the stall still present would have restored the skipped beat.
+
+Verified by driving the REAL dock: locate the ORBIT clip by DialKit's own
+`title`, grab `[data-edge="end"]`, drag — `orbit 3.200s -> 2.080s`, total
+`10.20s -> 9.08s`, then Revert restores both.
+
+### Gates
+
+- `verify-gates.mjs` **ALL GATES PASS**, 0 console errors.
+- `verify-hero-page.mjs` 20/20, 0 console errors — `docs/verification/hero-page/final/`.
+- `assert-implicit-reveal.mjs` all pass, negative control rejects.
+- Frames: `docs/verification/hero-transition/drawrange/` (100 scrub + 72 emerge + video).
+- Typecheck **51**, the unchanged pre-existing baseline.
+
+### Pre-existing, NOT caused here
+
+`assert-inflate-fusion.mjs` is 21/23. Both failures (`D2`, `D4`) are the single
+`blend 0` data point — the hard-union control, where there is no smooth minimum
+and therefore no k/6 law to obey, and whose 4.5% outlier is also what breaks D4's
+monotonicity. Marching-cubes discretisation at a hard crease. That this pass did
+not cause it is a measurement, not an argument: the reveal work is proved
+index-order-only, byte for byte.
+
+### Also fixed in passing
+
+`AnimatedStrokes` read `strokeMeshData.jointFractions.length` on the same line it
+guarded the next access with `?.[ji]`. `jointFractions` is optional, so that was a
+real throw waiting for any Rod mesh without joints.
+
+### NOT done / deliberately untouched
+
+- **The beat's choreography, `lib/hero-motion.ts`'s timing model and the flat->3D
+  mechanism** — all under redesign, all left alone. Nothing here tunes them; the
+  work was to make the beat playable at whatever tempo the storyboard picks.
+- **A geometry cache keyed on stroke signature is still absent.** Two identical
+  builds measured 523.6ms then 530.8ms. It no longer matters inside the beat (the
+  beat builds nothing), but it is still ~600ms on every hand-feel dial move.
+- **Inflate/implicit falling back to the loft loses its reveal** — the loft mesh
+  has no reveal table, so the draw-in would show the finished word at once. Named
+  in the code at `inflateRevealsByDrawRange`; basing the flag on the built mesh
+  would be circular.
+- **DialKit's ruler keeps a dead tail** when the beat is shortened below the
+  captured 10.2s. The page clamps its own transport to the clip sum, so the tail
+  is unreachable through the page's controls but still drawn on the dock.
+
+### Not committed
+
+Nothing was committed. Working tree + index only, as instructed.
+
+---
+
+## CHECKPOINT — The rim and the bead (all-modes geometry, pass 4)
+
+Write-up: `docs/explainers/16-the-rim-and-the-bead.md`.
+Research updated: `docs/research/extrude-solid-quality.md` §7 ("what has landed").
+
+### Landed, measured, verified on frames
+
+1. **Rod's joint beading is fixed.** `detectJoints3D`'s predicate was inverted —
+   it tested `π − acos(cosAngle)` (the interior angle) rather than `acos(cosAngle)`
+   (the turn), so it fired on straight runs and stayed silent at hairpins. That
+   is the 166-meshes-for-a-two-stroke-crossing census. With it corrected, both
+   sphere passes take `RADIAL_SEGMENTS` (the old 8 was a compensation for the bug's
+   own symptom — 44.22° max crease on every Rod fixture, 360/8).
+   `assert-joint-beading.mjs --compare` holds **both** signs: `word` 205 → 2,
+   `loopyS`/`openC` 0, and `zigzag` keeps all **7** of its real corners.
+   Regression net: Rod −62% to −86% verts on all 8 shapes; Extrude/Solid/Inflate
+   byte-identical on all 24 of their cases.
+2. **`__geomDebug.stats()`'s joint census had gone structurally blind** and this
+   nearly shipped as "the fix removed all the beads". It separated caps from
+   joints by VERTEX COUNT ("225 vs 81, nothing else can land in these buckets"),
+   which stopped being true the moment the two tessellations were unified: both
+   became 289 verts, the `else if` became unreachable, `jointSpheres` became
+   permanently 0. Now the meshes carry a part tag (`FS_PART_CAP`/`FS_PART_JOINT`)
+   and the census reads the tag, with an `untagged` count so a pass that loses its
+   tag shows up as a number rather than as a clean zero.
+3. **Solid has a bevel.** `insetLoopAgainstMask` in `lib/solid-mask.ts` (inward
+   offset, per-vertex miter clamped by probing the source raster) feeds a rewritten
+   H3 **ring-stack** assembly. `mixed` bucket: was mean 90.0 / max 90.0 / *every*
+   edge on every fixture; now `tick` and `circle` land on Extrude's exact signature
+   (mean 15.3–15.9, **max 30.0**) and the over-30 count fell from 100% of edges to
+   33–35%. The residual `max` on `square` (90) and `crossing` (89) is at genuine
+   drawn corners, where a crease is correct.
+   Frames: `docs/verification/gloss-rim/bevel_final/` — 4 fixtures × 72 orbit
+   frames + video + 3 ink-gated closeups, glossy, headed, Metal. Compare
+   `gloss-rim/after/crossing_solid/closeup_1.png` (hard black-to-cream terminator)
+   against `bevel_final/crossing_solid/closeup_1.png` (graded highlight band).
+4. **`assert-joint-beading.mjs` shipped with the explainer-13 `.entries()` closeup
+   bug still in it** (written 14 minutes after that explainer was written). Its
+   closeups were the same blank frames. Fixed the same way `verify-gloss-rim.mjs`
+   was — `focusView` against `bounds()`, offsets as fractions of the form's radius,
+   every frame ink-gated before it is written.
+5. **`geometry-baseline.mjs` no longer degrades silently** (kept from the previous
+   pass): `stats()` missing is now a hard failure instead of a fall-back to
+   export-byte-length.
+
+### Cost and gates
+
+Only Solid moved on the net: verts ×2, tris ×4 (two rings → eight; the cap now
+shares the ring-0 vertices instead of owning a block, which is why verts only
+doubled). Rod/Extrude/Inflate `=`. `verify-gates.mjs`: **ALL GATES PASS**, 0
+console errors, export works in all four modes, no geometry rebuild on style
+change. Typecheck is at the unchanged 51-error pre-existing baseline.
+
+### NOT done — the honest remainder of "all four modes"
+
+- **Inflate's rim is untouched.** `assert-mode-rims.mjs` reports `cap max
+  16.5–38.1` and `mixed max 85–90` on all four Inflate fixtures. Its 90s are the
+  marching-cubes surface meeting its own dome caps, not a die-cut edge, so it is a
+  different defect from Solid's and needs its own diagnosis. **Judge it on
+  `glossyPlastic`, never `softGel`** — a broad sheen lobe averages over a
+  discontinuity instead of tracing it.
+- **`square/extrude`'s 153 non-manifold edges** (explainer 13 §5b) are still there:
+  the ribbon passes through itself at the closed-loop seam. Unchanged this pass.
+- **Every Extrude mesh still has 8–12 boundary edges** — the ribbon is not closed.
+  Invisible under this rig; it is why an exported GLB is not watertight.
+- **The Rod sparse-anchor port was measured and deliberately NOT done.** Desk
+  Doodles' `detectJointPositions` carries the same inverted predicate verbatim, so
+  their 63-vs-our-205 was never about sparse anchors, and porting it now would
+  bead smooth curls. Explainer 15 §1 has the arithmetic and names the predicate
+  that would actually be principled (curvature radius vs tube radius). A decision
+  for Sebs, not a build.
+- **`applyDraftTaper` is still un-wired** (unchanged; see the previous checkpoint).
+
+### Tree health — the `ditherExposure` worry was unfounded
+
+The brief warned that a style-layers agent may have over-applied a replace into
+other agents' `FUSION_PRESET_DEFS` and `LAYER_STACK_PRESET_DEFS`. Checked:
+`git show HEAD:lib/style-system.ts | grep -c ditherExposure` is **14**, and the
+11 occurrences in those two preset families are all present **at HEAD**, committed
+by the stack/fusion work itself with its own explanatory note (the "ditherExposure
+everywhere dither is on" comment). Only **one** `ditherExposure` line is added in
+the staged diff, and the 10 in the working diff are all in `DITHER_PRESET_DEFS` /
+`ANIMATED_DITHER_PRESET_DEFS` with per-preset reasoning attached — that agent's own
+area. Nothing to restore. Not touched.
+
+### My own damage, reported
+
+`geometry-baseline.mjs` takes `--save=`, not `--label=`. I ran it with `--label`,
+so it defaulted and **overwrote `docs/verification/geometry/baseline/`** with the
+current state. That directory was untracked, so the original is gone. The run
+itself is preserved as `docs/verification/geometry/rodfix/` (post-Rod-fix,
+pre-bevel) and `bevel_after/`, and `memofix/` remains as the pre-Rod-fix
+reference the Rod comparison was made against. Worth making the two scripts agree
+on a flag name.
+
+---
+
+## CHECKPOINT — Measuring the rim (Extrude/Solid quality, pass 3)
+
+Scope: Extrude + Solid only. **Rod and Inflate untouched** — the regression net
+(`geometry-baseline.mjs`, 8 shapes × 4 modes) is `=` on all 32 cases, and
+`verify-gates.mjs` is ALL GATES PASS with 0 console errors.
+
+Write-up: `docs/explainers/13-measuring-the-rim.md`.
+Research: `docs/research/extrude-solid-quality.md` §7–8 (new).
+
+### Landed
+
+1. **The decimation ladder is finished and proven.** `smoothLatticeLoop` now
+   retries steps 2–3 down `CONTOUR_DECIMATE_EPSILON_LADDER = [1.4, 0.9, 0.55,
+   0.3, 0]` instead of surrendering to the raw staircase on the first area-guard
+   rejection. Measured on `crossing/solid`: rim turn mean **90° → 7.74°**,
+   alternation **0.987 → 0.058**, and it lands on rung 0.9 with `areaFallbacks:
+   0`. Only fixture whose numbers moved at all in the net: `tick/solid`
+   (verts −22 %, bytes −11 %).
+2. **`__geomDebug.probeDihedral()`** — an order-, winding- and weld-independent
+   faceting metric (crease angle across shared edges, keyed by rounded position
+   pair, bucketed wall / cap / mixed, plus `boundaryEdges` and
+   `nonManifoldEdges`). It exists because BOTH existing rim metrics are
+   structurally blind on Extrude — see the explainer.
+3. **`__captureHarness.bounds()`** — the form's world centre + radius, the
+   accessor `focusView` always needed.
+4. **Fixed: every `closeup_*.png` this project has ever captured was blank.**
+   `for (const [k, [az, el, fill]] of [[0,[18,10,0.26]], …].entries())` —
+   `.entries()` on rows that already lead with their own index, so `fill` was
+   `undefined`, the camera went NaN, and the file NAMES were the only thing that
+   came out right. `docs/verification/gloss-rim/after/` now has 24 distinct
+   non-blank closeups + 8 orbit mp4s, gated by an ink check.
+5. **`lib/dd-extrude-relief.ts`** — Desk Doodles' `EXTRUDE_BEVEL_PROFILES`,
+   `EXTRUDE_DRAFT_AMOUNT` and `applyDraftTaper` copied verbatim with provenance,
+   plus the ×0.3 world-scale conversion as separate `_FS` constants. Closes the
+   handoff item "the draft taper port did not land". **Not wired** — see below.
+6. **`useStrokeMeshes` deps are now derived, not transcribed.** Was a hand-listed
+   set of scalars under a comment saying every consumed field must be listed;
+   `bevelSize`/`bevelSegments` were consumed and never listed. Now one
+   `paramSig = JSON.stringify([extrudeParams, solidParams, inflateParams])`.
+   Closes the handoff item "adding a Bevel control gives a control that does
+   nothing". Geometry unmoved on all 32 baseline cases; rebuild gate still passes.
+
+### THE headline finding, measured and NOT fixed
+
+**Solid has no bevel at all.** `probeDihedral` `mixed` bucket (cap face meeting
+wall face): Extrude **mean 15.4° / max 30.1°** (the ported 3-segment rounded
+profile), Solid **mean 90.0° / max 90.0° on every edge of every fixture** — a
+spike, not a distribution. Visible directly in
+`docs/verification/gloss-rim/after/crossing_solid/closeup_1.png`: a near-white cap
+meeting a near-black wall at an absolutely hard terminator, versus
+`word_extrude/closeup_1.png` where a graded cream band runs along the rim. Desk
+Doodles' own comment on the constant says the profile is *"Shared by Extrude +
+Solid"*; this repo ported the Extrude half.
+
+Not attempted this pass because it is not a copy-paste: DD gets it free from
+`THREE.ExtrudeGeometry`, Free Stroke's H3 assembles caps and walls by hand, so it
+needs an **inward offset of a mask-derived contour with holes**. Research §7 lays
+out the three candidate approaches and argues the right one for this codebase is
+tracing the offset as an isoline of the coverage field already in `solid-mask.ts`
+(topologically safe by construction; the bevel vanishes on a stem thinner than
+2× the offset instead of inverting). Guard must be a ladder, same as §5b.
+
+### Also measured, also not fixed
+
+- **`square/extrude`: 153 non-manifold edges** — an edge shared by >2 faces, i.e.
+  the ribbon passes through itself at the closed-loop seam. Its worst creases
+  (`wall max 51°`, `mixed max 60.2°`) are at that overlap. Nothing had ever
+  measured this. This is a literal instance of *"the edges and overlaps, the
+  geometry gets all weird."*
+- **Every Extrude mesh has 8–12 boundary edges** — the ribbon is not closed. Does
+  not show under this rig; will show the first time anything does a boolean or a
+  thickness op on an exported GLB.
+- **Residual fray at the crossing notch** on `crossing/solid` (visible in the
+  closeup) — the ladder took rung 0.9 there, so less staircase was collapsed than
+  on a wide form. §7's "set the first epsilon from the local half-thickness the
+  rasteriser already knows" would fix this properly.
+- **`applyDraftTaper` is deliberately un-wired.** It shrinks toward *the
+  geometry's own* bbox centre; DD hands it one pooled slab, Free Stroke's Extrude
+  emits one geometry per stroke, so a verbatim call would taper each letter toward
+  its own centre and a word would read as five separate mouldings.
+  `applyDraftTaperAbout` in the same file takes the centre as an argument; wiring
+  needs the aggregate mark bbox, a `sideWall` dial, and Sebs's eye.
+
+### Operational hazard for the next agent
+
+A concurrent agent ran `git stash` / `git stash pop` cycles on the shared tree
+roughly every 1–3 minutes during this pass. Consequences seen: `lib/solid-mask.ts`
+and `lib/geometry-engines.ts` silently reverted to HEAD twice mid-session; the dev
+server served a broken bundle (`Export DEFAULT_INFLATE_PARAMS doesn't exist`)
+because `app/page.tsx` was un-stashed while `geometry-engines.ts` was stashed;
+three browser verification runs died with `window.__geomDebug?.stats is not a
+function`. Everything recovered, and a copy of the three tracked files was taken
+out-of-tree as insurance. **Do not start a long geometry edit or a multi-minute
+capture without checking `git stash list` and `wc -l` on the file first.**
+
+### Not committed
+
+Nothing was committed. Working tree + index only, as instructed.
+
 ## Solid checkpoint
 
 - **name:** Solid Checkpoint B — Extruded Filled Silhouette
@@ -2442,3 +3108,307 @@ NOT started — unfinishable in one pass.
 ### Final locked checkpoint label
 
 `ENGINE_PASS_4_SOLID_PERFORMANCE_AND_INFLATE_FORM`
+
+---
+
+## CHECKPOINT — `SCREEN_LAYER_QUALITY_PASS` (texture / dither / ASCII rails)
+
+Deep-dive quality pass on the screen-space style layers, asking the question the
+earlier passes did not: **does it look good**, visually and in the code. Earlier
+passes verified these effects *changed pixels* and *did not regress*.
+
+Docs: explainer [15](docs/explainers/15-screen-layer-quality.md), research
+[screen-space-layer-quality.md](docs/research/screen-space-layer-quality.md) and
+[ascii-glyph-resolution-and-temporal-stability.md](docs/research/ascii-glyph-resolution-and-temporal-stability.md).
+Frames: `docs/verification/screen-layers/{before,after,after-inflate,sweep,final}`
+and `docs/verification/layer-flicker/`.
+
+### The test bed was the finding
+
+A rail preset writes only its own family's fields, so the **material comes from
+the geometry mode** (`rod → ink`, `extrude → glossyPlastic`, `solid → matteClay`,
+`inflate → softGel`). Every earlier harness drove the shaders through raw
+parameters at one harness-chosen setting, which cannot answer "does this preset
+look good". `verify-screen-layers.mjs` shoots real preset × real per-mode default
+material × 4 modes, and adds **nearest-sibling distance** — how far a preset is
+from the closest *other* preset on its rail. `assert-screen-layers.mjs` turns it
+into pass/fail and measures distance **across** both rails of a family.
+
+### Fixed
+
+| | |
+| --- | --- |
+| Tone window 4.9× too wide | Half-width range `0.62..0.07` → `0.48..0.05`. Measured subject σ is 0.071 (solid) … 0.257 (rod); the default dial sat at 0.345. Halftone dots now vary in size across the form instead of being uniform. |
+| 11 of 11 ASCII rail presets below the legibility floor | `asciiCellSize` divides `gl_FragCoord`, so it is **device** pixels; a 5×5 bitfield at 9px is 1.8px per glyph pixel. Raised 8–11 → 16–20. Worst Solid pair `nnDist` 12.1 → 17.9; distinct tone levels up almost everywhere. |
+| `completionPulseDither` could never pulse | Set `motionMode` but never `ditherSyncMode`, so it resolved to the same mode as the preset above it — byte-identical to the **static** Dot Matrix on all four engines. Now span 62.8, peak 20.3, **rest 0.0**. |
+| `revealDensity` a no-op at rest | `floor(level * reveal + 0.5)` on an integer level is the identity at playhead 1. Moved to the continuous tone before quantisation: span **106.5**, largest of any animated ASCII preset. |
+| `characterCycle` flashed the whole form dark | Every cell walked the ramp in lockstep, so all cells hit the blank glyph together. Per-cell hash phase: sd **12.699 → 2.349**, max **43.7 → 15.8**, mean unchanged. |
+| `revealDither` was a duplicate at rest | bayer4 @ scale 3 = `bayerClassic` exactly; cross-rail Δ **0.000** on two engines. Now a `diamond` screen: Δ 26.94 / 8.68. |
+| Two presets translated an ordered matrix | Impossible to do smoothly — adjacent bayer cells hold maximally different thresholds, so translation re-rolls rather than moves. `ditherCrawl` → `dotScreen`, `diagonalMatrixDrift` → `hatch` (+ speeds). Frozen frames 94.6% → 0%. |
+| Every dither rail preset inherited its exposure | All ten now declare `ditherExposure` / `ditherContrast` / `ditherThreshold`. |
+| `binarySkin` recommended Rod | ASCII structurally cannot render on Rod: a limb is ~25 device px and a legible cell is mid-teens. |
+
+`verify-gates.mjs` **ALL GATES PASS**, 0 console errors, before and after.
+`assert-screen-layers.mjs` **ALL ASSERTIONS PASS** (1 warning). Typecheck clean
+in this area. **Not committed.**
+
+### Three harness bugs that produced *passing* evidence
+
+Worth more than some of the fixes, because each one made bad frames look fine.
+
+1. **Ink defined absolutely** ("darker than 232"). Soft Gel renders at ~230
+   against ~247 paper, so the detector reported *no ink* on a frame that plainly
+   contains a stroke. Now paper-relative, paper measured as the modal stage
+   luminance.
+2. **Framing once per run.** Later crops drifted off the form; a strip of blank
+   paper scored `nnDist 0.00` and `meanDelta 0.02` — indistinguishable from "the
+   rail collapsed" and from "this effect broke". I nearly chased the second one.
+3. **A flat field satisfies "there is ink here".** A crop that landed on a UI
+   panel gave a full run of flat-grey rectangles and 112 assertion failures that
+   had nothing to do with the presets. The guard now requires three things: ink
+   present, paper actually paper-white, and the crop **not flat**.
+
+Plus one metric that was simply missing: a slow effect and a dead one are
+identical in a frame-to-frame delta (Threshold Sweep: mean Δ 1.41, span 32.7).
+`spanDelta` now measures total travel alongside it.
+
+### Still weak
+
+- **Texture on a glossy dark material is invisible.** Rod's texture rail measures
+  `dOff` **1.0–4.1** across all twelve presets against the repo's own stated
+  perceptual floor of 2, with mean `nnDist` 2.7 — thirteen contact-sheet cells,
+  one silver tube, thirteen times. This is the *same fault* explainer 01 records
+  as fixed; bidirectional albedo plus a roughness swing still loses to a
+  near-mirror clearcoat on top. Next lever is the clearcoat layer itself. Left as
+  a WARN in the assert rather than silently tolerated.
+- **The tone window is a compromise across four materials by construction**,
+  because it is positioned in absolute display luminance while the material is
+  chosen elsewhere. Proven in both directions: too wide flattens, and an
+  overshoot to `0.34..0.02` sent three Extrude presets entirely to paper. The fix
+  is auto-exposure against a measured per-material reference; deliberately not
+  smuggled in, because it changes what the dial *means* and ten Layer Stack /
+  Fusion presets hold hand-tuned absolute values (0.18 on ceramic, 0.9 on ink).
+- **Terminal Flicker never travels** (span 7.76, smallest in the family). Its hit
+  rate is a fixed 14% of cells and the cell-size fix cut the cell count ~4×.
+  Left alone rather than guessed at.
+- **A citation I had not verified was written into a code comment during this
+  pass** and had to be removed. The research strand had not returned yet and I
+  wrote its expected conclusion. Every number in the code comments now traces to
+  a frame in `docs/verification/` or to arithmetic shown inline.
+- Structure-aware glyph selection (choose among `/ \ | _` by local gradient
+  angle, not by tone) is the most promising unexplored direction for ASCII on
+  forms too narrow to model tonally. Not built.
+
+---
+
+## CHECKPOINT — `RIM_IN_THE_ROUND_PASS` (Inflate rim / Extrude topology / draft taper)
+
+The three items explainer 16 left measured but not done. Docs: explainer
+[17](docs/explainers/17-the-rim-in-the-round.md), research
+[extrude-solid-quality.md](docs/research/extrude-solid-quality.md) §8 update + new §9.
+Frames: `docs/verification/gloss-rim/{rim_after,rim_after2}` (+ `rim_after/crops/`),
+`docs/verification/draft-taper/wired/`, `docs/verification/geometry/rim_final/`.
+
+### The finding: one number, three different causes
+
+`mixed max ~90` meant a missing bevel in Solid, a taper shoulder in Inflate, and
+overlapping end caps in Extrude. A fix that transferred would have missed.
+
+| | |
+| --- | --- |
+| **Inflate's rim** was diagnosed as "marching cubes meeting its dome caps". `fusion` defaults to **`loft`** — there is no marching cubes on that path. The real cause: `inflateInkWidthProfile`'s `sin(πx/2)^0.8` has **unbounded slope at the tip** (exp < 1 is the ported "capsule read" decision), so the first ring step turned the wall 86°, and the hemisphere cap was built at the *tip* radius — a nub welded to a near-right-angle flare. Fixed by making rings the **envelope of the balls** (canal surface: circle at `−r·r′·T`, radius `r√(1−r′²)`), which makes the end cap the terminal ball's own tangent patch. `|r′| < 1` comes from pruning contained balls — a theorem, not a clamp. Measured: crossing `mixed max 89.96 → 17.22` with **0** edges over 30 in any bucket; circle `85.26 → 34.85`; tick `89.31 → 33.78`. |
+| **`square/extrude`'s 153 non-manifold edges** were a closed loop built with two round end caps sweeping opposite half-discs about the same point. Closed loops now build as loops (wrap-around, no caps; nothing snapped). **153 → 0**, and the fourth corner now exists as a corner. |
+| **8–12 boundary edges on every Extrude mesh** were T-junctions, arithmetically six per cap: the cap's z-face fan used a new vertex that lands exactly on the midpoint of the strip's own chord. Fan from the chord's END instead — a half-disc is convex. **→ 0 on all fixtures**, and now *gated* on Extrude, not just printed. |
+| **`applyDraftTaper` is wired** as `ExtrudeParams.sideWall` (`straight` default, dial beside Bevel), about the pool centre threaded from the FULL strokes so it does not drift during draw-in. |
+
+### Instrument corrections (worth more than one of the fixes)
+
+- **`probeDihedral` scored a zero-area triangle as EXACTLY 90°** — the same value a
+  die-cut rim scores — because `{x:0,y:0,z:0}` is truthy and the guard never fired.
+  Now counted, excluded, and asserted at zero. It happened not to be firing, which
+  is how we know Inflate's 90s were real.
+- **`cap is flat` had been FAILing on all 4 modes × every fixture since the bevel
+  landed.** Its 5° threshold predates the bevel; the `cap` bucket is `|n.z| > 0.9`,
+  so the shallowest bevel ring lands in it carrying ~15°/step. Restated at 45.
+- **The census is now calibrated before it is believed** — pointed at `bevelEnabled:
+  false` (a hard 90° by construction) and refusing to report unless it reads >80.
+  Reads **90.00 off / 30.00 on**.
+- **Rim assertions are two-sided per shape AND mode**: `square/{extrude,solid,
+  inflate}` and `crossing/solid` must KEEP their corners (max > 60); `rod` is
+  excluded because a tube carries a corner as a bead, which `assert-joint-beading`
+  owns.
+- **`probeDihedral` now reports `worst`** (top 6 edges per bucket with midpoint,
+  both normals, both faces as indices AND positions). Inflate's rim had to be
+  diagnosed by inference before this, and the inference was wrong.
+- **`assert-joint-beading --holdsteady`**: `--compare` asserts a fix LANDED, so on
+  two already-fixed labels it reports "spurious beads did not fall" three times —
+  a clean result that reads like a broken one.
+- **`assert-draft-taper.mjs`** exists because the naive and correct taper wirings
+  agree on every number the build reports. Proved able to fail: rewired to the
+  verbatim `applyDraftTaper`, 3 of 4 assertions fire.
+
+### Verification
+
+- Geometry net vs `bevel_after`: **Rod byte-identical on all 8, Solid byte-identical
+  on all 8.** Extrude 0…−4%, Inflate −1…−38% (tick, mostly cap).
+- `verify-gates.mjs` **ALL GATES PASS**, 0 console errors.
+  `assert-mode-rims.mjs` **ALL PASS** (calibrated). `assert-draft-taper.mjs`
+  **ALL PASS**. `assert-joint-beading --holdsteady=predfix,rimfinal` **PASS**.
+- Typecheck **51 errors = the 51-error baseline**, all pre-existing.
+- The frames are the verdict: `gloss-rim/rim_after/crops/inflate_tip_{BEFORE,AFTER}.png`
+  (hard chisel point with a shoulder crease → smooth rolled dome, taper intact) and
+  `extrude_seam_{BEFORE,AFTER}.png` (overlapping-cap blob → clean mitre).
+- **Not committed.**
+
+### Still weak / not built
+
+- **`square/inflate` still reads `mixed max 89.6` at its four drawn corners.** The
+  union of balls IS smooth there, but expressing the elbow needs two tangency
+  circles per ball plus a band clipped against the two cylinders on the inside —
+  re-topologising, which a loft cannot do. It is what the implicit path is for.
+- **A seam fed by a stub was found only by eye.** Closing the square left a small
+  inverted flap at the inner corner: `processStroke` pins endpoints, leaving a
+  1.87 px remainder, and a 90° mitre offsets ~16 px. Every number was clean
+  (manifold, closed, low counts) and a fold reads as a SMALL crease under
+  `min(acos d, acos −d)`. Fixed by giving the seam the spacing every other join
+  has. **The census cannot see folds** — that gap is still open.
+- **Desk Doodles' `detectJointPositions` carries the same inverted predicate,
+  verbatim.** Their 63 beads were spurious too. Porting their sparse-anchor
+  detection would bead smooth curls. The corrected dense predicate is blind to a
+  *gentle* real corner (60° over three steps = 20°/step). The principled
+  replacement is curvature radius vs tube radius, which the adaptive sampler
+  already computes — a derivation, not a port. **Left for Sebs to decide.**
+
+---
+
+## CHECKPOINT — `HERO_BEAT_THE_TURN_LANDS`
+
+> 🔨 **⚠ SUPERSEDED THE SAME DAY — 2026-07-31 evening. Every item this checkpoint
+> lists as OPEN is CLOSED, and one of them was never a defect.** Corrected in
+> place below rather than rewritten (§0.7); each correction states what the text
+> used to say. The reconciliation, with the commands and their output, is the
+> checkpoint at the TOP of this file and `docs/hero-beat-storyboard.md` §11.7–11.8.
+> **Do not act on this checkpoint's "OPEN" list.** Also stale here: *"THREE
+> INSTRUMENT BUGS"* — the tally is **eight**.
+
+**Status: the beat has a MOMENT where it had none. Two defects open, both named below.**
+
+> 🔨 **The status line above is out of date: ZERO defects open. `max cx step` is
+> 1.00 px, the wash row PASSES on the dark core, K4 and K7 are BUILT, and the
+> twos exposure is 6/6. The beat's one wrong number is now the DRAW BEAT, which
+> is a timing call and not a defect — see the top checkpoint.**
+
+### The gates were fixed first, and they are now one implementation
+
+`scripts/verify/lib/hero-moment.mjs` holds the corrected §8 criteria and is called by
+BOTH the shipped gate (`assert-hero-transition.mjs`) and the storyboard tool
+(`docs/storyboard/tools/assert-moment.mjs`). That is the point: the tool's four synthetic
+negative controls only prove the shipped gate sound if they run the shipped gate's code.
+All three §10.4 amendments landed — axis-split registration, sliver-not-blank, net-extent
+stillness. `--gates=prior` reproduces the old 7/7 verbatim (0.00px, span 11.0, step 1.2).
+
+### The turn, ported from `compose.ORIGINAL-FLIP.mjs`
+
+`assert-hero-turn.mjs` — 8/8 hold, 8/8 correctly FAIL on the `mode:"prior"` control:
+breakdown **87.2%** (original 86.9% solved / 89.7% measured), 2 frozen dwell frames,
+14px sliver, depth 1.0 AT the edge so the sliver is real thickness, width law identical
+to the original's to 3e-15, max yaw exactly 90° so the mark never shows its mirrored back.
+
+Mesh yaw is `angle <= 90 ? angle : 180 - angle`. The original scales two front-facing
+images and swaps at the midpoint, so its "180°" is a figure of speech; a real mesh yawed
+through 180° reads right-to-left for the whole second half.
+
+### Measured on the real capture (`docs/verification/hero-transition/turn3/`)
+
+- **MOMENT — PASS.** extent falls to 24px = 3.7% of settled 648, held 6 capture frames
+  (= the authored 2/30s), centre drift 0.00px inside the moment.
+- **SLIVER not blank — PASS.** floor 24px / 3928 ink px, recovers to >= 90%.
+- **spacing 87.6% — WIND-UP.** The current beat measured 42%, the crossfade dead band.
+- **stillness — PASS**, net 0.00 on centre/w/h/ink. `cameraPark:"parked"` folds az 30->38
+  into the rise; the drift had no basis in 114s of reference film.
+- rise rebalanced ease-out dominant (`assert-hero-rise.mjs` 6/6, 3/3 spacing claims fail
+  on the symmetric control): velocity peak 50% -> **16.7%**, decay 5.0x, gather -10.0%
+  and overshoot +10.0% both preserved, so B4's "do not touch it" holds.
+
+### THREE INSTRUMENT BUGS FOUND BY RUNNING, not reading
+
+> 🔨 **⚠ THE TALLY IS NOW EIGHT (2026-07-31 evening).** This heading used to be
+> the complete count. The five since: the vacuous yaw claim, the overshoot window
+> reading a flat 10.0° on both arms, `hold.png` landing on the flat return, the
+> blind area-symmetric reversal control, and gate 2 sampling a phase that is flat
+> by design. All eight are recorded together in `docs/hero-beat-storyboard.md`
+> §11.8 — the pattern only reads at eight. The three below are §11.8's items 1–3.
+
+1. The capture's emerge window was derived by NAME (`anticipation` follows `emerge`).
+   The phase reorder inverted that, so the window ran BACKWARDS — `4.04s..3.76s`, 72
+   frames over a negative span, all written with correct-looking filenames. Now derived
+   by POSITION, and it throws rather than capture a backwards window.
+2. A "blank frame" at the moment was CLIPPING, not the beat: an expanded timeline dock
+   squeezed the stage 1120x702 -> 1120x350. Capture viewport is now 1440x1440.
+3. The gate's parked window was a fixed `+0.55s` sized for the old 0.54s emerge. Against
+   the 0.92s turn it cut mid-recovery, so `settled` (median of the last 5 widths) came
+   from the DWELL — 24px. Every threshold was measured against the frames being judged;
+   it reported "no moment" on a beat whose moment is in the frames.
+
+### OPEN — do not report this beat as done
+
+> 🔨 **⚠ ALL THREE BULLETS BELOW ARE CLOSED (2026-07-31 evening). Left standing,
+> unedited, per §0.7.** In order:
+>
+> 1. **Registration — CLOSED at `max cx step 1.00 px`** (`assert-hero-transition.mjs
+>    --label=reg-affine`, **9/9**). It was the PERSPECTIVE PROJECTION, proven two
+>    ways: intervention (perspective **46.50 px** vs affine **1.00 px**, and the
+>    perspective arm still passes 8 of 9 — the one failure is registration alone),
+>    and a prediction `Δcx = (W/2)·k·sinθ` fitted to **WIDTHS ONLY**, **rms
+>    3.31 px against a 30.10 px null**. Fixed with an **orthographic hero stage**
+>    (`Viewport3DProps.projection: "affine"`, defaulted for any viewport driven by
+>    `flatten`).
+>    ⚠ **And the bullet below carries a claim that was already falsified**: *"the
+>    word's ink centre at rest is 502"* is wrong. At rest the mark's bbox centre
+>    is **559.5** — the optical axis, to the digit — with its ink centroid 4.3 px
+>    off. **502 is not a rest quantity at all**; it is where the bbox centre swings
+>    to mid-turn, twice, once on each face. `hero-beat-storyboard.md` §11.4.1
+>    measured that in the morning and this checkpoint was never corrected.
+> 2. **The wash — NOT A DEFECT. It is a RAKE.** The mean cannot tell a wash from a
+>    rake; on the dark core the peak reads **12.6 against a settled 12.6, to the
+>    digit**, and only the lit end rises (87.0 vs 35.0) — which a cross-dissolve
+>    cannot do, because fading toward paper lifts the darkest pixel first. Two
+>    measurement faults fixed: the statistic (mean → dark core, §3 K3's own
+>    method) and the reference (one endpoint → the brighter endpoint). Falsifiable
+>    both ways: `--gates=prior` still reproduces this bullet's `37.2 vs 23.4`
+>    verbatim, and `--mutate=wash` drives the new row red. **It was NOT the window
+>    artifact this bullet guesses at.**
+> 3. **K7, K4's hold and the twos quantisation are all BUILT.**
+>    `assert-hero-return.mjs` **13/13** (`prior` kills 12 of 13, `identical` kills
+>    exactly the one row it should), `assert-hero-hold.mjs` **8/8**,
+>    `assert-hero-twos.mjs` **6/6**. The beat is twelve phases and closes its round
+>    trip; §7's four turns are four and its two moments are two.
+
+- **REGISTRATION FAILS: max cx step 24.50px (needs < 2).** The mark slides right as it
+  turns. The sliver lands at cx 559.5 = 1120/2, the optical axis, while the word's ink
+  centre at rest is 502 — so the rotation axis is right and the word's ink is not on it.
+  A measured-pivot fix produced BYTE-IDENTICAL numbers, which falsifies the
+  wrong-pivot hypothesis rather than confirming it. The original never had this problem
+  because it was a 2D compositor scaling two images about one point — "registration was
+  solved by construction". Under a perspective camera a real yaw of an off-axis object
+  moves its projected centre. Not yet fixed, not yet fully diagnosed.
+- **`ink never washes past the settled value` FAILS** (peak mean 37.2 vs settled 23.4).
+  May be the same window artifact as (3) — the emerge window's last frame sits on the
+  tilt boundary. Unverified either way.
+- K7 (the changed-flat return), K4's hold and the twos quantisation are NOT built.
+
+tsc = 51, the exact pre-existing baseline. No commits.
+
+### Controller note — `jointBreak` wired, 2026-08-01
+`app/desk-doodles/page.tsx`'s flatten memo now passes `sample.jointBreak` (+ dep).
+The break table and its render consumer had both landed in other lanes' files;
+this one line was the connection, and without it the live beat rendered K7
+identical to K1 and the round trip said nothing. `assert-hero-k7-news` 8/8,
+`assert-hero-flatstate` 13/13, `assert-hero-dials` and `assert-hero-windup`
+green, tsc 51.
+
+**OPEN, and NOT caused by the lane that reported it:** a fresh capture reads
+`max cy step 2.00 px` (needs < 2). A control capture with the K7 rendering
+DISABLED reads the identical 2.00 on 72/72 byte-identical emerge frames, so it
+is not the break. It arrived with the beat's retiming (9.83 -> 12.37 s) moving
+the 72 sample positions. `cx` is 1.00 and fine.

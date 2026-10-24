@@ -1,0 +1,49 @@
+SOURCE_URL: https://pmc.ncbi.nlm.nih.gov/articles/PMC9485126/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Computerized handwriting evaluation showing on-paper time ratio (OPTR) as percentage of total writing time across grade levels.
+NUMBERS: Grade 1 OPTR: 30.29%±6.90; Grade 3 OPTR: 38.00%±5.59; Grade 1 pause ratio (PPTR): 2.34±1.77 seconds/stroke; Grade 3 PPTR: 0.41±0.56 seconds/stroke; Number of velocity peaks (NVP) Grade 1: 3.08±1.08; Grade 3: 1.93±1.15
+
+# Handwriting Assessment and Fluency Measurements
+
+Computerized handwriting evaluation system measuring temporal and kinematic variables in children's writing development.
+
+## On-Paper Time Ratio (OPTR)
+
+The OPTR measures the temporal proportion of pen-tip contacts on paper as a percentage of total writing time.
+
+**Typical Development Progression:**
+- Grade 1: 30.29% ± 6.90
+- Grade 3: 38.00% ± 5.59
+
+**Interpretation**: Children improved from grade 1 to grade 3, indicating increased writing fluency as on-paper time percentage increases.
+
+## Pen Pause Time Ratio (PPTR)
+
+Measured in seconds per stroke, reflecting movement smoothness and dysfluency.
+
+**Typical Development Progression:**
+- Grade 1: 2.34 ± 1.77 seconds per stroke
+- Grade 3: 0.41 ± 0.56 seconds per stroke
+
+**Interpretation**: Dramatic reduction in pausing time indicates improved motor control and fluency.
+
+## Number of Velocity Peaks per Stroke (NVP)
+
+Measures movement automation—fewer peaks indicate better motor control.
+
+**Typical Development Progression:**
+- Grade 1: 3.08 ± 1.08 peaks per stroke
+- Grade 3: 1.93 ± 1.15 peaks per stroke
+
+**Ideal Value**: The ideal NVP per stroke is 1 per vertical or horizontal stroke
+**Interpretation**: Decrease in velocity peaks indicates transition from closed feedback control to open-loop control
+
+## Clinical Application
+
+Children with handwriting difficulties showed significantly elevated values across all three measures:
+- Much lower OPTR (less efficient use of on-paper time)
+- Higher PPTR (excessive pausing)
+- Higher NVP (more velocity inversions indicating poor motor control)
+
+This system effectively identifies motor control deficits that distinguish dysgraphic from typically developing children.

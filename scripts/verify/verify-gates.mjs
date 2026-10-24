@@ -8,13 +8,117 @@
 //      style layer active.
 //   3. TAXONOMY GATE — texture presets must never write dither/ascii state.
 //
-// Usage: node scripts/verify/verify-gates.mjs
-import { chromium } from "playwright-core"
+// Usage: node scripts/verify/verify-gates.mjs [--mutate=rebuild|skip]
+//
+// ⚠ THREE DEFECTS FIXED HERE 2026-08-01 (lane 23, the re-verification). All three
+// were in the HARNESS, not the subject — §17.4: fix the check, never the surface.
+//
+//   a. `headless: false`. This file was the last browser harness in the repo that
+//      took over the screen. Every other one runs headless with `--use-angle=metal`,
+//      which is measured equivalent (2026-07-30: 121 rAF ticks headless vs 120
+//      headed, identical renderer string) and is Sebs's standing preference. A
+//      gate that cannot be run while he is at the machine is a gate that does not
+//      get run.
+//   b. `viewport: 1400x900`. Below the 1440x1440 floor. The stage is squeezed by
+//      the timeline dock at small heights — one gate in this repo passed on a
+//      third-scale subject for its entire life. Nothing here reads pixels, so the
+//      old number was not producing a wrong answer, but a harness that disagrees
+//      with the floor is one copy-paste away from one that does.
+//   c. ⚠ THE SKIP WAS SCORED AS A PASS. `if (after < before)` printed `SKIP` and
+//      then fell through WITHOUT touching `pass`, so a run in which all four
+//      geometry-rebuild gates skipped still printed `ALL GATES PASS` and exited 0.
+//      That is precisely the "green row that cannot fail" class this repo keeps
+//      re-learning, and it sat on the one gate `docs/DISPATCH.md` §3 singles out:
+//      *"verify-gates.mjs must be ALL PASS — a SKIP is not a pass."* A skip now
+//      exits 3, the same code `_run-clean.mjs` uses for a contaminated run, which
+//      means the same thing: DISCARD and repeat, never adjust.
+//
+// `--mutate=` is the negative control required by §17.4. `rebuild` forces a real
+// geometry rebuild inside the style sweep (gate 1 must go red); `skip` forces the
+// buildCount-decrease branch (the run must exit 3, not 0). A gate that cannot be
+// made to fail has not been proved to work.
+//
+// ⚠ A FOURTH DEFECT, 2026-08-03, AND IT IS THE SAME SHAPE AS (c): ONE INVENTORY
+// HAD STOPPED BEING MAINTAINED. `TEXTURES` was written out by hand as
+//
+//     ["grain", "noise", "scanlines", "bands", "contour"]
+//
+// while `TextureMode` (lib/style-system.ts:80-94) and the panel's own
+// `TEXTURE_MODES` pills (:1136) both carry FOURTEEN. Nine texture modes —
+// procedural, crosshatch, dots, woodgrain, cellular, brushed, craquelure,
+// ripple — had never once been through gate 1, which is the gate that proves
+// changing style state does not rebuild geometry. The tell is that the three
+// sibling lists were complete: DITHERS 10 of 10, ASCII 10 of 10, MODES 4 of 4.
+// A list that is right on three axes and stale on the fourth is not an
+// oversight anybody can see by reading; it is only visible by counting.
+//
+// So it is not written out any more. `TEXTURES` is READ OUT OF
+// `lib/style-system.ts` — the panel's own `TEXTURE_MODES` array, minus "none",
+// because "none" is not a texture to sweep — and cross-checked against the
+// `TextureMode` union in the same file, so a mode added to the type without a
+// pill (or the reverse) fails the gate instead of quietly halving its coverage.
+// The same is done for DITHERS and ASCII: they are correct today, and the
+// reason they are correct is that somebody remembered, which is the thing this
+// change removes the need for.
+import { chromium } from "./lib/browser.mjs"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import { dirname, join } from "node:path"
+import { LAB_URL } from "./lib/dev-server.mjs"
+
+const MUTATE = (process.argv.find((a) => a.startsWith("--mutate=")) || "").split("=")[1] || ""
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
+const STYLE_SRC = readFileSync(join(ROOT, "lib", "style-system.ts"), "utf8")
+
+/** The ids of a `PresetShell<...>[]` list, in the order the panel shows them. */
+const presetIds = (name) => {
+  const m = STYLE_SRC.match(new RegExp(`export const ${name}: PresetShell<[^>]+>\\[\\] = \\[([\\s\\S]*?)\\n\\]`))
+  if (!m) throw new Error(`verify-gates: could not read ${name} out of lib/style-system.ts`)
+  return [...m[1].matchAll(/\{\s*id:\s*"([^"]+)"/g)].map((x) => x[1])
+}
+/* The members of a string-union type declaration.
+ *
+ * Scanned line by line and stopped at the first line that is not a `| "member"`
+ * continuation, rather than at the first blank line: `DitherType` is followed
+ * IMMEDIATELY by `DitherDirection` with no blank between them, and a blank-line
+ * terminator silently swallowed `horizontal | vertical | diagonal` into the
+ * dither list. A parser that over-reads is the same defect as a hand-written
+ * list that under-reads — it just fails in the other direction. */
+const unionMembers = (name) => {
+  const lines = STYLE_SRC.split("\n")
+  const at = lines.findIndex((l) => l.startsWith(`export type ${name} =`))
+  if (at < 0) throw new Error(`verify-gates: could not read type ${name} out of lib/style-system.ts`)
+  const out = []
+  for (let i = at; i < lines.length; i++) {
+    const t = lines[i].trim()
+    if (i > at && !t.startsWith("|")) break
+    const m = t.match(/\|\s*"([^"]+)"/)
+    if (m) out.push(m[1])
+  }
+  return out
+}
 
 const MODES = ["rod", "extrude", "solid", "inflate"]
-const TEXTURES = ["grain", "noise", "scanlines", "bands", "contour"]
-const DITHERS = ["bayer4", "bayer8", "blueNoise", "halftone", "lines", "dotScreen", "hatch", "crosshatch", "diamond", "newsprint"]
-const ASCII = ["classic", "blocks", "minimal", "dots", "custom", "braille", "boxes", "arrows", "punct", "numeric"]
+/* PARKED — what these three used to be, written out by hand. Only TEXTURES was
+ * wrong, and only on one axis, which is exactly why it survived:
+ *   TEXTURES = ["grain","noise","scanlines","bands","contour"]                  (5 of 14)
+ *   DITHERS  = ["bayer4",…,"newsprint"]                                        (10 of 10)
+ *   ASCII    = ["classic",…,"numeric"]                                         (10 of 10) */
+const INVENTORIES = [
+  { name: "texture", list: "TEXTURE_MODES", type: "TextureMode" },
+  { name: "dither", list: "DITHER_PRESETS", type: "DitherType" },
+  { name: "ascii", list: "ASCII_PRESETS", type: "AsciiCharset" },
+].map((i) => {
+  const ids = presetIds(i.list)
+  const union = unionMembers(i.type)
+  return { ...i, ids, union, missing: union.filter((u) => !ids.includes(u)) }
+})
+const inv = (n) => INVENTORIES.find((i) => i.name === n)
+const TEXTURES = inv("texture").ids.filter((t) => t !== "none")
+const DITHERS = inv("dither").ids.filter((d) => d !== "none")
+const ASCII = inv("ascii").ids.filter((a) => a !== "none")
+const STYLE_CHANGES_PER_MODE = (TEXTURES.length + DITHERS.length + ASCII.length) * 2
 
 function testStroke() {
   const pts = []
@@ -26,22 +130,53 @@ function testStroke() {
 }
 
 async function main() {
-  const browser = await chromium.launch({ channel: "chrome", headless: false, args: ["--use-angle=metal"] })
-  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
+  const browser = await chromium.launch()
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1440 } })
   const errors = []
   page.on("console", (m) => {
     if (m.type() === "error" && !m.text().includes("404")) errors.push(m.text().slice(0, 200))
   })
-  await page.goto("http://localhost:3000", { waitUntil: "networkidle" })
+  // ONE KNOB, ONE NAME: `FS_PORT`, resolved in `lib/dev-server.mjs`. This line
+  // used to read `LAB_URL ?? http://localhost:${FS_PORT || 3000}` — two names
+  // for one thing, added by two lanes that did not know about each other.
+  await page.goto(LAB_URL, { waitUntil: "networkidle" })
   await page.waitForFunction(() => window.__styleHarness && window.__geomDebug, null, { timeout: 30000 })
   await page.evaluate((poly) => window.__styleHarness.injectStrokes(poly, { msPerPoint: 12 }), testStroke())
   await page.waitForTimeout(1500)
 
   let pass = true
+  const skipped = []
   const say = (ok, label, detail) => {
     if (!ok) pass = false
     console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? " — " + detail : ""}`)
   }
+  /** A SKIP is not a PASS. It is an un-run row, and it ends the run. */
+  const skip = (label, detail) => {
+    skipped.push(label)
+    console.log(`SKIP  ${label}${detail ? " — " + detail : ""}`)
+  }
+
+  // ---- 0. THE INVENTORIES THIS GATE SWEEPS ARE THE ONES THE APP HAS -----
+  //
+  // Gate 1's answer is only as wide as its lists, and one of those lists was
+  // 5 of 14 for however long it took nobody to count. These rows put the width
+  // itself under assertion: the sweep set is the panel's own preset array, and
+  // it has to account for every member of the corresponding union type. A mode
+  // added to `TextureMode` without a pill, or a pill added without a type
+  // member, fails here rather than halving gate 1 in silence.
+  for (const i of INVENTORIES) {
+    console.log(`  ${i.name.padEnd(8)} ${i.list} has ${i.ids.length} — ${i.ids.join(", ")}`)
+    say(
+      i.missing.length === 0,
+      `inventory / every ${i.type} member is reachable as a ${i.list} pill`,
+      `${i.union.length} in the type, ${i.ids.length} pills${i.missing.length ? `, MISSING: ${i.missing.join(", ")}` : ""}`,
+    )
+  }
+  say(
+    TEXTURES.length >= 13,
+    "inventory / the texture sweep is the whole set, not the five it used to be",
+    `${TEXTURES.length} textures swept (the parked hand-written list had 5)`,
+  )
 
   // ---- 1. geometry rebuild gate ----------------------------------------
   for (const mode of MODES) {
@@ -100,18 +235,38 @@ async function main() {
         await page.waitForTimeout(80)
       }
     }
+    // NEGATIVE CONTROL (--mutate=rebuild): a mode switch DOES rebuild geometry,
+    // so slipping one in here must drive gate 1 red. If it does not, gate 1 is
+    // not reading the counter it claims to read.
+    if (MUTATE === "rebuild") {
+      await page.evaluate((m) => window.__styleHarness.setMode(m), mode === "rod" ? "solid" : "rod")
+      await page.waitForTimeout(800)
+    }
     await page.waitForTimeout(300)
-    const after = await page.evaluate(() => window.__geomDebug.buildCount())
+    let after = await page.evaluate(() => window.__geomDebug.buildCount())
+    // NEGATIVE CONTROL (--mutate=skip): force the decrease branch and prove the
+    // run now ends non-zero instead of printing ALL GATES PASS.
+    if (MUTATE === "skip") after = before - 1
     // A DECREASE is impossible from rebuilding — the counter only increments.
     // It means the module re-initialised, i.e. the dev server hot-reloaded
-    // mid-run (common when an agent is editing files concurrently). Report that
-    // honestly instead of failing the gate for a regression that didn't happen.
+    // mid-run (common when an agent is editing files concurrently).
+    //
+    // ⚠ THIS USED TO FALL THROUGH AS A PASS. It does not any more: an un-run row
+    // is not a green row. `_run-clean.mjs` already detects the sibling save that
+    // causes this, and the correct response to both is identical — discard the
+    // run and repeat it.
     if (after < before) {
-      console.log(
-        `SKIP  geometry-rebuild gate / ${mode} — page reloaded mid-test (buildCount ${before} → ${after}); re-run when the tree is stable`,
-      )
+      skip(`geometry-rebuild gate / ${mode}`, `page reloaded mid-test (buildCount ${before} → ${after}); re-run when the tree is stable`)
     } else {
-      say(after === before, `geometry-rebuild gate / ${mode}`, `buildCount ${before} → ${after} (30 style changes)`)
+      // The count is COMPUTED. It read "(30 style changes)" while the loops
+      // performed 5x2 + 10x2 + 10x2 = 50, and a label that disagrees with its
+      // own loops is how a shrunken sweep goes unnoticed.
+      say(
+        after === before,
+        `geometry-rebuild gate / ${mode}`,
+        `buildCount ${before} → ${after} (${STYLE_CHANGES_PER_MODE} style changes: ` +
+          `${TEXTURES.length} textures + ${DITHERS.length} dithers + ${ASCII.length} charsets, x2 each)`,
+      )
     }
   }
 
@@ -197,6 +352,12 @@ async function main() {
   say(errors.length === 0, "console errors", `${errors.length}${errors.length ? ": " + errors[0] : ""}`)
 
   await browser.close()
+  if (skipped.length) {
+    console.log(`\n${skipped.length} GATE(S) SKIPPED — A SKIP IS NOT A PASS. Un-run rows:`)
+    for (const s of skipped) console.log(`  · ${s}`)
+    console.log("DISCARD this run and repeat it once the tree is quiet (exit 3, same meaning as _run-clean).")
+    process.exit(3)
+  }
   console.log(pass ? "\nALL GATES PASS" : "\nGATE FAILURES PRESENT")
   process.exit(pass ? 0 : 1)
 }

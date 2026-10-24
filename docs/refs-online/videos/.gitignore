@@ -1,0 +1,4 @@
+# Reference footage. Reproducible from the URLs in ../README.md — never committed.
+*.mp4
+*.webm
+*.mkv

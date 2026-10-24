@@ -1,0 +1,36 @@
+SOURCE_URL: https://www.archchinese.com/chinese_stroke_order_rules.html
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: 12 explicit stroke order rules for Chinese characters: top-to-bottom, left-to-right, horizontal-before-vertical, and structural enclosure rules.
+
+# Chinese Character Stroke Order Rules
+
+The fundamental rules governing stroke order in Chinese character writing:
+
+## 12 Rules
+
+1. **Top to Bottom** – Write upper strokes before lower ones (e.g., 二)
+
+2. **Left to Right** – Write left components before right ones (e.g., 一)
+
+3. **Horizontal Before Vertical** – Horizontal strokes precede vertical strokes when crossing (e.g., 十)
+
+4. **Right-to-Left Diagonals First** – Diagonal strokes angling right-to-left come before left-to-right diagonals (e.g., 人)
+
+5. **Outside Before Inside** – Enclosing strokes are written before interior content (e.g., 同)
+
+6. **Inside Before Outside** – Interior strokes precede outer enclosing strokes in certain structures (e.g., 凶)
+
+7. **Inside Before Bottom Enclosing** – "Interior content is completed before the bottom closing stroke" (e.g., 因)
+
+8. **Center Verticals Before Outside Wings** – Central strokes precede surrounding dots (e.g., 小)
+
+9. **Cutting Strokes Last** – Vertical strokes cutting through a character are written after the horizontal strokes they cross (e.g., 中)
+
+10. **Left Vertical Before Enclosing** – Leftmost vertical strokes precede enclosing strokes (e.g., 日)
+
+11. **Top or Upper-Left Dots First** – Dots positioned at the top or upper-left are written earliest (e.g., 衣)
+
+12. **Inside or Upper-Right Dots Last** – Dots in interior or upper-right positions are written last (e.g., 我)
+
+These rules were naturally developed over centuries to promote writing efficiency and structural balance.

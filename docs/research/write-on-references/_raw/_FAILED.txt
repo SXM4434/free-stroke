@@ -1,0 +1,15 @@
+# Failed Fetches — 2026-08-28
+
+https://helpx.adobe.com/after-effects/using/shape-attributes-paint-operations-path.html
+- TIMEOUT: 60000ms exceeded. Adobe helpx server did not respond.
+
+https://blog.motionisland.com/after-effects-trim-paths/
+- FETCH ERROR: Content truncated by server.
+
+https://help.lottiefiles.com/hc/en-us/articles/33031716511897--15-Trim-path-in-Lottie-Creator
+- HTTP 404: Page not found.
+
+https://outland.art/machine-generated-handwriting/
+- HTTP 503: Service unavailable.
+https://www.nature.com/articles/s41598-022-19913-y | Paywall redirect (303) to IdP auth; paywalled
+https://www.zaner-bloser.com/sites/default/files/image/samples/HW_K_NA_PM_WM.pdf | PDF binary not readable via text fetch (would need PDF parser)

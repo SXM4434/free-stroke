@@ -1,0 +1,39 @@
+You are an INDEPENDENT check on work another AI just did in this repo. The value you add
+is that you did not write any of it, so you have different blind spots. Do not try to
+agree with me.
+
+WHAT CHANGED, and it is all I want you to look at. Ten instruments, all written or heavily
+changed on 2026-09-05 to 2026-09-18:
+  scripts/verify/lib/paired.mjs            new shared paired-control helper (makePaired)
+  scripts/verify/lib/browser.mjs           reapOrphans(): kills browsers whose owner died
+  scripts/verify/run-battery.mjs           extraArgsFor(path, {prodPort})
+  scripts/verify/run-browser-battery.mjs   guarded per-gate log write; --prod-port forwarding
+  scripts/verify/assert-drawin-timing.mjs  playUntilHead(): samples on the page's own playhead
+  scripts/verify/verify-timing-origin.mjs  --only now clears only its own arm's files
+  scripts/verify/assert-timing-frames.mjs  delay window, one interval early and two late
+  scripts/verify/verify-register-light.mjs parks the transport in "orbit" before capturing
+  scripts/verify/assert-no-em-dashes.mjs   new gate: no em dash in user-facing copy
+  scripts/verify/assert-export-window.mjs  the reorder row now compares an order-only pair
+
+CLOSED - do not re-open these, they are settled and you cannot see the reasons:
+  - "No em dashes in user-facing copy" is the owner's stated rule, not a style choice to debate.
+  - The numeric bars in these gates are NOT to be relaxed or retuned. Report a bar that cannot
+    fail; do not propose a new number for one that can.
+  - Which gates are red today, and why, is known and filed. Do not diagnose product defects.
+  - Taste, visual design, and anything about how the app should look.
+  - The repo's location on disk.
+
+THE ONE QUESTION, answer only this:
+  For each of those ten files, would it FAIL if the thing it grades were broken? Name
+  specifically the ones that would NOT. I am hunting for assertions that are vacuously
+  true, controls that cannot fire, comparisons where a NaN or an undefined silently
+  passes a threshold, a try/catch that turns a crash into a pass, a filter or prefix match
+  that catches more or less than it claims, and known-bad arms sitting behind a flag
+  nothing passes. For each finding, name the MUTATION you would make to show it staying
+  green, as precisely as a one-line diff.
+
+Then give me the DENOMINATOR: how many assertions or guards did you examine, out of how
+many exist in those files.
+
+Then, SEPARATELY, say what you could not check and why. Not knowing is not the same as
+being fine.

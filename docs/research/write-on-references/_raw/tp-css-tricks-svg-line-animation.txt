@@ -1,0 +1,44 @@
+SOURCE_URL: https://css-tricks.com/svg-line-animation-works/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: CSS-Tricks deep dive on how SVG line animation works using stroke-dasharray and dashoffset
+
+# SVG Line Animation: The Stroke-Dasharray Technique
+
+## Core Concept
+
+SVG line animation creates the illusion of a path drawing itself by manipulating two CSS properties: stroke-dasharray and stroke-dashoffset.
+
+## How It Works: Step-by-Step
+
+1. Start with a stroked SVG path - The shape must have a visible stroke applied.
+
+2. Create dashes using stroke-dasharray - As explained in the article, "stroke-dasharray: 20" produces dashes of 20px length. By increasing this value substantially, you can create one continuous "dash" longer than the entire path.
+
+3. Use stroke-dashoffset to position the dash - By setting stroke-dashoffset: 1000 (matching the dasharray value), you offset the dash completely, making the path invisible initially.
+
+4. Animate the offset back to zero - The animation progressively reduces the offset, revealing the stroke: "animation: dash 5s linear forwards" combined with a keyframe that transitions "stroke-dashoffset: 1000" to "stroke-dashoffset: 0".
+
+## Example Code
+
+```css
+.path {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: dash 5s linear forwards;
+}
+
+@keyframes dash {
+  to { stroke-dashoffset: 0; }
+}
+```
+
+## Key Limitation
+
+Determining the exact path length is challenging. JavaScript's getTotalLength() method solves this, but CSS-only solutions require estimating the value—making precise animations difficult without calculation.
+
+---
+
+## Why This Matters for Handwriting Animation
+
+This is the foundational technique for SVG stroke animation, but the article itself does not address why the visual result looks artificial or "fake" for handwriting. That gap is critical: the technique is mechanically sound but visually insufficient.

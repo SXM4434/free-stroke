@@ -1,0 +1,37 @@
+SOURCE_URL: https://jakearchibald.com/2013/animated-line-drawing-svg/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Jake Archibald's canonical 2013 article on SVG animated line drawing using stroke-dasharray and dashoffset technique
+
+# Animated Line Drawing in SVG
+
+Jake Archibald explains how to create self-drawing SVG diagrams using a clever animation trick. Rather than animating the path data itself, he leverages two SVG properties: stroke-dasharray and stroke-dashoffset.
+
+## Core Technique
+
+The method works by setting the dash array to match the total line length, then animating the offset from the full length to zero. As Archibald describes it: "Drag both sliders up to their maximum, then slowly decrease the dashoffset. Voilà, you just made the line draw!"
+
+## Implementation Details
+
+The process involves:
+
+1. Calculating line length using getTotalLength() from the DOM
+2. Setting initial styles where the dasharray and offset both equal the path length
+3. Forcing a layout calculation via getBoundingClientRect() to ensure browsers recognize the starting state
+4. Applying CSS transitions to animate the dashoffset to zero
+
+Archibald notes an important gotcha: "if you modify a style twice in the same JavaScript execution without forcing a synchronous layout inbetween, only the last one counts."
+
+## Limitations and Alternatives
+
+CSS animations provide the simplest approach but lack Internet Explorer support. The author recommends requestAnimationFrame for broader compatibility, while discouraging SMIL animations due to poor performance in Chrome and Safari.
+
+## Creative Extensions
+
+The technique extends beyond simple line drawing. Designers can create loading spinners and complex animations by using multi-value dash patterns for sophisticated visual effects.
+
+---
+
+## Key Finding on Why This Reads as Fake
+
+This canonical article on the technique itself does not address why the resulting animations look artificial. It describes the mechanism thoroughly, but the limitations are invisible to the pure technique. The "fakeness" emerges only when the stroke characteristics and ink qualities of real handwriting are absent.

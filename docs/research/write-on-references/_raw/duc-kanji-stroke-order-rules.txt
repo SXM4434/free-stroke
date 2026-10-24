@@ -1,0 +1,36 @@
+SOURCE_URL: https://www.tofugu.com/japanese/kanji-stroke-order/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Kanji stroke order principles: top-to-bottom, left-to-right, horizontal-before-vertical, center-before-sides, enclosure and diagonal rules.
+
+# Kanji Stroke Order Rules & Principles
+
+Core principles for writing kanji characters:
+
+## Directional Rules
+
+**Top to Bottom, Left to Right**: "When you write horizontal strokes, they go left to right. When you write vertical strokes, you go top to bottom."
+
+**Horizontal Priority**: Most kanji should begin with horizontal strokes before vertical ones, starting from the upper-left area where initial strokes typically originate.
+
+## Structural Principles
+
+**Center Vertical Before Symmetrical Sides**: When a vertical line has symmetrical characters flanking it, write the central vertical stroke before the outer diagonal or curved strokes (though horizontal lines still come first).
+
+**Box Formation**: Boxes use only three strokes—vertical first, then a horizontal stroke that continues as a right angle to the bottom, followed by a closing horizontal stroke from the left.
+
+**Enclosure Priority**: When kanji contain enclosed spaces (like 回 or 国), complete three sides of the enclosure before filling the interior, then finish with the final enclosure stroke.
+
+**Bottom Enclosure Last**: Bottom-side decorative elements come after all content above them.
+
+## Diagonal & Special Cases
+
+**Diagonal Ordering**: Right-to-left diagonals precede left-to-right ones, with upper-left diagonals written before lower ones.
+
+**Through-Strokes Last**: Strokes crossing multiple parallel lines are saved for final placement.
+
+**Dots & Dashes**: Minor marks typically come last, except when positioned at the very top.
+
+## Complex Kanji
+
+**Sectional Writing**: Complicated kanji are written component-by-component, progressing from top-left to bottom-right, applying rules fresh to each section.

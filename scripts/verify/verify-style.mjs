@@ -12,10 +12,18 @@
 // Usage:
 //   node scripts/verify/verify-style.mjs --pass=texture-v1
 //   node scripts/verify/verify-style.mjs --pass=texture-v1 --only=motion
-import { chromium } from "playwright-core"
-import { writeFileSync, mkdirSync, rmSync, readdirSync } from "node:fs"
+import { chromium } from "./lib/browser.mjs"
+import { writeFileSync, mkdirSync, rmSync, readdirSync, existsSync, cpSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
+// ONE KNOB, ONE NAME — this tool used to hardcode the default dev-server address,
+// so a lane running it on its own port captured the CANONICAL tree and filed those
+// frames under its own label. DISPATCH §3; explainers 27 §1 and 28 §3.2 (importing
+// the resolver rather than copying the port line is what keeps the legacy-name throw).
+// This comment deliberately spells no URL: a comment is source text too, and the
+// surveys that measure this debt are greps (explainer 28 §4.1).
+import { LAB_URL } from "./lib/dev-server.mjs"
+import { stageEvidence } from "./lib/evidence-swap.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, "..", "..")
@@ -26,7 +34,17 @@ const arg = (k, d) => {
 }
 const PASS = arg("pass", "unnamed")
 const ONLY = arg("only", "all") // all | still | motion
-const OUT = join(ROOT, "docs", "verification", PASS)
+/* STAGED, AND SEEDED, because this one clears PARTIALLY on purpose. `--pass` has
+ * no fixed value, so this wipe can reach ANY subtree of docs/verification — the
+ * widest reach in the class, `--pass=hero-beat-film` alone is 15302 tracked files.
+ * Staging it plainly would break the rule the comment below states: a
+ * `--only=motion` run must not destroy the stills. So the stored set is copied
+ * into staging first and the same clearing rule is applied there, which keeps the
+ * rule exactly and still means a run that dies partway replaces nothing.
+ * lib/evidence-swap.mjs. */
+const FINAL = join(ROOT, "docs", "verification", PASS)
+const EV = stageEvidence(FINAL)
+const OUT = EV.dir
 const MOTION_FRAMES = parseInt(process.env.MOTION_FRAMES || "24", 10)
 
 const MODES = ["rod", "extrude", "solid", "inflate"]
@@ -54,24 +72,24 @@ async function main() {
   // Only clear the family we're about to re-capture — a `--only=motion` run
   // must never destroy the stills (or vice versa); this directory is the
   // documented evidence for the pass.
-  mkdirSync(OUT, { recursive: true })
+  EV.open()
+  if (existsSync(FINAL)) cpSync(FINAL, OUT, { recursive: true })
   const prefix = ONLY === "still" ? "still_" : ONLY === "motion" ? "motion_" : null
   if (prefix === null) {
-    rmSync(OUT, { recursive: true, force: true })
-    mkdirSync(OUT, { recursive: true })
+    for (const f of readdirSync(OUT)) rmSync(join(OUT, f), { recursive: true, force: true })
   } else {
     for (const f of readdirSync(OUT).filter((f) => f.startsWith(prefix))) {
       rmSync(join(OUT, f), { force: true })
     }
   }
 
-  const browser = await chromium.launch({ channel: "chrome", headless: false, args: ["--use-angle=metal"] })
+  const browser = await chromium.launch({ headed: true })
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } })
   const errors = []
   page.on("console", (m) => {
     if (m.type() === "error" && !m.text().includes("404")) errors.push(m.text().slice(0, 160))
   })
-  await page.goto("http://localhost:3000", { waitUntil: "networkidle" })
+  await page.goto(LAB_URL, { waitUntil: "networkidle" })
   await page.waitForFunction(
     () => window.__styleHarness && window.__captureHarness && window.__revealHarness,
     null,
@@ -216,7 +234,9 @@ async function main() {
   console.log(`[verify] console errors: ${errors.length}`, errors.slice(0, 5))
 
   await browser.close()
-  console.log(`[verify] wrote frames to ${OUT}`)
+  /* THE SWAP. Staging holds the kept families plus the ones just re-captured. */
+  EV.commit()
+  console.log(`[verify] wrote frames to ${FINAL}`)
 }
 
 main().catch((e) => {

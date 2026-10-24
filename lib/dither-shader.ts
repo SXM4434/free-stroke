@@ -221,7 +221,7 @@ float fsDitherThreshold(vec2 co, float type) {
  * so every layer honours the stack the same way.
  */
 export const DITHER_APPLY_GLSL = /* glsl */ `
-vec3 fsApplyDither(vec3 fsCol) {
+vec3 fsApplyDither(vec3 fsCol, float fsNdV) {
   if (uFsDitType < 0.5) return fsCol;
 
   // Cell-based screens (halftone onward) need room for a MARK to grow inside
@@ -229,46 +229,50 @@ vec3 fsApplyDither(vec3 fsCol) {
   // thresholds work per pixel, so they stay at the raw scale.
   float fsCellF = uFsDitType > 3.5 ? 2.4 : 1.0;
 
-  // Coordinate for the threshold tile.
+  // Coordinate for the threshold tile. OBJECT lock projects onto the plane
+  // facing the dominant object-space normal, so an extrude side wall gets a
+  // grid and not the xy tile smeared into bars along the missing axis.
+  vec3 fsAN = abs(vFsObjNrm);
+  vec2 fsOP = fsAN.z >= max(fsAN.x, fsAN.y) ? vFsObjPos.xy
+    : (fsAN.x >= fsAN.y ? vFsObjPos.yz : vFsObjPos.xz);
   vec2 fsDCo = uFsDitLockScreen > 0.5
     ? gl_FragCoord.xy / max(uFsDitScale * fsCellF, 0.05)
-    : vFsObjPos.xy * (26.0 / max(uFsDitScale * fsCellF, 0.05));
+    : fsOP * (26.0 / max(uFsDitScale * fsCellF, 0.05));
   fsDCo += vec2(uFsDitDirX, uFsDitDirY) * uFsDitTime;
 
   float fsThr = fsDitherThreshold(fsDCo, uFsDitType);
 
   // Perceived brightness (Rec. 709 luma weights: the eye is far more
-  // sensitive to green than to blue).
-  float fsRawLum = dot(fsCol, vec3(0.2126, 0.7152, 0.0722));
+  // sensitive to green than to blue), then the FORM term — see fsFormTone in
+  // style-shader.ts. Without the facing ratio a dot screen on the Solid engine
+  // is mathematically forced to be uniform: p25 = p50 = p75 = 0.538 there, so
+  // half the ink is one tone and every dot comes out the same size.
+  float fsRawLum = fsFormTone(dot(fsCol, vec3(0.2126, 0.7152, 0.0722)), fsNdV);
 
-  // EXPOSURE. The subject never spans the full 0..1 range (the live default
-  // material sits at ~0.30..0.62; ink materials sit near black), so raw
-  // luminance parks the whole form on one side of every threshold and the
-  // pattern is UNIFORM — no tonal modelling, which is exactly the mush the
-  // pre-craft version produced. Dividing by a reference rescales the
-  // subject's real range across the ramp; the dial picks the reference.
-  // mix(1.9, .16): the default (0.5) lands the live default material's body
-  // tone (~0.54) at mid-ramp, so the pattern is present across the WHOLE
-  // form — at ref 0.8 the body sat 84% open and the stroke read pale/weak.
-  float fsRef = mix(1.9, 0.16, clamp(uFsDitExposure, 0.0, 1.0));
-  float fsLum = clamp(fsRawLum / max(fsRef, 0.02), 0.0, 1.0);
-
-  // Contrast about mid-grey, then the user's threshold bias.
-  fsLum = clamp((fsLum - 0.5) * (0.5 + uFsDitContrast * 3.0) + 0.5, 0.0, 1.0);
-
-  // PATTERN FLOOR. On a glossy-black subject (rod / extrude materials sit at
-  // raw ~0.04) the contrast expansion clamps tone to 0 and NO pattern
-  // renders at any dial setting — the layer silently no-ops. The floor is
-  // anchored to raw luminance through a soft gamma, so an ink-dark subject
-  // still keeps ~10-15% of its threshold structure (sparse paper pores /
-  // checker sparkle), while the default material's shadows (raw ~0.34) are
-  // already above it and see no change.
-  fsLum = max(fsLum, pow(clamp(fsRawLum / max(fsRef, 0.02), 0.0, 1.0), 0.4) * 0.42);
+  // TONE WINDOW (shared with ASCII). Replaces a divide-by-reference plus a
+  // contrast expansion, which could only scale the subject's tonal plateau,
+  // never spread it — and whose top half rendered nothing at all
+  // (docs/verification/style-craft/sheets/sweep_ditherExposure.png: exposure
+  // 0.75 and 1.0 both produced a flat, patternless shape).
+  float fsLum = fsToneWindow(fsRawLum, uFsDitExposure, uFsDitContrast);
   fsLum += (uFsDitThreshold - 0.5);
+
+  // SHADING DITHER, object lock only (LOOKS 2026-09-25, research-2026-09-25/
+  // looks/PLAN.md section 6). Screen lock keeps the classic graphic screen
+  // byte for byte: every preset that ships screen-locked renders as before.
+  // Object lock means the pattern belongs to the form, so it lives in the
+  // shading: the threshold offset is masked by 1 - facing (the lit front face
+  // posterizes clean, the shadowed flank carries the pattern), the ink end is
+  // a shadow of the body at 0.4 and not near-black, and a solid rim holds the
+  // silhouette where the surface turns away (fsNdV near 0).
+  float fsShade = uFsDitLockScreen > 0.5 ? 0.0 : 1.0;
+  // 1 - facing, shaped: at the probe's 3/4 view the extrude cap sits at
+  // fsNdV ~0.58 and must read clean, so the pattern is gone by 0.6.
+  float fsPat = mix(1.0, 1.0 - smoothstep(0.3, 0.6, fsNdV), fsShade);
 
   // THE DITHER STEP: offset by the centred threshold, then quantize.
   float fsLevels = max(uFsDitLevels - 1.0, 1.0);
-  float fsQ = floor(clamp(fsLum + (fsThr - 0.5), 0.0, 1.0) * fsLevels + 0.5) / fsLevels;
+  float fsQ = floor(clamp(fsLum + (fsThr - 0.5) * fsPat, 0.0, 1.0) * fsLevels + 0.5) / fsLevels;
 
   // Rebuild as an INK / PAPER duotone in the surface's own hue. The old
   // tint * q rebuild sent lit cells to luminance 1.0 — on the paper-white
@@ -277,7 +281,12 @@ vec3 fsApplyDither(vec3 fsCol) {
   // light end at 0.9 keeps every mark attached to the form.
   float fsSrcLum = dot(fsCol, vec3(0.2126, 0.7152, 0.0722));
   vec3 fsTint = fsSrcLum > 0.001 ? fsCol / max(fsSrcLum, 0.001) : vec3(1.0);
-  vec3 fsDithered = clamp(mix(fsTint * 0.045, fsTint * 0.9, fsQ), 0.0, 1.0);
+  float fsInk = mix(0.045, 0.4, fsShade);
+  vec3 fsDithered = clamp(mix(fsTint * fsInk, fsTint * 0.9, fsQ), 0.0, 1.0);
+  // solid rim: the silhouette band is one flat dark shade of the body, no
+  // pattern in it. Half the ink end (0.2): at 0.4 the rim came out LIGHTER
+  // than the clean body's own dark silhouette (edge ratio 0.60 on Signal Ink).
+  fsDithered = mix(fsDithered, fsTint * fsInk * 0.5, fsShade * (1.0 - smoothstep(0.1, 0.22, fsNdV)));
 
   return fsStackBlend(fsCol, fsDithered, uFsDitBlend, uFsDitIntensity);
 }

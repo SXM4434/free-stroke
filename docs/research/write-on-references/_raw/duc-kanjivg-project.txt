@@ -1,0 +1,41 @@
+SOURCE_URL: https://kanjivg.tagaini.net/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: KanjiVG project provides SVG files encoding kanji stroke shape, direction, and order with radicals and stroke type classification.
+
+# KanjiVG Project Overview
+
+The Kanji Vector Graphics (KanjiVG) project provides the most codified CJK stroke order data in machine-readable format.
+
+## Purpose
+KanjiVG provides vector graphics and related information about kanji characters used in Japanese. The project delivers SVG files showing character stroke shapes, directions, and stroke order, plus component details like radicals and stroke types.
+
+## Data Format
+The project uses SVG (Scalable Vector Graphics) as its primary format. According to the documentation, "For each character, it provides an SVG file which gives the shape and direction of its strokes, as well as the stroke order."
+
+## Stroke Order Encoding
+The SVG files are enriched with structural information about characters, including:
+- Stroke direction and shape
+- Stroke order sequence (numbered in SVG attributes)
+- Radical identification
+- Stroke type classification
+
+## File Format Example
+SVG files use attributes like `kvg:number` to encode the stroke order as an integer, allowing direct programmatic access to the sequence. Path elements are numbered with `kvg:04e00-s1`, `kvg:04e00-s2`, etc., explicitly marking each stroke's position in the sequence.
+
+## Documentation & Resources
+The project maintains comprehensive documentation covering:
+- SVG file format specifications
+- Stroke type categories (㇐, ㇑, ㇒, etc.)
+- Character variants
+- Radical information
+- Known issues and glossary
+
+## Access & Community
+- **Code Repository**: Available on GitHub at https://github.com/KanjiVG/kanjivg
+- **Viewer**: Interactive browser-based viewer provided
+- **Communication**: Google Groups mailing list for questions and issue reporting
+- **License**: Creative Commons Attribution-Share Alike 3.0
+
+## Applications
+The project notes that "It is very easy to create stroke order diagrams, animations, kanji dictionaries, and much more" using KanjiVG data, with numerous documented projects utilizing the resource for educational and research purposes.

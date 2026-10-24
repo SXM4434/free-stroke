@@ -1,13 +1,6 @@
 "use client"
 
-import {
-  useRef,
-  useState,
-  useCallback,
-  useEffect,
-  type Dispatch,
-  type SetStateAction,
-} from "react"
+import { useRef, useState, useCallback, useEffect } from "react"
 import {
   processStroke,
   processAllStrokes,
@@ -22,20 +15,54 @@ export interface ExportSettings {
   preserveCorners: boolean
 }
 
+/**
+ * ⚠ THIS COMPONENT NO LONGER OWNS ANY DOCUMENT STATE, AND THAT IS THE POINT.
+ *
+ * It used to own the stroke setters, the three processing settings, undo, clear
+ * and the ⌘Z binding. Every one of those is part of the DOCUMENT, and a
+ * document that lives inside the canvas is a document only the canvas can undo
+ * — which is exactly what shipped: ⌘Z popped a stroke and reached nothing else
+ * in the app, and ⇧⌘Z was explicitly swallowed by the same handler
+ * (`if (… || e.shiftKey) return`), so there was no redo anywhere.
+ *
+ * All of it moved up to `app/page.tsx`, which is the only place that can see
+ * the whole document. What is left here is what a canvas is actually for:
+ * capturing a gesture and drawing it.
+ */
 interface DrawingCanvasProps {
   rawStrokes: Stroke[]
-  setRawStrokes: Dispatch<SetStateAction<Stroke[]>>
   processedStrokes: ProcessedStroke[]
-  setProcessedStrokes: Dispatch<SetStateAction<ProcessedStroke[]>>
-  settingsRef: React.MutableRefObject<ExportSettings>
+  /** Stroke-processing settings, owned upstream so they are undoable + saved. */
+  settings: ExportSettings
+  onSettingsChange: (patch: Partial<ExportSettings>, opts?: { coalesceKey?: string }) => void
+  /** A finished gesture. One undo step. */
+  onStrokeComplete: (raw: Stroke, processed: ProcessedStroke) => void
+  /** The debounced re-derive after a setting change — NOT its own undo step. */
+  onReprocessed: (processed: ProcessedStroke[]) => void
+  onUndo: () => boolean
+  onRedo: () => boolean
+  onClear: () => void
+  canUndo: boolean
+  canRedo: boolean
+  /** What the next ⌘Z would take back, for the button's tooltip. */
+  undoLabel: string | null
+  redoLabel: string | null
 }
 
 export default function DrawingCanvas({
   rawStrokes,
-  setRawStrokes,
   processedStrokes,
-  setProcessedStrokes,
-  settingsRef,
+  settings,
+  onSettingsChange,
+  onStrokeComplete,
+  onReprocessed,
+  onUndo,
+  onRedo,
+  onClear,
+  canUndo,
+  canRedo,
+  undoLabel,
+  redoLabel,
 }: DrawingCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -44,11 +71,18 @@ export default function DrawingCanvas({
   // Mirrors isDrawingRef for the empty-state hint only (the hot pointer path
   // keeps using the ref so drawing never waits on a React render).
   const [isDrawing, setIsDrawing] = useState(false)
+  /* The processing readout is for whoever is debugging, not for a visitor.
+   * Development builds only, and only when `?debug` is in the URL, the same
+   * rule as the viewport's own debug panel (asked for, never on by default).
+   * Read in an effect so the server render and the first client render agree. */
+  const [debugReadout, setDebugReadout] = useState(false)
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return
+    setDebugReadout(new URLSearchParams(window.location.search).has("debug"))
+  }, [])
 
-  /* ---- processing controls ---- */
-  const [smoothing, setSmoothing] = useState(true)
-  const [spacing, setSpacing] = useState(4)
-  const [preserveCorners, setPreserveCorners] = useState(true)
+  /* ---- processing controls (owned by app/page.tsx) ---- */
+  const { spacing, smoothing, preserveCorners } = settings
 
   /* ---- refs for current settings (so callbacks read fresh values) ---- */
   const smoothingRef = useRef(smoothing)
@@ -58,16 +92,13 @@ export default function DrawingCanvas({
 
   useEffect(() => {
     smoothingRef.current = smoothing
-    settingsRef.current = { ...settingsRef.current, smoothing }
-  }, [smoothing, settingsRef])
+  }, [smoothing])
   useEffect(() => {
     spacingRef.current = spacing
-    settingsRef.current = { ...settingsRef.current, spacing }
-  }, [spacing, settingsRef])
+  }, [spacing])
   useEffect(() => {
     preserveCornersRef.current = preserveCorners
-    settingsRef.current = { ...settingsRef.current, preserveCorners }
-  }, [preserveCorners, settingsRef])
+  }, [preserveCorners])
   useEffect(() => {
     rawStrokesRef.current = rawStrokes
   }, [rawStrokes])
@@ -82,14 +113,20 @@ export default function DrawingCanvas({
     lastTrigger: "none" as string,
   })
   const [timingDisplay, setTimingDisplay] = useState(
-    "draw: 0ms | procOne: 0ms | procAll: 0ms | callsAll: 0 | lastTrigger: none"
+    "draw: 0ms | procOne: 0ms ×0 | procAll: 0ms ×0 | lastTrigger: none"
   )
   const processingRef = useRef(false)
 
+  /* `callsOne` was counted on every finished stroke and NEVER READ — the
+   * readout showed `procOne` (the duration) beside `callsAll` (the other
+   * path's count), so the one number that says how many single-stroke passes
+   * had run was written and thrown away. Shown rather than deleted: it is the
+   * denominator for the `procOne` beside it, and a duration with no call count
+   * cannot be read as a rate. */
   const updateTimingDisplay = useCallback(() => {
     const t = timingRef.current
     setTimingDisplay(
-      `draw: ${t.drawMs.toFixed(1)}ms | procOne: ${t.procOneMs.toFixed(1)}ms | procAll: ${t.procAllMs.toFixed(1)}ms | callsAll: ${t.callsAll} | lastTrigger: ${t.lastTrigger}`
+      `draw: ${t.drawMs.toFixed(1)}ms | procOne: ${t.procOneMs.toFixed(1)}ms ×${t.callsOne} | procAll: ${t.procAllMs.toFixed(1)}ms ×${t.callsAll} | lastTrigger: ${t.lastTrigger}`
     )
   }, [])
 
@@ -105,24 +142,41 @@ export default function DrawingCanvas({
       if (processingRef.current) return
       processingRef.current = true
 
-      const t0 = performance.now()
-      const result = processAllStrokes(
-        rawStrokesRef.current,
-        spacingRef.current,
-        smoothingRef.current,
-        preserveCornersRef.current
-      )
-      const t1 = performance.now()
+      /* THE RE-ENTRANCY FLAG NEEDS A `finally`, AND IT DID NOT HAVE ONE.
+       *
+       * `processAllStrokes` runs on user-supplied geometry and this file has no
+       * idea what it can throw on — the edge sweep pushes a 5,000-point
+       * scribble, a NaN coordinate and a closed loop through it. Without the
+       * `finally`, one throw anywhere in here leaves `processingRef.current`
+       * stuck at `true` FOREVER, and the guard on the line above then swallows
+       * every later reprocess silently: the Smoothing / Corners / Spacing
+       * controls keep moving, keep recording undo steps, and stop changing the
+       * mark. That is the worst shape of failure in this app — controls that
+       * respond and do nothing — and it would outlive the error that caused it.
+       *
+       * The throw is deliberately NOT swallowed: it still propagates, so the
+       * fault is visible. Only the flag is guaranteed. */
+      try {
+        const t0 = performance.now()
+        const result = processAllStrokes(
+          rawStrokesRef.current,
+          spacingRef.current,
+          smoothingRef.current,
+          preserveCornersRef.current
+        )
+        const t1 = performance.now()
 
-      timingRef.current.procAllMs = t1 - t0
-      timingRef.current.callsAll += 1
-      timingRef.current.lastTrigger = trigger
+        timingRef.current.procAllMs = t1 - t0
+        timingRef.current.callsAll += 1
+        timingRef.current.lastTrigger = trigger
 
-      setProcessedStrokes(result)
-      processingRef.current = false
-      updateTimingDisplay()
+        onReprocessed(result)
+        updateTimingDisplay()
+      } finally {
+        processingRef.current = false
+      }
     },
-    [setProcessedStrokes, updateTimingDisplay]
+    [onReprocessed, updateTimingDisplay]
   )
 
   const debouncedReprocess = useCallback(
@@ -325,45 +379,55 @@ export default function DrawingCanvas({
       timingRef.current.callsOne += 1
       timingRef.current.lastTrigger = "pointerUp"
 
-      setRawStrokes((prev) => [...prev, newRaw])
-      setProcessedStrokes((prev) => [...prev, newProcessed])
+      onStrokeComplete(newRaw, newProcessed)
       updateTimingDisplay()
     }
     currentPointsRef.current = []
-  }, [setRawStrokes, setProcessedStrokes, updateTimingDisplay])
+  }, [onStrokeComplete, updateTimingDisplay])
 
-  /* ---- undo / clear ---- */
-  const handleUndo = useCallback(() => {
-    setRawStrokes((prev) => prev.slice(0, -1))
-    setProcessedStrokes((prev) => prev.slice(0, -1))
-  }, [setRawStrokes, setProcessedStrokes])
+  /**
+   * A CANCELLED GESTURE IS NOT A STROKE — and `pointercancel` was not handled
+   * at all.
+   *
+   * MEASURED (scripts/verify/_probe-lane28-edges.mjs): a real captured gesture
+   * — mouse down on the canvas, ten moves, `setPointerCapture` succeeded — then
+   * a `pointercancel` for the same pointerId. Raw point count before 0, after
+   * the cancel 0: nothing closed the gesture. The eleven points from the
+   * CANCELLED drag were still sitting in `currentPointsRef`, and the next
+   * `pointerup` committed them as a finished stroke.
+   *
+   * `pointercancel` means the browser has taken the gesture over — a scroll
+   * took it, a system edge-swipe took it, the pen left range, the touch became
+   * a two-finger gesture. The user did not finish a mark; they had one taken
+   * away. Committing it writes a stroke they did not draw, and it goes onto the
+   * undo stack as "Draw stroke", so the ⌘Z label lies about it too.
+   *
+   * It also has to CLOSE the gesture, not just drop the points: `handlePointer-
+   * Down` returns early while `isDrawingRef` is true (multi-touch protection),
+   * so a cancel that left the flag set would make the canvas ignore every later
+   * gesture until something else happened to close it.
+   *
+   * Ordering with `onPointerLeave` is safe in both directions. A real cancel
+   * releases pointer capture and the browser then fires pointerout/pointerleave
+   * at the capture target; by then `isDrawingRef` is false and
+   * `handlePointerUp`'s own guard makes that a no-op.
+   */
+  const handlePointerCancel = useCallback(() => {
+    if (!isDrawingRef.current) return
+    isDrawingRef.current = false
+    setIsDrawing(false)
+    currentPointsRef.current = []
+    // Repaint without the in-flight polyline, or the abandoned line stays on
+    // the bitmap until some other redraw happens to clear it.
+    scheduleRedraw()
+  }, [scheduleRedraw])
 
-  const handleClear = useCallback(() => {
-    setRawStrokes([])
-    setProcessedStrokes([])
-  }, [setRawStrokes, setProcessedStrokes])
-
-  /* ⌘Z / Ctrl+Z removes the last stroke. Keyboard-initiated, so it is
-   * deliberately NOT animated (emil: never animate keyboard actions). */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return
-      if (e.key.toLowerCase() !== "z") return
-      const t = e.target as HTMLElement | null
-      if (
-        t &&
-        (t.tagName === "INPUT" ||
-          t.tagName === "SELECT" ||
-          t.tagName === "TEXTAREA" ||
-          t.isContentEditable)
-      )
-        return
-      e.preventDefault()
-      handleUndo()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [handleUndo])
+  /* THE ⌘Z LISTENER USED TO LIVE HERE AND IT HAS MOVED TO `app/page.tsx`.
+   *
+   * It could only ever have reached the stroke list from in here, and the thing
+   * a user means by ⌘Z is the document. The version that lived here also bailed
+   * on `e.shiftKey` before doing anything at all, which is the whole reason
+   * ⇧⌘Z did nothing anywhere in the product. */
 
   /* ---- debug counts ---- */
   const rawTotalPoints = rawStrokes.reduce(
@@ -383,12 +447,13 @@ export default function DrawingCanvas({
     <div ref={containerRef} className="relative h-full w-full">
       <canvas
         ref={canvasRef}
-        aria-label="Drawing canvas — draw a stroke here to create 3D geometry"
+        aria-label="Drawing canvas. Draw a stroke here to create 3D geometry."
         className="h-full w-full cursor-crosshair touch-none text-foreground"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
       />
 
       {/* Empty-state affordance: invites the first gesture, then gets out of
@@ -421,8 +486,8 @@ export default function DrawingCanvas({
         </span>
       </div>
 
-      {/* Debug info (development-only telemetry; hidden in demo/production build) */}
-      {process.env.NODE_ENV === "development" && (
+      {/* Debug info: development build AND ?debug in the URL. */}
+      {debugReadout && (
         <div className="pointer-events-none absolute left-3 top-3 select-none font-mono text-[10px] text-muted-foreground/60">
           <div>
             raw {rawTotalPoints} pts | processed {processedTotalPoints} pts |
@@ -437,21 +502,39 @@ export default function DrawingCanvas({
       {/* Controls: two grouped cards — actions on the left, stroke-processing
           options on the right. No dead gaps inside a group. */}
       <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-3">
+        {/* THE ACTIONS.
+            Undo and Redo are a pair and are grouped as one; Clear is separated
+            by a rule because it is the destructive one and it sat flush against
+            Undo, which is how a mis-click destroys a drawing.
+
+            Each button NAMES what it will do — "Undo Delete fusion" rather than
+            "Undo last stroke", which was the old tooltip and was a lie the
+            moment ⌘Z reached anything but a stroke. */}
         <div className="flex items-center gap-1 rounded-xl border border-border bg-background/85 p-1 shadow-sm backdrop-blur-sm">
           <button
             type="button"
-            onClick={handleUndo}
-            disabled={rawStrokes.length === 0}
-            title="Undo last stroke (⌘Z)"
+            onClick={onUndo}
+            disabled={!canUndo}
+            title={canUndo ? `Undo ${undoLabel} (⌘Z)` : "Nothing to undo (⌘Z)"}
             className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
           >
             Undo
           </button>
           <button
             type="button"
-            onClick={handleClear}
+            onClick={onRedo}
+            disabled={!canRedo}
+            title={canRedo ? `Redo ${redoLabel} (⇧⌘Z)` : "Nothing to redo (⇧⌘Z)"}
+            className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Redo
+          </button>
+          <div className="mx-1 h-5 w-px bg-border" />
+          <button
+            type="button"
+            onClick={onClear}
             disabled={rawStrokes.length === 0}
-            title="Clear all strokes"
+            title="Clear all strokes. ⌘Z brings them back."
             className="fs-press rounded-lg px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
           >
             Clear
@@ -461,7 +544,7 @@ export default function DrawingCanvas({
         <div className="flex items-center gap-1 rounded-xl border border-border bg-background/85 p-1 shadow-sm backdrop-blur-sm">
           <button
             type="button"
-            onClick={() => setSmoothing((v) => !v)}
+            onClick={() => onSettingsChange({ smoothing: !smoothing })}
             aria-pressed={smoothing}
             title="Smooth the stroke path"
             className={`fs-press rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
@@ -474,7 +557,7 @@ export default function DrawingCanvas({
           </button>
           <button
             type="button"
-            onClick={() => setPreserveCorners((v) => !v)}
+            onClick={() => onSettingsChange({ preserveCorners: !preserveCorners })}
             disabled={!smoothing}
             aria-pressed={preserveCorners}
             title="Keep sharp corners sharp while smoothing"
@@ -489,7 +572,7 @@ export default function DrawingCanvas({
           <div className="mx-1 h-5 w-px bg-border" />
           <label
             className="flex items-center gap-2 pr-2 text-xs text-muted-foreground"
-            title="Distance between resampled points — smaller keeps more detail"
+            title="Distance between resampled points. Smaller keeps more detail."
           >
             <span className="select-none pl-1 font-medium">Spacing</span>
             <input
@@ -498,7 +581,9 @@ export default function DrawingCanvas({
               max={8}
               step={1}
               value={spacing}
-              onChange={(e) => setSpacing(Number(e.target.value))}
+              onChange={(e) =>
+                onSettingsChange({ spacing: Number(e.target.value) }, { coalesceKey: "canvas:spacing" })
+              }
               onPointerUp={() => commitReprocess("spacing-commit")}
               className="fs-slider w-20"
             />

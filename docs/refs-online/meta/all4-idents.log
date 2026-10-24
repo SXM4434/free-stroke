@@ -1,0 +1,16 @@
+[youtube] Extracting URL: https://www.youtube.com/watch?v=sXnf8vyL00Q
+[youtube] sXnf8vyL00Q: Downloading webpage
+[youtube] sXnf8vyL00Q: Downloading android vr player API JSON
+[youtube] Downloading comment section API JSON
+[youtube] Downloading ~173 comments
+[youtube] Sorting comments by top
+[youtube] Downloading comment API JSON page 1 (0/~173)
+[youtube]     Downloading comment API JSON reply thread 1 (2/~173)
+[youtube]     Downloading comment API JSON reply thread 2 (4/~173)
+[youtube]     Downloading comment API JSON reply thread 3 (14/~173)
+[youtube]     Downloading comment API JSON reply thread 4 (22/~173)
+[youtube]     Downloading comment API JSON reply thread 5 (25/~173)
+[youtube]     Downloading comment API JSON reply thread 6 (29/~173)
+[youtube] Extracted 30 comments
+[info] sXnf8vyL00Q: Downloading 1 format(s): 396+251
+[info] Writing video metadata as JSON to: all4-idents.info.json

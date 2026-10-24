@@ -1,0 +1,4 @@
+#!/bin/sh
+# Merge commits do NOT run pre-commit. Without this hook a `git merge` is the
+# one path that walks straight past the identity check.
+exec "$(dirname "$0")/_identity-guard.sh"

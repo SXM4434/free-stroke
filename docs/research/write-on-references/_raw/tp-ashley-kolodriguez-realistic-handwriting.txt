@@ -1,0 +1,44 @@
+SOURCE_URL: https://ashleykolodziej.com/realistic-svg-handwriting/
+FETCHED: 2026-08-28
+HTTP_OK: yes
+WHAT: Ashley Kolodriguez's analysis of why stroke-dasharray animations look fake and her masking-based solution for authentic handwriting
+
+# Realistic SVG Handwriting
+
+## The Problem with Standard SVG Animation
+
+The typical technique for animating SVG handwriting involves stroke-dasharray manipulation. As Kolodriguez explains, "if you can find the length of a line, and make a dash so large it takes up the entire length of the line, you can animate the length of that dash so it looks like it's being drawn in."
+
+However, this approach fails to capture authentic handwriting characteristics. The author notes that genuine penmanship includes "texture, ink bleed, and variation in width and saturation of the ink depending on how quickly you write." Standard SVG strokes cannot replicate these qualities, resulting in lifeless, obviously artificial letterforms.
+
+Kolodriguez makes this explicit: "No SVG stroke will ever have all these things. And without these things, you get very dead, very not-handwritten looking type."
+
+## The Root Cause of "Fakeness"
+
+The fakeness emerges from what is absent: Uniform, perfectly-rendered SVG strokes have none of the material qualities that make handwriting read as authentic. A hand draws with pressure-sensitive media (pen, brush, pencil) that produces:
+
+- Variable stroke width (pressure-dependent)
+- Ink saturation changes (speed-dependent)
+- Texture and grain
+- Stroke skip and feathering
+- Pressure starts and stops that shape terminals
+
+A vector stroke animated via dasharray has exactly none of these.
+
+## The Solution: Reverse Animation with Image Masking
+
+Rather than animating strokes in, Kolodriguez reversed the concept—animating them *out* to reveal handwritten text hidden beneath. By matching the SVG stroke color to the background image, the stroke functions as a mask that gradually disappears, exposing the authentic handwriting underneath.
+
+This approach offered dual advantages:
+- Faster production
+- Superior visual authenticity, since the original handwriting source remained unaltered
+
+## Technical Refinements
+
+The author addressed layering complexities by creating separate PNG layers for overlapping areas like ligatures and crossbars, ensuring proper visual hierarchy. She also developed a reusable function that controls animation timing based on drawing speed, allowing different effects—from scribbles to diary entries—using identical methodology.
+
+---
+
+## Why This Directly Addresses the "Trim Path Looks Fake" Question
+
+This is the clearest statement in the research: practitioners reject pure SVG animation precisely because it lacks the material qualities that communicate "real handwriting." By reversing the animation (hiding real handwriting rather than drawing a fake one), Kolodriguez solves the problem not by making the animation more clever, but by abandoning the animation of letterforms entirely in favor of revealing authentic ones.

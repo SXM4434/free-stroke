@@ -1,0 +1,935 @@
+# Lane outcomes — written by the hook, not by a controller
+
+Every subagent stop lands here the moment it happens, whether it
+returned, hit a limit, or was killed. **`verdict` is deliberately
+empty** — this file records that a lane stopped and what its last
+line said; whether the work is DONE or NEEDS EYE is a judgement made
+at 1x and belongs in `RUN-QUEUE.md`.
+
+⚠️ Append-only sidecar. It is NOT the ledger — merge from here into
+the queue, and never point a lane at this file to edit.
+
+- **2026-08-25T13:50:18-04:00** · `a6c898ee21e15cdb2` · (no description)
+  - last line: *Landed as `ef55538c` on `v0/sebastianmmdesign-3308-12049aa9`. Not pushed. **`docs/RUN-QUEUE.md`** now exists — 14 rows, seeded from the 8/20 returns and from what I measured on disk today. Every row is tagged `[MEASURED HERE]` or `[LANE CLAIM · UNCHECKED]`, because the 8/20 session died before anyon…*
+- **2026-08-25T15:45:13-04:00** · `a74bcc359a9c543fb` · (no description)
+  - last line: *Corrected and committed as `fdd5cd66`. What I got wrong and why it matters: I read `docs/thinking/2026-08-20.md` as a record of this repo. It isn't. The journal files a session's returns under a project label, and that label doesn't mean the work landed there. Those returns name real files in here, …*
+- **2026-08-28T01:48:38-04:00** · `a6a3ad6a96926630b` · (no description)
+  - last line: *Extension isn't connected, so I'll drive Chrome directly with the repo's own launcher. First, find out what the page actually exposes — the probe timed out on a harness that may not be there.*
+- **2026-08-28T01:49:10-04:00** · `a4da16b319ec025ac` · (no description)
+  - last line: *Extension isn't connected, so I'll drive Chrome directly with the repo's own launcher. First, find out what the page actually exposes — the probe timed out on a harness that may not be there.*
+- **2026-08-28T01:49:42-04:00** · `ac1d548be3a201831` · (no description)
+  - last line: *Both harnesses exist. The probe's timeout was `waitUntil: "networkidle"` in its `goto` — with `domcontentloaded` everything is there in seconds. That is N1's fault (c), now measured twice. Now filming the write-in.*
+- **2026-08-28T01:50:19-04:00** · `a023aae8ace27ffff` · (no description)
+  - last line: *`setProgress` lets me step the write-in deterministically. Capturing it frame by frame on the Desk Doodles engine — the one he calls the benchmark.*
+- **2026-08-28T01:50:55-04:00** · `a62b5b09b57bdd318` · (no description)
+  - last line: *Frame 6 is blank paper. Let me measure ink across all frames numerically before spending looks on blanks.*
+- **2026-08-28T01:51:27-04:00** · `af07d9b15567ee432` · (no description)
+  - last line: *Zero ink in all 25. I'm screenshotting the wrong surface. Using the repo's own capture harness instead, which resolves the canvas by identity — that is exactly what the F9 fix was for.*
+- **2026-08-28T01:51:59-04:00** · `a2453f4d9ef73220a` · (no description)
+  - last line: *Zero ink in all 25. I'm screenshotting the wrong surface. Using the repo's own capture harness instead, which resolves the canvas by identity — that is exactly what the F9 fix was for.*
+- **2026-08-28T01:52:00-04:00** · `a5459dd64f316b9e0` · (no description)
+  - last line: *Zero ink in all 25. I'm screenshotting the wrong surface. Using the repo's own capture harness instead, which resolves the canvas by identity — that is exactly what the F9 fix was for.*
+- **2026-08-28T01:52:14-04:00** · `a1e6fc305d66a092f` · (no description)
+  - last line: *Zero ink in all 25. I'm screenshotting the wrong surface. Using the repo's own capture harness instead, which resolves the canvas by identity — that is exactly what the F9 fix was for.*
+- **2026-08-28T01:52:30-04:00** · `a42b5d31d7ae9c202` · (no description)
+  - last line: *That works — the word is drawing. Looking at it mid-write.*
+- **2026-08-28T01:53:02-04:00** · `aa60e7a772f13bcab` · (no description)
+  - last line: *Now I can see it. Looking at the later frame before I diagnose.*
+- **2026-08-28T01:53:12-04:00** · `aee61e52aee74c14a` · (no description)
+  - last line: *That's the diagnosis. Two different failures, and the second is the bigger one.*
+- **2026-08-28T01:53:29-04:00** · `a7dea907a9e85fee5` · (no description)
+  - last line: ***Found it.** The repo already researched this and wrote the fix down. `docs/research/stroke-width-models.md`, its own opening line: > *"how thick the mark is once it gets there — **which is the part we currently do not model at all**."* And `lib/pen-reveal.ts:623` is `const R = Math.max(1e-6, inkDi…*
+- **2026-08-28T01:53:33-04:00** · `a284948c412c18293` · (no description)
+  - last line: ***Found it.** The repo already researched this and wrote the fix down. `docs/research/stroke-width-models.md`, its own opening line: > *"how thick the mark is once it gets there — **which is the part we currently do not model at all**."* And `lib/pen-reveal.ts:623` is `const R = Math.max(1e-6, inkDi…*
+- **2026-08-28T01:54:07-04:00** · `a1750beb91e7e3003` · (no description)
+  - last line: ***Found it.** The repo already researched this and wrote the fix down. `docs/research/stroke-width-models.md`, its own opening line: > *"how thick the mark is once it gets there — **which is the part we currently do not model at all**."* And `lib/pen-reveal.ts:623` is `const R = Math.max(1e-6, inkDi…*
+- **2026-08-28T01:54:25-04:00** · `a0689df584d8fc65b` · (no description)
+  - last line: ***Found it.** The repo already researched this and wrote the fix down. `docs/research/stroke-width-models.md`, its own opening line: > *"how thick the mark is once it gets there — **which is the part we currently do not model at all**."* And `lib/pen-reveal.ts:623` is `const R = Math.max(1e-6, inkDi…*
+- **2026-08-28T01:54:43-04:00** · `a404dec733ccf5d23` · (no description)
+  - last line: ***Found it.** The repo already researched this and wrote the fix down. `docs/research/stroke-width-models.md`, its own opening line: > *"how thick the mark is once it gets there — **which is the part we currently do not model at all**."* And `lib/pen-reveal.ts:623` is `const R = Math.max(1e-6, inkDi…*
+- **2026-08-28T01:55:00-04:00** · `a03c541f343d1e116` · (no description)
+  - last line: *That is the answer to "we failed for weeks." The research was done, the fix was specified down to the line numbers, and it was never built. From the same doc: > *"The pressure channel is a lie, not a gap."* · *"Every renderer we own is a monoline."* · *"An elliptical nib is not a new primitive — it …*
+- **2026-08-28T01:55:10-04:00** · `a16ac4f58b33e3ca9` · (no description)
+  - last line: *That is the answer to "we failed for weeks." The research was done, the fix was specified down to the line numbers, and it was never built. From the same doc: > *"The pressure channel is a lie, not a gap."* · *"Every renderer we own is a monoline."* · *"An elliptical nib is not a new primitive — it …*
+- **2026-08-28T01:55:12-04:00** · `a92e79ea0098868e9` · (no description)
+  - last line: *That is the answer to "we failed for weeks." The research was done, the fix was specified down to the line numbers, and it was never built. From the same doc: > *"The pressure channel is a lie, not a gap."* · *"Every renderer we own is a monoline."* · *"An elliptical nib is not a new primitive — it …*
+- **2026-08-28T01:55:19-04:00** · `a6a57f457c325d00f` · (no description)
+  - last line: *That is the answer to "we failed for weeks." The research was done, the fix was specified down to the line numbers, and it was never built. From the same doc: > *"The pressure channel is a lie, not a gap."* · *"Every renderer we own is a monoline."* · *"An elliptical nib is not a new primitive — it …*
+- **2026-08-28T01:55:43-04:00** · `a1ac65d734c062cab` · (no description)
+  - last line: *Writing the finding into the ledger.*
+- **2026-08-28T01:55:48-04:00** · `af363b45d1327d6ea` · (no description)
+  - last line: *Writing the finding into the ledger.*
+- **2026-08-28T01:56:14-04:00** · `a9da6e5860eb6af18` · (no description)
+  - last line: *Writing the finding into the ledger.*
+- **2026-08-28T01:56:14-04:00** · `a0e8376b737bea173` · (no description)
+  - last line: *Writing the finding into the ledger.*
+- **2026-08-28T01:56:21-04:00** · `a20a9036841533c7d` · (no description)
+  - last line: *Here's where it landed. **I filmed the write-in and looked at it.** Two separate faults, and the second is the real one: - **At 3s, 2D**: letterforms are decent, but the ink is flat pure black, hard-edged, zero width variation. And a detached fragment sits **ahead** of the write position, past the `…*
+- **2026-08-28T01:56:46-04:00** · `ad0c1e150785cce76` · (no description)
+  - last line: *All four lanes are live and writing. While they run, let me pin down the other half of what I saw: that fragment appearing ahead of the pen, which is his "letter pieces missing" complaint.*
+- **2026-08-28T01:56:48-04:00** · `ae35f3ddd018db855` · (no description)
+  - last line: *All four lanes are live and writing. While they run, let me pin down the other half of what I saw: that fragment appearing ahead of the pen, which is his "letter pieces missing" complaint.*
+- **2026-08-28T01:56:59-04:00** · `ae7c9d86dd2240814` · (no description)
+  - last line: *All four lanes are live and writing. While they run, let me pin down the other half of what I saw: that fragment appearing ahead of the pen, which is his "letter pieces missing" complaint.*
+- **2026-08-28T01:57:18-04:00** · `a2a9d84309c472bc4` · (no description)
+  - last line: *All four lanes are live and writing. While they run, let me pin down the other half of what I saw: that fragment appearing ahead of the pen, which is his "letter pieces missing" complaint.*
+- **2026-08-28T01:57:23-04:00** · `a32c5624fafaf95f9` · (no description)
+  - last line: *All four lanes are live and writing. While they run, let me pin down the other half of what I saw: that fragment appearing ahead of the pen, which is his "letter pieces missing" complaint.*
+- **2026-08-28T01:57:23-04:00** · `a6bfad5033533fbc1` · (no description)
+  - last line: *All four lanes are live and writing. While they run, let me pin down the other half of what I saw: that fragment appearing ahead of the pen, which is his "letter pieces missing" complaint.*
+- **2026-08-28T01:57:45-04:00** · `a21178bc8b40cf316` · (no description)
+  - last line: *All four lanes are live and writing. While they run, let me pin down the other half of what I saw: that fragment appearing ahead of the pen, which is his "letter pieces missing" complaint.*
+- **2026-08-28T01:57:51-04:00** · `a762acde9b410d33a` · (no description)
+  - last line: *All four lanes are live and writing. While they run, let me pin down the other half of what I saw: that fragment appearing ahead of the pen, which is his "letter pieces missing" complaint.*
+- **2026-08-28T01:57:54-04:00** · `a003acb5e79f491c1` · (no description)
+  - last line: *All four lanes are live and writing. While they run, let me pin down the other half of what I saw: that fragment appearing ahead of the pen, which is his "letter pieces missing" complaint.*
+- **2026-08-28T01:58:00-04:00** · `a0417e89775714dd9` · (no description)
+  - last line: *All four lanes are live and writing. While they run, let me pin down the other half of what I saw: that fragment appearing ahead of the pen, which is his "letter pieces missing" complaint.*
+- **2026-08-28T01:58:23-04:00** · `ac1870be7675b3bbf` · (no description)
+  - last line: *Two measurable defects, both matching his complaints exactly.*
+- **2026-08-28T01:58:28-04:00** · `a146438d20438119f` · (no description)
+  - last line: *Two measurable defects, both matching his complaints exactly.*
+- **2026-08-28T01:58:29-04:00** · `ad63ba498e48f4c53` · (no description)
+  - last line: *The handover loss is spread evenly across every x band, so that's the whole mark re-rendering as tubes, not a piece vanishing. The sharper artifact is earlier. Looking at frame 4.*
+- **2026-08-28T01:58:40-04:00** · `a78bda17847b01897` · (no description)
+  - last line: *The handover loss is spread evenly across every x band, so that's the whole mark re-rendering as tubes, not a piece vanishing. The sharper artifact is earlier. Looking at frame 4.*
+- **2026-08-28T01:59:02-04:00** · `a687b186f1f12239b` · (no description)
+  - last line: *The handover loss is spread evenly across every x band, so that's the whole mark re-rendering as tubes, not a piece vanishing. The sharper artifact is earlier. Looking at frame 4.*
+- **2026-08-28T01:59:04-04:00** · `a62465e4e78f6dd7e` · (no description)
+  - last line: *The handover loss is spread evenly across every x band, so that's the whole mark re-rendering as tubes, not a piece vanishing. The sharper artifact is earlier. Looking at frame 4.*
+- **2026-08-28T01:59:16-04:00** · `acab9438b9dc4eee3` · (no description)
+  - last line: *Frame 4 shows both artifacts plainly. There's a detached dash floating 66px right of the finished `D`, and something wrong at the top of the `D`'s stem. Zooming on that.*
+- **2026-08-28T01:59:40-04:00** · `ae15cae5bdec22ef6` · (no description)
+  - last line: *Frame 4 shows both artifacts plainly. There's a detached dash floating 66px right of the finished `D`, and something wrong at the top of the `D`'s stem. Zooming on that.*
+- **2026-08-28T01:59:49-04:00** · `af942c23455fdbd05` · (no description)
+  - last line: *Frame 4 shows both artifacts plainly. There's a detached dash floating 66px right of the finished `D`, and something wrong at the top of the `D`'s stem. Zooming on that.*
+- **2026-08-28T01:59:58-04:00** · `a61ad25160d100a4e` · (no description)
+  - last line: *Frame 4 shows both artifacts plainly. There's a detached dash floating 66px right of the finished `D`, and something wrong at the top of the `D`'s stem. Zooming on that.*
+- **2026-08-28T02:00:04-04:00** · `ac8ce35f1d888780b` · (no description)
+  - last line: *Frame 4 shows both artifacts plainly. There's a detached dash floating 66px right of the finished `D`, and something wrong at the top of the `D`'s stem. Zooming on that.*
+- **2026-08-28T02:00:13-04:00** · `ad05e204f0c3b774b` · (no description)
+  - last line: *That artifact is on the **final** frame, so it ships. Two spurious marks cross the top of the `D`'s stem: a thin horizontal bar and a fat almond-shaped blob. Neither belongs to a `D`. That is what a very short entry tick looks like when swept by an 11.29px-radius round brush — and it is the same roo…*
+- **2026-08-28T02:00:33-04:00** · `a0ec861af619b1abc` · (no description)
+  - last line: *That artifact is on the **final** frame, so it ships. Two spurious marks cross the top of the `D`'s stem: a thin horizontal bar and a fat almond-shaped blob. Neither belongs to a `D`. That is what a very short entry tick looks like when swept by an 11.29px-radius round brush — and it is the same roo…*
+- **2026-08-28T02:00:42-04:00** · `a5f53a62dee7a2018` · (no description)
+  - last line: *That artifact is on the **final** frame, so it ships. Two spurious marks cross the top of the `D`'s stem: a thin horizontal bar and a fat almond-shaped blob. Neither belongs to a `D`. That is what a very short entry tick looks like when swept by an 11.29px-radius round brush — and it is the same roo…*
+- **2026-08-28T02:00:46-04:00** · `a4c70b2bcc44975b5` · (no description)
+  - last line: *That artifact is on the **final** frame, so it ships. Two spurious marks cross the top of the `D`'s stem: a thin horizontal bar and a fat almond-shaped blob. Neither belongs to a `D`. That is what a very short entry tick looks like when swept by an 11.29px-radius round brush — and it is the same roo…*
+- **2026-08-28T02:01:02-04:00** · `a0a79831e349d6589` · (no description)
+  - last line: *That artifact is on the **final** frame, so it ships. Two spurious marks cross the top of the `D`'s stem: a thin horizontal bar and a fat almond-shaped blob. Neither belongs to a `D`. That is what a very short entry tick looks like when swept by an 11.29px-radius round brush — and it is the same roo…*
+- **2026-08-28T02:01:11-04:00** · `aa858aabe5ca74c63` · (no description)
+  - last line: *That artifact is on the **final** frame, so it ships. Two spurious marks cross the top of the `D`'s stem: a thin horizontal bar and a fat almond-shaped blob. Neither belongs to a `D`. That is what a very short entry tick looks like when swept by an 11.29px-radius round brush — and it is the same roo…*
+- **2026-08-28T02:01:14-04:00** · `aa80cb9287c317484` · (no description)
+  - last line: *That artifact is on the **final** frame, so it ships. Two spurious marks cross the top of the `D`'s stem: a thin horizontal bar and a fat almond-shaped blob. Neither belongs to a `D`. That is what a very short entry tick looks like when swept by an 11.29px-radius round brush — and it is the same roo…*
+- **2026-08-28T02:01:19-04:00** · `a2fff23bda22c89e6` · (no description)
+  - last line: *That artifact is on the **final** frame, so it ships. Two spurious marks cross the top of the `D`'s stem: a thin horizontal bar and a fat almond-shaped blob. Neither belongs to a `D`. That is what a very short entry tick looks like when swept by an 11.29px-radius round brush — and it is the same roo…*
+- **2026-08-28T02:01:36-04:00** · `a13359f80ce9d2317` · (no description)
+  - last line: *Saving the lesson — it happened three separate ways tonight, which makes it a pattern rather than an incident.*
+- **2026-08-28T02:01:38-04:00** · `aa264f3ddbe0ed532` · (no description)
+  - last line: *Saving the lesson — it happened three separate ways tonight, which makes it a pattern rather than an incident.*
+- **2026-08-28T02:01:50-04:00** · `a2061e46c1d673cdc` · (no description)
+  - last line: *Saving the lesson — it happened three separate ways tonight, which makes it a pattern rather than an incident.*
+- **2026-08-28T02:01:59-04:00** · `a115db964eb82d6c1` · (no description)
+  - last line: *Memory saved and indexed. There are two engine options on that page and I only filmed one — checking whether the monoline is both.*
+- **2026-08-28T02:02:10-04:00** · `a130deb5158b5d4f8` · (no description)
+  - last line: *Memory saved and indexed. There are two engine options on that page and I only filmed one — checking whether the monoline is both.*
+- **2026-08-28T02:02:28-04:00** · `a2f6462392eb730fe` · (no description)
+  - last line: *Memory saved and indexed. There are two engine options on that page and I only filmed one — checking whether the monoline is both.*
+- **2026-08-28T02:02:54-04:00** · `a2817d759eb219585` · (no description)
+  - last line: *Identical tip on both engines — `mode: "reed"`, `radius: 11.290141859013586`. The monoline is global, not one engine's problem. Looking at how free-stroke renders it.*
+- **2026-08-28T02:03:04-04:00** · `ad36880c9660561f3` · (no description)
+  - last line: *Identical tip on both engines — `mode: "reed"`, `radius: 11.290141859013586`. The monoline is global, not one engine's problem. Looking at how free-stroke renders it.*
+- **2026-08-28T02:03:39-04:00** · `ad285ea3cbec9530e` · (no description)
+  - last line: *The free-stroke engine shows something more serious than tubing. Let me count it rather than describe it.*
+- **2026-08-28T02:03:39-04:00** · `ac90928e17de7c910` · (no description)
+  - last line: *The free-stroke engine shows something more serious than tubing. Let me count it rather than describe it.*
+- **2026-08-28T02:04:38-04:00** · `a69c32ca2865c4cc0` · (no description)
+  - last line: *Correcting my own read: the counters don't close, but they're choked. Measured, `free-stroke`'s smallest counter is **24 px** against desk-doodles' 98, and every one of its eight is smaller. That's a legibility metric a nib fix should move, so it's a gate.*
+- **2026-08-28T02:04:51-04:00** · `a0c41690b1adaba13` · (no description)
+  - last line: *Correcting my own read: the counters don't close, but they're choked. Measured, `free-stroke`'s smallest counter is **24 px** against desk-doodles' 98, and every one of its eight is smaller. That's a legibility metric a nib fix should move, so it's a gate.*
+- **2026-08-28T02:05:12-04:00** · `ad07776db8b1c6ff6` · (no description)
+  - last line: *Correcting my own read: the counters don't close, but they're choked. Measured, `free-stroke`'s smallest counter is **24 px** against desk-doodles' 98, and every one of its eight is smaller. That's a legibility metric a nib fix should move, so it's a gate.*
+- **2026-08-28T02:05:28-04:00** · `a1cd085aabc1d65a8` · (no description)
+  - last line: *Correcting my own read: the counters don't close, but they're choked. Measured, `free-stroke`'s smallest counter is **24 px** against desk-doodles' 98, and every one of its eight is smaller. That's a legibility metric a nib fix should move, so it's a gate.*
+- **2026-08-28T02:06:04-04:00** · `a23e6b8a57a7fedf5` · (no description)
+  - last line: *N3 landed, and it caught me in a real error. Checking that first.*
+- **2026-08-28T02:06:12-04:00** · `a464fbd2da666ea51` · (no description)
+  - last line: *N3 landed, and it caught me in a real error. Checking that first.*
+- **2026-08-28T02:06:14-04:00** · `a65946cbfebdb7d3d` · (no description)
+  - last line: *N3 landed, and it caught me in a real error. Checking that first.*
+- **2026-08-28T02:06:56-04:00** · `a662f077cbdefbfff` · (no description)
+  - last line: *N3 is right, and the mechanism is worse than a careless flag: I never used `-a`. **Two lanes committing in one working tree share one index.** N3 ran `git add`, and my next `git commit` swept its staged files in. File ownership doesn't protect the staging area.*
+- **2026-08-28T02:06:57-04:00** · `aa44db0ec9d2334b6` · (no description)
+  - last line: *N3 is right, and the mechanism is worse than a careless flag: I never used `-a`. **Two lanes committing in one working tree share one index.** N3 ran `git add`, and my next `git commit` swept its staged files in. File ownership doesn't protect the staging area.*
+- **2026-08-28T02:07:31-04:00** · `a40b9753e78cd501d` · (no description)
+  - last line: *Pathspec has to follow the options. Redoing it correctly — which also proves the fix works.*
+- **2026-08-28T02:07:48-04:00** · `ab121a940a3e4dac7` · (no description)
+  - last line: *Fix confirmed — one file committed, the other lanes' work untouched in the tree. **Where the night is:** **N3 landed, and its find is sharper than its fix.** F6 was already fixed in code on 08-07. What was open is that *nothing could catch it coming back*: it forced the defect back on and `assert-ex…*
+- **2026-08-28T02:08:06-04:00** · `ae98740a5f7d5744e` · (no description)
+  - last line: *All four lanes are alive and writing. The ledger has grown a lot tonight, so let me make sure it's readable in the morning rather than a wall.*
+- **2026-08-28T02:08:07-04:00** · `a8c87c8922b022f18` · (no description)
+  - last line: *All four lanes are alive and writing. The ledger has grown a lot tonight, so let me make sure it's readable in the morning rather than a wall.*
+- **2026-08-28T02:08:26-04:00** · `ac844c51c9131cc13` · (no description)
+  - last line: *All four lanes are alive and writing. The ledger has grown a lot tonight, so let me make sure it's readable in the morning rather than a wall.*
+- **2026-08-28T02:08:59-04:00** · `ad5145748c6c6e259` · (no description)
+  - last line: *Found a defect in my own ledger: **two different rows are both numbered F17.** The old one is the sixteen questions; N2's new one is the forged-reds finding. Fixing that and putting a morning entry point at the top.*
+- **2026-08-28T02:09:00-04:00** · `a5ceda69fa464fa5f` · (no description)
+  - last line: *Found a defect in my own ledger: **two different rows are both numbered F17.** The old one is the sixteen questions; N2's new one is the forged-reds finding. Fixing that and putting a morning entry point at the top.*
+- **2026-08-28T02:09:05-04:00** · `a484107253e5ac906` · (no description)
+  - last line: *Found a defect in my own ledger: **two different rows are both numbered F17.** The old one is the sixteen questions; N2's new one is the forged-reds finding. Fixing that and putting a morning entry point at the top.*
+- **2026-08-28T02:09:38-04:00** · `a564227f7386d5de3` · (no description)
+  - last line: *`assert-hero-word-legible` is failing — and it exits non-zero **without printing a FAIL row**, which is its own defect. Given I just measured choked counters, that name is worth a look.*
+- **2026-08-28T02:09:42-04:00** · `a5e642d21a09f8494` · (no description)
+  - last line: *`assert-hero-word-legible` is failing — and it exits non-zero **without printing a FAIL row**, which is its own defect. Given I just measured choked counters, that name is worth a look.*
+- **2026-08-28T02:09:50-04:00** · `ad8790f92709c3586` · (no description)
+  - last line: *`assert-hero-word-legible` is failing — and it exits non-zero **without printing a FAIL row**, which is its own defect. Given I just measured choked counters, that name is worth a look.*
+- **2026-08-28T02:10:22-04:00** · `afdacffd44c5539b7` · (no description)
+  - last line: *The gate prints 14 PASS rows, then shells out to a probe that crashes, and exits non-zero with **no FAIL row** — invisible to any scoreboard that reads rows. Looking at the crash.*
+- **2026-08-28T02:10:29-04:00** · `a1f5b1e50ed096f6d` · (no description)
+  - last line: *The gate prints 14 PASS rows, then shells out to a probe that crashes, and exits non-zero with **no FAIL row** — invisible to any scoreboard that reads rows. Looking at the crash.*
+- **2026-08-28T02:10:54-04:00** · `a066fe9ee515dd4cb` · (no description)
+  - last line: *The gate prints 14 PASS rows, then shells out to a probe that crashes, and exits non-zero with **no FAIL row** — invisible to any scoreboard that reads rows. Looking at the crash.*
+- **2026-08-28T02:10:56-04:00** · `a3062a4a494e0aac7` · (no description)
+  - last line: *`data-word-input` exists on exactly one line — `app/desk-doodles/page.tsx:2815`, the **/desk-doodles route**. Checking which page the probe actually loads.*
+- **2026-08-28T02:11:43-04:00** · `ac06a361f5f7e160b` · (no description)
+  - last line: *`data-word-input` exists on exactly one line — `app/desk-doodles/page.tsx:2815`, the **/desk-doodles route**. Checking which page the probe actually loads.*
+- **2026-08-28T02:11:44-04:00** · `a7064a12b2a0037fc` · (no description)
+  - last line: *`data-word-input` exists on exactly one line — `app/desk-doodles/page.tsx:2815`, the **/desk-doodles route**. Checking which page the probe actually loads.*
+- **2026-08-28T02:11:45-04:00** · `a9b07bf70f1064e0c` · (no description)
+  - last line: *`data-word-input` exists on exactly one line — `app/desk-doodles/page.tsx:2815`, the **/desk-doodles route**. Checking which page the probe actually loads.*
+- **2026-08-28T02:12:22-04:00** · `a7c2c4b97e5a57856` · (no description)
+  - last line: *That's the right route, so it's a readiness race rather than a wrong target. This is precisely N4's classification job, so handing it over rather than digging further myself.*
+- **2026-08-28T02:12:33-04:00** · `a4e2a441f2755758e` · (no description)
+  - last line: *That's the right route, so it's a readiness race rather than a wrong target. This is precisely N4's classification job, so handing it over rather than digging further myself.*
+- **2026-08-28T02:12:57-04:00** · `aa43df120fbad1593` · (no description)
+  - last line: *Both lanes are doing exactly the right thing — N6 has captured a proper "before" including my stem test case, and R1 has pulled Hobby's thesis, perfect-freehand's source, and a real handwriting-trajectory dataset. Meanwhile the "HIS ASKS" table still shows F4 as owed when I did it, and F1 framed by …*
+- **2026-08-28T02:13:13-04:00** · `a6273b4b29f1f92c9` · (no description)
+  - last line: *Both lanes are doing exactly the right thing — N6 has captured a proper "before" including my stem test case, and R1 has pulled Hobby's thesis, perfect-freehand's source, and a real handwriting-trajectory dataset. Meanwhile the "HIS ASKS" table still shows F4 as owed when I did it, and F1 framed by …*
+- **2026-08-28T02:13:38-04:00** · `a7a8c5f4960806bba` · (no description)
+  - last line: *Both lanes are doing exactly the right thing — N6 has captured a proper "before" including my stem test case, and R1 has pulled Hobby's thesis, perfect-freehand's source, and a real handwriting-trajectory dataset. Meanwhile the "HIS ASKS" table still shows F4 as owed when I did it, and F1 framed by …*
+- **2026-08-28T02:13:44-04:00** · `a7daa0ff848c37e78` · (no description)
+  - last line: *Both lanes are doing exactly the right thing — N6 has captured a proper "before" including my stem test case, and R1 has pulled Hobby's thesis, perfect-freehand's source, and a real handwriting-trajectory dataset. Meanwhile the "HIS ASKS" table still shows F4 as owed when I did it, and F1 framed by …*
+- **2026-08-28T02:14:03-04:00** · `af00d76b0e043ea3c` · (no description)
+  - last line: *Both lanes are doing exactly the right thing — N6 has captured a proper "before" including my stem test case, and R1 has pulled Hobby's thesis, perfect-freehand's source, and a real handwriting-trajectory dataset. Meanwhile the "HIS ASKS" table still shows F4 as owed when I did it, and F1 framed by …*
+- **2026-08-28T02:14:19-04:00** · `aa15c72454aa14953` · (no description)
+  - last line: *Let me confirm the tree is still sound after all this lane activity, then hold for the running lanes.*
+- **2026-08-28T02:14:45-04:00** · `a001db4c4e1f2734f` · (no description)
+  - last line: *Let me confirm the tree is still sound after all this lane activity, then hold for the running lanes.*
+- **2026-08-28T02:14:52-04:00** · `a3634811a7a9d7310` · (no description)
+  - last line: *Let me confirm the tree is still sound after all this lane activity, then hold for the running lanes.*
+- **2026-08-28T02:14:56-04:00** · `acff43fb1d0a9a284` · (no description)
+  - last line: *Let me confirm the tree is still sound after all this lane activity, then hold for the running lanes.*
+- **2026-08-28T02:15:07-04:00** · `a0c4014b51c9feaaa` · (no description)
+  - last line: *Tree is sound: tsc exactly 6, same six in the same two files, both routes 200, both servers up. **Where things stand while N1, N4, R1 and N6 finish:** | lane | state | |---|---| | **N2 · viewport** | landed. F5/F7/F9 all struck with evidence, F9's *mechanism* refuted, not just fixed | | **N3 · expor…*
+- **2026-08-28T02:15:34-04:00** · `aa904b0d83ab23873` · (no description)
+  - last line: *Tree is sound: tsc exactly 6, same six in the same two files, both routes 200, both servers up. **Where things stand while N1, N4, R1 and N6 finish:** | lane | state | |---|---| | **N2 · viewport** | landed. F5/F7/F9 all struck with evidence, F9's *mechanism* refuted, not just fixed | | **N3 · expor…*
+- **2026-08-28T02:15:55-04:00** · `a2f33dd52f688a436` · (no description)
+  - last line: *Tree is sound: tsc exactly 6, same six in the same two files, both routes 200, both servers up. **Where things stand while N1, N4, R1 and N6 finish:** | lane | state | |---|---| | **N2 · viewport** | landed. F5/F7/F9 all struck with evidence, F9's *mechanism* refuted, not just fixed | | **N3 · expor…*
+- **2026-08-28T02:16:27-04:00** · `af59a6c5a9b2195d4` · (no description)
+  - last line: *Tree is sound: tsc exactly 6, same six in the same two files, both routes 200, both servers up. **Where things stand while N1, N4, R1 and N6 finish:** | lane | state | |---|---| | **N2 · viewport** | landed. F5/F7/F9 all struck with evidence, F9's *mechanism* refuted, not just fixed | | **N3 · expor…*
+- **2026-08-28T02:17:08-04:00** · `a8b7864e63b17863f` · (no description)
+  - last line: *Tree is sound: tsc exactly 6, same six in the same two files, both routes 200, both servers up. **Where things stand while N1, N4, R1 and N6 finish:** | lane | state | |---|---| | **N2 · viewport** | landed. F5/F7/F9 all struck with evidence, F9's *mechanism* refuted, not just fixed | | **N3 · expor…*
+- **2026-08-28T02:18:21-04:00** · `a7c7318b3e2a965de` · (no description)
+  - last line: *Tree is sound: tsc exactly 6, same six in the same two files, both routes 200, both servers up. **Where things stand while N1, N4, R1 and N6 finish:** | lane | state | |---|---| | **N2 · viewport** | landed. F5/F7/F9 all struck with evidence, F9's *mechanism* refuted, not just fixed | | **N3 · expor…*
+- **2026-08-28T02:19:20-04:00** · `a3873c6724d736980` · (no description)
+  - last line: *Tree is sound: tsc exactly 6, same six in the same two files, both routes 200, both servers up. **Where things stand while N1, N4, R1 and N6 finish:** | lane | state | |---|---| | **N2 · viewport** | landed. F5/F7/F9 all struck with evidence, F9's *mechanism* refuted, not just fixed | | **N3 · expor…*
+- **2026-08-28T02:19:58-04:00** · `aa3d412425b8e1046` · (no description)
+  - last line: *N1 landed and it **overturned my premise.** There was no headless trap. Measured across 18 runs: headless 5/9 green, headed 5/9, all six cells unstable *within* one mode, renderer identical, `networkidle` resolving headless in 1.1s. The port was the trap. Telling N4 first, because its battery is run…*
+- **2026-08-28T02:20:08-04:00** · `a6eae13183cee9700` · (no description)
+  - last line: *N1 landed and it **overturned my premise.** There was no headless trap. Measured across 18 runs: headless 5/9 green, headed 5/9, all six cells unstable *within* one mode, renderer identical, `networkidle` resolving headless in 1.1s. The port was the trap. Telling N4 first, because its battery is run…*
+- **2026-08-28T02:20:36-04:00** · `a8769f28b45ad75d0` · (no description)
+  - last line: *N1 landed and it **overturned my premise.** There was no headless trap. Measured across 18 runs: headless 5/9 green, headed 5/9, all six cells unstable *within* one mode, renderer identical, `networkidle` resolving headless in 1.1s. The port was the trap. Telling N4 first, because its battery is run…*
+- **2026-08-28T02:21:01-04:00** · `a1f54d955cb1bc737` · (no description)
+  - last line: *N1 landed and it **overturned my premise.** There was no headless trap. Measured across 18 runs: headless 5/9 green, headed 5/9, all six cells unstable *within* one mode, renderer identical, `networkidle` resolving headless in 1.1s. The port was the trap. Telling N4 first, because its battery is run…*
+- **2026-08-28T02:21:39-04:00** · `a047a307b363e4cc4` · (no description)
+  - last line: *Two things N1 correctly declined because they weren't its files. Both are mine. Fixing the stale `PARTIAL` on `STATUS.md`'s front page first.*
+- **2026-08-28T02:21:52-04:00** · `aeb7bd988cff30341` · (no description)
+  - last line: *Two things N1 correctly declined because they weren't its files. Both are mine. Fixing the stale `PARTIAL` on `STATUS.md`'s front page first.*
+- **2026-08-28T02:22:23-04:00** · `ae20e7ae9c6971154` · (no description)
+  - last line: *N5 done, and it proves N1's resolver end to end: bare invocation, no env var, and it printed *"pid 7765 is listening on :3105 and its working directory is this checkout."* `STATUS.md` page one now reads **4 PASS · 0 FAIL · 0 UNSWEPT · exit 0**. Now the gate count.*
+- **2026-08-28T02:22:49-04:00** · `a8cc12ac61506b5c3` · (no description)
+  - last line: *N5 done, and it proves N1's resolver end to end: bare invocation, no env var, and it printed *"pid 7765 is listening on :3105 and its working directory is this checkout."* `STATUS.md` page one now reads **4 PASS · 0 FAIL · 0 UNSWEPT · exit 0**. Now the gate count.*
+- **2026-08-28T02:23:43-04:00** · `a7f4c750255d4b0e3` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:23:57-04:00** · `a3ccd7b2989f97888` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:24:27-04:00** · `aede33ef0f28c5c0a` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:24:46-04:00** · `a7ac85951ec83a245` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:25:03-04:00** · `adef281f3707be293` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:25:47-04:00** · `a4413bfdeee7e7769` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:25:51-04:00** · `a724e800319335faf` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:26:24-04:00** · `aa2bf18dbc9244818` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:26:46-04:00** · `ad05748e5029e2da4` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:27:48-04:00** · `a5e05452277d966ce` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:28:40-04:00** · `a44c94e4d5a6acdfa` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:28:57-04:00** · `a41e290b194030033` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:29:42-04:00** · `aefce82885aa76ed3` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:30:06-04:00** · `ae3d1129b82c1ff27` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:30:35-04:00** · `aea6037140352867b` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:31:03-04:00** · `aeaedeed5ff3ef455` · (no description)
+  - last line: *All three still working. **N1's return is the one worth telling you about, because it corrected me.** I briefed all four lanes that browser gates hang headless — that came from the 08-25 note about `assert-fusion-combo-ui` dying at 30s. N1 didn't inherit it, it measured it: 18 runs, headless **5 of …*
+- **2026-08-28T02:32:05-04:00** · `aa1817fd6ae2c1aa4` · (no description)
+  - last line: *N6 is into `geometry-engines.ts` now. While it works, let me take F15 — no lane owns `frame-guard.mjs` since N1 finished, and it's directly about capture integrity, which is how we judge the write-in.*
+- **2026-08-28T02:32:35-04:00** · `a84a2c229d09ef5d4` · (no description)
+  - last line: *N6 is into `geometry-engines.ts` now. While it works, let me take F15 — no lane owns `frame-guard.mjs` since N1 finished, and it's directly about capture integrity, which is how we judge the write-in.*
+- **2026-08-28T02:32:49-04:00** · `a2896ff13a433c2d4` · (no description)
+  - last line: *N6 is into `geometry-engines.ts` now. While it works, let me take F15 — no lane owns `frame-guard.mjs` since N1 finished, and it's directly about capture integrity, which is how we judge the write-in.*
+- **2026-08-28T02:33:22-04:00** · `a44c8baa53d3c866a` · (no description)
+  - last line: *N6 is into `geometry-engines.ts` now. While it works, let me take F15 — no lane owns `frame-guard.mjs` since N1 finished, and it's directly about capture integrity, which is how we judge the write-in.*
+- **2026-08-28T02:34:34-04:00** · `a2cbdba525787b4ad` · (no description)
+  - last line: *Now I have the file's shape. Adding the refusal and its two calibrated arms.*
+- **2026-08-28T02:34:37-04:00** · `a0ff5c23f820ca12b` · (no description)
+  - last line: *Now I have the file's shape. Adding the refusal and its two calibrated arms.*
+- **2026-08-28T02:35:45-04:00** · `ae702c86e290308d6` · (no description)
+  - last line: *Now I have the file's shape. Adding the refusal and its two calibrated arms.*
+- **2026-08-28T02:35:57-04:00** · `a8b6db20cbda66fc5` · (no description)
+  - last line: *Now I have the file's shape. Adding the refusal and its two calibrated arms.*
+- **2026-08-28T02:36:31-04:00** · `ab31f9e0868dabf0f` · (no description)
+  - last line: *All arms pass, including the positive control — and critically, the real stored captures (22 verify-stack frames, 56 dit_pulse) still raise no refusal, so the new rule doesn't fire on healthy data. Checking the full result and tsc before committing.*
+- **2026-08-28T02:36:57-04:00** · `a8419bc100240d1ab` · (no description)
+  - last line: *All arms pass, including the positive control — and critically, the real stored captures (22 verify-stack frames, 56 dit_pulse) still raise no refusal, so the new rule doesn't fire on healthy data. Checking the full result and tsc before committing.*
+- **2026-08-28T02:37:27-04:00** · `abd54a3c5b664e3b8` · (no description)
+  - last line: *All arms pass, including the positive control — and critically, the real stored captures (22 verify-stack frames, 56 dit_pulse) still raise no refusal, so the new rule doesn't fire on healthy data. Checking the full result and tsc before committing.*
+- **2026-08-28T02:39:08-04:00** · `ae18aa680ac3cc59a` · (no description)
+  - last line: *24 PASS · 0 FAIL, up from 20, and tsc holds. Committing scoped.*
+- **2026-08-28T02:39:57-04:00** · `a7f7db04a3ace0362` · (no description)
+  - last line: *24 PASS · 0 FAIL, up from 20, and tsc holds. Committing scoped.*
+- **2026-08-28T02:41:03-04:00** · `aad6b56404f75cd80` · (no description)
+  - last line: *Row for N7 — and I dispatched before writing it, which is the ledger's own rule broken, so the row says so.*
+- **2026-08-28T02:41:24-04:00** · `ab2533924088618aa` · (no description)
+  - last line: *Row for N7 — and I dispatched before writing it, which is the ledger's own rule broken, so the row says so.*
+- **2026-08-28T02:41:47-04:00** · `a6a94730eac6db223` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:41:49-04:00** · `a7ff15007a0b3ba19` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:42:11-04:00** · `ad3e453b9452b601b` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:42:51-04:00** · `a69c457d98c58339e` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:42:58-04:00** · `af97bfcd8f514e24b` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:43:12-04:00** · `a0a34de9de6b79fe2` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:43:34-04:00** · `ac0d8c0179dac03a5` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:44:09-04:00** · `afca2f4c2a08d508d` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:44:15-04:00** · `a901e5616de8078c8` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:44:21-04:00** · `a2b305819dbf0c103` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:44:59-04:00** · `a992650965560b22e` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:45:20-04:00** · `a18ccdfb0be29b6f5` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:45:42-04:00** · `a8e05b748b16e36fd` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:46:21-04:00** · `a2be8eccb324a4918` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:46:55-04:00** · `af7b56297c4421412` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:47:02-04:00** · `ad31764b122ca250c` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:47:42-04:00** · `a37db301afc35995b` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:48:17-04:00** · `a5f589cf750733350` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:48:21-04:00** · `aac82c961ae7496a5` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:48:22-04:00** · `a44028ba9fd841cd0` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:49:06-04:00** · `ac18cc759e49c9760` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:49:07-04:00** · `a171922741261f930` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:49:24-04:00** · `a630f7fab423c2f5a` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:49:49-04:00** · `a9903606ccfc1dcc5` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:50:26-04:00** · `a0105cbd318a2eb67` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:50:30-04:00** · `ac3c7ceff0ebfcfb8` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:50:30-04:00** · `ad66e5e864e36c718` · (no description)
+  - last line: *Four lanes running now: **N6** (nib build, into `geometry-engines.ts`), **N7** (the manifest, F22), **N4** (battery), **R1** (write-on timing). I also took two rows myself while waiting: **F15 closed.** `frame-guard.mjs` was collecting `grabs` on every frame, publishing it, and no consumer read it —…*
+- **2026-08-28T02:51:13-04:00** · `af4fc22af9b418948` · (no description)
+  - last line: *N6 has an `after` directory. That's the answer to the whole question — looking.*
+- **2026-08-28T02:51:55-04:00** · `a4e2aaab8a06de622` · (no description)
+  - last line: *nothing in the transcript*
+- **2026-08-28T02:52:34-04:00** · `ad55c16a68f8c839d` · (no description)
+  - last line: *That's a real change — the settled word now has genuine thick/thin contrast and reads as a pen rather than tubing. Checking the falsifiable test: the blob.*
+- **2026-08-28T02:52:36-04:00** · `a35dc767a8158f355` · (no description)
+  - last line: *That's a real change — the settled word now has genuine thick/thin contrast and reads as a pen rather than tubing. Checking the falsifiable test: the blob.*
+- **2026-08-28T02:53:14-04:00** · `a4a99721122785522` · (no description)
+  - last line: *The after-crop is blank. That's not evidence the blob is gone — it's evidence the crop moved. Checking before/after numerically.*
+- **2026-08-28T02:53:17-04:00** · `a110e677befab6c69` · (no description)
+  - last line: *The after-crop is blank. That's not evidence the blob is gone — it's evidence the crop moved. Checking before/after numerically.*
+- **2026-08-28T02:53:29-04:00** · `ab6af51c686715252` · (no description)
+  - last line: *The after-crop is blank. That's not evidence the blob is gone — it's evidence the crop moved. Checking before/after numerically.*
+- **2026-08-28T02:53:57-04:00** · `ab310f4b964c66c71` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:54:38-04:00** · `a9f4ed3cc1dd9c5d1` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:55:19-04:00** · `aea386621de017bd8` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:55:56-04:00** · `a7d65d659a5267097` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:56:02-04:00** · `acc09d4055e589b57` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:56:04-04:00** · `ae2a35abb732b3543` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:56:44-04:00** · `a0c29c155888f22ef` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:56:53-04:00** · `aba67739bcc407989` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:57:33-04:00** · `ab476f65bd9a46c99` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:58:00-04:00** · `a58e1b5747f1a10da` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:58:17-04:00** · `ac4d01078172dd833` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:58:24-04:00** · `ad072906cd3d72b31` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:59:08-04:00** · `aeaeb8acc299e8384` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:59:14-04:00** · `a225e33429cf12d47` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:59:47-04:00** · `ae345a8af3349e7d7` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:59:51-04:00** · `aeaf8009f63237e99` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T02:59:56-04:00** · `a9a3ee2a02423a45a` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:00:40-04:00** · `abad7e9ae4b9bd24f` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:00:44-04:00** · `a8fef4c5e3a9fdb02` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:00:50-04:00** · `a3da05677065041bd` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:01:19-04:00** · `a65428ce39abc6ae6` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:01:28-04:00** · `a54ce2060d83a032b` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:01:33-04:00** · `a91cdeddf9db928d8` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:02:00-04:00** · `a3aa102a591d39c6f` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:02:55-04:00** · `a8f886b38c47837b9` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:02:58-04:00** · `a434891a8e3190372` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:03:19-04:00** · `a2a0c877939ad805f` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:03:39-04:00** · `af1266bb873d9b824` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:03:45-04:00** · `aaebdeb9e95ffb711` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:04:22-04:00** · `a4ffca57b99ab3839` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:04:23-04:00** · `a793a88cea300a7da` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:04:56-04:00** · `af949a15e90c73501` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:05:02-04:00** · `a8ec0e5fc86a8de60` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:05:08-04:00** · `a8229026660fb743c` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:05:43-04:00** · `a9fffffdcc603d0f4` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:06:06-04:00** · `a551f3aea64ad2c86` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:06:10-04:00** · `ae1f321e899b8aaba` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:06:31-04:00** · `ae92a9a14578b11b8` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:06:45-04:00** · `a307a67cf18f266ab` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:07:06-04:00** · `a972619f0d0f46373` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:08:02-04:00** · `a0c6ac429e6968e24` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:08:07-04:00** · `a27f442b3596b7868` · (no description)
+  - last line: *I made the exact mistake I've been writing rows about all night: **I read another lane's evidence directory mid-write.** The blank crop wasn't a result, and the `after` STEM files don't exist yet — N6 is still running. What I looked at was an intermediate, so I'm setting aside my read of it and wait…*
+- **2026-08-28T03:08:43-04:00** · `a595c44b67cbab477` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:08:50-04:00** · `a3b77a379f0b1e478` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:09:22-04:00** · `a61acb917addef08b` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:09:40-04:00** · `a79176139908ee64d` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:10:18-04:00** · `a6fda04ce39216781` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:10:26-04:00** · `a8edb8c131bfbc75c` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:10:32-04:00** · `a58aafd6e4133d4e3` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:10:45-04:00** · `a9af23e0be458d4f9` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:11:09-04:00** · `a121710604b08c174` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:11:19-04:00** · `a2da35b2d67099a7c` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:11:55-04:00** · `a49768b84ae6eecd8` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:12:40-04:00** · `a38323e2eb8942cbe` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:12:46-04:00** · `a3704f19aae1f3a17` · (no description)
+  - last line: ***N4 landed, and it produced the night's most important number.** > **88 of 100 gates ran clean. Zero of 100 were shown able to fail.** Full battery on a frozen clone: 100 attempted, 47 model + 53 browser, overlap 0, **never-run is 0**. F11 is closed — the state that was "unknown" is now known. **Bu…*
+- **2026-08-28T03:13:25-04:00** · `a691da4073f9516bc` · (no description)
+  - last line: *N4 landed with the night's most quotable number: **88 of 100 gates ran clean, and zero of 100 were shown able to fail.** It also refines N7's brief while N7 is mid-job, so that goes first.*
+- **2026-08-28T03:14:09-04:00** · `a84404439e072c795` · (no description)
+  - last line: *N4 landed with the night's most quotable number: **88 of 100 gates ran clean, and zero of 100 were shown able to fail.** It also refines N7's brief while N7 is mid-job, so that goes first.*
+- **2026-08-28T03:14:43-04:00** · `ad0db3a6c6893e502` · (no description)
+  - last line: *N4 landed with the night's most quotable number: **88 of 100 gates ran clean, and zero of 100 were shown able to fail.** It also refines N7's brief while N7 is mid-job, so that goes first.*
+- **2026-08-28T03:14:55-04:00** · `a69581c725b1c7f11` · (no description)
+  - last line: *N4 landed with the night's most quotable number: **88 of 100 gates ran clean, and zero of 100 were shown able to fail.** It also refines N7's brief while N7 is mid-job, so that goes first.*
+- **2026-08-28T03:15:30-04:00** · `af5ea4ab65aefdb6a` · (no description)
+  - last line: *N4 landed with the night's most quotable number: **88 of 100 gates ran clean, and zero of 100 were shown able to fail.** It also refines N7's brief while N7 is mid-job, so that goes first.*
+- **2026-08-28T03:15:54-04:00** · `a9ccd8332679f831c` · (no description)
+  - last line: *N4 landed with the night's most quotable number: **88 of 100 gates ran clean, and zero of 100 were shown able to fail.** It also refines N7's brief while N7 is mid-job, so that goes first.*
+- **2026-08-28T03:16:12-04:00** · `aa63c0298ac6fea2b` · (no description)
+  - last line: *N4 landed with the night's most quotable number: **88 of 100 gates ran clean, and zero of 100 were shown able to fail.** It also refines N7's brief while N7 is mid-job, so that goes first.*
+- **2026-08-28T03:16:33-04:00** · `a0d3b5f32eb2a90b2` · (no description)
+  - last line: *N4 landed with the night's most quotable number: **88 of 100 gates ran clean, and zero of 100 were shown able to fail.** It also refines N7's brief while N7 is mid-job, so that goes first.*
+- **2026-08-28T03:16:59-04:00** · `af3d3745131b7fbbd` · (no description)
+  - last line: *N4 landed with the night's most quotable number: **88 of 100 gates ran clean, and zero of 100 were shown able to fail.** It also refines N7's brief while N7 is mid-job, so that goes first.*
+- **2026-08-28T03:17:39-04:00** · `a3b6a769bcc604396` · (no description)
+  - last line: *N4 landed with the night's most quotable number: **88 of 100 gates ran clean, and zero of 100 were shown able to fail.** It also refines N7's brief while N7 is mid-job, so that goes first.*
+- **2026-08-28T03:18:00-04:00** · `a75f7274310bdb577` · (no description)
+  - last line: *R1 landed and it independently confirmed and quantified the blob I found. Telling N6 first, because the cause is now measured and it isn't the nib.*
+- **2026-08-28T03:18:22-04:00** · `a50148a611b365e82` · (no description)
+  - last line: *R1 landed and it independently confirmed and quantified the blob I found. Telling N6 first, because the cause is now measured and it isn't the nib.*
+- **2026-08-28T03:18:41-04:00** · `adf73ec3e63fd21e0` · (no description)
+  - last line: *R1 landed and it independently confirmed and quantified the blob I found. Telling N6 first, because the cause is now measured and it isn't the nib.*
+- **2026-08-28T03:19:07-04:00** · `ad8d022c5434b12b9` · (no description)
+  - last line: *R1 landed and it independently confirmed and quantified the blob I found. Telling N6 first, because the cause is now measured and it isn't the nib.*
+- **2026-08-28T03:19:23-04:00** · `a2c43d15fdfb6f17b` · (no description)
+  - last line: *R1 landed and it independently confirmed and quantified the blob I found. Telling N6 first, because the cause is now measured and it isn't the nib.*
+- **2026-08-28T03:20:06-04:00** · `a163d00079a350831` · (no description)
+  - last line: *F32 belongs in memory — there's already a fake-provenance rule and this gives it a concrete detection method.*
+- **2026-08-28T03:20:11-04:00** · `acf344189ddaae090` · (no description)
+  - last line: *F32 belongs in memory — there's already a fake-provenance rule and this gives it a concrete detection method.*
+- **2026-08-28T03:21:34-04:00** · `a24b2a79c61436930` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:22:11-04:00** · `a2496a6b62aad4a83` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:22:13-04:00** · `ad163348b5c2866c3` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:22:50-04:00** · `abd3550e2f02e1026` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:22:51-04:00** · `a14380073bb3a15f2` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:23:24-04:00** · `ae1b3de9a96d0a39d` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:23:52-04:00** · `acc2898c3020aefef` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:24:34-04:00** · `a314543f6b59ba619` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:25:20-04:00** · `ab59e99ce637893d1` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:26:32-04:00** · `ad081bfc0153d839f` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:30:03-04:00** · `a4b8d8e960307d7b9` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:31:02-04:00** · `ae4014e35ff5b5421` · (no description)
+  - last line: ***R1 landed, and for the fourth time tonight the hard part was already finished.** The velocity model is *correct*. It probed the shipped hand: lognormal **mu −1.888, sigma 0.243, overlap 0.494** — all inside the literature's ranges, overlap within 1.2% of recommended, 22 of 22 strokes carrying a re…*
+- **2026-08-28T03:32:04-04:00** · `a398209bbdfc1ad53` · (no description)
+  - last line: ***F22 is closed, and its cause is better than its fix.** Channel K now reconciles 101 gates: **0 red, CALIBRATED 34/34**, up from 28/29 red. But the diagnosis is the part worth having: > **The 25 citations never rotted. They were wrong the day they were written.** Not one of those gates has a commit…*
+- **2026-08-28T03:34:23-04:00** · `a25b72bc205bdef23` · (no description)
+  - last line: ***F22 is closed, and its cause is better than its fix.** Channel K now reconciles 101 gates: **0 red, CALIBRATED 34/34**, up from 28/29 red. But the diagnosis is the part worth having: > **The 25 citations never rotted. They were wrong the day they were written.** Not one of those gates has a commit…*
+- **2026-08-28T03:35:14-04:00** · `aedc957a74b68c839` · (no description)
+  - last line: ***F22 is closed, and its cause is better than its fix.** Channel K now reconciles 101 gates: **0 red, CALIBRATED 34/34**, up from 28/29 red. But the diagnosis is the part worth having: > **The 25 citations never rotted. They were wrong the day they were written.** Not one of those gates has a commit…*
+- **2026-08-28T03:35:56-04:00** · `aeb2a955e071c3cfb` · (no description)
+  - last line: ***F22 is closed, and its cause is better than its fix.** Channel K now reconciles 101 gates: **0 red, CALIBRATED 34/34**, up from 28/29 red. But the diagnosis is the part worth having: > **The 25 citations never rotted. They were wrong the day they were written.** Not one of those gates has a commit…*
+- **2026-08-28T03:36:49-04:00** · `a64fcfcec871355b2` · (no description)
+  - last line: ***F22 is closed, and its cause is better than its fix.** Channel K now reconciles 101 gates: **0 red, CALIBRATED 34/34**, up from 28/29 red. But the diagnosis is the part worth having: > **The 25 citations never rotted. They were wrong the day they were written.** Not one of those gates has a commit…*
+- **2026-08-28T03:37:43-04:00** · `afe6d29cd70da05e4` · (no description)
+  - last line: ***F22 is closed, and its cause is better than its fix.** Channel K now reconciles 101 gates: **0 red, CALIBRATED 34/34**, up from 28/29 red. But the diagnosis is the part worth having: > **The 25 citations never rotted. They were wrong the day they were written.** Not one of those gates has a commit…*
+- **2026-08-28T03:38:23-04:00** · `af573f3302aae532a` · (no description)
+  - last line: *N7 landed and closed F22 — but it found that N6's own new gate **throws before reaching any of its three arms**. N6 is still running, so that goes first.*
+- **2026-08-28T03:39:54-04:00** · `a856cbe1a7adfe6c9` · (no description)
+  - last line: *N7 landed and closed F22 — but it found that N6's own new gate **throws before reaching any of its three arms**. N6 is still running, so that goes first.*
+- **2026-08-28T03:41:32-04:00** · `a5f205e0a9c0dd460` · (no description)
+  - last line: *N7 landed and closed F22 — but it found that N6's own new gate **throws before reaching any of its three arms**. N6 is still running, so that goes first.*
+- **2026-08-28T03:42:23-04:00** · `a97bd64485f7ace1d` · (no description)
+  - last line: *N7 landed and closed F22 — but it found that N6's own new gate **throws before reaching any of its three arms**. N6 is still running, so that goes first.*
+- **2026-08-28T03:45:01-04:00** · `a00f303b6146cad57` · (no description)
+  - last line: *Gate-integrity now **runs** — N7's fix unlocked the question, and the answer is severe. Getting the full picture.*
+- **2026-08-28T03:46:11-04:00** · `a48fbfef41dbc7073` · (no description)
+  - last line: *Gate-integrity now **runs** — N7's fix unlocked the question, and the answer is severe. Getting the full picture.*
+- **2026-08-28T03:47:21-04:00** · `a230d946c25974164` · (no description)
+  - last line: *Gate-integrity now **runs** — N7's fix unlocked the question, and the answer is severe. Getting the full picture.*
+- **2026-08-28T03:48:24-04:00** · `a796e1597e276c376` · (no description)
+  - last line: *Gate-integrity now **runs** — N7's fix unlocked the question, and the answer is severe. Getting the full picture.*
+- **2026-08-28T03:49:22-04:00** · `a2190429eb3215dbc` · (no description)
+  - last line: *Calibration is fully green now, so it sweeps for real. Getting the 53.*
+- **2026-08-28T03:51:07-04:00** · `ab68884db916b23b0` · (no description)
+  - last line: *Calibration is fully green now, so it sweeps for real. Getting the 53.*
+- **2026-08-28T03:52:23-04:00** · `a25f81a29f692243c` · (no description)
+  - last line: *Calibration is fully green now, so it sweeps for real. Getting the 53.*
+- **2026-08-28T03:53:15-04:00** · `a3bc3996a379f4ae4` · (no description)
+  - last line: *Calibration is fully green now, so it sweeps for real. Getting the 53.*
+- **2026-08-28T03:55:27-04:00** · `a44ba09a4a2667ea6` · (no description)
+  - last line: *Three consecutive runs gave **53, 52, 51** — monotonically decreasing while N6 is still committing. I'll report the range, not pick a number.*
+- **2026-08-28T03:56:14-04:00** · `ad57db9d03e6abc31` · (no description)
+  - last line: *Three consecutive runs gave **53, 52, 51** — monotonically decreasing while N6 is still committing. I'll report the range, not pick a number.*
+- **2026-08-28T03:57:37-04:00** · `acef3c2d94f499049` · (no description)
+  - last line: ***N7's fix unlocked the question this repo has been circling for a month, and the answer is bad.** `assert-gate-integrity` now prints *"CALIBRATED — 34/34 … its verdicts below are usable."* Before tonight it refused to start. The verdict: > **~52 of 101 gates cannot report a failure, or cannot repor…*
+- **2026-08-28T04:00:25-04:00** · `aea76b572a0b06471` · (no description)
+  - last line: ***N7's fix unlocked the question this repo has been circling for a month, and the answer is bad.** `assert-gate-integrity` now prints *"CALIBRATED — 34/34 … its verdicts below are usable."* Before tonight it refused to start. The verdict: > **~52 of 101 gates cannot report a failure, or cannot repor…*
+- **2026-08-28T04:01:21-04:00** · `acb841edf76aa1d5b` · (no description)
+  - last line: ***N7's fix unlocked the question this repo has been circling for a month, and the answer is bad.** `assert-gate-integrity` now prints *"CALIBRATED — 34/34 … its verdicts below are usable."* Before tonight it refused to start. The verdict: > **~52 of 101 gates cannot report a failure, or cannot repor…*
+- **2026-08-28T04:02:37-04:00** · `ac019d0cb957ccc22` · (no description)
+  - last line: ***N7's fix unlocked the question this repo has been circling for a month, and the answer is bad.** `assert-gate-integrity` now prints *"CALIBRATED — 34/34 … its verdicts below are usable."* Before tonight it refused to start. The verdict: > **~52 of 101 gates cannot report a failure, or cannot repor…*
+- **2026-08-28T04:03:24-04:00** · `acb3633ba10e83147` · (no description)
+  - last line: ***N7's fix unlocked the question this repo has been circling for a month, and the answer is bad.** `assert-gate-integrity` now prints *"CALIBRATED — 34/34 … its verdicts below are usable."* Before tonight it refused to start. The verdict: > **~52 of 101 gates cannot report a failure, or cannot repor…*
+- **2026-08-28T04:04:20-04:00** · `a05b97500895d62f6` · (no description)
+  - last line: ***N7's fix unlocked the question this repo has been circling for a month, and the answer is bad.** `assert-gate-integrity` now prints *"CALIBRATED — 34/34 … its verdicts below are usable."* Before tonight it refused to start. The verdict: > **~52 of 101 gates cannot report a failure, or cannot repor…*
+- **2026-08-28T04:05:38-04:00** · `aff0ca57d6ef4ec5a` · (no description)
+  - last line: ***N7's fix unlocked the question this repo has been circling for a month, and the answer is bad.** `assert-gate-integrity` now prints *"CALIBRATED — 34/34 … its verdicts below are usable."* Before tonight it refused to start. The verdict: > **~52 of 101 gates cannot report a failure, or cannot repor…*
+- **2026-08-28T04:06:36-04:00** · `a908251a24d408925` · (no description)
+  - last line: *N6's gate runs now and passes 11/11 — *"THE SOLID IS WRITTEN WITH A NIB."* But those per-angle numbers look low against the doc's 5:1 bar. Getting the headline.*
+- **2026-08-28T04:07:26-04:00** · `a0f50acb6e692c033` · (no description)
+  - last line: *N6's gate is excellent, and it settled my challenge about the 5:1 ratio **by measurement**: > `KNOWN-BAD 'aspect 5' (stroke-width-models.md's own ranked pick) FAILS the counter row — it retains 68.1 % of the enclosed area — 3 counters against 7` It tested the research doc's own recommendation and th…*
+- **2026-08-28T04:08:45-04:00** · `ac27347d06b016953` · (no description)
+  - last line: *N6's gate is excellent, and it settled my challenge about the 5:1 ratio **by measurement**: > `KNOWN-BAD 'aspect 5' (stroke-width-models.md's own ranked pick) FAILS the counter row — it retains 68.1 % of the enclosed area — 3 counters against 7` It tested the research doc's own recommendation and th…*
+- **2026-08-28T04:09:50-04:00** · `ab59fcfba68a18ffd` · (no description)
+  - last line: *N6's gate is excellent, and it settled my challenge about the 5:1 ratio **by measurement**: > `KNOWN-BAD 'aspect 5' (stroke-width-models.md's own ranked pick) FAILS the counter row — it retains 68.1 % of the enclosed area — 3 counters against 7` It tested the research doc's own recommendation and th…*
+- **2026-08-28T04:10:45-04:00** · `ae8c734833e7accdf` · (no description)
+  - last line: *N6's gate is excellent, and it settled my challenge about the 5:1 ratio **by measurement**: > `KNOWN-BAD 'aspect 5' (stroke-width-models.md's own ranked pick) FAILS the counter row — it retains 68.1 % of the enclosed area — 3 counters against 7` It tested the research doc's own recommendation and th…*
+- **2026-08-28T04:11:56-04:00** · `aaca65bb6974394c9` · (no description)
+  - last line: *N6's gate is excellent, and it settled my challenge about the 5:1 ratio **by measurement**: > `KNOWN-BAD 'aspect 5' (stroke-width-models.md's own ranked pick) FAILS the counter row — it retains 68.1 % of the enclosed area — 3 counters against 7` It tested the research doc's own recommendation and th…*
+- **2026-08-28T04:14:01-04:00** · `a72765e17714b5020` · (no description)
+  - last line: *N6's gate is excellent, and it settled my challenge about the 5:1 ratio **by measurement**: > `KNOWN-BAD 'aspect 5' (stroke-width-models.md's own ranked pick) FAILS the counter row — it retains 68.1 % of the enclosed area — 3 counters against 7` It tested the research doc's own recommendation and th…*
+- **2026-08-28T04:14:48-04:00** · `a6baba890dec9138b` · (no description)
+  - last line: *N6's gate is excellent, and it settled my challenge about the 5:1 ratio **by measurement**: > `KNOWN-BAD 'aspect 5' (stroke-width-models.md's own ranked pick) FAILS the counter row — it retains 68.1 % of the enclosed area — 3 counters against 7` It tested the research doc's own recommendation and th…*
+- **2026-08-28T04:15:28-04:00** · `ac527beeb32041e22` · (no description)
+  - last line: *N6's gate is excellent, and it settled my challenge about the 5:1 ratio **by measurement**: > `KNOWN-BAD 'aspect 5' (stroke-width-models.md's own ranked pick) FAILS the counter row — it retains 68.1 % of the enclosed area — 3 counters against 7` It tested the research doc's own recommendation and th…*
+- **2026-08-28T04:16:07-04:00** · `adbe4534b9c7bdcbc` · (no description)
+  - last line: *N6's gate is excellent, and it settled my challenge about the 5:1 ratio **by measurement**: > `KNOWN-BAD 'aspect 5' (stroke-width-models.md's own ranked pick) FAILS the counter row — it retains 68.1 % of the enclosed area — 3 counters against 7` It tested the research doc's own recommendation and th…*
+- **2026-08-28T04:17:50-04:00** · `a2da3fa91d6e24768` · (no description)
+  - last line: *N6 took the feedback — it added the per-counter row and tested Johnston's 0° as a fifth known-bad. While it finishes, let me rewrite the morning entry now that almost everything has landed.*
+- **2026-08-28T04:18:50-04:00** · `aa6e93837cda1039b` · (no description)
+  - last line: *N6 took the feedback — it added the per-counter row and tested Johnston's 0° as a fifth known-bad. While it finishes, let me rewrite the morning entry now that almost everything has landed.*
+- **2026-08-28T04:19:45-04:00** · `aa8aba205c61e8f74` · (no description)
+  - last line: *N6 took the feedback — it added the per-counter row and tested Johnston's 0° as a fifth known-bad. While it finishes, let me rewrite the morning entry now that almost everything has landed.*
+- **2026-08-28T04:20:30-04:00** · `a128f78ceda6616a8` · (no description)
+  - last line: *N6 took the feedback — it added the per-counter row and tested Johnston's 0° as a fifth known-bad. While it finishes, let me rewrite the morning entry now that almost everything has landed.*
+- **2026-08-28T04:21:28-04:00** · `a54098ea8587426a9` · (no description)
+  - last line: *N6 took the feedback — it added the per-counter row and tested Johnston's 0° as a fifth known-bad. While it finishes, let me rewrite the morning entry now that almost everything has landed.*
+- **2026-08-28T04:23:57-04:00** · `a599dfb9fe2438355` · (no description)
+  - last line: *N6 took the feedback — it added the per-counter row and tested Johnston's 0° as a fifth known-bad. While it finishes, let me rewrite the morning entry now that almost everything has landed.*
+- **2026-08-28T04:24:54-04:00** · `acb0567aabc772768` · (no description)
+  - last line: *N6 took the feedback — it added the per-counter row and tested Johnston's 0° as a fifth known-bad. While it finishes, let me rewrite the morning entry now that almost everything has landed.*
+- **2026-08-28T04:28:34-04:00** · `ac29b267aab3b39ff` · (no description)
+  - last line: *N6 answered both challenges with measurements. The counter concern was a threshold artifact — **7 enclosed regions before, 7 after** at an 8-texel floor, so nothing was lost. And it tested *both* of the research doc's prescriptions as known-bads: - `aspect 5` (the doc's ranked pick) → **3 counters a…*
+- **2026-08-28T04:29:43-04:00** · `ac21c7e68314fad37` · (no description)
+  - last line: *Crop's off. Finding the word's actual bounds and cropping both identically.*
+- **2026-08-28T04:32:26-04:00** · `aa6de6ccf69b05562` · (no description)
+  - last line: *I looked at before and after at identical crops, and I'm going to be straight about it: **the change is real but subtle.** That matches the number — contrast went 1.203:1 → 1.784:1, not the 5:1 the doc wanted.*
+- **2026-08-28T04:34:18-04:00** · `af90ee2a0ac9995f2` · (no description)
+  - last line: ***Straight answer on the nib, because I looked at it rather than trusting the gate.** The mechanism landed and it's real — width now depends on direction, proved by a known-bad the round pen fails. But I cropped before/after to an identical box and the visible difference is **small**: slightly thinn…*
+- **2026-08-28T04:35:37-04:00** · `a97f063fec8b5cabb` · (no description)
+  - last line: ***Straight answer on the nib, because I looked at it rather than trusting the gate.** The mechanism landed and it's real — width now depends on direction, proved by a known-bad the round pen fails. But I cropped before/after to an identical box and the visible difference is **small**: slightly thinn…*
+- **2026-08-28T04:36:00-04:00** · `ad4a36df7f3be7b70` · (no description)
+  - last line: ***Straight answer on the nib, because I looked at it rather than trusting the gate.** The mechanism landed and it's real — width now depends on direction, proved by a known-bad the round pen fails. But I cropped before/after to an identical box and the visible difference is **small**: slightly thinn…*
+- **2026-08-28T04:44:05-04:00** · `a4c8544a9b4f9a17c` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:44:38-04:00** · `a6c305329ef5ef41e` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:45:12-04:00** · `a8f1327c9f52d6157` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:45:44-04:00** · `a37c375e77a8281e9` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:46:20-04:00** · `a30426f21fa0d76cb` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:46:53-04:00** · `a2caf9811347f18ca` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:47:32-04:00** · `a4f7929eee3f169bc` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:48:06-04:00** · `a06e11d39f84d0eb1` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:48:46-04:00** · `a7487c3b4642449b9` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:49:20-04:00** · `af221d28919bf4506` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:49:53-04:00** · `a76041b25171e10bc` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:50:27-04:00** · `a482dd0a2e290f945` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:51:02-04:00** · `a14bf927b770c09ca` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:51:37-04:00** · `aa340e9167d68cb3e` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:52:09-04:00** · `a367f30363e4cab2b` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:52:42-04:00** · `a906b57d2b27bbd99` · (no description)
+  - last line: ***N6 landed the nib, and it corrected me twice — both worth knowing.** **1. My diagnosis was half wrong.** I said the 2D pass writes decent letterforms and 3D turns them to tubes. The observation held; my reason didn't. `lib/flat-ink.ts` is **already a full broad-nib implementation** — aspect 1.8 at…*
+- **2026-08-28T04:53:44-04:00** · `a2d011ddc801e9510` · (no description)
+  - last line: *N8 is into `dd-engine/adapter.ts` — the F34 fix. While it works, the thinking journals are still untracked, and the ledger's own "where the truth lives" section points at them as source #1.*
+- **2026-08-28T04:54:17-04:00** · `ad368712742fc36fc` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T04:54:49-04:00** · `aaca8b0a14feb01f1` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T04:55:25-04:00** · `ad3a0ada80d5600cf` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T04:56:04-04:00** · `a70a33ba2041a8287` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T04:57:08-04:00** · `a66b2bb37760b367f` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T04:57:51-04:00** · `afba46e3d6a31d89c` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T04:58:49-04:00** · `a4f0f3afaf6e6a61f` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T04:59:35-04:00** · `adb865b9a0d2dd1ab` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:00:54-04:00** · `acda2eb41f3c0e984` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:01:36-04:00** · `a636896b1018ed2be` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:02:08-04:00** · `afe43ffa298b27a4f` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:02:46-04:00** · `aff4fbacbd663edfc` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:03:30-04:00** · `abee87862dfc8d9d3` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:04:03-04:00** · `a3b978a5f19119c47` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:04:35-04:00** · `a0a166cfdf291b2d6` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:05:07-04:00** · `a8e8491b798492c8a` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:06:01-04:00** · `a048828cbce202bab` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:06:34-04:00** · `a878728a10cca4a71` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:07:06-04:00** · `a0914c55f31137a0d` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:08:09-04:00** · `a6630c41d42845e32` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:08:41-04:00** · `acc79a3555ad800e0` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:09:14-04:00** · `a40f3903810d42a7f` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:09:46-04:00** · `aa29545af668c1818` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:10:19-04:00** · `ac06efcc2b9f23539` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:10:51-04:00** · `ad3fe3259f187ad58` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:11:23-04:00** · `a220f7f115c1fd23d` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:11:55-04:00** · `a2f936a178a0ddd26` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:12:28-04:00** · `a4a4e00571c57f06c` · (no description)
+  - last line: *The `-- <paths>` fix works: three files, N8's work untouched. Waiting on N8 now.*
+- **2026-08-28T05:15:05-04:00** · `a8667275142c16f4f` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:15:39-04:00** · `a48360810f16194d8` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:16:15-04:00** · `a11e1d4b40adf1022` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:16:48-04:00** · `afcac26288671e432` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:19:24-04:00** · `a0e87a5ccbc3a818d` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:19:56-04:00** · `a5792e9ab984a5111` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:22:31-04:00** · `a3f59e3156724f4cf` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:23:04-04:00** · `a203085fe04232174` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:23:37-04:00** · `a6a76f515dfdfc079` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:24:10-04:00** · `afe9d397443ea7ba5` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:24:46-04:00** · `ae06540f4ff518301` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:25:19-04:00** · `a78ab8468ae73314d` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:25:52-04:00** · `ae157f39b18ff1879` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:26:25-04:00** · `a48f94a8085f11cb5` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:27:01-04:00** · `a14fb4b0b27275635` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:27:37-04:00** · `ac4ffa3f708a1026a` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:28:15-04:00** · `a94ca50e7b6b053d9` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:29:18-04:00** · `ab7bc6cc3e2a6735e` · (no description)
+  - last line: *F34 is committed — the nib now reaches Desk Doodles. N8 is onto the stub filter and has written a probe for the aspect hypothesis.*
+- **2026-08-28T05:39:56-04:00** · `a1332dac83fbe79cb` · (no description)
+  - last line: *N8 has moved into `lib/hero-motion.ts`, which is outside the ownership I gave it — no collision since it's the only live lane, but that file has a known trap attached.*
+- **2026-08-28T05:40:31-04:00** · `a3ae7491a9fec2250` · (no description)
+  - last line: *N8 has moved into `lib/hero-motion.ts`, which is outside the ownership I gave it — no collision since it's the only live lane, but that file has a known trap attached.*
+- **2026-08-28T05:41:05-04:00** · `a1f13ed860de82e5c` · (no description)
+  - last line: *N8 has moved into `lib/hero-motion.ts`, which is outside the ownership I gave it — no collision since it's the only live lane, but that file has a known trap attached.*
+- **2026-08-28T05:41:39-04:00** · `a0fb933a838c1abcb` · (no description)
+  - last line: *N8 has moved into `lib/hero-motion.ts`, which is outside the ownership I gave it — no collision since it's the only live lane, but that file has a known trap attached.*
+- **2026-08-28T05:42:26-04:00** · `afc04115648edc822` · (no description)
+  - last line: *N8 has moved into `lib/hero-motion.ts`, which is outside the ownership I gave it — no collision since it's the only live lane, but that file has a known trap attached.*
+- **2026-08-28T05:43:05-04:00** · `a37000b132a39b263` · (no description)
+  - last line: *N8 has moved into `lib/hero-motion.ts`, which is outside the ownership I gave it — no collision since it's the only live lane, but that file has a known trap attached.*
+- **2026-08-28T05:43:41-04:00** · `a433a29f53b34c291` · (no description)
+  - last line: *N8 has moved into `lib/hero-motion.ts`, which is outside the ownership I gave it — no collision since it's the only live lane, but that file has a known trap attached.*
+- **2026-08-28T05:44:19-04:00** · `ac2d603769aebacc8` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:45:00-04:00** · `a34984f3bd8888c78` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:45:38-04:00** · `a02e7399c14df2ceb` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:46:25-04:00** · `a55cb0f68ecdd85c3` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:47:19-04:00** · `a9b7c146a33846128` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:47:54-04:00** · `a8e7b25c55ba865c7` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:48:27-04:00** · `ac9e5b799a3db1bec` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:49:01-04:00** · `ae5d59299fbccd009` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:49:34-04:00** · `a8d075e37821132d3` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:50:08-04:00** · `a9266ec62f24dc709` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:50:41-04:00** · `af266a776af328bbd` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:51:15-04:00** · `a45b82c451a4255dd` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:51:51-04:00** · `a5772536bb7936c62` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:52:26-04:00** · `ac75cf96d90e7a9a8` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:53:00-04:00** · `a6d82d8c4c2246c28` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:53:34-04:00** · `a611f30c8309717f7` · (no description)
+  - last line: *Stub filter is committed — *"drop the nine accidental taps."* Now the aspect-5 experiment, which is the one I most want.*
+- **2026-08-28T05:54:07-04:00** · `a5b46ba027f4fe5dc` · (no description)
+  - last line: *It built the paste gate too — closing a hole defended only by a README sentence, which had cost this repo twice in two days.*
+- **2026-08-28T05:54:40-04:00** · `a4863c5ef74481290` · (no description)
+  - last line: *It built the paste gate too — closing a hole defended only by a README sentence, which had cost this repo twice in two days.*
+- **2026-08-28T05:55:14-04:00** · `a145ce17d851e5b59` · (no description)
+  - last line: *It built the paste gate too — closing a hole defended only by a README sentence, which had cost this repo twice in two days.*
+- **2026-08-28T05:57:51-04:00** · `ad4fb99115c01bcc1` · (no description)
+  - last line: *It built the paste gate too — closing a hole defended only by a README sentence, which had cost this repo twice in two days.*
+- **2026-08-28T06:00:25-04:00** · `a74b128f7c3d5d04d` · (no description)
+  - last line: *It built the paste gate too — closing a hole defended only by a README sentence, which had cost this repo twice in two days.*
+- **2026-08-28T06:00:58-04:00** · `a02a7267c07e1f6cd` · (no description)
+  - last line: *It built the paste gate too — closing a hole defended only by a README sentence, which had cost this repo twice in two days.*
+- **2026-08-28T06:01:43-04:00** · `ae9f20cd85dc1454b` · (no description)
+  - last line: *It built the paste gate too — closing a hole defended only by a README sentence, which had cost this repo twice in two days.*
+- **2026-08-28T06:08:56-04:00** · `aeb721e7f3bd8deb2` · (no description)
+  - last line: *Everything's committed, tsc holds at exactly 6, **47 commits tonight**, tree clean. ## The thing you asked for **The artifact is gone.** Look at `docs/verification/mark-2026-08-28/AB-stubs-Dstem.png` — top is before, bottom is after. That fat black almond across the top of the `D`'s stem, the thing …*
+- **2026-08-28T06:53:14-04:00** · `ae9f20cd85dc1454b` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *`assert-drawin-pentip` is now resolved as *unresolved*, and killing it turned up a second finding. Everything else is unchanged from my report above. ## The pentip gate — killed at 72 minutes, and it is a stale-evidence trap either way I killed it by exact pid (`kill 57114`, exited on SIGTERM, no st…*
+- **2026-08-28T09:09:45-04:00** · `aa7fd06e801e5f8d3` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *All three jobs done, committed as `3a6ebb0a`, paths named, nothing of N10's or N11's taken. tsc exactly 6, 0 deleted files in the tree. ## Read-proof - `scripts/verify/_probe-word-ladder.mjs:210` (pre-fix): `rmSync(OUT, { recursive: true, force: true })` - `docs/DISPATCH.md:143`: `- \`scripts/verify…*
+- **2026-08-28T09:18:13-04:00** · `a8d0704619570c186` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Committed as `91eee065`. Full report. ## Read-proof `lib/hero-motion.ts:1883` (as it stood before this commit): > `* `emerge` THE CASCADE, 160 fr. Not a number picked to fit: `cascadeSec`` `lib/hero-motion.ts:2568`, inside `cascadeSec`: > ` return slotStartSec(p, maxSlot) + Math.max(0, p.letterBeatS…*
+- **2026-08-28T09:34:53-04:00** · `aadce89ab942a423c` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done and committed. Final state: `assert-gate-integrity` **CALIBRATED 41/41**, 104 gates, K 0 red, 0 drift, tsc 6. ## Read-proof `scripts/verify/assert-gate-integrity.mjs`, `reconcileControls`, the `missing-entry` branch (was `:1247`, now `:1488` after my insert): > `why: "NO ENTRY. A gate with no r…*
+- **2026-08-28T09:39:00-04:00** · `a076d62beee96909b` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Clean. Landed as `1f6f98e1`. ## Read-proof - `scripts/verify/assert-data-safety.mjs:1784` — `console.log(\`FAIL the run itself crashed after ${rows} row(s) had already printed — ${String(e).slice(0, 300)}\`)` - `scripts/verify/run-battery.mjs:205` (inside `readRows`) — `const rows = (out.match(ROW_R…*
+- **2026-08-28T10:55:53-04:00** · `a0603ace9a4eadc43` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. Five commits landed, tree clean. ## Read-proof **N9's staging swap**, `scripts/verify/_probe-word-ladder.mjs`: - L298 `/* ---- THE SWAP. The only moment \`OUT\` is written at all. ---------------- */` - L300 `renameSync(STAGE, OUT)` **`_probe-drawin-film.mjs`'s own header**, as it stood before…*
+- **2026-08-28T11:00:54-04:00** · `aaaa3e0f80574b98d` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Committed as `c3c6e9fa`, and the whole arm re-verified from the committed tree. ## Read-proof ⚠️ **The line number in my dispatch was stale — an eighth instance of the family.** N12's derivation was not at `hero-motion.ts:1936` (that line is `* and there is no shadow beat to land dead-on. See sample…*
+- **2026-08-28T12:10:19-04:00** · `aec4a7a7eda5ed7ac` · Explore · keyed on subagent_type+own-transcript
+  - last line: *Based on careful line-by-line reading of all 5 verification files, here are the precise facts: --- ## assert-drawin-parity.mjs **Evidence directory:** Line 73: `const OUT = EV.dir` where `EV = stageEvidence(FINAL)` (line 72); `FINAL` at line 71 is `join(ROOT, "docs", "verification", "drawin-parity",…*
+- **2026-08-28T12:10:55-04:00** · `a54419875ab90c3ba` · Explore · keyed on subagent_type+own-transcript
+  - last line: *Now I have all 6 files. Let me extract the precise information for each. --- ## **assert-fusion-newborn.mjs** **1. Capture directory constant:** - Line 61: `const OUT = join(ROOT, "docs", "verification", "fusion-newborn", LABEL)` - Does NOT use `stageEvidence()` — direct path assignment - No `EV.dir…*
+- **2026-08-28T12:11:00-04:00** · `a0299d6e17ad51561` · Explore · keyed on subagent_type+own-transcript
+  - last line: *Based on my thorough reading of all 6 files, here are the precise findings with current line numbers: --- ## **assert-layer-flicker.mjs (80078 bytes)** 1. **Capture directory constant (lines 128–136):** ``` const OUT = join( ROOT, "docs", "verification", "layer-flicker", CALIBRATE ? "calibration" : …*
+- **2026-08-28T12:17:06-04:00** · `a4bf304f72368fd5c` · Explore · keyed on subagent_type+own-transcript
+  - last line: *I have everything. No self-spawn, and the decisive constraint is the browser battery's 300 s cap. ## Bottom line **No flag here is "an arm behind a flag no runner passes" in the same sense as `assert-hero-dials --live`.** Two of the five (`--calibrate`, `--calibrate-guard`) are pure **duplicates** o…*
+- **2026-08-28T12:18:12-04:00** · `adb19f0f563c31252` · Explore · keyed on subagent_type+own-transcript
+  - last line: *I could not run any of the gates — the timing command was blocked by the permission classifier — so every cost figure below is derived from the code, and I say so where it matters. --- # `// battery:` directives Only one of the four carries one. - `/Users/sebs/Desktop/Projects/free-stroke/scripts/ve…*
+- **2026-08-28T12:19:22-04:00** · `ac01e101b1b509037` · Explore · keyed on subagent_type+own-transcript
+  - last line: *Read-only pass complete. No files written, no git, no browser, no processes launched. All four gates read in full at the cited sites, plus `run-battery.mjs`'s classifier and `EXTRA_ARGS`, `run-browser-battery.mjs`'s exit ladder, `lib/control-manifest.json`, `docs/RUN-QUEUE.md`, `docs/verification/la…*
+- **2026-08-28T12:42:28-04:00** · `ad9400a8ef3090514` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *N17 is complete. ## Read-proof `scripts/verify/_capture-freshness.mjs` (the module already existed, at `scripts/verify/`, not `scripts/verify/lib/` as briefed): ``` 89: export function newestCapture(dir, filter = /\.(png|json|jpg|webm)$/) { 140: const behind = lib.ms - cap.ms 141: const ok = behind …*
+- **2026-08-28T12:42:55-04:00** · `a704239481f9d967b` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *All seven rows taken. Three commits: `fa2c622d`, `a42fa775`, `ac3c7c43`. **Zero deleted files. tsc exactly 6, same six, same two files. Both routes 200.** ## F49 — CLOSED The `live` map listed 8 phases beside a loop over 12. `live.land` was `undefined`, `undefined - at` is `NaN`, and `NaN > 1e-4` is…*
+- **2026-08-28T12:46:31-04:00** · `abde2e73de210bd88` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. Committed as `d01ef687`. ## The floor did not move. Still `1.0`, and the four empty cells still read `0.000`. ## Read-proof Probe header, on the control: > `B link 0.0 ┤` / `B' link 0.0 ┘ control = |B - B'| ONE GAP OF DRIFT AND NOTHING ELSE` > "the CONTROL is taken with the relationship switch…*
+- **2026-08-28T12:55:07-04:00** · `a3bcab84f3fffb1a9` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *All seven commits landed, meta-gate CALIBRATED 41/41, tsc exactly 6. ## N16 · THE WITHHELD ARMS — done **Read-proof.** `run-battery.mjs:894-896`, the `EXTRA_ARGS` note: > *"A gate is in here only when leaving it out would make the sweep LIE. Prefer deleting the flag in the gate itself — an arm that …*
+- **2026-08-28T13:06:41-04:00** · `a187be7eb3b0593c9` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. Final state verified: zero deleted files, tsc exactly 6, everything committed. ## What I found and did **The row was 54, not 53.** Channel D had gained one since the brief was written. **My 11 (channel I, re-derived):** `assert-citations` · `assert-drawin-2d-parity` · `assert-drawin-pentip` · …*
+- **2026-08-28T13:12:57-04:00** · `ad9400a8ef3090514` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Clean. My runner (pid 93614) exited on its own; the only gate process still alive is pid 34811 running `assert-stroke-schedule`, which belongs to another lane, so I left it untouched. No `pkill` was used anywhere in this lane. Nothing changed since my report. The lane's final state stands: - **17/17…*
+- **2026-08-28T13:22:03-04:00** · `a3cc172ef61399742` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Both batteries complete, everything committed, nothing left running. Here is the outcome. ## Totals | | run 1 (12:07–12:39) | run 2 (12:40–13:17) | |---|---|---| | attempted | 53 | 53 | | passed | 20 | 33 | | failed | 33 | 20 | | timed out | **0** | **0** | | PARTIAL (exit 3) | 0 | 0 | | **never run…*
+- **2026-08-28T13:31:45-04:00** · `ad9400a8ef3090514` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *That's another of the wait-for-batch pollers being cleaned up. It was waiting on a batch that finished before I wrote the report, so its results are already accounted for and there is nothing to re-run. No change to the lane's outcome. N17 remains complete: 17/17 gates guarded, the split measured at…*
+- **2026-08-28T13:33:26-04:00** · `ad9400a8ef3090514` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Another of the same wait-loop pollers being cleaned up. Same situation as the previous two: it was blocking on a batch that had already completed, and its results are in the report. No action needed, and no change to the lane's outcome. N17 stands as reported.*
+- **2026-08-28T13:34:00-04:00** · `ad9400a8ef3090514` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *The last of the wait-loop pollers being cleaned up. Same as the previous three: it was waiting on a batch that finished before I reported, and I already printed that table directly. No action needed. N17 stands as reported: 17/17 gates guarded, 11 can recapture / 6 cannot, 7 recaptured with a verdic…*
+- **2026-08-28T13:34:54-04:00** · `ad9400a8ef3090514` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Same class of cleanup notification as the previous four. Nothing to act on. The lane is finished and its state is unchanged from the report. To avoid repeating myself on further cleanup events: any remaining notifications for these `bw7ymkzm7` / `be1t88flb` / `b1c9lbq81` / `bf700ta3e` / `bnc4734tn` …*
+- **2026-08-28T13:35:23-04:00** · `ad9400a8ef3090514` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Another wait-loop cleanup, as anticipated. No action. N17 is complete and unchanged.*
+- **2026-08-28T14:18:04-04:00** · `abb097cd67e306c85` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. Everything committed, tree clean, zero deleted files, tsc exactly 6, constant back at 1.8 byte-identical to git. ## The four by two `INFLATE_NIB_ASPECT_DEFAULT` flipped 1.8 ↔ 1.0, the live page confirmed through `__inflateProbe.debug().nibAspect` **before** every gate ran, every red run twice …*
+- **2026-08-28T15:52:26-04:00** · `a425fb7d8c38092de` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. Committed `949df107`, 17 files, only my paths. ## Did I see both? Yes, and they are one mechanism Reproduced the shipped build exactly first: ink **28 569** desk-doodles and **37 772** free-stroke, bboxes identical to `mark-2026-08-28/after-stubs/*/measure.json`'s final frame. Same cadence as …*
+- **2026-08-28T15:58:40-04:00** · `a5cd9ffa042ee7d10` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. All four are fail-closed, every one of Codex's mutations re-run against the fixed tree, and the meta-gate shows nothing broken. ## The four, each with the finder's own break re-run **F65 `assert-stub-filter.mjs`.** The `font-exempt` row counted occurrences in `page.tsx`, so a MOVE kept the cou…*
+- **2026-08-28T17:36:37-04:00** · `a58385d56e8d6a852` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. Three commits on `v0/sebastianmmdesign-3308-12049aa9`, nothing pushed. ## The spike is gone, in a picture, on both families **F70 — `fb35ad36`.** `HandFeelSettings.closed` was declared, implemented in `applyEndpointBehavior`, read at `stroke-processing.ts:324`, and written by nothing. It is wr…*
+- **2026-08-28T17:57:29-04:00** · `a203e52fadc8816d6` · Explore · keyed on subagent_type+own-transcript
+  - last line: *# LANE E2 SUB-AUDIT — THE PRODUCT'S ANIMATION CONTROL SURFACE (route `/`) ## 0. SCOPE CORRECTION — READ THIS FIRST **The brief's four-file read list does not contain the product's animation controls.** Every one of them lives in `components/viewport-3d.tsx`, which the brief did not list. Proof of re…*
+- **2026-08-28T17:58:51-04:00** · `a762ab6cf71eb05c3` · Explore · keyed on subagent_type+own-transcript
+  - last line: *## LANE E2 SUB-AUDIT — `/desk-doodles` animation control inventory Read `app/desk-doodles/page.tsx` complete, 1–4145, in ten chunks. File was stable across the whole read (`stat` mtime `Aug 28 17:17:13`, 4145 lines at both first and last touch), so no line number below is a cached one. Also read the…*
+- **2026-08-28T18:06:21-04:00** · `a7ea7620319deeafa` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *`app/page.tsx` is another lane's edit at 18:01:29, already documented in the audit's drift row. I only ever read it. Commit is exactly my two files. ## What I did Wrote `docs/animation-port-audit.md` and `docs/verification/portaudit-2026-08-28/method.md`, committed as `cb8f8bd3`. Read-only on all so…*
+- **2026-08-28T18:37:47-04:00** · `a2e4b6528823f0546` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. Committed as `2f422d90`. ## Why the viewport's size depends on the cell **It doesn't.** It depends on whatever frame happened to measure widest, and then it never comes back. `/Users/sebs/Desktop/Projects/free-stroke/app/page.tsx:2146` and `:2165` (worktree `:2217`, `:2236`). `flex-1` is `flex…*
+- **2026-08-28T18:50:46-04:00** · `aba59c563b3083491` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Both halves are done, committed, not pushed. Two commits: `262ecf0d` and `a88e9e46`. ## The round trip, driven on the real page `assert-take-persists.mjs` (new) authors six controls through the panel's own buttons and a real pointer drag on the Overlap slider, reloads, and reads the take back — **44…*
+- **2026-08-28T20:25:26-04:00** · `ac1ba5e86b7c91a1a` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Sweep confirms my four probes left zero orphaned Chromes (the one orphan listed belongs to `verify-hero-windup.mjs`, another owner — I killed nothing). ## Gaps 1-5 re-measured against today's tree, 5 of 5 The map is stale about itself, and not only in §3. `docs/animation-toolset-map.md:7` still read…*
+- **2026-08-28T20:32:30-04:00** · `a8bd7e63a94f0ecf2` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *# LANE A3 — gaps 10 to 13, re-measured and driven **31 rows run, 30 PASS, 1 recorded as inconclusive-then-resolved (H2, below).** Own headless Chrome via `scripts/verify/lib/browser.mjs`, `FS_HEADED=0 FS_PORT=3105`, own pids, all closed — sweep shows zero orphans of mine (the one live orphan belongs…*
+- **2026-08-28T20:35:25-04:00** · `a8d33d3b5d0994e04` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. Everything below is measured on this checkout today, dev server on :3105, my own headless Chrome via `scripts/verify/lib/browser.mjs`. Evidence + probe scripts: `/private/tmp/claude-501/-Users-sebs/69d255f7-4129-4b69-b66f-2292733c9a85/scratchpad/a2/`. ## The rows | gap | verdict | mechanism at…*
+- **2026-09-04T01:23:17-04:00** · `a3fc389eb0e14f787` · Explore · keyed on subagent_type+own-transcript
+  - last line: *I wrote nothing, edited nothing, ran no git commands, and opened no browser. Everything below is read off disk. --- # 1 · Has a timeline / dock / track UI already been attempted, specced, parked or rejected for `/`? **Answer: SPECCED THREE TIMES, RULED ON TWICE, REJECTED ONCE AS A PORT — and never b…*
+- **2026-09-04T01:52:23-04:00** · `a12a531a54388f16e` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. `docs/animation-port-audit.md` rewritten in place, four commits (`679233e0`, `7eb958e5`, `70777b7c`, `49f4e598`). ## The reframe changed the answer The lab animates a wordmark. The channel that does it is `flatten` (`FlatState`), and **E2's audit has zero mentions of it**, against 16 of `drawI…*
+- **2026-09-04T02:12:50-04:00** · `a27b0c64a57d7bf52` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. Everything committed, tree clean, no worktrees or servers of mine left. ## What I built **`components/take-timeline.tsx`** — a strip that becomes the transport dock's first row. One row per unit, one bar per stroke, left to right across the beat. Three decisions did the work: - **The axis is w…*
+- **2026-09-04T12:17:24-04:00** · `ad5e8d1ab1fc6ead6` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *All three gates exit 0. Here is the lane report. ## Exit codes, main checkout, after every commit | gate | exit | |---|---| | `assert-fusion-combo-liveness` | **0** (15 of 15) | | `assert-hero-carve` | **0** (12 of 12) | | `assert-timing-frames` | **0** (28 of 28) | Four commits: `2be41a3f`, `787027…*
+- **2026-09-04T12:50:46-04:00** · `a82b5164bf47f1024` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *All three rows green, committed, server down. Here's the report. ## Three rows, final state **1 · `rod/texture/fineGrain does nothing — dOff 1.917 < 2.0`** → **PASS**, and the row was wrong. The 2.0 floor is quoted from `diff-frames.mjs`, whose first sentence says what it averages over: *"over pixel…*
+- **2026-09-04T12:52:51-04:00** · `a2c1288b98b5858bf` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *All four commits are in history, everything I own is committed, my server is dead and the worktree is gone. ## Exit codes | gate | exit | rows | |---|---|---| | `assert-fusion-two-dead` | **0** | 12 PASS | | `assert-pentip-specks` | **0** | 31 PASS · 7 COST · 0 FAIL | | `assert-drawin-pentip` | **1*…*
+- **2026-09-04T18:07:51-04:00** · `afdd79a38ba2cc6c3` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Done. Gate is green and committed. ## Exit code `assert-export-window` **exit 0 · 37 PASS · 0 FAIL** (was exit 1 · 36 PASS · 1 FAIL). Commit `c6560e25`, touching only `scripts/verify/assert-export-window.mjs` and `docs/verification/export-window/real-button-films.png`. ## The extent, measured The fi…*
+- **2026-09-04T18:36:29-04:00** · `acc8b59aaae5f8b90` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Both commits are in. All three items are done. ## 1 · F86 — the uniform is `d.uFsDitThreshold.value` The threshold-bias sweep sits at **−0.0990** below the resting threshold at the cutoff and snaps to 0 in one frame. Bisected in `~/.fs-lanes/laneE3` on port 3133, one arm at a time, with the arm's na…*
+- **2026-09-04T19:01:12-04:00** · `a54c001d13afb0e26` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: *Both commits are in history. F87 is closed. ## Exit code `node scripts/verify/assert-fusion-authoring.mjs` — **exit 0**, twice. 38 PASS, 0 FAIL. Both F87 rows green: *all 21 targets visibly change the render* (min Δ2.14) and *all 10 sources carry a signal* (10/10). ## The bar, and the two measuremen…*
+- **2026-09-05T00:16:41-04:00** · `a89b005d1502dea54` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: in the JSONL, 4000 chars, from its own transcript
+- **2026-09-05T00:30:10-04:00** · `ab764bce39a3f20da` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: in the JSONL, 4000 chars, from its own transcript
+- **2026-09-05T00:51:55-04:00** · `a9048256f951f568c` · general-purpose · keyed on subagent_type+own-transcript
+  - last line: in the JSONL, 4000 chars, from its own transcript
